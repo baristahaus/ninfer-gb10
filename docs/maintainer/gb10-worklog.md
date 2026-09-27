@@ -271,9 +271,10 @@ failed later, on the missing measured region — B6).
 | PLE residency: 49 faults (campaign 2, warm) → 0 faults (campaign 3); host gather 134 µs/step | step 3, campaigns 2–3 | `profiles/bench/gb10/step3/residency.log` |
 | Per-stage attribution (mtp0/mtp2, 97.5–97.8% attributed) | step 3, campaign 3 | `profiles/bench/gb10/step3/{mtp0,mtp2}-report.md` |
 | Final consolidated report (25,214 B, 2026-09-27T19:32Z) | `report.sh`, campaign 3 | `profiles/bench/gb10/report.md` |
-| Idle-time gap attribution; step 6 task decision | kernel-gap bucketing on `profiles/bench/gb10/step3/{mtp0,mtp2}.sqlite` (no new capture) | `gb10-worklog.md` § Idle-time attribution; task brief: `plan-2026-09-27-step6-task1-host-overlap.md` |
+| Idle-time gap attribution; step 6 task decision | kernel-gap bucketing on `profiles/bench/gb10/step3/{mtp0,mtp2}.sqlite` (no new capture) | `gb10-worklog.md` § Idle-time attribution; brief folded into `plan-2026-09-gb10.md` § step 6 |
 | File-backed page GPU-read probe (device-PLE gate) | `file_page_probe.cu` + `probe_file_pages.sh` | `profiles/bench/gb10/file_page_probe/summary.md` |
-| Step 6.1 gap breakdown (43/49 gaps host-bound; ~1.4 ms sync-return completion lag is the dominant component) | sqlite analysis of `profiles/bench/gb10/step3/mtp2.sqlite` | `step6-task1-gap-breakdown.md` |
+| Step 6.1 gap breakdown (43/49 gaps host-bound; ~1.4 ms sync-return completion lag is the dominant component) | sqlite analysis of `profiles/bench/gb10/step3/mtp2.sqlite` | `plan-2026-09-gb10.md` § 3 (between-round gap bullets) |
+| Round-boundary sync probe (blocking 0.4–1.2 ms vs yield/spin/auto 2.8 µs; no per-node graph cost at 4000 nodes) | `probe_sync.sh` + `sync_probe.cu`, PIN_CPUS="10 19" | `profiles/bench/gb10/sync_probe/summary.md` |
 
 ## Idle-time attribution (2026-09-27, mtp0/mtp2 sqlite, no new capture)
 
@@ -354,11 +355,11 @@ handles it; campaign 2 showed convergence 49 faults → 0). The sink magic-check
 ## Step 6.1 — inter-round gap breakdown (2026-09-27, mtp2.sqlite)
 
 Opus's step-6 ordering question: the PLE gather is 9.2 µs warm (0.7% of the gap) —
-what fills the rest of the ~1.5–1.7 ms? Full analysis in
-`docs/maintainer/step6-task1-gap-breakdown.md` (method: LAG(end) gaps over the
-kernel table, next-kernel enqueue resolved exactly via `kernel.correlationId =
-runtime.correlationId`, NVTX + CUPTI sync/memcpy per gap; 49 decode-phase gaps >200 µs,
-5 run-boundary gaps >3 ms excluded).
+what fills the rest of the ~1.5–1.7 ms? Full analysis now in `plan-2026-09-gb10.md`
+(step-3 attribution, between-round gap bullets; the dated file was removed once the plan
+carried it; method: LAG(end) gaps over the kernel table, next-kernel enqueue resolved
+exactly via `kernel.correlationId = runtime.correlationId`, NVTX + CUPTI sync/memcpy per
+gap; 49 decode-phase gaps >200 µs, 5 run-boundary gaps >3 ms excluded).
 
 Headline:
 
@@ -380,3 +381,31 @@ Consequence: step 6.3 (device PLE) is ~11 µs/round of steady-state (cold-tail v
 only); step 6.2 as designed recovers ~100–200 µs/round; the **new top target is the
 ~1.4 ms sync-return lag** (candidate 6.0 — blocking event sync / tighter wait loop),
 which needs the engine's wait-path source to confirm the mechanism.
+
+## Round-boundary sync probe (2026-09-27, plan step 6 item 1 "the wake-up")
+
+`tools/gb10/probe_sync.sh` with `PIN_CPUS="10 19"` (cpu10 = Cortex-A725 2.8 GHz,
+cpu19 = Cortex-X925 3.9 GHz; governor performance). Results in
+`profiles/bench/gb10/sync_probe/summary.md`.
+
+| schedule | sync return lag p50 (kernel 50 µs / 1 ms / 10 ms / 60 ms) |
+|---|---|
+| blocking (unpinned) | 401 / 670 / 956 / 1181 µs |
+| yield | **2.7–2.8 µs** at every duration |
+| spin | 2.8 µs at every duration |
+| auto | 2.8 µs (auto spins here: 20 cores > 1 GPU) |
+| blocking pinned cpu10 (A725) | 138 / 138 / 675 / 596 µs |
+| blocking pinned cpu19 (X925) | 394 / 607 / 734 / 976 µs |
+
+- Confirms the ~1.4 ms completion lag from the gap breakdown, growing with kernel
+  duration (a 60 ms decode round → 1.18 ms). Core type does not change blocking's
+  order of magnitude.
+- Graph launch: 100/1000/4000 nodes → 1.6–14 µs call, 2.5–14.5 µs to first kernel.
+  **Per-node submission cost is not confirmed** — the 940–970 µs `cudaGraphLaunch` call
+  in the trace is not node-count-driven; likely CUPTI overhead or per-round graph exec
+  update (`install_graph_profile`). Step 6 item 2 (fewer/larger nodes) is not indicated
+  by this evidence; investigate under item 3's instrumentation.
+- Decision: `src/core/device.cu` switches `cudaDeviceScheduleBlockingSync` →
+  `cudaDeviceScheduleYield`: yield matches spin's 2.8 µs wake-up without holding a core
+  at 100% (shared CPU/GPU power budget); auto is excluded because it spins on this
+  machine. Gate: step 2 re-run against 44.6 tokens/s (running).

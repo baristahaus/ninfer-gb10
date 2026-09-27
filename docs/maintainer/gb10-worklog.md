@@ -405,13 +405,21 @@ cpu19 = Cortex-X925 3.9 GHz; governor performance). Results in
   in the trace is not node-count-driven; likely CUPTI overhead or per-round graph exec
   update (`install_graph_profile`). Step 6 item 2 (fewer/larger nodes) is not indicated
   by this evidence; investigate under item 3's instrumentation.
-- Decision: `src/core/device.cu` switches `cudaDeviceScheduleBlockingSync` →
-  `cudaDeviceScheduleYield`: yield matches spin's 2.8 µs wake-up without holding a core
-  at 100% (shared CPU/GPU power budget); auto is excluded because it spins on this
-  machine. Gate: step 2 re-run against 44.6 tokens/s (running).
+- Decision (2026-09-27, per-device after review): `src/core/device.cu` reads
+  `props.integrated` (1 on GB10) before `cudaSetDeviceFlags` and yields only on
+  integrated devices; discrete GPUs keep the upstream blocking schedule (it frees
+  the host core; the wake-up there is unmeasured). Yield is a busy-wait
+  (sched_yield between polls), so the choice rests on the measured wake-up, not a
+  power model; an nvidia-smi clock/power sample (`-lms 1000`) runs alongside the
+  step 2 A/B. Gate: step 2 re-run against 44.6 tokens/s (expected ~2-4% from the
+  untraced gap accounting).
 
 - Ops note: after the file-page probe's 125 GiB evictor read, 101 GB of page cache left
   only 16 GB free, so the first step-2 load failed the `current_free_device_bytes`
   check. Non-root page-cache drop/reclaim is not permitted on this box; clear it with
   `sudo sh -c 'echo 3 > /proc/sys/vm/drop_caches'` (passwordless sudo is available)
   before load-heavy runs following any probe that reads large artifact volumes.
+- The five campaign-branch commits authored as `TwoFour <24@ninfer.local>`
+  (34bcaab7, bb71028c, f91d9e73, 3009bf8e, 598c7872) were re-authored to
+  `baristahaus <baristahaus@users.noreply.github.com>` via filter-branch before the
+  follow-up push (18:46 identity policy).

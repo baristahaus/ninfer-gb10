@@ -245,6 +245,19 @@ failed later, on the missing measured region — B6).
   context; long tasks run as plain background shell jobs (no LLM concurrency).
   Recorded in `AGENTS.md`.
 
+- **19:37 — repo hygiene after campaign 3.** `git status` showed uncommitted edits
+  alongside my own commits. Ownership settled by mtime + worklog evidence: `AGENTS.md`
+  (18:47, designation/logistics/beads block), `.gitignore` (18:20, bd init), and
+  `README.md` + plan doc (18:40, probe run-2 results) are this machine's own
+  uncommitted work — committed in `b5156f35`. The eight maintainer-doc "English
+  clarification" sections (all written 18:26:09 within 100 ms — a scripted batch,
+  absent from this worklog) and the bd-init agent integrations (`.codex/`, `CLAUDE.md`,
+  `.claude/`, `.cursor/`, `.agents/`) are not this session's work — kept local,
+  uncommitted, for their owner to ship.
+- **19:37 — beads PR subsumed.** `twoFour/beads-local-only` is subsumed: its commit
+  `d08f230e` is on `master` and in `twoFour/gb10-campaign`; the PR can be closed
+  without merging (a push-only deploy key cannot close it from here).
+
 ## Data inventory so far
 
 | Data | Source | Where |

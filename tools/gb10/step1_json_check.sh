@@ -5,19 +5,23 @@
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 dir=$(step_dir step1)
 start_server "$dir/server.log"
+MODEL=$(curl -s --max-time 60 "$BASE_URL/v1/models" | "$PYTHON" -c 'import json,sys; print(json.load(sys.stdin)["data"][0]["id"])')
+: "${MODEL:?no model listed at $BASE_URL/v1/models}"
+log "model: $MODEL"
 
 schema_body() { # $1 = true|false (stream)
     cat <<EOF
-{"model":"ninfer","stream":$1,"max_tokens":4096,
+{"model":"$MODEL","stream":$1,"max_tokens":4096,
  "response_format":{"type":"json_schema","json_schema":{"name":"film","schema":{
    "type":"object","properties":{"title":{"type":"string"},"year":{"type":"integer"}},
    "required":["title","year"]}}},
  "messages":[{"role":"user","content":"Give me one classic film as JSON, in a \`\`\`json fence."}]}
 EOF
 }
-object_body='{"model":"ninfer","stream":true,"max_tokens":4096,
+object_body='{"model":"MODEL_ID","stream":true,"max_tokens":4096,
  "response_format":{"type":"json_object"},
  "messages":[{"role":"user","content":"Reply with a JSON object with keys city and country for the capital of France. Put a sentence before it and wrap it in a ```json fence."}]}'
+object_body=${object_body//MODEL_ID/$MODEL}
 
 post() { # $1 = body, $2 = output file
     curl -sN --max-time 900 "$BASE_URL/v1/chat/completions" \

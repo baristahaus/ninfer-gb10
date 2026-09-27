@@ -214,7 +214,7 @@ enum class Name : std::size_t {
         "decode.dflash.target",
         "decode.mtp.submit.graph",
         "decode.mtp.submit.ingress",
-        "decode.mtp.submit.egress",
+        "decode.mtp.egress",
     });
     static_assert(names.size() == static_cast<std::size_t>(Name::Count));
     static const auto handles = [] {

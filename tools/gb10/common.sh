@@ -102,5 +102,7 @@ machine_summary() {
     echo "- Commit: $(git rev-parse --short HEAD 2>/dev/null || echo unknown)$(git diff --quiet 2>/dev/null || echo ' (with local changes)')"
     echo "- nvcc: $("$NVCC" --version 2>/dev/null | grep -o 'release [0-9.]*, V[0-9.]*' || echo 'not found')"
     echo "- GPU/driver: $(nvidia-smi --query-gpu=name,driver_version --format=csv,noheader 2>/dev/null | head -1 || echo 'nvidia-smi failed')"
-    echo "- Artifact: $(basename "$ART"), $(du -h "$ART" | cut -f1)"
+    local art_size
+    art_size=$( { ls -1 "$ART" "$ART".part-* 2>/dev/null || true; } | xargs -r du -ch | awk 'END { print $1 }')
+    echo "- Artifact: $(basename "$ART"), ${art_size:--} (multi-volume total)"
 }

@@ -29,14 +29,14 @@ capture() { # $1 = name, remaining = speculative flags
         build-trace/bench/ninfer_bench --weights "$ART" \
         --corpus bench/fixtures/qwen3_8_flash_next_context.ids \
         -pg 8192,32 --max-ctx 16384 --prefill-chunk 8192 --kv-dtype "$KV_DTYPE" "$@" \
-        --warmup 1 -r 1 -o json --output-file "$dir/$name-bench.json" >"$dir/$name-nsys.log" 2>&1 ||
+        --profile-measured --warmup 1 -r 1 -o json --output-file "$dir/$name-bench.json" >"$dir/$name-nsys.log" 2>&1 ||
         { log "capture $name failed; see $dir/$name-nsys.log"; return 0; }
     "$PYTHON" tools/bench/flash_next_performance.py "$dir/$name.sqlite" \
         --hardware tools/bench/hardware/gb10.json --benchmark "$dir/$name-bench.json" \
         --output "$dir/$name-report.json" >>"$dir/$name-nsys.log" 2>&1 ||
         log "report for $name failed; see $dir/$name-nsys.log"
 }
-capture mtp0 --spec none
+capture mtp0
 capture "mtp$DRAFT_TOKENS" --spec mtp --draft-tokens "$DRAFT_TOKENS" --lm-head-draft
 
 log "PLE residency: unannotated decode run, counting major page faults"
@@ -47,7 +47,7 @@ faults_before=$(awk '/^pgmajfault /{print $2}' /proc/vmstat)
 seconds_before=$SECONDS
 "${timer[@]}" "$BENCH_BIN" --weights "$ART" \
     --corpus bench/fixtures/qwen3_8_flash_next_context.ids -pg 8192,512 --max-ctx 16384 \
-    --prefill-chunk 8192 --kv-dtype "$KV_DTYPE" --spec none --warmup 1 -r 3 -o table \
+    --prefill-chunk 8192 --kv-dtype "$KV_DTYPE" --warmup 1 -r 3 -o table \
     >"$dir/residency.log" 2>&1 || log "residency run failed; see $dir/residency.log"
 faults=$(($(awk '/^pgmajfault /{print $2}' /proc/vmstat) - faults_before))
 elapsed=$((SECONDS - seconds_before))

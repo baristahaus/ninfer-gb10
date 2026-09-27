@@ -1,6 +1,7 @@
 # Qwen3.8 Flash-Next 125B-A6B artifact reference
 
-This reference defines the sole registered storage profile for Qwen3.8 Flash-Next 125B-A6B. Generic
+This reference defines the two registered storage profiles for Qwen3.8 Flash-Next 125B-A6B: the
+checkpoint-word profile written by the converter and the dense-FP8 profile derived from it. Generic
 framing, layouts, and numeric formats remain governed by `artifact-container.md`,
 `storage-layouts.md`, and `tensor-formats.md`; model mathematics are defined in
 [`qwen3.8-flash-next-125b-a6b-model.md`](qwen3.8-flash-next-125b-a6b-model.md).
@@ -28,6 +29,15 @@ extent, then exposes read-only mappings spanning the v3 payload shards. A gather
 cache own residency; the generic materializer does not allocate host or device storage for the
 complete 51.2 GB table. Prompt preparation gathers only the sixteen rows selected for each token.
 
+The dense-FP8 profile has the same objects, bindings, Uses and components. Its 230 text
+projections that every decode step reads in full are `fp8_e4m3fn_row_bf16` with `row_scale_v1`:
+the GDN query/key/value, output-gate and output projections, the QSA packed query/gate and output
+projections, the 97 HyperConnection down projections (96 layer connections and the final mixer)
+and the output head. Their A16Only Uses are unchanged: activations stay BF16 and only the weights
+are quantized. Everything else, including the MTP layer, keeps the checkpoint-word representation.
+The profile stores 3.6 GB less than the checkpoint-word profile and removes the same amount from
+the bytes read per decoded token.
+
 The upgraded artifact occupies 134,755,956,216 bytes across five files capped at 32 GB each. Its format allocation is 1,249 BF16, 168 FP32,
 one FP8 table, 96 NVFP4 expert banks, 55 Q4, 54 Q5, one Q6, one INT32 map, and two Q8 tensors. The six embedded
 resources are `tokenizer.json`, `tokenizer_config.json`, `chat_template.jinja`,
@@ -53,6 +63,22 @@ The output basename is fixed. Conversion rejects missing, unexpected, incorrectl
 incorrectly typed source tensors, mismatched paired gate/up scales, invalid divisors, incompatible
 model configuration, and incomplete frontend resources.
 
+The dense-FP8 profile is derived from a checkpoint-word artifact, whose BF16 words are the
+checkpoint's:
+
+```bash
+python3 -m tools.convert.qwen3_8_flash_next_125b_a6b.dense_fp8 \
+  --source out/qwen3_8_flash_next_125b_a6b_nvfp4.ninfer \
+  --out out/fp8/qwen3_8_flash_next_125b_a6b_nvfp4_fp8.ninfer
+```
+
+Each selected matrix is quantized with `fp8_row_maxabs` rounding: one BF16 row multiplier, the
+round-to-nearest-even BF16 value of the row's maximum magnitude divided by 448, and E4M3FN codes
+rounded to nearest even. Every other object is copied byte for byte. The re-encoder rejects a
+selected parameter that is not one whole contiguous BF16 object of its exact shape, or whose object
+another binding or auxiliary also references. The report beside the output records, per matrix,
+the relative RMS and maximum absolute error of the represented weights against the BF16 words.
+
 ## Upgrade an existing v2 artifact
 
 ```bash
@@ -72,7 +98,12 @@ Text alone selects 1,260 device objects. MTP adds 31, Vision adds 333, and the o
 adds two. Frontend resources are owned host bytes; PLE is a read-only mapped range whose lifetime
 is owned by the loaded model. PLE mappings are not counted as GPU uploads or materializer staging.
 The C++ loader checks logical shapes, formats, expert layout, activation permissions, selected
-component targets and indexed-proposal geometry before building the Program.
+component targets and indexed-proposal geometry before building the Program. The projections of
+the dense-FP8 profile accept either BF16 or `fp8_e4m3fn_row_bf16`, as the artifact records it,
+wherever they occur (the MTP layer included); every other leaf has one declared format. The
+consuming Ops take the FP8 words directly: A16 FP8 linear routes for the exact problems, fused
+FP8 decode forms for the HyperConnection down projection and the QSA query/gate split, and an FP8
+exact-head rescoring for MTP drafting.
 
 Flash-Next retains its registered template renderer and does not support `--chat-template`
 overrides. Text, Vision, MTP, prefix reuse and concurrency still use the public Engine route.

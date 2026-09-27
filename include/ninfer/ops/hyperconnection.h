@@ -31,6 +31,8 @@ void hyperconnection_add_repeated(const Tensor& embedding, Tensor& hyper,
 [[nodiscard]] std::size_t hyperconnection_mix_workspace_capacity_bytes(std::int32_t tokens,
                                                                         bool with_injection);
 
+// The [320,10240] down projection may be BF16 or row-scaled FP8 (fp8_e4m3fn_row_bf16); the
+// [10240,320] up projection and the [4,10240] injection rows are BF16.
 void hyperconnection_mix(const Tensor& hyper, const HyperConnectionWeights& weights,
                          Tensor& block_input, Tensor* injection, WorkspaceArena& workspace,
                          cudaStream_t stream, Bf16GemmContext* bf16_gemm = nullptr);

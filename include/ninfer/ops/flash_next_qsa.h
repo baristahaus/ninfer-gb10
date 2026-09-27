@@ -26,6 +26,8 @@ struct FlashNextQsaIndexControl {
     const Tensor* reused_indices = nullptr;
 };
 
+// query_gate and output may be BF16 or row-scaled FP8 (fp8_e4m3fn_row_bf16); the key, value and
+// index projections are BF16.
 struct FlashNextQsaWeights {
     // Per-head packed rows: 24 repetitions of [query(256), gate(256)].
     Weight query_gate;

@@ -30,6 +30,25 @@ Reference device(artifact::Binder& binder, std::string_view name, QType format,
                             format);
 }
 
+// Dense projections whose consuming Ops accept either representation: GDN qkv/z/out, QSA
+// query-gate/output, the HyperConnection down projection and the output head. The artifact's
+// recorded format selects the route; every other leaf keeps its single declared format.
+Reference projection(artifact::Binder& binder, std::string_view name,
+                     std::initializer_list<std::uint64_t> shape,
+                     Placement placement = Placement::Device) {
+    if (placement == Placement::Disabled) { return {}; }
+    const auto found = binder.reader().directory().bindings.find(name);
+    if (found == binder.reader().directory().bindings.end() || found->second.parts.empty()) {
+        throw artifact::ArtifactError("missing logical parameter " + std::string(name));
+    }
+    const QType format = binder.reader().geometry(found->second.parts.front().object).format;
+    if (format != QType::BF16 && format != QType::FP8_E4M3FN_ROW_BF16) {
+        throw artifact::ArtifactError(std::string(name) +
+                                      ": projection must be BF16 or row-scaled FP8");
+    }
+    return device(binder, name, format, shape, placement);
+}
+
 Reference expert_bank(artifact::Binder& binder, std::string_view name,
                       std::initializer_list<std::uint64_t> shape,
                       Placement placement = Placement::Device) {
@@ -64,10 +83,10 @@ HyperConnectionPlan bind_hc(artifact::Binder& binder, const std::string& prefix,
         .block_inject = device(binder, prefix + "block_inject_weight.weight", QType::BF16,
                                {4, 10240}, placement),
         .norm         = device(binder, prefix + "hc_norm.weight", QType::BF16, {10240}, placement),
-        .down = device(binder, prefix + "input_mix_weight_down.weight", QType::BF16, {320, 10240},
-                       placement),
-        .up   = device(binder, prefix + "input_mix_weight_up.weight", QType::BF16, {10240, 320},
-                       placement),
+        .down =
+            projection(binder, prefix + "input_mix_weight_down.weight", {320, 10240}, placement),
+        .up = device(binder, prefix + "input_mix_weight_up.weight", QType::BF16, {10240, 320},
+                     placement),
     };
 }
 
@@ -75,10 +94,10 @@ FinalHyperConnectionPlan bind_final_hc(artifact::Binder& binder, const std::stri
                                        Placement placement = Placement::Device) {
     return {
         .norm = device(binder, prefix + "hc_norm.weight", QType::BF16, {10240}, placement),
-        .down = device(binder, prefix + "input_mix_weight_down.weight", QType::BF16, {320, 10240},
-                       placement),
-        .up   = device(binder, prefix + "input_mix_weight_up.weight", QType::BF16, {10240, 320},
-                       placement),
+        .down =
+            projection(binder, prefix + "input_mix_weight_down.weight", {320, 10240}, placement),
+        .up = device(binder, prefix + "input_mix_weight_up.weight", QType::BF16, {10240, 320},
+                     placement),
     };
 }
 
@@ -121,13 +140,12 @@ MoePlan bind_mtp_moe(artifact::Binder& binder, const std::string& prefix, Placem
 FullAttentionPlan bind_attention(artifact::Binder& binder, const std::string& prefix,
                                  Placement placement = Placement::Device) {
     return {
-        .query_gate =
-            device(binder, prefix + "q_proj.weight", QType::BF16, {12288, 2560}, placement),
-        .key    = device(binder, prefix + "k_proj.weight", QType::BF16, {512, 2560}, placement),
-        .value  = device(binder, prefix + "v_proj.weight", QType::BF16, {512, 2560}, placement),
-        .output = device(binder, prefix + "o_proj.weight", QType::BF16, {2560, 6144}, placement),
-        .query_norm      = device(binder, prefix + "q_norm.weight", QType::BF16, {256}, placement),
-        .key_norm        = device(binder, prefix + "k_norm.weight", QType::BF16, {256}, placement),
+        .query_gate = projection(binder, prefix + "q_proj.weight", {12288, 2560}, placement),
+        .key        = device(binder, prefix + "k_proj.weight", QType::BF16, {512, 2560}, placement),
+        .value      = device(binder, prefix + "v_proj.weight", QType::BF16, {512, 2560}, placement),
+        .output     = projection(binder, prefix + "o_proj.weight", {2560, 6144}, placement),
+        .query_norm = device(binder, prefix + "q_norm.weight", QType::BF16, {256}, placement),
+        .key_norm   = device(binder, prefix + "k_norm.weight", QType::BF16, {256}, placement),
         .index_query_key = device(binder, prefix + "indexer.index_qk_proj.weight", QType::BF16,
                                   {640, 2560}, placement),
         .index_query_norm =
@@ -139,16 +157,15 @@ FullAttentionPlan bind_attention(artifact::Binder& binder, const std::string& pr
 
 GdnPlan bind_gdn(artifact::Binder& binder, const std::string& prefix) {
     return {
-        .a_log        = device(binder, prefix + "A_log", QType::FP32, {48}),
-        .dt_bias      = device(binder, prefix + "dt_bias", QType::FP32, {48}),
-        .convolution  = device(binder, prefix + "conv1d.weight", QType::BF16, {4, 10240}),
-        .a_projection = device(binder, prefix + "in_proj_a.weight", QType::BF16, {48, 2560}),
-        .b_projection = device(binder, prefix + "in_proj_b.weight", QType::BF16, {48, 2560}),
-        .query_key_value =
-            device(binder, prefix + "in_proj_qkv.weight", QType::BF16, {10240, 2560}),
-        .output_gate = device(binder, prefix + "in_proj_z.weight", QType::BF16, {6144, 2560}),
-        .norm        = device(binder, prefix + "norm.weight", QType::BF16, {128}),
-        .output      = device(binder, prefix + "out_proj.weight", QType::BF16, {2560, 6144}),
+        .a_log           = device(binder, prefix + "A_log", QType::FP32, {48}),
+        .dt_bias         = device(binder, prefix + "dt_bias", QType::FP32, {48}),
+        .convolution     = device(binder, prefix + "conv1d.weight", QType::BF16, {4, 10240}),
+        .a_projection    = device(binder, prefix + "in_proj_a.weight", QType::BF16, {48, 2560}),
+        .b_projection    = device(binder, prefix + "in_proj_b.weight", QType::BF16, {48, 2560}),
+        .query_key_value = projection(binder, prefix + "in_proj_qkv.weight", {10240, 2560}),
+        .output_gate     = projection(binder, prefix + "in_proj_z.weight", {6144, 2560}),
+        .norm            = device(binder, prefix + "norm.weight", QType::BF16, {128}),
+        .output          = projection(binder, prefix + "out_proj.weight", {2560, 6144}),
     };
 }
 
@@ -284,7 +301,7 @@ ArtifactLoadPlan plan_artifact(artifact::Binder& binder,
         target.moe    = bind_main_moe(binder, prefix + "mlp.");
     }
     out.bindings.final_hc = bind_final_hc(binder, "model.language_model.hyper_connection_mixer.");
-    out.bindings.output_head = device(binder, "lm_head.weight", QType::BF16, {248320, 2560});
+    out.bindings.output_head = projection(binder, "lm_head.weight", {248320, 2560});
     const Placement proposal_placement =
         features.optimized_proposal() ? Placement::Device : Placement::Disabled;
     out.bindings.optimized_proposal_head =

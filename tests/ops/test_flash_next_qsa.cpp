@@ -1,11 +1,13 @@
 #include "ninfer/ops/flash_next_qsa.h"
 #include "ops/op_tester.h"
+#include "ops/quantized_weight.h"
 
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
 #include <iostream>
+#include <string>
 #include <vector>
 
 namespace {
@@ -378,12 +380,82 @@ int run(int kPrefillTokens) {
     return failures;
 }
 
+// Packed query/gate projection: rows alternate one 256-wide query head and its gate head. The FP64
+// reference evaluates the represented weight rows; T=1 takes the fused decode routes and T=3 the
+// linear projection plus split.
+int run_query_gate(bool fp8, int tokens) {
+    constexpr int kPackedRows = 2 * kQueryRows;
+    const std::string label   = std::string("Flash-Next query/gate ") + (fp8 ? "FP8" : "BF16") +
+                              " T=" + std::to_string(tokens);
+    const auto fp8_weight = quantized_weight::make_patterned_weight(QType::FP8_E4M3FN_ROW_BF16,
+                                                                    kPackedRows, kHidden, 941U);
+    std::vector<float> weight(static_cast<std::size_t>(kPackedRows) * kHidden);
+    if (fp8) {
+        std::vector<std::int32_t> rows(kPackedRows);
+        for (int row = 0; row < kPackedRows; ++row) { rows[row] = row; }
+        weight = quantized_weight::materialize_rows_fp32(fp8_weight, rows);
+    } else {
+        fill_uniform(weight, 942U, -0.25F, 0.25F);
+        round_to_bf16(weight);
+    }
+    std::vector<float> input(static_cast<std::size_t>(kHidden) * tokens);
+    fill_uniform(input, 943U, -1.0F, 1.0F);
+    round_to_bf16(input);
+
+    std::vector<double> query_reference(static_cast<std::size_t>(kQueryRows) * tokens);
+    std::vector<double> gate_reference(query_reference.size());
+    for (int token = 0; token < tokens; ++token) {
+        for (int row = 0; row < kPackedRows; ++row) {
+            double value = 0.0;
+            for (int k = 0; k < kHidden; ++k) {
+                value += double(weight[static_cast<std::size_t>(row) * kHidden + k]) *
+                         input[static_cast<std::size_t>(token) * kHidden + k];
+            }
+            const int head        = row / (2 * kHeadDim);
+            const int within_head = row - head * 2 * kHeadDim;
+            auto& target          = within_head < kHeadDim ? query_reference : gate_reference;
+            target[static_cast<std::size_t>(token) * kQueryRows + head * kHeadDim +
+                   within_head % kHeadDim] = value;
+        }
+    }
+
+    std::vector<std::uint16_t> weight_bits(weight.size());
+    for (std::size_t i = 0; i < weight.size(); ++i) { weight_bits[i] = f32_to_bf16(weight[i]); }
+    DeviceBuffer d_weight = fp8 ? to_device(fp8_weight.payload) : to_device(weight_bits);
+    const Weight packed =
+        fp8 ? fp8_weight.device_weight(d_weight.p) : bf16_weight(d_weight, kPackedRows, kHidden);
+    DeviceBuffer d_input = to_device_bf16(input);
+    GuardedDeviceBuffer d_query(query_reference.size() * sizeof(std::uint16_t));
+    GuardedDeviceBuffer d_gate(gate_reference.size() * sizeof(std::uint16_t));
+    Tensor input_tensor(d_input.p, DType::BF16, {kHidden, tokens});
+    Tensor query_tensor(d_query.data(), DType::BF16, {kQueryRows, tokens});
+    Tensor gate_tensor(d_gate.data(), DType::BF16, {kQueryRows, tokens});
+    WorkspaceArena workspace(ops::flash_next_query_gate_workspace_capacity_bytes(tokens));
+    ops::flash_next_project_query_gate(input_tensor, packed, query_tensor, gate_tensor, workspace,
+                                       nullptr);
+    cuda_synchronize();
+
+    int failures = 0;
+    failures += verify_pointwise(label + " query",
+                                 from_device_bf16(d_query.data(), query_reference.size()),
+                                 query_reference, {/*absolute*/ 2.0e-2, /*relative*/ 1.0e-2});
+    failures += verify_pointwise(label + " gate",
+                                 from_device_bf16(d_gate.data(), gate_reference.size()),
+                                 gate_reference, {/*absolute*/ 2.0e-2, /*relative*/ 1.0e-2});
+    failures += d_query.verify_guards((label + " query").c_str());
+    failures += d_gate.verify_guards((label + " gate").c_str());
+    return failures;
+}
+
 } // namespace
 
 int main() {
     if (ninfer::test::cuda_unavailable()) { return 77; }
     try {
-        const int failures = run(17) + run(18);
+        int failures = run(17) + run(18);
+        for (const bool fp8 : {false, true}) {
+            for (const int tokens : {1, 3}) { failures += run_query_gate(fp8, tokens); }
+        }
         std::cout << (failures == 0 ? "OK" : "FAIL") << " Flash-Next QSA\n";
         return failures == 0 ? 0 : 1;
     } catch (const std::exception& error) {

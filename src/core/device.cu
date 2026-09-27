@@ -54,20 +54,24 @@ DeviceContext::DeviceContext(int device_id) : device(device_id) {
 
     bind_to_current_thread();
 
-    // GB10 sync probe (tools/gb10/probe_sync.sh, profiles/bench/gb10/sync_probe): yield wakes
-    // the host ~3 us after GPU completion, 0.4-1.2 ms for blocking, equal to spin. Spin
-    // matches yield but holds a core at 100% for the whole round, which GB10's shared
-    // CPU/GPU power budget disfavors; auto spins on this machine (20 cores > 1 GPU).
-    err = cudaSetDeviceFlags(cudaDeviceScheduleYield);
+    err = cudaGetDeviceProperties(&props, device_id);
+    if (err != cudaSuccess) {
+        throw std::runtime_error(cuda_error_message("cudaGetDeviceProperties failed", err));
+    }
+
+    // GB10 sync probe (tools/gb10/probe_sync.sh): under cudaDeviceScheduleBlockingSync a
+    // synchronize returns 0.4-1.2 ms after the GPU finished, growing with kernel duration;
+    // yield/spin/auto return in ~3 us. Yield is a busy-wait (sched_yield between polls),
+    // so the end-to-end rate and GPU clock under GB10's shared power budget are gated on
+    // the step 2 A/B. Use yield on integrated devices (GB10); keep the upstream blocking
+    // choice on discrete GPUs, where it frees the host core while the GPU runs.
+    const unsigned sync_flag =
+        props.integrated ? cudaDeviceScheduleYield : cudaDeviceScheduleBlockingSync;
+    err = cudaSetDeviceFlags(sync_flag);
     if (err != cudaSuccess) {
         (void)cudaGetLastError(); // don't leak this into later launch checks
         std::fprintf(stderr, "warning: %s; keeping default CUDA sync schedule\n",
                      cuda_error_message("cudaSetDeviceFlags failed", err).c_str());
-    }
-
-    err = cudaGetDeviceProperties(&props, device_id);
-    if (err != cudaSuccess) {
-        throw std::runtime_error(cuda_error_message("cudaGetDeviceProperties failed", err));
     }
 
     cudaStream_t compute = nullptr;

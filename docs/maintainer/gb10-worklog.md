@@ -53,8 +53,12 @@ compression-granted rate.
 
 ### 18:35 — memory probe, run 2 (+ weight samples)
 
-Same setup, plus samples from the artifact's own bytes with `ART` set to the 125B-A6B
-NVFP4 fork artifact:
+With `ART` set to the 125B-A6B NVFP4 fork artifact, sample the artifact's own bytes
+additionally — executing the explicit instruction from the pre-PR #8 Opus conversation
+("next time on the GB10: set `ART` and rerun the probe, ~15 s").
+`tools/gb10/weight_samples.py` (PR #8) extracts 64 MiB of each weight class through
+the Flash-Next bindings; `probe_memory.sh` runs it automatically when `ART` is set and
+removes the samples afterwards. `hbm_bandwidth_probe.cu` section 2b:
 
 - plain GPU read 236–240 GB/s (≈3% run-to-run variance);
 - compression granted on zero-filled data 2024.9 GB/s (granter works when data is
@@ -148,6 +152,18 @@ entirely; the query had an inner JOIN on `textId` and silently dropped rows that
 carry their text inline in the `text` column. The coalesced query (`COALESCE(text,
 StringIds.value)`) shows the full annotation set. Kept here because the same trap
 will bite any future nsys-sqlite inspection.
+
+### Pre-existing bug fixed upstream (verified here)
+
+The hardware profile `tools/bench/hardware/gb10.json` was named "NVIDIA GB10 Grace
+Blackwell (DGX Spark class)"; the attribution script requires the profile name to match
+`cudaDeviceProp.name`, which the benchmark reports as "NVIDIA GB10". The old name would
+have stopped step 3's attribution at the name check
+(`flash_next_performance.py:382`). Found in the pre-PR #8 Opus conversation (CPU side,
+no GPU); fixed in PR #8 (`b7e770d8`, merged 18:27) together with the measured 246 GB/s
+bandwidth value. Verified here: `gb10.json` now reads `name: "NVIDIA GB10"`,
+`dram_gbps: 246.0`, and the campaign 2 attribution runs passed the name check (they
+failed later, on the missing measured region — B6).
 
 ## Operational logistics (timestamped)
 

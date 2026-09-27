@@ -29,13 +29,13 @@ bench() { # $1 = output name, remaining = extra ninfer_bench arguments
 }
 
 log "warming the page cache (discarded run)"
-bench warm -pg 8192,32 --spec none --warmup 0 -r 1 -o table
+bench warm -pg 8192,32 --warmup 0 -r 1 -o table
 
 draft_counts=(0 "$DRAFT_TOKENS")
 [[ $DRAFT_TOKENS != 3 ]] && draft_counts+=(3)
 reports=()
 for k in "${draft_counts[@]}"; do
-    [[ $k == 0 ]] && spec=(--spec none) || spec=(--spec mtp --draft-tokens "$k" --lm-head-draft)
+    [[ $k == 0 ]] && spec=() || spec=(--spec mtp --draft-tokens "$k" --lm-head-draft)
     log "ninfer_bench K=$k (8K and 64K prompts, 1 warmup + 5 measured)"
     bench "mtp$k" -pg '8192,512;65536,512' "${spec[@]}" --warmup 1 -r 5 -o json \
         --output-file "$dir/mtp$k.json"

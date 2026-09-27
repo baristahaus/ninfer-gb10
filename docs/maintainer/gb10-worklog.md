@@ -409,3 +409,9 @@ cpu19 = Cortex-X925 3.9 GHz; governor performance). Results in
   `cudaDeviceScheduleYield`: yield matches spin's 2.8 µs wake-up without holding a core
   at 100% (shared CPU/GPU power budget); auto is excluded because it spins on this
   machine. Gate: step 2 re-run against 44.6 tokens/s (running).
+
+- Ops note: after the file-page probe's 125 GiB evictor read, 101 GB of page cache left
+  only 16 GB free, so the first step-2 load failed the `current_free_device_bytes`
+  check. Non-root page-cache drop/reclaim is not permitted on this box; clear it with
+  `sudo sh -c 'echo 3 > /proc/sys/vm/drop_caches'` (passwordless sudo is available)
+  before load-heavy runs following any probe that reads large artifact volumes.

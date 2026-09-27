@@ -423,3 +423,23 @@ cpu19 = Cortex-X925 3.9 GHz; governor performance). Results in
   (34bcaab7, bb71028c, f91d9e73, 3009bf8e, 598c7872) were re-authored to
   `baristahaus <baristahaus@users.noreply.github.com>` via filter-branch before the
   follow-up push (18:46 identity policy).
+
+- Step 2 A/B (yield vs. blocking, untraced, identical config): all six rows up,
+  1.6-3.3% — inside the untraced gap prediction (2-4%):
+
+  | config | blocking | yield |
+  |---|---:|---:|
+  | MTP off 8K / 64K | 19.3 / 19.1 | 19.6 / 19.4 |
+  | MTP K=2 8K / 64K | 44.6 / 43.6 | 45.7 / 44.4 |
+  | MTP K=3 8K / 64K | 52.0 / 51.1 | 53.7 / 52.4 |
+
+  The measured binary was the pre-per-device build (unconditional yield — identical
+  on this integrated device, `props.integrated=1`); the per-device source was
+  rebuilt afterward and the flag path verified with a short K=2 smoke run
+  (45.52 ± 0.04 tok/s at 8K+512, no schedule-fallback warning).
+
+- Power/clock during the yield run (0.5 s `nvidia-smi` sampling, K=2 8K+512 x3
+  after the 20 s load): SM clock pinned at 2405-2489 MHz (mean 2454) through the
+  whole ~51 s decode window, power.draw mean 41.2 W (peak 55.5 W; idle ~4.5 W).
+  The yield-busy host core does not cost GPU clock under GB10's shared power
+  budget. Raw sample: `profiles/bench/gb10/step2/gpu_power_load.csv` (local).

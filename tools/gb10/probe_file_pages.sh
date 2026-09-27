@@ -4,16 +4,20 @@
 # phase times out without taking the rest. Writes
 # profiles/bench/gb10/file_page_probe/summary.md. Needs no model.
 #
-# The evictor defaults to the largest regular file under $MODELS (the Flash-Next artifact
-# volumes) so the 512 MiB scratch mapping is pushed out of the page cache before the cold
-# phases. NOTE: the evicting read (~125 GiB) recycles the whole page cache — the PLE table's
+# The evictor defaults to the largest regular file under $MODELS (default: the directory of
+# ART from config.local.sh, i.e. the Flash-Next artifact volumes) so the 512 MiB scratch
+# mapping is pushed out of the page cache before the cold phases. NOTE: the evicting read (~125 GiB) recycles the whole page cache — the PLE table's
 # residency is gone afterwards; the next campaign's warm run re-establishes it.
 # Run on an otherwise idle machine (stop any server first). Takes ~2-4 minutes.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 
 NVCC=${NVCC:-$(command -v nvcc || echo /usr/local/cuda/bin/nvcc)}
-MODELS=${MODELS:-/home/apollo11/models}
+if [[ -z ${MODELS:-} && -z ${ART:-} && -f tools/gb10/config.local.sh ]]; then
+    # shellcheck source=config.example.sh
+    source tools/gb10/config.local.sh
+fi
+MODELS=${MODELS:-$(dirname "${ART:-/nonexistent/x}")}
 dir=profiles/bench/gb10/file_page_probe
 rm -rf "$dir"
 mkdir -p "$dir"

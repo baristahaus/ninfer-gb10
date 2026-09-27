@@ -271,3 +271,109 @@ failed later, on the missing measured region — B6).
 | PLE residency: 49 faults (campaign 2, warm) → 0 faults (campaign 3); host gather 134 µs/step | step 3, campaigns 2–3 | `profiles/bench/gb10/step3/residency.log` |
 | Per-stage attribution (mtp0/mtp2, 97.5–97.8% attributed) | step 3, campaign 3 | `profiles/bench/gb10/step3/{mtp0,mtp2}-report.md` |
 | Final consolidated report (25,214 B, 2026-09-27T19:32Z) | `report.sh`, campaign 3 | `profiles/bench/gb10/report.md` |
+| Idle-time gap attribution; step 6 task decision | kernel-gap bucketing on `profiles/bench/gb10/step3/{mtp0,mtp2}.sqlite` (no new capture) | `gb10-worklog.md` § Idle-time attribution; task brief: `plan-2026-09-27-step6-task1-host-overlap.md` |
+| File-backed page GPU-read probe (device-PLE gate) | `file_page_probe.cu` + `probe_file_pages.sh` | `profiles/bench/gb10/file_page_probe/summary.md` |
+| Step 6.1 gap breakdown (43/49 gaps host-bound; ~1.4 ms sync-return completion lag is the dominant component) | sqlite analysis of `profiles/bench/gb10/step3/mtp2.sqlite` | `step6-task1-gap-breakdown.md` |
+
+## Idle-time attribution (2026-09-27, mtp0/mtp2 sqlite, no new capture)
+
+Kernel-gap bucketing on `CUPTI_ACTIVITY_KIND_KERNEL`
+(`LAG("end") OVER (ORDER BY start)`, single stream 13 / ctx 1 in both captures;
+each capture = one 163 ms warmup burst + 2 concatenated benchmark runs; the 79 ms /
+8.4 ms gaps at ~1% and ~50% span are run-boundary pauses, not round stalls).
+
+| Bucket | mtp0 (MTP off, diagnostic) | mtp2 (production, draft K=2) |
+|---|---|---|
+| kernels | 88,775 — **100% eager** (`graphNodeId` = 0 for all) | 47,408 — **85% in CUDA graphs** (40,446 graph / 6,962 eager) |
+| span / busy / idle | 14,469 / 14,088 / 381.7 ms (≈191 ms/run) | 13,613 / 13,355 / 258 ms (≈129 ms/run) |
+| gaps >1 ms | 60 / 174.2 ms | 59 / 233.7 ms (**90.6% of idle**) |
+| gaps 100 µs–1 ms | 19 / 9.1 ms | 8 / 3.7 ms |
+| gaps 10–100 µs | 176 / 3.7 ms | 80 / 2.1 ms |
+| gaps <10 µs | 88,519 / **194.6 ms** | 37,552 / 19.7 ms (7.6% of idle) |
+
+Findings:
+
+1. mtp0's 194.6 ms of sub-10 µs "small gaps" are **eager-launch latency**: with MTP
+   off, the decode path runs 100% eager on one stream (no graph launches at all in
+   the capture). That is an artifact of the attribution config, not of the
+   production path.
+2. In the production config (mtp2) decode is 85% graph-captured and in-round gaps
+   collapse to 19.7 ms. **>90% of production idle is between-round host gaps** —
+   round-boundary signature: `shortlist_exact_select` / `ple_fold` /
+   `embed_gather_dense` (last kernels of round N) → host (PLE gather, sampling
+   readback, scalar set) → `set_i32_scalar` / `speculative_prepare_verify_inputs`
+   (first kernels of round N+1). Median ≈1.7 ms; outliers 26.5 ms and 14.2 ms at
+   the MTP verify-inputs prep boundary (after `shortlist_exact_select`).
+   Excluding run-boundary outliers: ≈73 ms/run ≈ 2.3 ms/decode round ≈ ~20% of
+   the ~12 ms/token gap.
+3. **Step 6 first task: overlap the between-round host work with the previous
+   round's GPU execution** (pipelined commit path: verify-inputs prep and PLE
+   gather of round N+1 in flight while round N's GPU work runs; sampling readback
+   off the critical path). PDL (knoopx fork `e0a6d18c`) is demoted to second:
+   its remaining target is the 19.7 ms of in-round gaps plus the ~6,962
+   eager kernels/run (PLE fold/gather, scalar ops, verify prep), and it would have
+   to coexist with graph capture — a harder combination than eager-only PDL.
+
+## File-backed page GPU-read probe (2026-09-27, step 6.3 gate)
+
+Plan step 6.3 asks whether a device kernel can gather PLE rows directly from the
+file-backed mapping, and what a GPU pays for a file-backed page that is resident vs.
+cold (page-cache miss → NVMe page-in via the fault path). New standalone probe
+(`tools/gb10/file_page_probe.cu`, runner `tools/gb10/probe_file_pages.sh`; 512 MiB
+scratch file, 2560 B rows at 4 KiB-aligned offsets, deterministic offsets; each phase a
+separate invocation so a hung cold fault would time out without hanging the run).
+
+| Phase | Result |
+|---|---|
+| host warm read (CPU, page cache) | 97.5 GB/s |
+| GPU sequential full read, resident | 161.9 GB/s |
+| GPU random 2560 B rows ×100k, resident | 168.9 GB/s (1.5 ms) |
+| evict: 125 GiB host read (LRU recycle) | 76.6 s at 1.75 GB/s |
+| GPU serial cold rows, 1 thread ×512 | **96.4 µs/row** (fault round-trip) |
+| GPU parallel cold rows ×100k | 102.2 ms, 2.5 GB/s, **1.02 µs/row** amortized |
+| same rows re-read, resident (sanity) | 168.1 GB/s — matches resident phase |
+
+Verdict — **gate passed**:
+
+1. Device faults on file-backed (page-cache) pages work on GB10 sm_121: no hangs, no
+   errors, all 100k cold rows completed.
+2. Steady-state (resident) device PLE gather is ~free: 3 rows/round at 168 GB/s is
+   ~50 ns; the residency campaign already showed 0 faults over 147 s warm.
+3. Cold tail is ~100 µs per faulted row, and faults parallelize across SMs
+   (1.02 µs/row amortized at 100k rows) — vs. the host gather's 72 ms cold outlier
+   (single-threaded serialized faults). The device gather is ~700× better in the cold case.
+
+Caveats: the 125 GiB evicting read recycles the whole page cache — PLE table residency
+is gone until the next campaign's warm run re-establishes it (the campaign warmup
+handles it; campaign 2 showed convergence 49 faults → 0). The sink magic-check prints
+0x0 by construction (best-effort anti-DCE); the bandwidth and completion evidence stands.
+
+## Step 6.1 — inter-round gap breakdown (2026-09-27, mtp2.sqlite)
+
+Opus's step-6 ordering question: the PLE gather is 9.2 µs warm (0.7% of the gap) —
+what fills the rest of the ~1.5–1.7 ms? Full analysis in
+`docs/maintainer/step6-task1-gap-breakdown.md` (method: LAG(end) gaps over the
+kernel table, next-kernel enqueue resolved exactly via `kernel.correlationId =
+runtime.correlationId`, NVTX + CUPTI sync/memcpy per gap; 49 decode-phase gaps >200 µs,
+5 run-boundary gaps >3 ms excluded).
+
+Headline:
+
+1. **43/49 gaps are host-bound** — the next kernel's enqueue call starts 0.32–2.01 ms
+   after the GPU went idle. The GPU is waiting for the host.
+2. Two stall points per round: type A `qsa.select → GDN` (eager, one kernel at a time,
+   gap p50 1.32 ms) and type B `ple_fold → verify graph` (graph, gap p50 1.85 ms).
+3. Dominant component: a CUPTI stream sync returns **~1.4 ms (p50 1.47 ms) after the
+   last kernel it waited on has already completed** — completion-detection latency of
+   the engine's wait path (poll/sleep granularity or post-kernel stream work; to
+   confirm in the engine source).
+4. The real between-round work (commit ~8 µs, submit ~84 µs, PLE 11 µs, H2D, launch)
+   is only ~30–110 µs after the sync returns.
+5. `cudaGraphLaunch` runs 940–970 µs with the first kernel starting mid-call — the
+   call duration is not itself critical, but the ~800 µs call-start → kernel-start
+   interval is; flagged for follow-up.
+
+Consequence: step 6.3 (device PLE) is ~11 µs/round of steady-state (cold-tail value
+only); step 6.2 as designed recovers ~100–200 µs/round; the **new top target is the
+~1.4 ms sync-return lag** (candidate 6.0 — blocking event sync / tighter wait loop),
+which needs the engine's wait-path source to confirm the mechanism.

@@ -4,7 +4,8 @@
 
 ## GB10 (sm_121a) — this fork
 
-**Lineage:** NInfer (Neroued) → lkarlslund/ninfer (Flash-Next support) → this fork (GB10 port).
+**Lineage:** NInfer (Neroued) → lkarlslund/ninfer (Flash-Next support) → this fork (GB10 port),
+plus selected fixes cherry-picked from giveen/ninfer-ext (see below).
 
 - **Neroued** — the original NInfer engine and the five official upstream artifacts in the
   table below ([huggingface.co/neroued](https://huggingface.co/neroued)).
@@ -39,6 +40,30 @@
 3. **Lowered CUDA requirements.** The whole stack — clean build, op conformance
    (ctest), serve, probes — is validated on the GB10 stock **CUDA 13.0.88** toolkit;
    upstream's validated toolkit is CUDA 13.1. CMake imposes no CUDA version floor.
+
+### Pull requests merged since the port
+
+Each cherry-picked commit keeps its original author and records its source commit
+(`git cherry-pick -x`).
+
+| PR | Change | Provenance |
+|---|---|---|
+| [#1](https://github.com/baristahaus/ninfer-gb10/pull/1) | Streamed JSON `response_format` output sent as one cleaned chunk; parse-first `json_output::extract`; port-note corrections; GB10 plan | This fork (Claude Code session) |
+| [#2](https://github.com/baristahaus/ninfer-gb10/pull/2) | `tools/gb10/` scripts for plan steps 0–3 and one pasteable report; `tools/bench/hardware/gb10.json` | This fork (Claude Code session) |
+| [#3](https://github.com/baristahaus/ninfer-gb10/pull/3) | Fixes taken from [giveen/ninfer-ext](https://github.com/giveen/ninfer-ext), listed below, and the tool-call fixes ported to the Flash-Next frontend | Cherry-picks as listed; Flash-Next port by this fork |
+| [#4](https://github.com/baristahaus/ninfer-gb10/pull/4) | Findings from other NInfer forks folded into the GB10 plan, with source commits | This fork (survey of `Neroued/ninfer` forks) |
+
+Commits taken in #3 (source commit in giveen/ninfer-ext, then original author):
+
+| Change | Source | Author |
+|---|---|---|
+| Layout state preserved after overflow | `1d4a6162` | Duncan Betts |
+| Converter reads shard headers without a safetensors index (+ test) | `a59c3b4a`, `7605e257` | giveen |
+| `ignore_eos` on chat completions (+ docs/test) | `b003327c`, `1b471efb` | Thireus |
+| OpenAI requests publish stable shared prefixes | `da0f6cd2` | giveen |
+| Quoted reasoning closes and later tool-call markers | `71304581` | Fedor Suchkov |
+| Duplicate tool-call parameter keeps its last value (combined per ext `932c549a`) | `d3a44d21` | adubkov |
+| Engine worker recovers from OOM | `93165378` | Ian Ranson, porting David Oelfke's `3f3272d6` (Doelfke/ninfer-yarn, carried by gzenz/ninfer) |
 
 ### Validated on GB10
 

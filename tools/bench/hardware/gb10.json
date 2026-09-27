@@ -1,0 +1,9 @@
+{
+  "name": "NVIDIA GB10 Grace Blackwell (DGX Spark class)",
+  "reference": "Memory: NVIDIA DGX Spark specification, 273 GB/s LPDDR5X. Compute is derived, not a datasheet dense figure: NVFP4 dense is half of NVIDIA's 1 PFLOP sparse FP4 rating; BF16 dense is NVFP4/4, the ratio of the RTX PRO 6000 profile; FP32 is the commonly reported 31 TFLOPS. Replace with NVIDIA dense rates when published.",
+  "kind": "theoretical",
+  "dram_gbps": 273.0,
+  "bf16_tflops": 125.0,
+  "nvfp4_tflops": 500.0,
+  "fp32_tflops": 31.0
+}

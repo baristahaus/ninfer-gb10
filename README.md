@@ -75,6 +75,13 @@ Clean build 728/728 (nvcc V13.0.88, `-DCMAKE_CUDA_ARCHITECTURES=121a`); op confo
 early EOS. Serves the Qwen3.8 Flash-Next 125B-A6B v3 artifact (fp8 KV cache, MTP
 draft-tokens 2, max concurrency 2).
 
+The fork measures the machine it runs on. `tools/gb10/probe_memory.sh` reads the GB10's
+unified memory directly: 246 GB/s sustained GPU streaming read (NVIDIA's specification is
+273 GB/s), host and contention behavior, and, with `ART` set, whether generic compression
+helps the artifact's real weight bytes (it does not: 1.00–1.01× on every decode-path class,
+measured on the 125B-A6B artifact). The measured value, not the specification, drives the
+decode estimates in the plan.
+
 Open GB10 work — baseline measurement, decode attribution, `tool_choice: required`
 enforcement, and NVFP4 tuning — is tracked step by step in
 [`docs/maintainer/plan-2026-09-gb10.md`](docs/maintainer/plan-2026-09-gb10.md).
@@ -106,17 +113,19 @@ the weights again.
 
 ## Quick start
 
-NInfer requires 64-bit Linux, an RTX 5090 or RTX PRO 6000 Blackwell, a CUDA toolkit supporting `sm_120a`,
+NInfer requires 64-bit Linux, an RTX 5090, RTX PRO 6000, or GB10 Blackwell, a CUDA toolkit
+supporting the device architecture (`sm_120a` for the 5090/PRO 6000, `sm_121a` for GB10),
 CMake 3.28 or newer, a C++20 host compiler, Ninja, `pkg-config`, FFmpeg development libraries
 (`libavformat`, `libavcodec`, `libavutil`, and `libswscale`), and `libcurl >= 7.85`.
-CUDA 13.1 is the validated development toolkit; CMake does not impose a CUDA version floor.
-The build rejects CUDA architectures other than `sm_120a`.
+CUDA 13.1 is the validated development toolkit; this fork also validates the GB10 stock
+CUDA 13.0.88. CMake does not impose a CUDA version floor.
+The build rejects CUDA architectures other than `sm_120a`; this fork also accepts `sm_121a` (GB10).
 
 Build the product binaries:
 
 ```bash
-git clone https://github.com/Neroued/ninfer.git
-cd ninfer
+git clone https://github.com/baristahaus/ninfer-gb10.git
+cd ninfer-gb10
 
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j

@@ -119,6 +119,9 @@ The endpoint supports:
 - `temperature`, `top_p`, presence/frequency penalties, and signed integer `seed`;
 - the compatible `top_k` (`0..20`) and `min_p` (`0..1`) sampler extensions;
 - up to four non-empty stop strings, applied to both reasoning and answer output;
+- the boolean `ignore_eos` extension: `true` suppresses the checkpoint's own stop tokens so
+  generation runs to the requested token budget, while caller-supplied stop strings and stop token
+  ids still apply; omitted or `false` keeps them;
 - `n:1`, text-only `modalities`, and `response_format` `text` (the default), `json_object`, or
   `json_schema`; JSON output is prompt-guided and tolerant-cleaned, not constrained decoding;
 - non-streaming responses and server-sent event streams;
@@ -196,7 +199,9 @@ properties, perform recursive JSON Schema validation, or use constrained decodin
 String parameters preserve function/tool-call markers and balanced nested
 `<parameter=...>...</parameter>` text as value bytes. The Qwen wire format has no delimiter escape,
 so an unmatched nested parameter opener or a standalone `</parameter>` cannot be represented
-unambiguously; either causes the complete tool-call region to fall back to ordinary content.
+unambiguously; either makes that tool-call region ordinary content. Later content is still examined:
+the first complete `<tool_call>` region that consumes the remainder of the response becomes the
+structured turn, and any quoted markup before it stays ordinary content.
 
 Messages enter the selected template in their input order. The maintained Qwen templates keep
 system/developer messages at their original positions.
@@ -364,7 +369,10 @@ candidates:
 - omitted `prompt_cache_options` creates a default implicit candidate at the latest representable
   content boundary;
 - `mode:"implicit"` requests the same automatic candidate explicitly;
-- `mode:"explicit"` disables that implicit write for the request;
+- unless `mode:"explicit"` is set, the Engine also proposes its own stable-layer candidates after
+  all tools and after the leading System/Developer messages, so new conversations that share a
+  system prompt and tool set reuse that prefix. These candidates only take spare cache capacity;
+- `mode:"explicit"` disables the implicit write and the Engine candidates for the request;
 - `prompt_cache_breakpoint:{"mode":"explicit"}` on supported content creates an explicit
   candidate.
 

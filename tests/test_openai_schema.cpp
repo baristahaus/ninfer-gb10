@@ -382,6 +382,13 @@ int test_tools() {
                               ninfer::PromptCacheMarkerLocation::MessageBoundary &&
                           mixed_prompt.context_cache.markers.back().after_message_count == 2,
                       "automatic caching stops after a complete assistant text/tool-call turn");
+    failures += check(mixed_prompt.context_cache.allow_engine_automatic_shared_prefixes,
+                      "default automatic caching lets the Engine add its stable-layer candidates");
+    Json explicit_only                    = mixed_assistant;
+    explicit_only["prompt_cache_options"] = Json{{"mode", "explicit"}};
+    failures += check(
+        !prompt(parse(explicit_only).generation).context_cache.allow_engine_automatic_shared_prefixes,
+        "explicit prompt caching keeps Engine candidates out");
 
     const Json ordered = Json::parse(
         R"({"model":"qwen","messages":[{"role":"user","content":"probe"}],"tools":[{"type":"function","function":{"name":"probe","parameters":{"type":"object","properties":{"zeta":{"type":"string"},"alpha":{"type":"integer"}}}}}]})");
@@ -619,6 +626,25 @@ int test_stops_and_ranges() {
     body["stop"] = "";
     failures +=
         check(api_error([&] { (void)parse(body); }).param == "stop", "empty stop string rejected");
+
+    body = base_request();
+    failures += check(options(parse(body).generation).stop.include_model_defaults,
+                      "an omitted ignore_eos keeps the checkpoint's own stop tokens");
+    body["ignore_eos"] = false;
+    failures += check(options(parse(body).generation).stop.include_model_defaults,
+                      "ignore_eos false keeps the checkpoint's own stop tokens");
+    body["ignore_eos"] = true;
+    failures += check(parse(body).generation.ignore_eos &&
+                          !options(parse(body).generation).stop.include_model_defaults,
+                      "ignore_eos suppresses the checkpoint's own stop tokens");
+    body["stop"] = Json::array({"A"});
+    failures += check(options(parse(body).generation).stop.strings.size() == 2 &&
+                          !options(parse(body).generation).stop.include_model_defaults,
+                      "ignore_eos leaves caller stop strings in place");
+    body.erase("stop");
+    body["ignore_eos"] = "true";
+    failures += check(api_error([&] { (void)parse(body); }).param == "ignore_eos",
+                      "a non-boolean ignore_eos is rejected");
 
     body                                  = base_request();
     body["top_k"]                         = 21;

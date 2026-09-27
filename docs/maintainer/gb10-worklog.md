@@ -337,8 +337,11 @@ Verdict — **gate passed**:
 
 1. Device faults on file-backed (page-cache) pages work on GB10 sm_121: no hangs, no
    errors, all 100k cold rows completed.
-2. Steady-state (resident) device PLE gather is ~free: 3 rows/round at 168 GB/s is
-   ~50 ns; the residency campaign already showed 0 faults over 147 s warm.
+2. Steady-state (resident) device PLE gather is ~free: 48 rows/round (3 tokens ×
+   16 heads × 160 B = 7.7 KB) at 168 GB/s is ~45 ns; the residency campaign already
+   showed 0 faults over 147 s warm. Note the 162–169 GB/s is ~30% below the ~246 GB/s
+   the GPU gets from its own allocations — irrelevant at a latency-bound gather of a
+   few KB, but the plan should not claim "no penalty".
 3. Cold tail is ~100 µs per faulted row, and faults parallelize across SMs
    (1.02 µs/row amortized at 100k rows) — vs. the host gather's 72 ms cold outlier
    (single-threaded serialized faults). The device gather is ~700× better in the cold case.

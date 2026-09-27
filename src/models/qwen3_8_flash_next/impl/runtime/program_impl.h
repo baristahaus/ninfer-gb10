@@ -12128,6 +12128,8 @@ ProgramImplCore::decode_mtp_batch(std::span<const std::uint32_t> lanes,
         schedule::MtpCausalAttentionEnvelopes envelopes =
             mtp_causal_attention_envelopes(maximum_frontier, draft_window, capacity);
         if (use_cuda_graph) {
+            nvtx::ScopedRange graph_range(nvtx::Name::DecodeMtpSubmitGraph, nvtx::Category::Mtp,
+                                          static_cast<std::uint64_t>(lanes.size()));
             DecodeGraphProfile& profile =
                 select_graph_profile(mtp_graphs, static_cast<std::uint32_t>(lanes.size()),
                                      maximum_frontier, "MTP batch");
@@ -12136,6 +12138,9 @@ ProgramImplCore::decode_mtp_batch(std::span<const std::uint32_t> lanes,
                                                        capacity);
         }
 
+        std::optional<nvtx::ScopedRange> ingress_range;
+        ingress_range.emplace(nvtx::Name::DecodeMtpSubmitIngress, nvtx::Category::Mtp,
+                              static_cast<std::uint64_t>(lanes.size()));
         for (std::size_t row = 0; row < lanes.size(); ++row) {
             SequenceState& sequence           = active_sequence(lanes[row]);
             const RequestControl& request     = requests[lanes[row]];
@@ -12200,6 +12205,7 @@ ProgramImplCore::decode_mtp_batch(std::span<const std::uint32_t> lanes,
                                    lanes.size() * width * 2560U, cudaMemcpyHostToDevice,
                                    device.stream));
 #endif
+        ingress_range.reset();
 
         schedule::MtpBatchContext schedule_state{
             {device, model, work, state_images->linear(), state_images->ple_store(),
@@ -12227,6 +12233,9 @@ ProgramImplCore::decode_mtp_batch(std::span<const std::uint32_t> lanes,
         }
         timing.end_wait();
 
+        std::optional<nvtx::ScopedRange> egress_range;
+        egress_range.emplace(nvtx::Name::DecodeMtpEgress, nvtx::Category::Mtp,
+                             static_cast<std::uint64_t>(lanes.size()));
         const double seconds = std::chrono::duration<double>(Clock::now() - started).count();
         for (std::size_t row = 0; row < lanes.size(); ++row) {
             SequenceState& sequence       = active_sequence(lanes[row]);
@@ -12271,6 +12280,7 @@ ProgramImplCore::decode_mtp_batch(std::span<const std::uint32_t> lanes,
             request.lifecycle = Lifecycle::Pending;
             request.timings.decode_seconds += seconds;
         }
+        egress_range.reset();
         return runtime::BatchedGeneratedRound{
             .tokens     = std::span<const TokenId>(mtp_host_egress->licensed_tokens.data(),
                                                    lanes.size() * width),

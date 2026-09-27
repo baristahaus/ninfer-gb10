@@ -93,10 +93,27 @@ struct ToolCall {
 enum class ToolChoiceMode {
     Auto,
     None,
+    // Prompt-level directive forcing at least one tool call; NInfer has no
+    // constrained decoding, so enforcement is a folded system instruction.
+    Required,
 };
 
 struct ToolChoice {
     ToolChoiceMode mode = ToolChoiceMode::Auto;
+};
+
+// Wire response_format steering. Non-text kinds are prompt-guided (a folded
+// system instruction) plus tolerant output cleaning; NInfer performs no
+// constrained decoding.
+enum class ResponseFormatKind {
+    Text,
+    JsonObject,
+    JsonSchema,
+};
+
+struct ResponseFormat {
+    ResponseFormatKind kind = ResponseFormatKind::Text;
+    std::string schema_json; // populated for JsonSchema
 };
 
 struct ChatTurn {
@@ -175,6 +192,7 @@ struct GenerationRequest {
     std::vector<ToolDefinition> tools;
     std::size_t tool_name_max_length = 64;
     ToolChoice tool_choice;
+    ResponseFormat response_format;
     std::vector<std::string> stop_strings;
     bool stop_strings_apply_to_reasoning = false;
     int max_tokens                       = 0; // resolved budget; zero means immediate output limit

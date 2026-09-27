@@ -1,6 +1,8 @@
 #include "serve/generation_service.h"
 
 #include "product/media_acquire/acquire.h"
+#include "serve/json_output.h"
+
 #include "serve/translate.h"
 
 #include <algorithm>
@@ -201,7 +203,11 @@ void check_preparation_control(Clock::time_point deadline,
 
 class ServiceOutputSink final : public ninfer::OutputSink {
 public:
-    explicit ServiceOutputSink(const StreamSink& sink) : sink_(&sink) {}
+    // hold_content buffers answer text until flush_held(): JSON response_format
+    // output is delivered as one chunk so the stream presents a single, complete
+    // answer (the aggregate result is tolerant-cleaned by GenerationService::run).
+    ServiceOutputSink(const StreamSink& sink, bool hold_content)
+        : sink_(&sink), hold_content_(hold_content) {}
 
     void start(ninfer::GenerationStart start) override {
         if (sink_->on_start) { sink_->on_start(start); }
@@ -222,13 +228,25 @@ public:
         if (delta.text.empty()) { return; }
         if (delta.channel == ninfer::OutputChannel::Reasoning) {
             if (sink_->on_reasoning) { sink_->on_reasoning(delta.text); }
-        } else {
+        } else if (!hold_content_) {
             if (sink_->on_content) { sink_->on_content(delta.text); }
+        } else {
+            held_content_ += delta.text;
+        }
+    }
+
+    // Flush held (response_format JSON) content as a single final delta.
+    void flush_held() {
+        if (hold_content_ && !held_content_.empty()) {
+            const std::string held = std::move(held_content_);
+            if (sink_->on_content) { sink_->on_content(held); }
         }
     }
 
 private:
     const StreamSink* sink_ = nullptr;
+    bool hold_content_      = false;
+    std::string held_content_;
 };
 
 } // namespace
@@ -309,6 +327,7 @@ PreparedRequest GenerationService::prepare_impl(const GenerationRequest& request
     prepared.thinking_budget     = request_options.execution.thinking.budget;
     prepared.reasoning_effort    = semantics.reasoning_effort;
     prepared.preserve_thinking   = semantics.preserve_thinking;
+    prepared.response_format      = request.response_format.kind;
     const bool request_has_media = request.media_item_count() != 0;
     if (request_has_media && !options_.enable_vision) {
         const std::invalid_argument error("Vision is disabled for this server");
@@ -403,7 +422,11 @@ int GenerationService::count_prompt_tokens(const GenerationRequest& request,
 GenerationOutcome GenerationService::run(PreparedRequest& prepared, const StreamSink* sink,
                                          std::function<bool()> is_cancelled) {
     std::unique_ptr<ServiceOutputSink> output_sink;
-    if (sink != nullptr) { output_sink = std::make_unique<ServiceOutputSink>(*sink); }
+    if (sink != nullptr) {
+        const bool hold = prepared.response_format == ResponseFormatKind::JsonObject ||
+                         prepared.response_format == ResponseFormatKind::JsonSchema;
+        output_sink = std::make_unique<ServiceOutputSink>(*sink, hold);
+    }
     ninfer::OutputSink* public_sink = output_sink.get();
     ninfer::CancellationView cancellation;
     if (is_cancelled || (sink != nullptr && sink->is_cancelled)) {
@@ -426,6 +449,15 @@ GenerationOutcome GenerationService::run(PreparedRequest& prepared, const Stream
     outcome.thinking            = result.thinking;
     outcome.finish_reason       = result.finish_reason;
     outcome.matched_stop_string = std::move(result.matched_stop_string);
+    // When response_format is JSON, tolerant-clean the output: strip prose,
+    // markdown fences, and thinking leaks; extract the outermost JSON object.
+    // Tool-call responses carry their own structure and are left untouched.
+    if (result.tool_calls.empty() &&
+        (prepared.response_format == ResponseFormatKind::JsonObject ||
+         prepared.response_format == ResponseFormatKind::JsonSchema)) {
+        outcome.text = json_output::extract(outcome.text);
+    }
+    if (output_sink) { output_sink->flush_held(); }
 
     outcome.metrics.prepare_seconds = prepared.prepare_seconds;
     outcome.metrics.ttft_seconds =

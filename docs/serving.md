@@ -119,12 +119,14 @@ The endpoint supports:
 - `temperature`, `top_p`, presence/frequency penalties, and signed integer `seed`;
 - the compatible `top_k` (`0..20`) and `min_p` (`0..1`) sampler extensions;
 - up to four non-empty stop strings, applied to both reasoning and answer output;
-- `n:1`, text-only `modalities`, and `response_format: {"type":"text"}`;
+- `n:1`, text-only `modalities`, and `response_format` `text` (the default), `json_object`, or
+  `json_schema`; JSON output is prompt-guided and tolerant-cleaned, not constrained decoding;
 - non-streaming responses and server-sent event streams;
 - `stream_options.include_usage`;
 - llama.cpp-compatible terminal `timings`, plus opt-in `timings_per_token` and
   streaming `return_progress` observations;
-- non-strict function tools with `tool_choice` `auto`, `none`, or `allowed_tools` in `auto` mode,
+- non-strict function tools with `tool_choice` `auto`, `none`, `required`, or `allowed_tools` in
+  `auto` mode,
   parallel calls enabled, assistant tool-call history, tool-result messages, and legacy
   function-call history;
 - the top-level `reasoning_effort` field;
@@ -133,11 +135,19 @@ The endpoint supports:
 - Assistant `reasoning_content` and `reasoning` history aliases.
 
 Options whose observable behavior the Engine cannot provide are rejected when they request that
-behavior. This includes JSON constrained output, nonzero `logit_bias`, requested log probabilities,
-audio/file input or audio output, `strict:true`, required or named tool choice,
-`parallel_tool_calls:false` with enabled tools, explicit low/high image detail, web search,
-moderation, low/high verbosity, stored Chat Completions, and non-empty legacy `functions`.
-Each capability rejection identifies the affected field and the guarantee NInfer cannot provide.
+behavior. This includes constrained-decoding JSON enforcement (schema validation of the model
+output), nonzero `logit_bias`, requested log probabilities, audio/file input or audio output,
+`strict:true`, named tool choice, `parallel_tool_calls:false` with enabled tools, explicit
+low/high image detail, web search, moderation, low/high verbosity, stored Chat Completions, and
+non-empty legacy `functions`. Each capability rejection identifies the affected field and the
+guarantee NInfer cannot provide.
+
+JSON `response_format` is accepted: the JSON instruction and any schema are folded into a leading
+prompt block, and the returned content is tolerant-cleaned to the JSON object. NInfer does not
+apply constrained decoding, so schema conformance is not guaranteed. `tool_choice:"required"` is
+likewise prompt-guided: a directive forces a tool call and the request's tools stay enabled, but
+the model is not constrained to one.
+
 Known constrained-decoding aliases (`grammar`, `structured_outputs`, `guided_json`, `guided_regex`,
 `guided_choice`, and `guided_grammar`) receive the same explicit rejection instead of being treated
 as unknown hints.
@@ -424,7 +434,7 @@ wire response contains typed `output` Items.
 | `preserve_thinking` | alias for `chat_template_kwargs.preserve_thinking`; conflicting values are rejected |
 | `text.format` | omitted or `{"type":"text"}` only |
 | `tools` | direct function definitions or namespace groups containing function definitions; see below |
-| `tool_choice` | `auto`, `none`, or function-only `allowed_tools` with mode `auto`; a namespaced selection carries both `namespace` and `name` |
+| `tool_choice` | `auto`, `none`, `required`, or function-only `allowed_tools` with mode `auto`; a namespaced selection carries both `namespace` and `name` |
 | `parallel_tool_calls` | `true` by default; `false` is accepted only when no effective tool is callable |
 | `max_tool_calls` | non-negative integer accepted as a hosted-tool no-op; NInfer does not execute hosted tools |
 | `truncation` | omitted or `disabled`; overlong input fails instead of silently dropping Items |
@@ -523,8 +533,9 @@ without changing declaration order, while `tool_choice:"none"` disables structur
 when the history contains earlier calls.
 
 NInfer does not execute functions or enforce JSON Schema through constrained decoding, so
-`strict:true`, required or named tool choice, hosted tools, remote MCP tools, and custom free-form
-tools are rejected. Deferred loading, output schemas, and caller restrictions that exclude direct
+`strict:true`, named tool choice, hosted tools, remote MCP tools, and custom free-form
+tools are rejected. `tool_choice:"required"` is accepted as a prompt-level directive that forces
+a tool call. Deferred loading, output schemas, and caller restrictions that exclude direct
 invocation are also rejected because their semantics cannot be honored.
 
 ### Response object and usage

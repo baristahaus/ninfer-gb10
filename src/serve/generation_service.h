@@ -90,6 +90,7 @@ struct PreparedRequest {
     std::optional<std::uint32_t> thinking_budget;
     std::optional<ninfer::ReasoningEffort> reasoning_effort;
     std::optional<bool> preserve_thinking;
+    ResponseFormatKind response_format = ResponseFormatKind::Text;
     std::shared_ptr<RequestLifetime> lifetime;
 };
 

@@ -2,6 +2,7 @@
 #include "serve/openai_chat.h"
 #include "serve/openai_common.h"
 #include "serve/translate.h"
+#include "serve/json_output.h"
 
 #include <nlohmann/json.hpp>
 
@@ -17,6 +18,7 @@ namespace {
 
 using Json = ninfer::serve::RequestJson;
 using namespace ninfer::serve;
+using ninfer::ChatRole;
 
 int check(bool condition, const std::string& label) {
     if (condition) { return 0; }
@@ -146,7 +148,37 @@ int test_standard_field_policy() {
     rejected("logit_bias", Json{{"12", 1}}, "logit_bias_not_supported");
     rejected("logprobs", true, "logprobs_not_supported");
     rejected("top_logprobs", 2, "logprobs_not_supported");
-    rejected("response_format", Json{{"type", "json_schema"}}, "response_format_not_supported");
+    {
+        // response_format json_object is accepted and recorded (prompt-guided JSON).
+        Json body              = base_request();
+        body["response_format"] = Json{{"type", "json_object"}};
+        const OpenAIChatRequest json_req = parse(body);
+        failures += check(
+            json_req.generation.response_format.kind == ResponseFormatKind::JsonObject,
+            "json_object response_format accepted and recorded");
+    }
+    {
+        // response_format json_schema accepted; the schema is captured for the
+        // folded instruction.
+        Json body         = base_request();
+        Json schema_spec  = Json::object();
+        schema_spec["schema"] = Json{{"type", "object"}};
+        body["response_format"] = Json{{"type", "json_schema"}, {"json_schema", schema_spec}};
+        const OpenAIChatRequest schema_req = parse(body);
+        failures += check(
+            schema_req.generation.response_format.kind == ResponseFormatKind::JsonSchema &&
+                !schema_req.generation.response_format.schema_json.empty(),
+            "json_schema response_format accepted with schema");
+    }
+    {
+        // malformed json_schema (missing schema object) is still rejected.
+        Json body = base_request();
+        body["response_format"] = Json{{"type", "json_schema"}, {"json_schema", Json::object()}};
+        const ApiError error = api_error([&] { (void)parse(body); });
+        failures += check(error.param == "response_format" &&
+                          error.code == "response_format_not_supported",
+                          "json_schema without schema object rejected");
+    }
     rejected("modalities", Json::array({"text", "audio"}), "modality_not_supported");
     rejected("web_search_options", Json::object(), "web_search_not_supported");
     rejected("moderation", Json::object(), "moderation_not_supported");
@@ -250,8 +282,18 @@ int test_tools() {
               "tool_choice none makes parallel_tool_calls neutral and removes executable tools");
 
     body["tool_choice"] = "required";
-    failures += check(api_error([&] { (void)parse(body); }).code == "tool_choice_not_supported",
-                      "required tool choice rejected");
+    body.erase("parallel_tool_calls");
+    const OpenAIChatRequest required = parse(body);
+    failures += check(required.generation.tool_choice.mode == ToolChoiceMode::Required &&
+                          required.generation.uses_tools(),
+                      "required tool choice is accepted and keeps tools enabled");
+    {
+        Json no_tools = base_request();
+        no_tools["tool_choice"] = "required";
+        const ApiError no_tools_error = api_error([&] { (void)parse(no_tools); });
+        failures += check(no_tools_error.code == "tool_choice_not_supported",
+                          "required tool choice without tools rejected");
+    }
     body["tool_choice"] = Json{{"type", "function"}, {"function", Json{{"name", "weather"}}}};
     failures += check(api_error([&] { (void)parse(body); }).code == "tool_choice_not_supported",
                       "named tool choice rejected");
@@ -780,6 +822,197 @@ int test_common_objects() {
     return failures;
 }
 
+int test_output_directives() {
+    int failures = 0;
+    auto text_turn = [](ChatRole role, std::string text) {
+        ChatTurn turn;
+        turn.role = role;
+        ContentPart part;
+        part.kind     = ContentKind::Text;
+        part.text      = std::move(text);
+        part.type_raw  = "text";
+        turn.content.push_back(std::move(part));
+        return turn;
+    };
+    auto acquire = [](const ContentPart&) { return ninfer::OwnedMedia{}; };
+
+    // No directive: system turns stay in place; no leading block is injected.
+    {
+        GenerationRequest request;
+        request.messages = {text_turn(ChatRole::System, "You are a terse bot."),
+                            text_turn(ChatRole::User, "hi")};
+        const ninfer::PromptInput input = to_prompt_input(request, semantics(request), acquire);
+        failures += check(input.messages.size() == 2 &&
+                              input.messages[0].role == ChatRole::System &&
+                              input.messages[1].role == ChatRole::User,
+                          "no directive leaves system turns in place");
+    }
+
+    // JSON schema: the leading block carries the JSON instruction, then the
+    // folded user system text.
+    {
+        GenerationRequest request;
+        request.messages = {text_turn(ChatRole::System, "You are a terse bot."),
+                            text_turn(ChatRole::User, "hi")};
+        request.response_format.kind      = ResponseFormatKind::JsonSchema;
+        request.response_format.schema_json = R"({"type":"object"})";
+        const ninfer::PromptInput input = to_prompt_input(request, semantics(request), acquire);
+        failures += check(input.messages.size() == 2 &&
+                              input.messages[0].role == ChatRole::System &&
+                              input.messages[1].role == ChatRole::User,
+                          "directive block leads and the folded system turn is skipped");
+        const std::string& block = input.messages[0].parts.front().text;
+        failures += check(block.find("single valid JSON object") != std::string::npos &&
+                              block.find(R"({"type":"object"})") != std::string::npos,
+                          "leading block carries the JSON instruction and schema");
+        failures += check(block.find("You are a terse bot.") != std::string::npos &&
+                              block.find("You are a terse bot.") > block.find("JSON Schema"),
+                          "folded system text follows the directive in the leading block");
+    }
+
+    // tool_choice required: the tool-call directive is appended last, after any
+    // user system text.
+    {
+        GenerationRequest request;
+        request.messages = {text_turn(ChatRole::System, "Answer directly when you can."),
+                            text_turn(ChatRole::User, "hi")};
+        ToolDefinition tool;
+        tool.name              = "weather";
+        tool.input_schema_json = R"({"type":"object"})";
+        request.tools.push_back(tool);
+        request.tool_choice.mode = ToolChoiceMode::Required;
+        const ninfer::PromptInput input = to_prompt_input(request, semantics(request), acquire);
+        const std::string& block = input.messages[0].parts.front().text;
+        failures += check(block.find("You MUST call a tool") != std::string::npos,
+                          "required tool choice injects a tool-call directive");
+        failures += check(block.find("You MUST call a tool") >
+                              block.find("Answer directly when you can."),
+                          "tool-call directive trails the folded user system text");
+        failures += check(!prompt(request).options.tool_jsons.empty(),
+                          "required tool choice keeps the tools enabled");
+    }
+
+    // A system turn carrying media is kept in place even under a directive.
+    {
+        GenerationRequest request;
+        ChatTurn system;
+        system.role = ChatRole::System;
+        ContentPart text;
+        text.kind     = ContentKind::Text;
+        text.text      = "system text";
+        text.type_raw  = "text";
+        ContentPart image;
+        image.kind = ContentKind::Image;
+        system.content = {std::move(text), std::move(image)};
+        request.messages = {std::move(system), text_turn(ChatRole::User, "hi")};
+        request.response_format.kind = ResponseFormatKind::JsonObject;
+        const ninfer::PromptInput input = to_prompt_input(request, semantics(request), acquire);
+        failures += check(input.messages.size() == 3 &&
+                              input.messages[0].role == ChatRole::System &&
+                              input.messages[1].role == ChatRole::System &&
+                              input.messages[1].parts.size() == 2,
+                          "media system turn is preserved in place under a directive");
+    }
+
+    // Folded system turns must not shift the part-boundary markers of the turns
+    // that survive: a boundary on a kept turn reports its actual input position.
+    {
+        GenerationRequest request;
+        ChatTurn system;
+        system.role = ChatRole::System;
+        ContentPart system_text;
+        system_text.kind     = ContentKind::Text;
+        system_text.text      = "system text";
+        system_text.type_raw  = "text";
+        system_text.cache_boundary_after = CacheBoundary{};
+        ChatTurn user;
+        user.role = ChatRole::User;
+        ContentPart user_text;
+        user_text.kind     = ContentKind::Text;
+        user_text.text      = "hi";
+        user_text.type_raw  = "text";
+        user_text.cache_boundary_after = CacheBoundary{};
+        user.content = {std::move(user_text)};
+        system.content = {std::move(system_text)};
+        request.messages = {std::move(system), std::move(user)};
+        request.response_format.kind = ResponseFormatKind::JsonObject;
+        bool threw = false;
+        ninfer::PromptInput input;
+        try { input = to_prompt_input(request, semantics(request), acquire); }
+        catch (...) { threw = true; }
+        failures += check(!threw && input.messages.size() == 2 &&
+                              input.context_cache.markers.size() == 2,
+                          "folded turn keeps the prompt and both boundaries representable");
+        const auto part_marker = std::find_if(
+            input.context_cache.markers.begin(), input.context_cache.markers.end(),
+            [](const ninfer::PromptCacheMarker& marker) {
+                return marker.location == ninfer::PromptCacheMarkerLocation::MessagePartBoundary;
+            });
+        failures += check(part_marker != input.context_cache.markers.end() &&
+                              part_marker->after_message_count == 2 &&
+                              part_marker->after_message_part_count == 1,
+                          "kept-turn part boundary marker points at its actual input position");
+    }
+    return failures;
+}
+
+int test_json_output_extract() {
+    int failures = 0;
+    auto check = [&failures](bool ok, const char* what) {
+        if (!ok) {
+            std::cerr << "  FAIL " << what << "\n";
+            return 1;
+        }
+        return 0;
+    };
+    using extract_t = std::string (*)(const std::string&);
+    const extract_t extract = &ninfer::serve::json_output::extract;
+
+    // A complete object is returned verbatim; values containing the marker
+    // substring "think" and a newline are never damaged.
+    {
+        const std::string in = "{\"summary\":\"I was thinking\nabout the plot\"}";
+        failures += check(extract(in) == in, "complete object with 'think' in a value is untouched");
+    }
+    // A leaked Qwen thinking block before the object is dropped.
+    {
+        const std::string in = "\nThe user wants JSON.\n{\"capital\":\"Paris\"}\ntail";
+        failures += check(extract(in) == "{\"capital\":\"Paris\"}", "qwen thinking leak is dropped");
+    }
+    // The DeepSeek-style pair is stripped too.
+    {
+        const std::string in = "a\n<end_think>\nb {\"a\":1} tail";
+        failures += check(extract(in) == "{\"a\":1}", "deepseek thinking pair is dropped");
+    }
+    // An unclosed fragment is left in place, not erased to the end.
+    {
+        const std::string in = "preamble think unterminated {\"a\":1} tail";
+        const std::string out = extract(in);
+        failures += check(out == "{\"a\":1}", "unclosed thinking fragment is not erased");
+    }
+    // Markdown-fenced JSON.
+    {
+        const std::string in = "```json\n{\"a\":1}\n```";
+        failures += check(extract(in) == "{\"a\":1}", "fenced json is unwrapped");
+    }
+    // Fenced JSON preceded by a thinking leak: both are handled.
+    {
+        const std::string in = "\nleak\n```json\n{\"a\":1}\n```";
+        failures += check(extract(in) == "{\"a\":1}", "leak and fence are both stripped");
+    }
+    // Prose before and after the object: the outermost object wins.
+    {
+        const std::string in = "Sure, here you go: {\"a\":{\"b\":2}} hope that helps";
+        failures += check(extract(in) == "{\"a\":{\"b\":2}}", "prose on both sides is trimmed");
+    }
+    // No JSON object at all: unchanged.
+    {
+        const std::string in = "no json here at all";
+        failures += check(extract(in) == in, "non-json text passes through");
+    }
+    return failures;
+}
+
 } // namespace
 
 int main() {
@@ -788,6 +1021,8 @@ int main() {
     failures += test_standard_field_policy();
     failures += test_constrained_decoding_extensions();
     failures += test_tools();
+    failures += test_output_directives();
+    failures += test_json_output_extract();
     failures += test_messages_and_media();
     failures += test_reasoning_and_extensions();
     failures += test_stops_and_ranges();

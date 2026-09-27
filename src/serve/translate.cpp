@@ -198,9 +198,112 @@ ninfer::PromptInput to_prompt_input(const GenerationRequest& request,
                                     const ResolvedPromptSemantics& semantics,
                                     const MediaAcquirer& acquire_media) {
     ninfer::PromptInput input;
-    input.messages.reserve(request.messages.size());
+
+    // Prompt-level output directives. NInfer has no constrained decoding, so a JSON
+    // response_format and tool_choice "required" are enforced with a folded leading
+    // system block: the JSON instruction first, then every user system/developer text
+    // (folded in so the directive still takes precedence over conflicting system
+    // guidance), and the tool-call directive last. Without a directive the prompt is
+    // built exactly as before, with system/developer turns left in place.
+    std::string directive;
+    const bool json_format = request.response_format.kind == ResponseFormatKind::JsonObject ||
+                             request.response_format.kind == ResponseFormatKind::JsonSchema;
+    const bool tool_directive =
+        request.tool_choice.mode == ToolChoiceMode::Required && !request.tools.empty();
+    if (json_format) {
+        directive =
+            "You must respond with a single valid JSON object. Do not include any text "
+            "outside the JSON object. Do not wrap it in markdown code fences.";
+        if (request.response_format.kind == ResponseFormatKind::JsonSchema) {
+            directive += "\n\nThe JSON object must conform to this JSON Schema:\n" +
+                         request.response_format.schema_json;
+        }
+    }
+
+    // Fold plan: when a directive is present, text-only system/developer turns are
+    // absorbed into the leading block. Turns carrying media stay in place, unmodified,
+    // so no media is dropped.
+    const bool block_prepended = json_format || tool_directive;
+    std::vector<bool> fold_turn(request.messages.size(), false);
+    if (block_prepended) {
+        for (std::size_t turn_index = 0; turn_index < request.messages.size(); ++turn_index) {
+            const ChatTurn& turn = request.messages[turn_index];
+            if (turn.role != ChatRole::System && turn.role != ChatRole::Developer) { continue; }
+            bool text_only = true;
+            std::string turn_text;
+            for (const ContentPart& part : turn.content) {
+                if (part.kind != ContentKind::Text) { text_only = false; break; }
+                if (part.text.empty()) { continue; }
+                if (!turn_text.empty()) { turn_text += "\n"; }
+                turn_text += part.text;
+            }
+            if (!text_only) { continue; }
+            fold_turn[turn_index] = true;
+            if (turn_text.empty()) { continue; }
+            if (!directive.empty()) { directive += "\n\n"; }
+            directive += std::move(turn_text);
+        }
+    }
+    // The tool-call directive goes last: after the JSON instruction and any folded
+    // user system text, so it takes precedence over conflicting "answer directly"
+    // guidance. Prompt-level enforcement only; NInfer has no constrained decoding.
+    if (tool_directive) {
+        if (!directive.empty()) { directive += "\n\n"; }
+        directive += "IMPORTANT: You MUST call a tool in your reply. Never answer the "
+                    "user directly with plain text; produce your answer through a tool "
+                    "call. This overrides any earlier instruction to answer directly.";
+    }
+    const std::size_t folded_bytes = directive.size();
+    input.messages.reserve(request.messages.size() + (block_prepended ? 1U : 0U));
+    if (block_prepended) {
+        ninfer::ChatMessage instruction;
+        instruction.role = ChatRole::System;
+        ninfer::MessagePart part;
+        part.text = std::move(directive);
+        instruction.parts.push_back(std::move(part));
+        input.messages.push_back(std::move(instruction));
+
+        // Re-emit the cache boundaries the fold consumed: a boundary on the first
+        // turn marks the folded leading instruction; all other folded boundaries
+        // anchor after the leading block.
+        for (std::size_t turn_index = 0; turn_index < request.messages.size(); ++turn_index) {
+            if (!fold_turn[turn_index]) { continue; }
+            const ChatTurn& turn = request.messages[turn_index];
+            if (turn.cache_boundary_after) {
+                input.context_cache.markers.push_back(ninfer::PromptCacheMarker{
+                    .after_message_count = 1U,
+                    .kind                = turn.cache_boundary_after->kind,
+                    .evidence            = turn.cache_boundary_after->evidence,
+                    .location            = ninfer::PromptCacheMarkerLocation::MessageBoundary,
+                });
+            }
+            for (const ContentPart& part : turn.content) {
+                if (!part.cache_boundary_after) { continue; }
+                if (turn_index == 0) {
+                    if (folded_bytes > std::numeric_limits<std::uint32_t>::max()) {
+                        throw std::overflow_error("folded leading instruction exceeds uint32");
+                    }
+                    input.context_cache.markers.push_back(ninfer::PromptCacheMarker{
+                        .kind                     = part.cache_boundary_after->kind,
+                        .evidence                 = part.cache_boundary_after->evidence,
+                        .location                 =
+                            ninfer::PromptCacheMarkerLocation::LeadingInstructionBoundary,
+                        .leading_instruction_bytes = static_cast<std::uint32_t>(folded_bytes),
+                    });
+                } else {
+                    input.context_cache.markers.push_back(ninfer::PromptCacheMarker{
+                        .after_message_count = 1U,
+                        .kind                = part.cache_boundary_after->kind,
+                        .evidence            = part.cache_boundary_after->evidence,
+                        .location            = ninfer::PromptCacheMarkerLocation::MessageBoundary,
+                    });
+                }
+            }
+        }
+    }
     for (std::size_t turn_index = 0; turn_index < request.messages.size(); ++turn_index) {
         const ChatTurn& turn = request.messages[turn_index];
+        if (fold_turn[turn_index]) { continue; }
         ninfer::ChatMessage message;
         message.role              = turn.role;
         message.reasoning_content = turn.reasoning_content;
@@ -243,11 +346,13 @@ ninfer::PromptInput to_prompt_input(const GenerationRequest& request,
                 throw ApiException(std::move(error));
             }
             if (part.cache_boundary_after) {
-                if (turn_index >= std::numeric_limits<std::uint32_t>::max() ||
+                const std::size_t message_position = input.messages.size() + 1U;
+                if (message_position > std::numeric_limits<std::uint32_t>::max() ||
                     part_index >= std::numeric_limits<std::uint32_t>::max()) {
                     throw std::overflow_error("conversation cache boundary exceeds uint32");
                 }
                 const bool leading_instruction =
+                    !block_prepended &&
                     turn_index == 0 &&
                     (turn.role == ChatRole::System || turn.role == ChatRole::Developer) &&
                     part.kind == ContentKind::Text;
@@ -260,7 +365,7 @@ ninfer::PromptInput to_prompt_input(const GenerationRequest& request,
                     });
                 } else {
                     input.context_cache.markers.push_back(ninfer::PromptCacheMarker{
-                        .after_message_count = static_cast<std::uint32_t>(turn_index + 1U),
+                        .after_message_count = static_cast<std::uint32_t>(message_position),
                         .kind                = part.cache_boundary_after->kind,
                         .evidence            = part.cache_boundary_after->evidence,
                         .location = ninfer::PromptCacheMarkerLocation::MessagePartBoundary,

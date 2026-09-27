@@ -133,14 +133,25 @@ void validate_standard_output_controls(const Json& body) {
 
     if (body.contains("response_format") && !body.at("response_format").is_null()) {
         const Json& format = body.at("response_format");
-        if (!format.is_object() || !format.contains("type") || !format.at("type").is_string()) {
+        if (!format.is_object()) {
+            bad_request("response_format must be an object", "response_format");
+        }
+        if (!format.contains("type") || !format.at("type").is_string()) {
             bad_request("response_format must contain a string type", "response_format");
         }
-        if (format.at("type").get<std::string>() != "text") {
-            bad_request(
-                "this response_format requires constrained output, which NInfer cannot guarantee; "
-                "only {\"type\":\"text\"} is available",
-                "response_format", "response_format_not_supported");
+        const std::string type = format.at("type").get<std::string>();
+        if (type == "json_schema") {
+            if (!format.contains("json_schema") || !format.at("json_schema").is_object() ||
+                !format.at("json_schema").contains("schema") ||
+                !format.at("json_schema").at("schema").is_object()) {
+                bad_request(
+                    "response_format json_schema requires a json_schema object with an object "
+                    "schema",
+                    "response_format", "response_format_not_supported");
+            }
+        } else if (type != "text" && type != "json_object") {
+            bad_request("unsupported response_format type: " + type, "response_format",
+                        "response_format_not_supported");
         }
     }
 
@@ -700,10 +711,14 @@ void parse_tool_choice(const Json& body, GenerationRequest& output) {
         } else if (value == "none") {
             output.tool_choice.mode = ToolChoiceMode::None;
         } else if (value == "required") {
-            bad_request(
-                "tool_choice='required' requires at least one tool call, which NInfer cannot "
-                "guarantee",
-                "tool_choice", "tool_choice_not_supported");
+            if (output.tools.empty()) {
+                bad_request("tool_choice \"required\" has no effect without tools declared on the "
+                             "request",
+                            "tool_choice", "tool_choice_not_supported");
+            }
+            // Prompt-guided: a folded system directive forces a tool call (NInfer has no
+            // constrained decoding); see to_prompt_input.
+            output.tool_choice.mode = ToolChoiceMode::Required;
         } else {
             bad_request("tool_choice must be 'auto', 'none', 'required', or a function choice",
                         "tool_choice");
@@ -879,6 +894,22 @@ void parse_output_limit(const Json& body, const RequestLimits& limits, OpenAICha
 
 } // namespace
 
+// response_format is prompt-guided (non-constrained): text is the default,
+// json_object and json_schema are accepted and steered via a leading system
+// instruction; the output is tolerant-cleaned (json_output::extract) after
+// generation. Validation lives in validate_standard_output_controls.
+void parse_response_format(const Json& body, GenerationRequest& out) {
+    if (!body.contains("response_format") || body.at("response_format").is_null()) { return; }
+    const Json& fmt = body.at("response_format");
+    const std::string type = fmt.at("type").get<std::string>();
+    if (type == "json_object") {
+        out.response_format.kind = ResponseFormatKind::JsonObject;
+    } else if (type == "json_schema") {
+        out.response_format.kind         = ResponseFormatKind::JsonSchema;
+        out.response_format.schema_json = fmt.at("json_schema").at("schema").dump();
+    }
+}
+
 OpenAIChatRequest parse_chat_completion_request(const Json& body, const RequestLimits& limits) {
     require_object(body, "request body must be a JSON object");
     validate_standard_output_controls(body);
@@ -900,6 +931,7 @@ OpenAIChatRequest parse_chat_completion_request(const Json& body, const RequestL
     parse_messages(body, output.generation);
     parse_stop(body, output.generation);
     parse_sampling(body, output.generation);
+    parse_response_format(body, output.generation);
     parse_stream_options(body, output);
     parse_response_observations(body, output);
     parse_output_limit(body, limits, output);

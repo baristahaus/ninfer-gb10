@@ -537,6 +537,15 @@ int test_tools_and_effective_subset() {
                           !disabled.prompt.generation.uses_tools(),
                       "tool_choice none disables generation tools without deleting their echo");
 
+    Json required         = body;
+    required["tool_choice"] = "required";
+    const OpenAIResponsesCreateRequest required_request =
+        parse_openai_responses_create_request(required, limits());
+    failures += check(required_request.prompt.generation.tool_choice.mode == ToolChoiceMode::Required &&
+                          required_request.prompt.generation.uses_tools() &&
+                          required_request.tool_choice == "required",
+                      "tool_choice required is accepted, enables tools, and is echoed on the wire");
+
     const Json ordered = Json::parse(
         R"({"model":"m","input":"probe","tools":[{"type":"function","name":"probe","parameters":{"type":"object","properties":{"zeta":{"type":"string"},"alpha":{"type":"integer"}}}}]})");
     const OpenAIResponsesCreateRequest ordered_request =

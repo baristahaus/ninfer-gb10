@@ -894,8 +894,9 @@ void parse_tool_choice(const Json& body, ParsedPromptFields& out) {
         } else if (value == "none") {
             out.prompt.generation.tool_choice.mode = ToolChoiceMode::None;
         } else if (value == "required") {
-            bad_request("tool_choice 'required' cannot be guaranteed by the Engine", "tool_choice",
-                        "tool_choice_not_supported");
+            // Prompt-guided: a folded system directive forces a tool call (NInfer has no
+            // constrained decoding); see to_prompt_input.
+            out.prompt.generation.tool_choice.mode = ToolChoiceMode::Required;
         } else {
             bad_request("tool_choice must be 'auto', 'none', or a supported object", "tool_choice");
         }

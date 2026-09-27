@@ -12,7 +12,7 @@ import struct
 
 import torch
 
-from tools.artifact.file_io import discard_cached_pages
+from tools.artifact.file_io import IO_CHUNK_BYTES, discard_cached_pages
 from .logical import LogicalSource
 
 _DTYPES = {
@@ -146,7 +146,12 @@ class SafetensorsSource:
         count = (end - begin) * word_bytes
         fd = self._file(info.file)
         offset = info.offset + begin * word_bytes
-        raw = os.pread(fd, count, offset)
+        # Chunked reads: this GB10 kernel clamps a single read() of more than
+        # 2 GiB to 2 GiB - 4 KiB (measured 2026-09-26, local and NFS), so one
+        # unbounded pread short-reads any tensor larger than the clamp.
+        raw = bytearray()
+        for pos in range(0, count, IO_CHUNK_BYTES):
+            raw += os.pread(fd, min(IO_CHUNK_BYTES, count - pos), offset + pos)
         if len(raw) != count:
             raise ValueError(f"{name}: short source read")
         self.bytes_read += count

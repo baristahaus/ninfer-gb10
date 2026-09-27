@@ -136,16 +136,66 @@ B6 fixed by defining the macro on the bench target
 fix) → `report.sh`, serial to keep the machine idle for the timing runs. Results
 pending at time of writing.
 
+### 19:32 — campaign 3 (bg_18) results: all green
+
+bg_18 done: rc `step3=0 step2=0 report=0`, wall 1,839 s (30.7 min); final
+`profiles/bench/gb10/report.md` 25,214 B (2026-09-27T19:32Z). **B5 and B6
+verified.** Note: the report's step 0 section reuses campaign 1's step 0 output, so
+its artifact line still reads 30 G (pre-B4); steps 1–3 show the correct 126 G
+multi-volume total.
+
+Step 2 matrix (KV fp8-e4m3-row256, max-ctx 73728, prefill-chunk 8192, 1 warmup + 5
+measured; in-run bandwidth probe 247.1 GB/s, 90.5% of spec):
+
+| Config | Prefill 8K / 64K tok/s | Decode out 8K / 64K tok/s | Mean accepted |
+|---|---:|---:|---:|
+| none | 1,513.7 / 1,473.3 | 19.3 / 19.1 | — |
+| mtp K=2 | 1,435.0 / 1,400.0 | 44.6 / 43.6 | 2.99 / 2.98 |
+| mtp K=3 | 1,435.0 / 1,397.5 | 52.0 / 51.1 | 3.96 / 3.96 |
+
+Decode is context-insensitive (−1.7% 8K→64K at K=3); K=3 is +16.5% over K=2 and 2.7×
+no-spec. Prefill is essentially context-independent (≤2.7% drop). KV capacity
+73,728 tokens; 17.3 GiB free after startup.
+
+Step 3 attribution (measured region: 8192-token prefill + 32 decode steps; 97.5%
+(mtp0) / 97.8% (mtp2) of GPU work attributed):
+
+- Decode (mtp0): `gdn.update` 38.8% of GPU work at 95.9% of the bandwidth estimate;
+  `moe.nvfp4` 21.3% at 76.4%; `hyper.combine_mix` 14.8% at 71.3%; `ple.update` 0.6%
+  at 90.0%. The decode path is bandwidth-saturated — little headroom left in the
+  decode stages.
+- Decode (mtp2): `moe.nvfp4` 30.2%, `gdn.record` 28.5% at 94.3%,
+  `hyper.combine_mix` 11.5%, `qsa.select` 10.8% at 71.7%; the MTP predictor's decode
+  cost is ~3.5% of total GPU work.
+- Prefill (both): `gdn.prefill` ~37% at ~13% estimate efficiency,
+  `hyper.combine_mix` ~21% at ~13.6%, `qsa.select` ~20% at **6.9%** (843 GFLOP —
+  the largest single inefficiency in the trace), `moe.nvfp4` ~16% at 8.5–32%.
+- Unattributed GPU work: 171.6 ms (mtp0) / 141.4 ms (mtp2).
+- PLE host lookup (mtp0): `ple.gather` 134 µs/step, `ple.hash` 0.5 µs/step — <0.3% of
+  a 51.8 ms decode step.
+
+PLE residency (campaign 3): **0 major page faults over 147 s** (campaign 2: 49) —
+the PLE working set is now fully page-cached. Together with the host-gather cost
+above, the plan's PLE residency question is settled: keep the PLE on the file +
+page cache; no device-resident copy needed.
+
+TC-68 failed again (0/2, seed 42) — three consecutive reproducible runs; genuine
+model behavior (step 4 decision input).
+
+Next (plan): step 4 KV read-share at the served context (the 64K row above informs
+it); steps 5–6 optimization targets point at prefill — `qsa.select` (6.9% estimate
+efficiency), then `gdn.prefill` / `hyper.combine_mix` (~13%) — not the decode path.
+
 ## Bug history (first live run exposed all of them)
 
 | ID | Symptom | Root cause | Fix | Status |
 |---|---|---|---|---|
 | B1 | `ninfer_bench: invalid speculative backend: none` — step 2 matrix, step 3 mtp0 capture, PLE residency run | the bench CLI takes `--spec <mtp\|dflash\|dflash2>`; `none` is the default, not a passable value; scripts passed `--spec none` | omit the flag for the no-spec case (`step2:38`, `step3:39`, `step3:50`) | fixed; verified in campaign 2 (step 1 parse + step 3 captures; the step 2 warm run failed on B5 instead) |
 | B2 | step 1 JSON checks: `model_not_found: model 'ninfer' not found`; all three FAIL | `step1_json_check.sh` hardcoded `"model":"ninfer"`; the server's model id is `qwen3.8-flash-next-125b-a6b` (TEB queries `/v1/models`, which is why it passed) | model id derived from `$BASE_URL/v1/models` at runtime (`step1:8-10,14,21-24`) | fixed; verified campaign 2 (all three checks PASS) |
-| B3 | attribution: `no selected measured range` for both captures | the `ninfer.region/1\|measured` scope is only emitted under `--profile-measured` (`bench/inference/ninfer_bench.cpp:219`); captures never passed it. The trace itself is fully annotated: 1,892 `ninfer.work/1\|` op scopes, 27 `ninfer.region/1\|` (predictor/target.verify/target.prefill), 58 `ninfer.host/1\|ple.hash\|gather` — engine `NINFER_PERFORMANCE_TRACE` wiring is intact | add `--profile-measured` to the capture (`step3:32`); its preconditions (exactly one test, `-r 1`) were already met | flag fix correct; superseded by B6 (macro missing in the bench TU); verification pending (campaign 3) |
+| B3 | attribution: `no selected measured range` for both captures | the `ninfer.region/1\|measured` scope is only emitted under `--profile-measured` (`bench/inference/ninfer_bench.cpp:219`); captures never passed it. The trace itself is fully annotated: 1,892 `ninfer.work/1\|` op scopes, 27 `ninfer.region/1\|` (predictor/target.verify/target.prefill), 58 `ninfer.host/1\|ple.hash\|gather` — engine `NINFER_PERFORMANCE_TRACE` wiring is intact | add `--profile-measured` to the capture (`step3:32`); its preconditions (exactly one test, `-r 1`) were already met | flag fix correct; superseded by B6 (macro missing in the bench TU); end-to-end verified campaign 3 via the B6 fix |
 | B4 | reports state the artifact as 30 G | `machine_summary` used `du -h "$ART"` — the entry volume only; the artifact is 5 volumes, 134.7 G | sum `ART` + `ART.part-*` (`common.sh:105-107`) | fixed; verified campaign 2 (126 G multi-volume total in summaries) |
-| B5 | campaign 2 step 2 failed again, same B1 signature, ~15 s in | `step2:32` page-cache warm call had `--spec none` hardcoded — missed by the B1 fix | remove the flag (`step2:32`) | fixed 18:57; verification pending (campaign 3 step 2) |
-| B6 | attribution still `no selected measured range` with `--profile-measured` passed (campaign 2) | the `ninfer_bench` TU compiles without `NINFER_PERFORMANCE_TRACE`: core's `target_compile_definitions(PUBLIC ...)` does not propagate through `ninfer_engine`'s private link, so the bench's measured-region scope compiled to a no-op (string absent from the build-trace binary) | explicit `target_compile_definitions(ninfer_bench PRIVATE NINFER_PERFORMANCE_TRACE=1)` under the option (`bench/inference/benchmarks.cmake`) | fixed 18:58; verification pending (campaign 3 step 3) |
+| B5 | campaign 2 step 2 failed again, same B1 signature, ~15 s in | `step2:32` page-cache warm call had `--spec none` hardcoded — missed by the B1 fix | remove the flag (`step2:32`) | fixed 18:57; **verified campaign 3** (full 6-cell matrix completed) |
+| B6 | attribution still `no selected measured range` with `--profile-measured` passed (campaign 2) | the `ninfer_bench` TU compiles without `NINFER_PERFORMANCE_TRACE`: core's `target_compile_definitions(PUBLIC ...)` does not propagate through `ninfer_engine`'s private link, so the bench's measured-region scope compiled to a no-op (string absent from the build-trace binary) | explicit `target_compile_definitions(ninfer_bench PRIVATE NINFER_PERFORMANCE_TRACE=1)` under the option (`bench/inference/benchmarks.cmake`) | fixed 18:58; **verified campaign 3** (both captures attributed 97.5–97.8%) |
 
 Note on B3: the first trace inspection looked like the annotations were missing
 entirely; the query had an inner JOIN on `textId` and silently dropped rows that
@@ -204,6 +254,7 @@ failed later, on the missing measured region — B6).
 | TEB 83/100 (TC-68 fail) | `tool-eval-bench` seed 42 | `profiles/bench/gb10/step1/` |
 | MTP2 preview 1447 prefill / 43.2 decode tok/s, acceptance 1.0 | `ninfer_bench` JSON | `profiles/bench/gb10/step3/mtp2-bench.json` (campaign 1) |
 | Step 0: ctest 131/131, real-artifact 3/3 | `step0_build_test.sh` | `profiles/bench/gb10/step0/` |
-| Baseline matrix (8K/64K × MTP0/2/3, 512 decode) | step 2 | pending (B5 fix) |
-| PLE residency: 49 major page faults / 147 s (page cache warm) | step 3, campaign 2 | `profiles/bench/gb10/step3/residency.log` |
-| Per-stage attribution | step 3 | pending (campaign 3, B6 fix) |
+| Baseline matrix: none 19.3, K=2 44.6, K=3 52.0 tok/s decode (8K/512) | step 2, campaign 3 | `profiles/bench/gb10/step2/summary.md` |
+| PLE residency: 49 faults (campaign 2, warm) → 0 faults (campaign 3); host gather 134 µs/step | step 3, campaigns 2–3 | `profiles/bench/gb10/step3/residency.log` |
+| Per-stage attribution (mtp0/mtp2, 97.5–97.8% attributed) | step 3, campaign 3 | `profiles/bench/gb10/step3/{mtp0,mtp2}-report.md` |
+| Final consolidated report (25,214 B, 2026-09-27T19:32Z) | `report.sh`, campaign 3 | `profiles/bench/gb10/report.md` |

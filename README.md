@@ -55,6 +55,7 @@ Each cherry-picked commit keeps its original author and records its source commi
 | [#5](https://github.com/baristahaus/ninfer-gb10/pull/5) | This provenance record | This fork (Claude Code session) |
 | [#7](https://github.com/baristahaus/ninfer-gb10/pull/7) | `tools/gb10/memory_probe.cu` and `probe_memory.sh`: standalone unified-memory probe | This fork (Claude Code session) |
 | [#8](https://github.com/baristahaus/ninfer-gb10/pull/8) | Probe weight-sample compression check; `gb10.json` at the measured 246 GB/s with the device's reported name; GB10 plan updated from the first probe run and from [HawkBearPig/dgpp](https://github.com/HawkBearPig/dgpp) (FP8 dense weights, lossless 12-bit BF16, L2 weight prefetch) | This fork (Claude Code session); techniques from DGPP, no code taken |
+| [#9](https://github.com/baristahaus/ninfer-gb10/pull/9) | Step-script and `ninfer_bench` trace-define fixes found on the first GB10 campaign (`--spec` flags, served model id, `--profile-measured`, multi-volume artifact size, `NINFER_PERFORMANCE_TRACE` on the bench target); GB10 plan updated with the campaign's baseline, attribution and PLE residency results | Fixes by twoFour (the GB10 box), cherry-picked from `twoFour/gb10-campaign` (`fad5ebdd`, `3df43884`); plan by this fork (Claude Code session) |
 
 Commits taken in #3 (source commit in giveen/ninfer-ext, then original author):
 

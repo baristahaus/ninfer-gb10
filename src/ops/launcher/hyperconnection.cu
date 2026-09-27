@@ -5,6 +5,7 @@
 #include "core/device.h"
 #include "ninfer/ops/linear.h"
 #include "ops/linear/bf16/flash_next/bf16_launch.h"
+#include "ops/linear/fp8/fp8_flash_next.h"
 
 #include <cuda_bf16.h>
 #include <cuda_runtime.h>
@@ -320,10 +321,22 @@ void validate(const Tensor& hyper, const HyperConnectionWeights& weights, const 
         weights.up.n != kHyper || weights.up.k != kRank) {
         throw std::invalid_argument("hyperconnection_mix: invalid Flash-Next geometry");
     }
+    // The low-rank down projection is BF16 or row-scaled FP8; the up projection and the
+    // injection rows are read as BF16.
+    const bool bf16_down =
+        weights.down.qtype == QType::BF16 && weights.down.layout == QuantLayout::Contiguous;
+    const bool fp8_down = weights.down.qtype == QType::FP8_E4M3FN_ROW_BF16 &&
+                          weights.down.layout == QuantLayout::RowScale;
+    if ((!bf16_down && !fp8_down) || weights.up.qtype != QType::BF16 ||
+        weights.up.layout != QuantLayout::Contiguous) {
+        throw std::invalid_argument("hyperconnection_mix: unsupported weight representation");
+    }
     if (injection != nullptr &&
         (injection->dtype != DType::BF16 || !injection->is_contiguous() ||
          injection->ne[0] != kStreams || injection->ne[1] != tokens ||
-         weights.injection.n != kStreams || weights.injection.k != kHyper)) {
+         weights.injection.n != kStreams || weights.injection.k != kHyper ||
+         weights.injection.qtype != QType::BF16 ||
+         weights.injection.layout != QuantLayout::Contiguous)) {
         throw std::invalid_argument("hyperconnection_mix: invalid injection geometry");
     }
 }
@@ -344,8 +357,12 @@ void finish_mix(const Tensor& normalized, const HyperConnectionWeights& weights,
                 cudaStream_t stream, Bf16GemmContext* bf16_gemm) {
     const int tokens = normalized.ne[1];
     Tensor low_rank = workspace.alloc(DType::BF16, {kRank, tokens});
-    const bool fused_down_silu = tokens <= 16;
-    if (tokens == 1) {
+    const bool fp8_down        = weights.down.qtype == QType::FP8_E4M3FN_ROW_BF16;
+    const bool fused_down_silu = fp8_down ? tokens == 1 : tokens <= 16;
+    if (tokens == 1 && fp8_down) {
+        detail::flash_next::launch_fp8_hc_down_silu_decode(normalized, weights.down, low_rank,
+                                                           stream);
+    } else if (tokens == 1) {
         detail::flash_next::launch_bf16_hc_down_silu_decode(normalized, weights.down, low_rank, stream);
     } else if (fused_down_silu) {
         detail::flash_next::launch_bf16_hc_down_silu_small_t(normalized, weights.down, low_rank, stream);
@@ -441,7 +458,8 @@ void hyperconnection_mix(const Tensor& hyper, const HyperConnectionWeights& weig
                          Tensor& block_input, Tensor* injection, WorkspaceArena& workspace,
                          cudaStream_t stream, Bf16GemmContext* bf16_gemm) {
     NINFER_PERF_SCOPE("hyper.mix", hyper.ne[1], 0, 0,
-                       flash_next_work::hyper(hyper.ne[1], injection != nullptr, false));
+                       flash_next_work::hyper(hyper.ne[1], injection != nullptr, false,
+                                              weights.down.qtype == QType::FP8_E4M3FN_ROW_BF16));
 
     validate(hyper, weights, block_input, injection);
     const int tokens = hyper.ne[1];
@@ -461,7 +479,8 @@ void hyperconnection_combine_mix(Tensor& hyper, const Tensor& previous_block_out
                                  WorkspaceArena& workspace, cudaStream_t stream,
                                  Bf16GemmContext* bf16_gemm) {
     NINFER_PERF_SCOPE("hyper.combine_mix", hyper.ne[1], 0, 0,
-                       flash_next_work::hyper(hyper.ne[1], injection != nullptr, true));
+                       flash_next_work::hyper(hyper.ne[1], injection != nullptr, true,
+                                              weights.down.qtype == QType::FP8_E4M3FN_ROW_BF16));
 
     validate(hyper, weights, block_input, injection);
     validate_combine_inputs(hyper, previous_block_output, previous_injection);

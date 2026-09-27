@@ -14,6 +14,8 @@ namespace ninfer::ops {
 
 class Bf16GemmContext;
 
+// query_key_value, output_gate and output may be BF16 or row-scaled FP8 (fp8_e4m3fn_row_bf16);
+// the a/b control projections are BF16.
 struct FlashNextGdnWeights {
     Tensor a_log;
     Tensor dt_bias;

@@ -7,6 +7,7 @@
 // winner selects the exact value/lower-id maximum per column.
 
 #include <cuda_bf16.h>
+#include <cuda_fp8.h>
 #include <cstdint>
 #include <climits>
 #include <math_constants.h>
@@ -180,6 +181,38 @@ __launch_bounds__(256) __global__ void shortlist_exact_scores_kernel(
         __syncthreads();
     }
     if (threadIdx.x == 0) { candidate_scores[candidate_index] = partial[0]; }
+}
+
+// Row-scaled FP8 exact head: each E4M3 code decodes exactly, the FP32 dot product accumulates
+// against the BF16 hidden state, and the row's BF16 multiplier scales the complete sum once.
+__launch_bounds__(256) __global__ void shortlist_exact_scores_fp8_kernel(
+    const __nv_bfloat16* hidden, const std::uint8_t* exact_codes,
+    const __nv_bfloat16* exact_row_scales, const std::int32_t* candidate_ids,
+    float* candidate_scores, std::int32_t hidden_rows, std::int32_t candidate_rows) {
+    const int candidate = static_cast<int>(blockIdx.x);
+    const int token = static_cast<int>(blockIdx.y);
+    const std::int64_t candidate_index = static_cast<std::int64_t>(token) * candidate_rows +
+                                         candidate;
+    const int token_id = candidate_ids[candidate_index];
+    const __nv_bfloat16* x = hidden + static_cast<std::int64_t>(token) * hidden_rows;
+    const std::uint8_t* codes = exact_codes + static_cast<std::int64_t>(token_id) * hidden_rows;
+    float sum = 0.0F;
+    for (int k = static_cast<int>(threadIdx.x); k < hidden_rows; k += blockDim.x) {
+        __nv_fp8_e4m3 code;
+        code.__x = codes[k];
+        sum = fmaf(__bfloat162float(x[k]), static_cast<float>(code), sum);
+    }
+    __shared__ float partial[256];
+    partial[threadIdx.x] = sum;
+    __syncthreads();
+    for (int stride = 128; stride > 0; stride >>= 1) {
+        if (threadIdx.x < stride) { partial[threadIdx.x] += partial[threadIdx.x + stride]; }
+        __syncthreads();
+    }
+    if (threadIdx.x == 0) {
+        candidate_scores[candidate_index] =
+            partial[0] * __bfloat162float(exact_row_scales[token_id]);
+    }
 }
 
 __launch_bounds__(kShortlistRerankTile) __global__ void shortlist_exact_select_kernel(

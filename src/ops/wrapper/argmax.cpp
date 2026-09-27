@@ -99,8 +99,13 @@ void shortlist_exact_argmax(const Tensor& hidden, const Tensor& approximate_logi
         out.ne[1] != 1 || out.ne[2] != 1 || out.ne[3] != 1) {
         throw std::invalid_argument("shortlist_exact_argmax: invalid tensor shape");
     }
-    if (exact_head.qtype != QType::BF16 || exact_head.layout != QuantLayout::Contiguous ||
-        exact_head.k != hidden.ne[0] || exact_head.n <= 0 || exact_head.qdata == nullptr ||
+    const bool bf16_head =
+        exact_head.qtype == QType::BF16 && exact_head.layout == QuantLayout::Contiguous;
+    const bool fp8_head = exact_head.qtype == QType::FP8_E4M3FN_ROW_BF16 &&
+                          exact_head.layout == QuantLayout::RowScale &&
+                          exact_head.scales != nullptr;
+    if ((!bf16_head && !fp8_head) || exact_head.k != hidden.ne[0] || exact_head.n <= 0 ||
+        exact_head.qdata == nullptr ||
         id_map == nullptr || hidden.data == nullptr || approximate_logits.data == nullptr ||
         candidate_ids.data == nullptr || candidate_scores.data == nullptr || out.data == nullptr) {
         throw std::invalid_argument("shortlist_exact_argmax: invalid exact head or storage");

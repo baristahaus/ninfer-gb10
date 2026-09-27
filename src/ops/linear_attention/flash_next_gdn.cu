@@ -130,9 +130,17 @@ __global__ void conv_replay_record_kernel(
     }
 }
 
-void require_weight(const Weight& weight, int rows, int columns, const char* label) {
-    if (weight.qtype != QType::BF16 || weight.layout != QuantLayout::Contiguous ||
-        weight.qdata == nullptr || weight.n != rows || weight.k != columns) {
+enum class WeightFormats { Bf16, Bf16OrFp8 };
+
+bool fp8_row_weight(const Weight& weight) {
+    return weight.qtype == QType::FP8_E4M3FN_ROW_BF16 && weight.layout == QuantLayout::RowScale;
+}
+
+void require_weight(const Weight& weight, int rows, int columns, const char* label,
+                    WeightFormats formats = WeightFormats::Bf16) {
+    const bool bf16 = weight.qtype == QType::BF16 && weight.layout == QuantLayout::Contiguous;
+    const bool allowed = bf16 || (formats == WeightFormats::Bf16OrFp8 && fp8_row_weight(weight));
+    if (!allowed || weight.qdata == nullptr || weight.n != rows || weight.k != columns) {
         throw std::invalid_argument(label);
     }
 }
@@ -165,11 +173,11 @@ void validate(const Tensor& input, const FlashNextGdnWeights& weights,
     require_weight(weights.b_projection, kHeads, kHidden,
                    "flash_next_gdn: invalid b projection");
     require_weight(weights.query_key_value, kConvolution, kHidden,
-                   "flash_next_gdn: invalid qkv projection");
+                   "flash_next_gdn: invalid qkv projection", WeightFormats::Bf16OrFp8);
     require_weight(weights.output_gate, kValue, kHidden,
-                   "flash_next_gdn: invalid output gate projection");
-    require_weight(weights.output, kHidden, kValue,
-                   "flash_next_gdn: invalid output projection");
+                   "flash_next_gdn: invalid output gate projection", WeightFormats::Bf16OrFp8);
+    require_weight(weights.output, kHidden, kValue, "flash_next_gdn: invalid output projection",
+                   WeightFormats::Bf16OrFp8);
 }
 
 } // namespace
@@ -199,7 +207,8 @@ void flash_next_gdn(const Tensor& input, const FlashNextGdnWeights& weights,
                     Tensor& destination, WorkspaceArena& workspace, cudaStream_t stream,
                     Bf16GemmContext* bf16_gemm) {
     NINFER_PERF_SCOPE("gdn.prefill", input.ne[1], 1, 0,
-                       flash_next_work::gdn(input.ne[1], 1, false, true));
+                       flash_next_work::gdn(input.ne[1], 1, false, true,
+                                            fp8_row_weight(weights.query_key_value)));
 
     validate(input, weights, convolution_state_in, convolution_state_out, recurrent_state_in,
              recurrent_state_out, destination);
@@ -258,7 +267,8 @@ void flash_next_gdn_batch_update(const Tensor& input, const FlashNextGdnWeights&
                                  Tensor& destination, WorkspaceArena& workspace,
                                  cudaStream_t stream) {
     NINFER_PERF_SCOPE("gdn.update", input.ne[1], input.ne[1], 0,
-                       flash_next_work::gdn(input.ne[1], input.ne[1], false));
+                       flash_next_work::gdn(input.ne[1], input.ne[1], false, false,
+                                            fp8_row_weight(weights.query_key_value)));
 
     const int batch = input.ne[1];
     if (batch <= 0 || batch > 8 || input.dtype != DType::BF16 || !input.is_contiguous() ||
@@ -327,7 +337,8 @@ void flash_next_gdn_replay_record(const Tensor& input, const FlashNextGdnWeights
                                   GdnReplayRecordLayer records, Tensor& destination,
                                   WorkspaceArena& workspace, cudaStream_t stream) {
     NINFER_PERF_SCOPE("gdn.record", input.ne[1], records.conv.ne[2], 0,
-                       flash_next_work::gdn(input.ne[1], records.conv.ne[2], true));
+                       flash_next_work::gdn(input.ne[1], records.conv.ne[2], true, false,
+                                            fp8_row_weight(weights.query_key_value)));
 
     const int width = records.conv.ne[1];
     const int batch = records.conv.ne[2];

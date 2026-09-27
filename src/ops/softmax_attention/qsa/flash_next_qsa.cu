@@ -9,6 +9,7 @@
 #include "ninfer/ops/sigmoid_mul.h"
 #include "ops/softmax_attention/dense/causal_cache/prompt_common.cuh"
 #include "ops/linear/bf16/flash_next/bf16_launch.h"
+#include "ops/linear/fp8/fp8_flash_next.h"
 #include "ops/common/device_info.h"
 #include "ops/kv_cache/fp8_e4m3_row_codec.cuh"
 #include "ops/kv_cache/hadamard_d256.cuh"
@@ -1454,9 +1455,17 @@ __global__ void reduce_selected_attention_splits_kernel(
     }
 }
 
-void require_weight(const Weight& weight, int n, int k, const char* label) {
-    if (weight.qtype != QType::BF16 || weight.layout != QuantLayout::Contiguous ||
-        weight.qdata == nullptr || weight.n != n || weight.k != k) {
+enum class WeightFormats { Bf16, Bf16OrFp8 };
+
+bool fp8_row_weight(const Weight& weight) {
+    return weight.qtype == QType::FP8_E4M3FN_ROW_BF16 && weight.layout == QuantLayout::RowScale;
+}
+
+void require_weight(const Weight& weight, int n, int k, const char* label,
+                    WeightFormats formats = WeightFormats::Bf16) {
+    const bool bf16 = weight.qtype == QType::BF16 && weight.layout == QuantLayout::Contiguous;
+    const bool allowed = bf16 || (formats == WeightFormats::Bf16OrFp8 && fp8_row_weight(weight));
+    if (!allowed || weight.qdata == nullptr || weight.n != n || weight.k != k) {
         throw std::invalid_argument(label);
     }
 }
@@ -1528,9 +1537,16 @@ void flash_next_project_query_gate(const Tensor& input, const Weight& query_gate
         throw std::invalid_argument("flash_next_project_query_gate: invalid tensor geometry");
     }
     require_weight(query_gate, 12288, 2560,
-                   "flash_next_project_query_gate: invalid packed weight");
+                   "flash_next_project_query_gate: invalid packed weight",
+                   WeightFormats::Bf16OrFp8);
     if (tokens == 1) {
-        detail::flash_next::launch_bf16_query_gate_decode(input, query_gate, query, gate, stream);
+        if (fp8_row_weight(query_gate)) {
+            detail::flash_next::launch_fp8_query_gate_decode(input, query_gate, query, gate,
+                                                             stream);
+        } else {
+            detail::flash_next::launch_bf16_query_gate_decode(input, query_gate, query, gate,
+                                                              stream);
+        }
         return;
     }
     auto scope = workspace.scope();
@@ -1554,7 +1570,8 @@ void flash_next_qsa(const Tensor& input, const Tensor& cache_positions,
                     FlashNextQsaIndexControl index_control) {
     NINFER_PERF_SCOPE(index_control.reused_indices != nullptr ? "qsa.reuse" : "qsa.select",
                        input.ne[1], cache_positions.ne[1], envelope.max_visible_keys,
-                       flash_next_work::qsa(input.ne[1], index_control.reused_indices != nullptr));
+                       flash_next_work::qsa(input.ne[1], index_control.reused_indices != nullptr,
+                                            fp8_row_weight(weights.query_gate)));
 
     const int width = cache_positions.ne[0];
     const int batch = cache_positions.ne[1];
@@ -1613,10 +1630,11 @@ void flash_next_qsa(const Tensor& input, const Tensor& cache_positions,
         throw std::invalid_argument("flash_next_qsa: invalid auxiliary cache geometry");
     }
     require_weight(weights.query_gate, 12288, 2560,
-                   "flash_next_qsa: invalid packed query/gate weight");
+                   "flash_next_qsa: invalid packed query/gate weight", WeightFormats::Bf16OrFp8);
     require_weight(weights.key, 512, 2560, "flash_next_qsa: invalid key weight");
     require_weight(weights.value, 512, 2560, "flash_next_qsa: invalid value weight");
-    require_weight(weights.output, 2560, 6144, "flash_next_qsa: invalid output weight");
+    require_weight(weights.output, 2560, 6144, "flash_next_qsa: invalid output weight",
+                   WeightFormats::Bf16OrFp8);
     require_weight(weights.index_query, 512, 2560, "flash_next_qsa: invalid index query weight");
     require_weight(weights.index_key, 128, 2560, "flash_next_qsa: invalid index key weight");
     auto scope = workspace.scope();

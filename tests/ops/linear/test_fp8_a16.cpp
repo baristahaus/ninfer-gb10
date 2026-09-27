@@ -22,6 +22,22 @@ std::vector<Invocation> a16_capacity_calls() {
     return calls;
 }
 
+// Flash-Next problems use one generic A16 route: GEMV at T=1, every K-split tile through 48
+// tokens, and the tiled GEMM with its packing intervals and tails beyond.
+std::vector<Invocation> flash_next_calls() {
+    std::vector<Invocation> calls;
+    for (int t = 1; t <= 48; ++t) calls.push_back({t});
+    for (int t :
+         {49, 63, 64, 65, 95, 96, 97, 127, 128, 129, 161, 192, 193, 257, 288, 289, 300, 1024})
+        calls.push_back({t});
+    for (int t : {1, 3, 8, 24, 41, 42, 129})
+        calls.push_back({t, CallForm::Policy, ops::LinearPolicy::A16Only, true});
+    calls.push_back({1, CallForm::A16Convenience});
+    calls.push_back({3, CallForm::Policy, ops::LinearPolicy::AllowA8});
+    calls.push_back({129, CallForm::Policy, ops::LinearPolicy::AllowA4});
+    return calls;
+}
+
 int run_fp8_a16() {
     const auto attn_invocations = a16_capacity_calls();
     int failures                = run_shape("FP8_A16", ActivationCompute::A16, make_fp8_weight,
@@ -90,6 +106,16 @@ int run_fp8_a16() {
         run_shape("FP8_A16", ActivationCompute::A16, make_fp8_weight,
                   {5120, 17408, 829U, Comparison::Sampled, true, residual17408_invocations});
 
+    const auto flash_next_invocations = flash_next_calls();
+    std::uint32_t flash_next_seed     = 841U;
+    for (auto [n, k] : {std::pair{10240, 2560}, std::pair{6144, 2560}, std::pair{12288, 2560},
+                        std::pair{2560, 6144}, std::pair{320, 10240}, std::pair{248320, 2560}}) {
+        failures +=
+            run_shape("FP8_A16", ActivationCompute::A16, make_fp8_weight,
+                      {n, k, flash_next_seed, Comparison::Sampled, true, flash_next_invocations});
+        flash_next_seed += 2U;
+    }
+
     auto packed = make_fp8_weight(14336, 5120, 831U);
     try {
         (void)ops::detail::validate_fp8_weight(packed.weight, "FP8 validator test");
@@ -114,7 +140,9 @@ int run_fp8_a16() {
     invalid.payload_bytes = invalid.payload_bytes - 1;
     expect_invalid("payload bound", invalid);
     for (auto [n, k] : {std::pair{14336, 5120}, std::pair{16384, 5120}, std::pair{34816, 5120},
-                        std::pair{248320, 5120}, std::pair{5120, 6144}, std::pair{5120, 17408}}) {
+                        std::pair{248320, 5120}, std::pair{5120, 6144}, std::pair{5120, 17408},
+                        std::pair{10240, 2560}, std::pair{6144, 2560}, std::pair{12288, 2560},
+                        std::pair{2560, 6144}, std::pair{320, 10240}, std::pair{248320, 2560}}) {
         failures += verify_workspace_envelopes(QType::FP8_E4M3FN_ROW_BF16, n, k);
     }
     return failures;

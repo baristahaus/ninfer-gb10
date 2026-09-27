@@ -2,6 +2,48 @@
 
 > Selected checkpoints. Maximum single-GPU inference performance.
 
+## GB10 (sm_121a) — this fork
+
+**Lineage:** NInfer (Neroued) → lkarlslund/ninfer (Flash-Next support) → this fork (GB10 port).
+
+- **Neroued** — the original NInfer engine and the five official upstream artifacts in the
+  table below ([huggingface.co/neroued](https://huggingface.co/neroued)).
+- **lkarlslund** — [lkarlslund/ninfer](https://github.com/lkarlslund/ninfer) adds
+  Qwen3.8 Flash-Next 125B-A6B (MoE, thinking + MTP) support: the local conversion path
+  (last row of the table) and the v3 frontend work. This fork is based on the tip of
+  that repository (commit `2aa87467`).
+- **This fork** — the GB10 (sm_121a) port of the full stack. Upstream targets
+  `sm_120a` parts (RTX 5090, RTX PRO 6000); GB10 is a different Blackwell part
+  (`sm_121a`, 48 SMs vs the 170-SM class the kernel sizing was tuned for). Without the
+  changes below the build gate, the kernel launch sizing, and the weight conversion
+  all fail on GB10.
+
+### What this fork changes
+
+1. **GB10 SM format (kernel sizing).** The architecture gate now accepts `sm_121a`
+   alongside `sm_120a` (CMake + runtime capability check). Every launch constant
+   derived from the 5090's 170 SMs (170/510/680/1020/5440) is replaced by a runtime
+   `device_sm_count()` query (`src/ops/common/device_info.{h,cu}`; cached, 170 fallback).
+   The persistent-grid kernels stride their work list by `gridDim.x`, so grid sizing is
+   performance-only — any grid size is a correct result. `tools/convert` also reads
+   safetensors tensors in chunks: the GB10 kernel clamps a single read at 2 GiB, so an
+   unbounded `pread` short-reads.
+2. **JSON and tool calls.** Serve accepts `response_format: text | json_object |
+   json_schema` and `tool_choice: auto | none | required | allowed_tools`. Output is
+   prompt-guided (no constrained decoding — schema conformance is not guaranteed); a
+   leading system block carries the JSON/tool instructions and `json_output::extract`
+   strips think leaks and code fences to the outermost JSON object. See `docs/serving.md`.
+3. **Lowered CUDA requirements.** The whole stack — clean build, op conformance
+   (ctest), serve, probes — is validated on the GB10 stock **CUDA 13.0.88** toolkit;
+   upstream's validated toolkit is CUDA 13.1. CMake imposes no CUDA version floor.
+
+### Validated on GB10
+
+Clean build 728/728 (nvcc V13.0.88, `-DCMAKE_CUDA_ARCHITECTURES=121a`); op conformance
+36 pass / 4 skip / 0 fail; unit suites green; 11/11 live smoke; probe suite all 200, no
+early EOS. Serves the Qwen3.8 Flash-Next 125B-A6B v3 artifact (fp8 KV cache, MTP
+draft-tokens 2, max concurrency 2).
+
 NInfer is a from-scratch C++/CUDA inference engine for Qwen3.5 Dense/MoE and Qwen3.8 Flash-Next
 on one Blackwell GPU. The 27B/35B models target RTX 5090; Flash-Next targets RTX PRO 6000. It runs text, image, and video prompts through a local CLI or
 OpenAI-/Anthropic-compatible HTTP APIs. The runtime is deliberately specialized: one GPU, one

@@ -54,18 +54,23 @@ DeviceContext::DeviceContext(int device_id) : device(device_id) {
 
     bind_to_current_thread();
 
-    // cudaDeviceScheduleAuto spin-waits in every synchronize when the host has more cores
-    // than GPUs, keeping this thread at 100% of a core for as long as the GPU is busy.
-    err = cudaSetDeviceFlags(cudaDeviceScheduleBlockingSync);
+    err = cudaGetDeviceProperties(&props, device_id);
+    if (err != cudaSuccess) {
+        throw std::runtime_error(cuda_error_message("cudaGetDeviceProperties failed", err));
+    }
+
+    // On GB10 (integrated) a blocking synchronize returns 0.4-1.2 ms after the GPU finishes,
+    // growing with the wait; yield returns in ~3 us (tools/gb10/probe_sync.sh). Yield
+    // busy-waits with sched_yield between polls, but measured decode is 1.6-3.3% faster with
+    // it and the GPU clock is unchanged under GB10's shared CPU/GPU power budget. Discrete
+    // GPUs keep blocking, which frees the host core while the GPU runs.
+    const unsigned sync_flag =
+        props.integrated ? cudaDeviceScheduleYield : cudaDeviceScheduleBlockingSync;
+    err = cudaSetDeviceFlags(sync_flag);
     if (err != cudaSuccess) {
         (void)cudaGetLastError(); // don't leak this into later launch checks
         std::fprintf(stderr, "warning: %s; keeping default CUDA sync schedule\n",
                      cuda_error_message("cudaSetDeviceFlags failed", err).c_str());
-    }
-
-    err = cudaGetDeviceProperties(&props, device_id);
-    if (err != cudaSuccess) {
-        throw std::runtime_error(cuda_error_message("cudaGetDeviceProperties failed", err));
     }
 
     cudaStream_t compute = nullptr;

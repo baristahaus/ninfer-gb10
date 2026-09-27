@@ -58,7 +58,7 @@ free -g >"$dir/free_after.txt"
     echo
     machine_summary
     echo "- nsys: $(nsys --version 2>/dev/null | head -1)"
-    echo "- Hardware profile: tools/bench/hardware/gb10.json (273 GB/s; derived compute rates)"
+    echo "- Hardware profile: tools/bench/hardware/gb10.json (246 GB/s measured; derived compute rates)"
     for name in mtp0 "mtp$DRAFT_TOKENS"; do
         echo
         echo "### $name"

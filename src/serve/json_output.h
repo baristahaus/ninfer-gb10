@@ -1,69 +1,95 @@
 #pragma once
 
-// json_output - tolerant post-generation cleaning for prompt-guided JSON
-// response_format. NInfer performs no constrained decoding; this tolerant
-// cleaner runs after generation: paired thinking leaks are dropped,
-// markdown code fences are unwrapped, and the outermost JSON object is
-// returned verbatim.
-//
-// Provenance (2026-09-27, Daphne): the original file was new-and-untracked
-// in the v3-leg worktree on .24 and was lost in the 2026-09-27 re-image;
-// the committed port tree references it (generation_service.cpp,
-// tests/test_openai_schema.cpp) but omitted it from commit 85afc967. The
-// body below is the tested desk original `extract_json_output`
-// (daphne/ninfer-GB10 src/serve/generation_service.cpp; refs gb10/main and
-// gitea/sm121a-tune, identical in both), relocated to the fork's header
-// layout, with exactly one behavior change pinned by the fork tests: an
-// UNCLOSED <think> fragment is left in place (the desk original erased it
-// to the end of the string). Verified 2026-09-27 on the Mac: the 12-case
-// harness (worklog/variants/json-extract-check) and the committed 8-case
-// test_json_output_extract both pass.
+// json_output - tolerant post-generation cleaning for prompt-guided JSON response_format.
+// NInfer performs no constrained decoding, so generated content may surround the JSON value
+// with whitespace, a markdown fence, a leaked thinking block, or prose. The cleaner returns the
+// first well-formed JSON object or array it can recover, byte-for-byte as generated.
 
+#include <nlohmann/json.hpp>
+
+#include <cstddef>
 #include <string>
+#include <string_view>
 
 namespace ninfer::serve::json_output {
+namespace detail {
 
-// Tolerant-clean generated content into the JSON object. A complete object
-// is returned verbatim; values containing the marker substring "think" and
-// a newline are never damaged.
-inline std::string extract(const std::string& text) {
-    std::string s = text;
+inline std::string_view trim(std::string_view text) noexcept {
+    constexpr std::string_view kSpace = " \t\r\n";
+    const std::size_t first           = text.find_first_not_of(kSpace);
+    if (first == std::string_view::npos) { return {}; }
+    return text.substr(first, text.find_last_not_of(kSpace) - first + 1);
+}
 
-    // Strip thinking blocks (<think>...</think>) if any leaked into content.
+// A structured JSON value: an object or array that parses completely.
+inline bool is_json_value(std::string_view text) {
+    if (text.empty() || (text.front() != '{' && text.front() != '[')) { return false; }
+    return nlohmann::json::accept(text.begin(), text.end());
+}
+
+// Drops closed <think>...</think> blocks. An unclosed opening tag is left in place.
+inline std::string strip_thinking(std::string_view text) {
+    constexpr std::string_view kOpen  = "<think>";
+    constexpr std::string_view kClose = "</think>";
+    std::string out;
+    std::size_t position = 0;
     for (;;) {
-        const auto open = s.find("<think>");
-        if (open == std::string::npos) { break; }
-        const auto close = s.find("</think>", open);
-        if (close == std::string::npos) {
-            break; // unclosed fragment: left in place, never erased to the end
-        }
-        s.erase(open, close + 8 - open);
+        const std::size_t open = text.find(kOpen, position);
+        if (open == std::string_view::npos) { break; }
+        const std::size_t close = text.find(kClose, open + kOpen.size());
+        if (close == std::string_view::npos) { break; }
+        out.append(text.substr(position, open - position));
+        position = close + kClose.size();
     }
+    out.append(text.substr(position));
+    return out;
+}
 
-    // Strip markdown code fences: ```json\n...\n``` or ```\n...\n```
-    const auto fence = s.find("```");
-    if (fence != std::string::npos) {
-        std::size_t start = fence + 3;
-        // Skip optional language tag (json, etc.) on the same line.
-        if (start < s.size() && s[start] != '\n') {
-            const auto nl = s.find('\n', start);
-            if (nl != std::string::npos) { start = nl + 1; }
-        } else if (start < s.size()) {
-            ++start; // skip the newline after ```
-        }
-        const auto close = s.rfind("```");
-        if (close > start) {
-            s = s.substr(start, close - start);
-        }
-    }
+// Body of the first markdown fence: after the opening fence line, before the last fence.
+inline std::string_view fence_body(std::string_view text) {
+    constexpr std::string_view kFence = "```";
+    const std::size_t open            = text.find(kFence);
+    if (open == std::string_view::npos) { return {}; }
+    const std::size_t line_end = text.find('\n', open + kFence.size());
+    if (line_end == std::string_view::npos) { return {}; }
+    const std::size_t close = text.rfind(kFence);
+    if (close <= line_end) { return {}; }
+    return text.substr(line_end + 1, close - line_end - 1);
+}
 
-    // Find the outermost { ... } pair.
-    const auto first = s.find('{');
-    const auto last  = s.rfind('}');
-    if (first != std::string::npos && last != std::string::npos && last > first) {
-        return s.substr(first, last - first + 1);
+// First opening bracket whose span to a later matching closing bracket parses. Closers are
+// tried from the right so the outermost value wins over a nested one.
+inline std::string_view embedded_value(std::string_view text) {
+    constexpr int kMaxAttempts = 256;
+    int attempts               = 0;
+    for (std::size_t open = text.find_first_of("{["); open != std::string_view::npos;
+         open             = text.find_first_of("{[", open + 1)) {
+        const char closer = text[open] == '{' ? '}' : ']';
+        for (std::size_t close = text.rfind(closer); close != std::string_view::npos && close > open;
+             close             = close == 0 ? std::string_view::npos : text.rfind(closer, close - 1)) {
+            if (++attempts > kMaxAttempts) { return {}; }
+            const std::string_view candidate = text.substr(open, close - open + 1);
+            if (is_json_value(candidate)) { return candidate; }
+        }
     }
-    return s;
+    return {};
+}
+
+} // namespace detail
+
+// Returns the JSON object or array carried by generated content, or the content unchanged when
+// none can be recovered.
+inline std::string extract(const std::string& text) {
+    const std::string_view whole = detail::trim(text);
+    if (detail::is_json_value(whole)) { return std::string(whole); }
+
+    const std::string visible = detail::strip_thinking(text);
+    const std::string_view fenced = detail::trim(detail::fence_body(visible));
+    if (detail::is_json_value(fenced)) { return std::string(fenced); }
+
+    const std::string_view embedded = detail::embedded_value(visible);
+    if (!embedded.empty()) { return std::string(embedded); }
+    return text;
 }
 
 } // namespace ninfer::serve::json_output

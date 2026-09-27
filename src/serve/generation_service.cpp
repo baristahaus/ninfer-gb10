@@ -2,7 +2,6 @@
 
 #include "product/media_acquire/acquire.h"
 #include "serve/json_output.h"
-
 #include "serve/translate.h"
 
 #include <algorithm>
@@ -203,11 +202,12 @@ void check_preparation_control(Clock::time_point deadline,
 
 class ServiceOutputSink final : public ninfer::OutputSink {
 public:
-    // hold_content buffers answer text until flush_held(): JSON response_format
-    // output is delivered as one chunk so the stream presents a single, complete
-    // answer (the aggregate result is tolerant-cleaned by GenerationService::run).
-    ServiceOutputSink(const StreamSink& sink, bool hold_content)
-        : sink_(&sink), hold_content_(hold_content) {}
+    // withhold_content suppresses incremental answer text. JSON response_format output is
+    // cleaned only once generation ends, so the stream encoder's terminal suffix delivers the
+    // cleaned text as one chunk instead of streaming raw text that the cleaned result would
+    // no longer extend.
+    ServiceOutputSink(const StreamSink& sink, bool withhold_content)
+        : sink_(&sink), withhold_content_(withhold_content) {}
 
     void start(ninfer::GenerationStart start) override {
         if (sink_->on_start) { sink_->on_start(start); }
@@ -228,25 +228,14 @@ public:
         if (delta.text.empty()) { return; }
         if (delta.channel == ninfer::OutputChannel::Reasoning) {
             if (sink_->on_reasoning) { sink_->on_reasoning(delta.text); }
-        } else if (!hold_content_) {
+        } else if (!withhold_content_) {
             if (sink_->on_content) { sink_->on_content(delta.text); }
-        } else {
-            held_content_ += delta.text;
-        }
-    }
-
-    // Flush held (response_format JSON) content as a single final delta.
-    void flush_held() {
-        if (hold_content_ && !held_content_.empty()) {
-            const std::string held = std::move(held_content_);
-            if (sink_->on_content) { sink_->on_content(held); }
         }
     }
 
 private:
     const StreamSink* sink_ = nullptr;
-    bool hold_content_      = false;
-    std::string held_content_;
+    bool withhold_content_  = false;
 };
 
 } // namespace
@@ -423,9 +412,9 @@ GenerationOutcome GenerationService::run(PreparedRequest& prepared, const Stream
                                          std::function<bool()> is_cancelled) {
     std::unique_ptr<ServiceOutputSink> output_sink;
     if (sink != nullptr) {
-        const bool hold = prepared.response_format == ResponseFormatKind::JsonObject ||
-                         prepared.response_format == ResponseFormatKind::JsonSchema;
-        output_sink = std::make_unique<ServiceOutputSink>(*sink, hold);
+        const bool json_format = prepared.response_format == ResponseFormatKind::JsonObject ||
+                                 prepared.response_format == ResponseFormatKind::JsonSchema;
+        output_sink = std::make_unique<ServiceOutputSink>(*sink, json_format);
     }
     ninfer::OutputSink* public_sink = output_sink.get();
     ninfer::CancellationView cancellation;
@@ -449,15 +438,14 @@ GenerationOutcome GenerationService::run(PreparedRequest& prepared, const Stream
     outcome.thinking            = result.thinking;
     outcome.finish_reason       = result.finish_reason;
     outcome.matched_stop_string = std::move(result.matched_stop_string);
-    // When response_format is JSON, tolerant-clean the output: strip prose,
-    // markdown fences, and thinking leaks; extract the outermost JSON object.
-    // Tool-call responses carry their own structure and are left untouched.
+    // JSON response_format output is tolerant-cleaned to its JSON value. Tool-call responses
+    // carry their own structure and keep their text unchanged. Streams received no content
+    // deltas, so their terminal suffix is exactly this text.
     if (result.tool_calls.empty() &&
         (prepared.response_format == ResponseFormatKind::JsonObject ||
          prepared.response_format == ResponseFormatKind::JsonSchema)) {
         outcome.text = json_output::extract(outcome.text);
     }
-    if (output_sink) { output_sink->flush_held(); }
 
     outcome.metrics.prepare_seconds = prepared.prepare_seconds;
     outcome.metrics.ttft_seconds =

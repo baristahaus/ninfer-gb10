@@ -143,8 +143,12 @@ non-empty legacy `functions`. Each capability rejection identifies the affected 
 guarantee NInfer cannot provide.
 
 JSON `response_format` is accepted: the JSON instruction and any schema are folded into a leading
-prompt block, and the returned content is tolerant-cleaned to the JSON object. NInfer does not
-apply constrained decoding, so schema conformance is not guaranteed. `tool_choice:"required"` is
+prompt block, and the returned content is tolerant-cleaned: a complete JSON object or array is
+returned as generated without surrounding whitespace; otherwise closed `<think>` blocks, a markdown
+fence, and surrounding prose are dropped to the first well-formed object or array, and content
+with none is returned unchanged. A streamed JSON answer is withheld until generation ends and then
+sent as one cleaned content delta. NInfer does not apply constrained decoding, so schema
+conformance is not guaranteed. `tool_choice:"required"` is
 likewise prompt-guided: a directive forces a tool call and the request's tools stay enabled, but
 the model is not constrained to one.
 

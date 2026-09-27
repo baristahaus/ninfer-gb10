@@ -15,8 +15,8 @@
 - **This fork** — the GB10 (sm_121a) port of the full stack. Upstream targets
   `sm_120a` parts (RTX 5090, RTX PRO 6000); GB10 is a different Blackwell part
   (`sm_121a`, 48 SMs vs the 170-SM class the kernel sizing was tuned for). Without the
-  changes below the build gate, the kernel launch sizing, and the weight conversion
-  all fail on GB10.
+  changes below the build gate rejects GB10 and conversion short-reads large tensors;
+  the launch-sizing changes are performance-only.
 
 ### What this fork changes
 
@@ -25,14 +25,17 @@
    derived from the 5090's 170 SMs (170/510/680/1020/5440) is replaced by a runtime
    `device_sm_count()` query (`src/ops/common/device_info.{h,cu}`; cached, 170 fallback).
    The persistent-grid kernels stride their work list by `gridDim.x`, so grid sizing is
-   performance-only — any grid size is a correct result. `tools/convert` also reads
-   safetensors tensors in chunks: the GB10 kernel clamps a single read at 2 GiB, so an
+   performance-only — any grid size is a correct result. These values are scaled from
+   the reference part, not yet measured on GB10. `tools/convert` also reads safetensors
+   tensors in chunks: Linux caps a single `read`/`pread` just under 2 GiB, so an
    unbounded `pread` short-reads.
 2. **JSON and tool calls.** Serve accepts `response_format: text | json_object |
    json_schema` and `tool_choice: auto | none | required | allowed_tools`. Output is
    prompt-guided (no constrained decoding — schema conformance is not guaranteed); a
    leading system block carries the JSON/tool instructions and `json_output::extract`
-   strips think leaks and code fences to the outermost JSON object. See `docs/serving.md`.
+   returns the first well-formed JSON object or array after dropping whitespace, closed
+   think blocks, fences and prose. Streamed JSON arrives as one cleaned content chunk.
+   See `docs/serving.md`.
 3. **Lowered CUDA requirements.** The whole stack — clean build, op conformance
    (ctest), serve, probes — is validated on the GB10 stock **CUDA 13.0.88** toolkit;
    upstream's validated toolkit is CUDA 13.1. CMake imposes no CUDA version floor.
@@ -43,6 +46,10 @@ Clean build 728/728 (nvcc V13.0.88, `-DCMAKE_CUDA_ARCHITECTURES=121a`); op confo
 36 pass / 4 skip / 0 fail; unit suites green; 11/11 live smoke; probe suite all 200, no
 early EOS. Serves the Qwen3.8 Flash-Next 125B-A6B v3 artifact (fp8 KV cache, MTP
 draft-tokens 2, max concurrency 2).
+
+Open GB10 work — baseline measurement, decode attribution, `tool_choice: required`
+enforcement, and NVFP4 tuning — is tracked step by step in
+[`docs/maintainer/plan-2026-09-gb10.md`](docs/maintainer/plan-2026-09-gb10.md).
 
 NInfer is a from-scratch C++/CUDA inference engine for Qwen3.5 Dense/MoE and Qwen3.8 Flash-Next
 on one Blackwell GPU. The 27B/35B models target RTX 5090; Flash-Next targets RTX PRO 6000. It runs text, image, and video prompts through a local CLI or

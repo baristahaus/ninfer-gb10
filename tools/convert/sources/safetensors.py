@@ -146,9 +146,9 @@ class SafetensorsSource:
         count = (end - begin) * word_bytes
         fd = self._file(info.file)
         offset = info.offset + begin * word_bytes
-        # Chunked reads: this GB10 kernel clamps a single read() of more than
-        # 2 GiB to 2 GiB - 4 KiB (measured 2026-09-26, local and NFS), so one
-        # unbounded pread short-reads any tensor larger than the clamp.
+        # Chunked reads: Linux caps one read()/pread() at MAX_RW_COUNT
+        # (INT_MAX & PAGE_MASK, just under 2 GiB) on every distribution, so one
+        # unbounded pread short-reads any tensor larger than that.
         raw = bytearray()
         for pos in range(0, count, IO_CHUNK_BYTES):
             raw += os.pread(fd, min(IO_CHUNK_BYTES, count - pos), offset + pos)

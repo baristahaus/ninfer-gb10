@@ -722,6 +722,18 @@ int test_stream_response() {
                       "dedicated stream usage carries token accounting and terminal timings");
     failures += check(events.back() == "data: [DONE]\n\n", "stream ends with DONE sentinel");
 
+    // JSON response_format content is withheld while streaming and cleaned at the end; the
+    // terminal suffix then carries the cleaned value as one content chunk.
+    OpenAIChatStream json_stream(identity(), false);
+    (void)json_stream.start();
+    (void)json_stream.reasoning_delta("thought");
+    GenerationOutcome json_outcome = sample_outcome();
+    json_outcome.text = ninfer::serve::json_output::extract("```json\n{\"a\":1}\n```\n");
+    const std::vector<std::string> json_events = json_stream.finish(json_outcome);
+    failures += check(json_events.size() >= 2 &&
+                          parse_sse(json_events[0])["choices"][0]["delta"]["content"] == "{\"a\":1}",
+                      "withheld JSON content streams once as the cleaned value");
+
     OpenAIChatStream mismatch(identity(), false);
     (void)mismatch.start();
     (void)mismatch.content_delta("different");
@@ -1009,6 +1021,32 @@ int test_json_output_extract() {
     {
         const std::string in = "no json here at all";
         failures += check(extract(in) == in, "non-json text passes through");
+    }
+    // Surrounding whitespace is not part of the value.
+    {
+        failures += check(extract("\n\n{\"a\":1}\n") == "{\"a\":1}", "surrounding whitespace is trimmed");
+    }
+    // A fence inside a string value never damages a complete object.
+    {
+        const std::string in = "{\"code\":\"use ```x``` here\"}";
+        failures += check(extract(in) == in, "fence inside a string value is untouched");
+    }
+    // A closed thinking block containing braces is dropped before the value is located.
+    {
+        const std::string in = "<think>maybe {\"a\":0}</think>\n{\"a\":1}";
+        failures += check(extract(in) == "{\"a\":1}", "closed thinking block is dropped");
+    }
+    // Top-level arrays are JSON values too.
+    {
+        failures += check(extract("```json\n[1,{\"b\":2}]\n```") == "[1,{\"b\":2}]",
+                          "fenced top-level array is unwrapped");
+        failures += check(extract("Result: [{\"a\":1},{\"a\":2}] done") == "[{\"a\":1},{\"a\":2}]",
+                          "top-level array is not cut to its first object");
+    }
+    // Truncated JSON cannot be recovered and is returned unchanged.
+    {
+        const std::string in = "{\"a\":[1,2";
+        failures += check(extract(in) == in, "unrecoverable json is unchanged");
     }
     return failures;
 }

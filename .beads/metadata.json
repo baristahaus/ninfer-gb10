@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "ninfer_gb10",
+  "project_id": "51c0defa-7cf8-436c-b555-a054915fe186"
+}

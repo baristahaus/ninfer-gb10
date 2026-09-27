@@ -54,9 +54,11 @@ DeviceContext::DeviceContext(int device_id) : device(device_id) {
 
     bind_to_current_thread();
 
-    // cudaDeviceScheduleAuto spin-waits in every synchronize when the host has more cores
-    // than GPUs, keeping this thread at 100% of a core for as long as the GPU is busy.
-    err = cudaSetDeviceFlags(cudaDeviceScheduleBlockingSync);
+    // GB10 sync probe (tools/gb10/probe_sync.sh, profiles/bench/gb10/sync_probe): yield wakes
+    // the host ~3 us after GPU completion, 0.4-1.2 ms for blocking, equal to spin. Spin
+    // matches yield but holds a core at 100% for the whole round, which GB10's shared
+    // CPU/GPU power budget disfavors; auto spins on this machine (20 cores > 1 GPU).
+    err = cudaSetDeviceFlags(cudaDeviceScheduleYield);
     if (err != cudaSuccess) {
         (void)cudaGetLastError(); // don't leak this into later launch checks
         std::fprintf(stderr, "warning: %s; keeping default CUDA sync schedule\n",

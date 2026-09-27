@@ -4,6 +4,8 @@
 // source cannot settle: what CUDA reports about the shared LPDDR5X pool, whether generic
 // ("compute data") compression is granted and changes effective read bandwidth, how fast the GPU
 // reads each kind of host-visible memory, and how CPU and GPU traffic contend. Prints Markdown.
+// --sample LABEL=PATH (repeatable; tools/gb10/weight_samples.py writes them from an artifact)
+// repeats the compression comparison on real weight bytes.
 //
 // Build (no libcuda link needed; driver-API calls go through the runtime entry-point query):
 //   nvcc -O3 -std=c++17 -arch=sm_121a tools/gb10/memory_probe.cu -o memory_probe
@@ -39,6 +41,7 @@ struct Options {
     std::size_t bytes     = std::size_t{1} << 30; // per buffer
     double seconds        = 0.5;                  // target duration of one measurement
     unsigned cpu_threads  = std::max(1u, std::thread::hardware_concurrency());
+    std::vector<std::pair<std::string, std::string>> samples; // label, file
 };
 
 Options parse(int argc, char** argv) {
@@ -58,10 +61,18 @@ Options parse(int argc, char** argv) {
             o.seconds = std::stod(next());
         } else if (a == "--cpu-threads") {
             o.cpu_threads = static_cast<unsigned>(std::stoul(next()));
+        } else if (a == "--sample") {
+            const std::string v = next();
+            const auto eq       = v.find('=');
+            if (eq == std::string::npos || eq == 0 || eq + 1 == v.size()) {
+                std::fprintf(stderr, "--sample expects LABEL=PATH, got %s\n", v.c_str());
+                std::exit(2);
+            }
+            o.samples.emplace_back(v.substr(0, eq), v.substr(eq + 1));
         } else {
             std::fprintf(stderr,
                          "usage: memory_probe [--gib N (default 1)] [--seconds S (default 0.5)] "
-                         "[--cpu-threads N (default all)]\n");
+                         "[--cpu-threads N (default all)] [--sample LABEL=PATH]...\n");
             std::exit(a == "--help" ? 0 : 2);
         }
     }
@@ -130,6 +141,15 @@ __global__ void fill_kernel(uint4* data, std::size_t n, std::uint32_t seed, bool
         x ^= x << 13; x ^= x >> 17; x ^= x << 5; v.z = x;
         x ^= x << 13; x ^= x >> 17; x ^= x << 5; v.w = x;
         data[i] = v;
+    }
+}
+
+// Fills `n` 16-byte words of `dst` by repeating the `period` words of `src`. A kernel store, so the
+// data reaches a compressible allocation the same way section 2's fills do.
+__global__ void tile_kernel(uint4* dst, std::size_t n, const uint4* src, std::size_t period) {
+    for (std::size_t i = blockIdx.x * std::size_t(blockDim.x) + threadIdx.x; i < n;
+         i += std::size_t(gridDim.x) * blockDim.x) {
+        dst[i] = src[i % period];
     }
 }
 
@@ -291,6 +311,26 @@ VmmBuffer vmm_alloc(const Driver& d, std::size_t bytes, bool request_compression
     return b;
 }
 
+std::vector<unsigned char> read_file(const std::string& path) {
+    std::FILE* f = std::fopen(path.c_str(), "rb");
+    if (f == nullptr) {
+        std::fprintf(stderr, "cannot open sample %s\n", path.c_str());
+        std::exit(2);
+    }
+    std::vector<unsigned char> data;
+    unsigned char chunk[1 << 16];
+    for (std::size_t got; (got = std::fread(chunk, 1, sizeof(chunk), f)) > 0;) {
+        data.insert(data.end(), chunk, chunk + got);
+    }
+    std::fclose(f);
+    data.resize(data.size() / sizeof(uint4) * sizeof(uint4));
+    if (data.empty()) {
+        std::fprintf(stderr, "sample %s holds fewer than 16 bytes\n", path.c_str());
+        std::exit(2);
+    }
+    return data;
+}
+
 void vmm_free(const Driver& d, VmmBuffer& b) {
     if (b.ptr) {
         d.memUnmap(b.ptr, b.size);
@@ -381,6 +421,47 @@ int main(int argc, char** argv) {
         }
         std::printf("\nCompression is doing something only if the granted, zero-filled row reads "
                     "clearly faster than the plain rows.\n\n");
+    }
+
+    // 2b. Compression on real weight bytes.
+    if (have_driver && !opt.samples.empty()) {
+        std::printf("### 2b. Generic compression on weight samples\n\n"
+                    "Each sample is the tensor's leading bytes, repeated to fill the %.2f GiB "
+                    "buffer.\n\n| Sample | Sample MiB | Plain GB/s | Compressed GB/s | Gain |\n"
+                    "|---|---:|---:|---:|---:|\n",
+                    gib);
+        for (const auto& [label, path] : opt.samples) {
+            const std::vector<unsigned char> host = read_file(path);
+            void* staged                          = nullptr;
+            CUDA_CHECK(cudaMalloc(&staged, host.size()));
+            CUDA_CHECK(cudaMemcpy(staged, host.data(), host.size(), cudaMemcpyHostToDevice));
+            double gbps[2] = {0, 0};
+            std::string error;
+            for (const bool want : {false, true}) {
+                VmmBuffer b = vmm_alloc(drv, opt.bytes, want);
+                if (!b.error.empty() || (want && !b.compression_granted)) {
+                    error = b.error.empty() ? "compression not granted" : b.error;
+                    vmm_free(drv, b);
+                    break;
+                }
+                tile_kernel<<<g.sms * 8, 256, 0, g.stream>>>(
+                    reinterpret_cast<uint4*>(b.ptr), b.size / sizeof(uint4),
+                    static_cast<const uint4*>(staged), host.size() / sizeof(uint4));
+                CUDA_CHECK(cudaGetLastError());
+                CUDA_CHECK(cudaStreamSynchronize(g.stream));
+                gbps[want] = gpu_read_gbps(g, reinterpret_cast<void*>(b.ptr), b.size, opt.seconds);
+                vmm_free(drv, b);
+            }
+            CUDA_CHECK(cudaFree(staged));
+            if (!error.empty()) {
+                std::printf("| %s | %.1f | %s | — | — |\n", label.c_str(),
+                            host.size() / 1048576.0, error.c_str());
+            } else {
+                std::printf("| %s | %.1f | %.1f | %.1f | %.2fx |\n", label.c_str(),
+                            host.size() / 1048576.0, gbps[0], gbps[1], gbps[1] / gbps[0]);
+            }
+        }
+        std::printf("\n");
     }
 
     // 3. GPU reads of each memory kind, and copies.

@@ -52,6 +52,9 @@ Each cherry-picked commit keeps its original author and records its source commi
 | [#2](https://github.com/baristahaus/ninfer-gb10/pull/2) | `tools/gb10/` scripts for plan steps 0–3 and one pasteable report; `tools/bench/hardware/gb10.json` | This fork (Claude Code session) |
 | [#3](https://github.com/baristahaus/ninfer-gb10/pull/3) | Fixes taken from [giveen/ninfer-ext](https://github.com/giveen/ninfer-ext), listed below, and the tool-call fixes ported to the Flash-Next frontend | Cherry-picks as listed; Flash-Next port by this fork |
 | [#4](https://github.com/baristahaus/ninfer-gb10/pull/4) | Findings from other NInfer forks folded into the GB10 plan, with source commits | This fork (survey of `Neroued/ninfer` forks) |
+| [#5](https://github.com/baristahaus/ninfer-gb10/pull/5) | This provenance record | This fork (Claude Code session) |
+| [#7](https://github.com/baristahaus/ninfer-gb10/pull/7) | `tools/gb10/memory_probe.cu` and `probe_memory.sh`: standalone unified-memory probe | This fork (Claude Code session) |
+| [#8](https://github.com/baristahaus/ninfer-gb10/pull/8) | Probe weight-sample compression check; `gb10.json` at the measured 246 GB/s with the device's reported name; GB10 plan updated from the first probe run and from [HawkBearPig/dgpp](https://github.com/HawkBearPig/dgpp) (FP8 dense weights, lossless 12-bit BF16, L2 weight prefetch) | This fork (Claude Code session); techniques from DGPP, no code taken |
 
 Commits taken in #3 (source commit in giveen/ninfer-ext, then original author):
 

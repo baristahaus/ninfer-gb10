@@ -353,6 +353,10 @@ device IP (`172.30.30.24`). It is an NVIDIA GB10 Grace Blackwell system (aarch64
 port/fork workstation for inference engines on this platform. The `sm_120a`
 product contract above is the baseline that porting work adapts to `sm_121a`.
 
+Language: English only. Anything touched in a task (code, docs, commit messages) is
+written in English; non-English content in a touched section is translated to English
+(as done for engine-architecture.md §7.4 on 2026-09-28).
+
 GitHub access (this checkout): repo-scoped deploy key `~/.ssh/ninfer-gb10-deploy`, wired
 through `~/.ssh/config` (`github.com`, `IdentitiesOnly`); `github.com` host key pinned in
 `known_hosts`. `origin` uses the SSH URL. Beads (`.beads/`) runs dolt `local-only` on this box:

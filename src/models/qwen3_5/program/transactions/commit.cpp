@@ -768,6 +768,10 @@ ReleaseResult ProgramImpl::release_shared_prefix(SharedPrefixHandle&& handle) no
 }
 
 void ProgramImpl::fail_all_cleanup() noexcept {
+    // Drain the compute stream before any lane or pool release: the failing unit's round
+    // kernels (or the previous unit's) may still be in flight, writing the very pages the
+    // cleanup below releases.
+    if (device.stream != nullptr) { (void)cudaStreamSynchronize(device.stream); }
     pending_transaction_.reset();
     if (auto* transaction = std::get_if<ActiveCaptureTransaction>(&context_transaction_)) {
         if (transaction->transfer_submitted && device.transfer_stream != nullptr) {
@@ -800,6 +804,21 @@ void ProgramImpl::fail_all_cleanup() noexcept {
             ContractAccess::make_shared_prefix(this, index, shared_prefix_slots[index].generation);
         (void)release_shared_prefix(std::move(handle));
     }
+}
+
+bool ProgramImpl::quiescent_after_fail_all_cleanup() const noexcept {
+    if (pending_transaction_.has_value()) { return false; }
+    if (!std::holds_alternative<std::monostate>(context_transaction_)) { return false; }
+    for (std::uint32_t lane = 0; lane < max_concurrency; ++lane) {
+        if (active_continuations[lane] < continuation_capacity) { return false; }
+    }
+    for (std::uint32_t index = 0; index < continuation_capacity; ++index) {
+        if (continuation_slots[index].role != ContinuationSlotRole::Free) { return false; }
+    }
+    for (std::uint32_t index = 0; index < shared_prefix_capacity; ++index) {
+        if (shared_prefix_slots[index].role != SharedPrefixSlotRole::Free) { return false; }
+    }
+    return true;
 }
 
 

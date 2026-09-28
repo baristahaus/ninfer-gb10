@@ -345,84 +345,8 @@ feat(engine): cut over the registered target to native artifacts
 Use concise lowercase types consistent with repository history (`feat`, `fix`, `perf`, `bench`,
 `test`, `build`, `refactor`, `docs`, `chore`).
 
-## Device and role
+## Language
 
-This workstation is **24 / twofour** — the name derives from the last octet of the
-device IP (`172.30.30.24`). It is an NVIDIA GB10 Grace Blackwell system (aarch64,
-20-core Arm CPU, 128 GB unified LPDDR5x, GPU compute capability 12.1) and is the
-port/fork workstation for inference engines on this platform. The `sm_120a`
-product contract above is the baseline that porting work adapts to `sm_121a`.
-
-Language: English only. Anything touched in a task (code, docs, commit messages) is
-written in English; non-English content in a touched section is translated to English
-(as done for engine-architecture.md §7.4 on 2026-09-28).
-
-GitHub access (this checkout): repo-scoped deploy key `~/.ssh/ninfer-gb10-deploy`, wired
-through `~/.ssh/config` (`github.com`, `IdentitiesOnly`); `github.com` host key pinned in
-`known_hosts`. `origin` uses the SSH URL. Beads (`.beads/`) runs dolt `local-only` on this box:
-issue data stays on machine, its git-tracked files ride the same git/SSH route.
-
-Git identities: repo default is `baristahaus <baristahaus@users.noreply.github.com>` for anything
-that gets pushed; local-only commits use `TwoFour <24@twofour.gb10.local>` via
-`git -c user.name=TwoFour -c user.email=24@twofour.gb10.local commit`. Re-author with the
-baristahaus identity before pushing any local WIP.
-
-LLM backend: the provider has tight concurrency limits. Cap at main session + one subagent
-total while running long context; prefer sequential work, and plain background shell jobs for
-long-running tasks (they consume no LLM concurrency).
-
-<!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:46cd31e7 -->
-## Beads Issue Tracker
-
-This project uses **bd (beads)** for issue tracking. Run `bd prime` to see full workflow context and commands.
-
-### Quick Reference
-
-```bash
-bd ready              # Find available work
-bd show <id>          # View issue details
-bd update <id> --claim  # Claim work
-bd close <id>         # Complete work
-```
-
-### Rules
-
-- Use `bd` for ALL task tracking — do NOT use TodoWrite, TaskCreate, or markdown TODO lists
-- Run `bd prime` for detailed command reference and session close protocol
-- Use `bd remember` for persistent knowledge — do NOT use MEMORY.md files
-
-**Architecture in one line:** issues live in a local Dolt DB; sync uses `refs/dolt/data` on your git remote; `.beads/issues.jsonl` is a passive export. See https://github.com/gastownhall/beads/blob/main/docs/core-concepts/sync-concepts.md for details and anti-patterns.
-
-## Agent Context Profiles
-
-The managed Beads block is task-tracking guidance, not permission to override repository, user, or orchestrator instructions.
-
-- **Conservative (default)**: Use `bd` for task tracking. Do not run git commits, git pushes, or Dolt remote sync unless explicitly asked. At handoff, report changed files, validation, and suggested next commands.
-- **Minimal**: Keep tool instruction files as pointers to `bd prime`; use the same conservative git policy unless active instructions say otherwise.
-- **Team-maintainer**: Only when the repository explicitly opts in, agents may close beads, run quality gates, commit, and push as part of session close. A current "do not commit" or "do not push" instruction still wins.
-
-## Session Completion
-
-This protocol applies when ending a Beads implementation workflow. It is subordinate to explicit user, repository, and orchestrator instructions.
-
-1. **File issues for remaining work** - Create beads for anything that needs follow-up
-2. **Run quality gates** (if code changed) - Tests, linters, builds
-3. **Update issue status** - Close finished work, update in-progress items
-4. **Handle git/sync by active profile**:
-   ```bash
-   # Conservative/minimal/default: report status and proposed commands; wait for approval.
-   git status
-
-   # Team-maintainer opt-in only, unless current instructions forbid it:
-   git pull --rebase
-   bd dolt push
-   git push
-   git status
-   ```
-5. **Hand off** - Summarize changes, validation, issue status, and any blocked sync/commit/push step
-
-**Critical rules:**
-- Explicit user or orchestrator instructions override this Beads block.
-- Do not commit or push without clear authority from the active profile or the current user request.
-- If a required sync or push is blocked, stop and report the exact command and error.
-<!-- END BEADS INTEGRATION -->
+English only. Anything touched in a task (code, docs, commit messages) is
+written in English; non-English content in a touched section is translated to
+English (as done for engine-architecture.md §7.4 on 2026-09-28).

@@ -157,15 +157,72 @@ def cmd_serving(path: Path) -> None:
         print(f"| {case} | {len(group)} | " + " | ".join("—" if c is None else f"{c:,.3f}" for c in cells) + " |")
 
 
+def gpu_samples(path: Path) -> list[dict]:
+    """Rows of `nvidia-smi --query-gpu=timestamp,utilization.gpu,power.draw,clocks.sm,
+    temperature.gpu --format=csv,noheader,nounits`; unreadable fields ([N/A]) become None."""
+    def number(text: str):
+        try:
+            return float(text)
+        except ValueError:
+            return None
+    rows = []
+    for line in path.read_text(errors="replace").splitlines() if path.exists() else []:
+        fields = [field.strip() for field in line.split(",")]
+        if len(fields) == 5:
+            rows.append(dict(zip(("util", "power", "clock", "temp"), map(number, fields[1:]))))
+    return rows
+
+
+def active_window(rows: list[dict], threshold: float = 50.0) -> list[dict]:
+    busy = [index for index, row in enumerate(rows)
+            if row["util"] is not None and row["util"] >= threshold]
+    return rows[busy[0]:busy[-1] + 1] if busy else []
+
+
+def cmd_gpu(runs: list[str]) -> None:
+    print("| Run | Samples | GPU util % mean | Power W mean / p95 / peak | SM clock MHz mean / min "
+          "| Temp °C max | Decode tok/s | J / output token |")
+    print("|---|---:|---:|---:|---:|---:|---:|---:|")
+    for run in runs:
+        label, _, paths = run.partition("@")
+        csv_path, _, bench_path = paths.partition(":")
+        rows = gpu_samples(Path(csv_path))
+        window = rows if label == "idle" else active_window(rows)
+        power = sorted(row["power"] for row in window if row["power"] is not None)
+        clocks = [row["clock"] for row in window if row["clock"] is not None]
+        temps = [row["temp"] for row in window if row["temp"] is not None]
+        decode = None
+        if bench_path and Path(bench_path).exists():
+            tests = json.loads(Path(bench_path).read_text()).get("tests", [])
+            decode = tests[0].get("decode_output_tok_s_mean") if tests else None
+        power_mean = statistics.fmean(power) if power else None
+        cells = [
+            f"{len(window)}/{len(rows)}",
+            "—" if mean(row["util"] for row in window) is None
+            else f"{mean(row['util'] for row in window):.0f}",
+            "—" if not power else
+            f"{power_mean:.1f} / {power[min(len(power) - 1, int(0.95 * len(power)))]:.1f} / {power[-1]:.1f}",
+            "—" if not clocks else f"{statistics.fmean(clocks):.0f} / {min(clocks):.0f}",
+            "—" if not temps else f"{max(temps):.0f}",
+            "—" if decode is None else f"{decode:.1f}",
+            "—" if decode is None or power_mean is None or decode <= 0
+            else f"{power_mean / decode:.2f}",
+        ]
+        print(f"| {label} | " + " | ".join(cells) + " |")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
     for name in ("ctest", "stream", "chat", "serving"):
         sub.add_parser(name).add_argument("path", type=Path)
     sub.add_parser("bench").add_argument("paths", type=Path, nargs="+")
+    sub.add_parser("gpu", help="LABEL@samples.csv[:bench.json] ...").add_argument("runs", nargs="+")
     args = parser.parse_args()
     if args.command == "bench":
         cmd_bench(args.paths)
+    elif args.command == "gpu":
+        cmd_gpu(args.runs)
     else:
         {"ctest": cmd_ctest, "stream": cmd_stream, "chat": cmd_chat,
          "serving": cmd_serving}[args.command](args.path)

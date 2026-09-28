@@ -144,7 +144,8 @@ int run_case(const std::string& label, std::int32_t physical_rows, std::int32_t 
     Tensor logits_tensor(device_logits.data(), DType::BF16, {physical_rows, columns});
     Tensor targets_tensor(device_targets.data(), DType::I32, {columns});
     Tensor output_tensor(device_output.data(), DType::FP32, {columns});
-    ops::target_logprobs(logits_tensor, targets_tensor, valid_rows, output_tensor, nullptr);
+    ops::target_logprobs(logits_tensor, targets_tensor, valid_rows, {}, output_tensor, nullptr,
+                         nullptr, nullptr);
     cuda_synchronize();
 
     int failures = verify_reduction(label, fp32_as_double(device_output.data(), targets.size()),
@@ -158,6 +159,180 @@ int run_case(const std::string& label, std::int32_t physical_rows, std::int32_t 
     failures += device_logits.verify_guards(label + " logits guards");
     failures += device_targets.verify_guards(label + " target guards");
     failures += device_output.verify_guards(label + " output guards");
+    return failures;
+}
+
+// One column's penalty-adjusted, temperature-scaled FP64 logit. Mirrors the adjustment the Op
+// documents (and the sampler applies): counts come from the committed-token array plus the
+// column's round-local overlay, and a non-positive temperature reports the un-scaled distribution.
+struct RankingFixture {
+    float temperature      = 1.0F;
+    float presence_penalty = 0.0F;
+    float frequency_penalty= 0.0F;
+    std::vector<std::int32_t> counts;
+    std::vector<std::int32_t> overlay; // [overlay_rows, columns], column-major
+    std::int32_t overlay_rows          = 0;
+    std::int32_t top_k                 = 0;
+};
+
+double scaled_value(const std::vector<std::uint16_t>& logits, std::size_t base, std::int32_t row,
+                    const RankingFixture& fixture, std::size_t column) {
+    int count = 0;
+    if (!fixture.counts.empty()) { count = fixture.counts[static_cast<std::size_t>(row)]; }
+    for (std::int32_t entry = 0; entry < fixture.overlay_rows; ++entry) {
+        if (fixture.overlay[entry + column * static_cast<std::size_t>(fixture.overlay_rows)] ==
+            row) {
+            ++count;
+        }
+    }
+    double value = static_cast<double>(bf16_to_f32(logits[base + static_cast<std::size_t>(row)]));
+    if (count > 0) { value -= static_cast<double>(fixture.presence_penalty); }
+    value -= static_cast<double>(fixture.frequency_penalty) * static_cast<double>(count);
+    return fixture.temperature > 0.0F
+               ? value / static_cast<double>(fixture.temperature)
+               : value;
+}
+
+// The Op's ranking rule: descending value, lower token id breaking an exact tie.
+bool ranking_before(std::pair<double, std::int32_t> lhs, std::pair<double, std::int32_t> rhs) {
+    if (lhs.first != rhs.first) { return lhs.first > rhs.first; }
+    return lhs.second < rhs.second;
+}
+
+int run_ranked_case(const std::string& label, std::int32_t physical_rows, std::int32_t valid_rows,
+                    std::int32_t columns, const std::vector<std::uint16_t>& logits,
+                    const RankingFixture& fixture) {
+    const auto targets = make_targets(valid_rows, columns);
+
+    std::vector<double> expected_output(static_cast<std::size_t>(columns));
+    std::vector<std::int32_t> expected_ids(static_cast<std::size_t>(fixture.top_k) * columns,
+                                           ops::kNoReportedLogprobRank);
+    std::vector<double> expected_rank_logprobs(
+        static_cast<std::size_t>(fixture.top_k) * columns, -std::numeric_limits<double>::infinity());
+    std::vector<std::int32_t> reported_count(static_cast<std::size_t>(columns), 0);
+
+    for (std::size_t column = 0; column < static_cast<std::size_t>(columns); ++column) {
+        const std::size_t base = column * static_cast<std::size_t>(physical_rows);
+        double maximum         = -std::numeric_limits<double>::infinity();
+        for (std::int32_t row = 0; row < valid_rows; ++row) {
+            maximum = std::max(maximum, scaled_value(logits, base, row, fixture, column));
+        }
+        double sum = 0.0;
+        for (std::int32_t row = 0; row < valid_rows; ++row) {
+            sum += std::exp(scaled_value(logits, base, row, fixture, column) - maximum);
+        }
+        const double normalizer = maximum + std::log(sum);
+        expected_output[column] =
+            scaled_value(logits, base, targets[column], fixture, column) - normalizer;
+
+        std::vector<std::pair<double, std::int32_t>> ranked;
+        ranked.reserve(static_cast<std::size_t>(valid_rows));
+        for (std::int32_t row = 0; row < valid_rows; ++row) {
+            ranked.emplace_back(scaled_value(logits, base, row, fixture, column), row);
+        }
+        std::stable_sort(ranked.begin(), ranked.end(), ranking_before);
+        const std::int32_t reported =
+            fixture.top_k < valid_rows ? fixture.top_k : valid_rows;
+        reported_count[column] = reported;
+        for (std::int32_t rank = 0; rank < reported; ++rank) {
+            expected_ids[static_cast<std::size_t>(rank) + column * fixture.top_k] =
+                ranked[static_cast<std::size_t>(rank)].second;
+            expected_rank_logprobs[static_cast<std::size_t>(rank) +
+                                   column * fixture.top_k] =
+                ranked[static_cast<std::size_t>(rank)].first - normalizer;
+        }
+    }
+
+    GuardedDeviceBuffer device_logits(logits.size() * sizeof(std::uint16_t));
+    GuardedDeviceBuffer device_targets(targets.size() * sizeof(std::int32_t));
+    GuardedDeviceBuffer device_output(targets.size() * sizeof(float));
+    device_logits.copy_from_host(logits.data(), device_logits.bytes());
+    device_targets.copy_from_host(targets.data(), device_targets.bytes());
+    device_output.fill(0xcd);
+
+    // The configs array embeds the device token-count pointer, so counts land first.
+    GuardedDeviceBuffer device_counts(fixture.counts.size() * sizeof(std::int32_t));
+    if (!fixture.counts.empty()) {
+        device_counts.copy_from_host(fixture.counts.data(), device_counts.bytes());
+    }
+    GuardedDeviceBuffer device_overlay(fixture.overlay.size() * sizeof(std::int32_t));
+    if (!fixture.overlay.empty()) {
+        device_overlay.copy_from_host(fixture.overlay.data(), device_overlay.bytes());
+    }
+    std::vector<ops::SamplingConfig> configs(static_cast<std::size_t>(columns));
+    for (auto& config : configs) {
+        config.temperature       = fixture.temperature;
+        config.presence_penalty  = fixture.presence_penalty;
+        config.frequency_penalty = fixture.frequency_penalty;
+        config.token_counts = fixture.counts.empty() ? nullptr
+                                                     : static_cast<std::int32_t*>(
+                                                           device_counts.data());
+    }
+    GuardedDeviceBuffer device_configs(configs.size() * sizeof(ops::SamplingConfig));
+    device_configs.copy_from_host(configs.data(), device_configs.bytes());
+
+    const std::size_t ranking_elements =
+        static_cast<std::size_t>(fixture.top_k) * static_cast<std::size_t>(columns);
+    GuardedDeviceBuffer device_top_ids(ranking_elements * sizeof(std::int32_t));
+    GuardedDeviceBuffer device_top_logprobs(ranking_elements * sizeof(float));
+    device_top_ids.fill(0x5a);
+    device_top_logprobs.fill(0x5a);
+
+    Tensor logits_tensor(device_logits.data(), DType::BF16, {physical_rows, columns});
+    Tensor targets_tensor(device_targets.data(), DType::I32, {columns});
+    Tensor output_tensor(device_output.data(), DType::FP32, {columns});
+    Tensor top_ids_tensor(device_top_ids.data(), DType::I32, {fixture.top_k, columns});
+    Tensor top_logprobs_tensor(device_top_logprobs.data(), DType::FP32, {fixture.top_k, columns});
+
+    ops::TargetLogprobOptions options;
+    options.configs = static_cast<const ops::SamplingConfig*>(device_configs.data());
+    options.penalty_overlay =
+        fixture.overlay_rows > 0 ? static_cast<const std::int32_t*>(device_overlay.data()) : nullptr;
+    options.overlay_rows = fixture.overlay_rows;
+
+    Tensor* top_ids_pointer   = &top_ids_tensor;
+    Tensor* top_logprobs_pointer = &top_logprobs_tensor;
+    ops::target_logprobs(logits_tensor, targets_tensor, valid_rows, options, output_tensor,
+                         top_ids_pointer, top_logprobs_pointer, nullptr);
+    cuda_synchronize();
+
+    int failures = verify_reduction(label, fp32_as_double(device_output.data(), targets.size()),
+                                    expected_output, kTargetLogprobsFp32Criterion);
+    failures += verify_exact(
+        (label + " ranking ids").c_str(),
+        from_device<std::int32_t>(device_top_ids.data(), ranking_elements), expected_ids);
+
+    // Compare the reported prefix under the reduction criterion and check the sentinel tail
+    // exactly: an out-of-range rank is a defined value, not an approximation.
+    const auto actual_rank_logprobs =
+        from_device<float>(device_top_logprobs.data(), ranking_elements);
+    for (std::size_t column = 0; column < expected_output.size(); ++column) {
+        const std::int32_t reported = reported_count[column];
+        std::vector<double> actual_prefix(static_cast<std::size_t>(reported));
+        std::vector<double> expected_prefix(static_cast<std::size_t>(reported));
+        for (std::int32_t rank = 0; rank < reported; ++rank) {
+            const std::size_t index = static_cast<std::size_t>(rank) + column * fixture.top_k;
+            actual_prefix[static_cast<std::size_t>(rank)]   = actual_rank_logprobs[index];
+            expected_prefix[static_cast<std::size_t>(rank)] = expected_rank_logprobs[index];
+        }
+        failures += verify_reduction(label + " ranking logprobs", actual_prefix, expected_prefix,
+                                     kTargetLogprobsFp32Criterion);
+        for (std::int32_t rank = reported; rank < fixture.top_k; ++rank) {
+            const std::size_t index = static_cast<std::size_t>(rank) + column * fixture.top_k;
+            const double reported_value = static_cast<double>(actual_rank_logprobs[index]);
+            if (!(std::isinf(reported_value) && reported_value < 0.0)) {
+                std::cerr << label << ": rank " << rank << " of column " << column
+                          << " expected -inf, got " << actual_rank_logprobs[index] << '\n';
+                ++failures;
+            }
+        }
+    }
+
+    failures += device_logits.verify_guards(label + " logits guards");
+    failures += device_targets.verify_guards(label + " target guards");
+    failures += device_output.verify_guards(label + " output guards");
+    failures += device_top_ids.verify_guards(label + " top_ids guards");
+    failures += device_top_logprobs.verify_guards(label + " top_logprobs guards");
     return failures;
 }
 
@@ -177,40 +352,77 @@ int run_validation_cases() {
     DeviceBuffer logits_data(8 * 3 * sizeof(std::uint16_t));
     DeviceBuffer targets_data(3 * sizeof(std::int32_t));
     DeviceBuffer output_data(3 * sizeof(float));
+    DeviceBuffer ranking_data(20 * 3 * sizeof(std::int32_t));
+    DeviceBuffer rank_logprob_data(20 * 3 * sizeof(float));
     Tensor logits(logits_data.p, DType::BF16, {8, 3});
     Tensor targets(targets_data.p, DType::I32, {3});
     Tensor output(output_data.p, DType::FP32, {3});
+    Tensor top_ids(ranking_data.p, DType::I32, {20, 3});
+    Tensor top_logprobs(rank_logprob_data.p, DType::FP32, {20, 3});
 
     int failures = 0;
-    failures += expect_invalid("target_logprobs rejects valid_rows=0",
-                               [&] { ops::target_logprobs(logits, targets, 0, output, nullptr); });
-    failures += expect_invalid("target_logprobs rejects valid_rows>physical_rows",
-                               [&] { ops::target_logprobs(logits, targets, 9, output, nullptr); });
+    failures += expect_invalid(
+        "target_logprobs rejects valid_rows=0",
+        [&] { ops::target_logprobs(logits, targets, 0, {}, output, nullptr, nullptr, nullptr); });
+    failures += expect_invalid("target_logprobs rejects valid_rows>physical_rows", [&] {
+        ops::target_logprobs(logits, targets, 9, {}, output, nullptr, nullptr, nullptr);
+    });
     failures += expect_invalid("target_logprobs rejects target shape mismatch", [&] {
         Tensor wrong_targets(targets_data.p, DType::I32, {2});
-        ops::target_logprobs(logits, wrong_targets, 8, output, nullptr);
+        ops::target_logprobs(logits, wrong_targets, 8, {}, output, nullptr, nullptr, nullptr);
     });
     failures += expect_invalid("target_logprobs rejects output dtype", [&] {
         Tensor wrong_output(output_data.p, DType::BF16, {3});
-        ops::target_logprobs(logits, targets, 8, wrong_output, nullptr);
+        ops::target_logprobs(logits, targets, 8, {}, wrong_output, nullptr, nullptr, nullptr);
     });
     failures += expect_invalid("target_logprobs rejects non-contiguous logits", [&] {
         Tensor strided_logits = logits;
         strided_logits.nb[1] += 2;
-        ops::target_logprobs(strided_logits, targets, 8, output, nullptr);
+        ops::target_logprobs(strided_logits, targets, 8, {}, output, nullptr, nullptr, nullptr);
     });
     failures += expect_invalid("target_logprobs rejects null output", [&] {
         Tensor null_output(nullptr, DType::FP32, {3});
-        ops::target_logprobs(logits, targets, 8, null_output, nullptr);
+        ops::target_logprobs(logits, targets, 8, {}, null_output, nullptr, nullptr, nullptr);
     });
     failures += expect_invalid("target_logprobs rejects output alias", [&] {
         Tensor alias_output(logits_data.p, DType::FP32, {3});
-        ops::target_logprobs(logits, targets, 8, alias_output, nullptr);
+        ops::target_logprobs(logits, targets, 8, {}, alias_output, nullptr, nullptr, nullptr);
     });
     failures += expect_invalid("target_logprobs rejects non-matrix logits", [&] {
         Tensor rank_three = logits;
         rank_three.ne[2]  = 2;
-        ops::target_logprobs(rank_three, targets, 8, output, nullptr);
+        ops::target_logprobs(rank_three, targets, 8, {}, output, nullptr, nullptr, nullptr);
+    });
+    failures += expect_invalid("target_logprobs rejects a half ranking request", [&] {
+        ops::target_logprobs(logits, targets, 8, {}, output, &top_ids, nullptr, nullptr);
+    });
+    failures += expect_invalid("target_logprobs rejects a rank count above the ceiling", [&] {
+        Tensor wide_ids(ranking_data.p, DType::I32, {21, 3});
+        Tensor wide_logprobs(rank_logprob_data.p, DType::FP32, {21, 3});
+        ops::target_logprobs(logits, targets, 8, {}, output, &wide_ids, &wide_logprobs, nullptr);
+    });
+    failures += expect_invalid("target_logprobs rejects a ranking column mismatch", [&] {
+        Tensor narrow_ids(ranking_data.p, DType::I32, {20, 2});
+        Tensor narrow_logprobs(rank_logprob_data.p, DType::FP32, {20, 2});
+        ops::target_logprobs(logits, targets, 8, {}, output, &narrow_ids, &narrow_logprobs, nullptr);
+    });
+    failures += expect_invalid("target_logprobs rejects mismatched ranking shapes", [&] {
+        Tensor narrow_logprobs(rank_logprob_data.p, DType::FP32, {19, 3});
+        ops::target_logprobs(logits, targets, 8, {}, output, &top_ids, &narrow_logprobs, nullptr);
+    });
+    failures += expect_invalid("target_logprobs rejects overlay_rows without an overlay", [&] {
+        ops::TargetLogprobOptions options;
+        options.overlay_rows = 2;
+        ops::target_logprobs(logits, targets, 8, options, output, nullptr, nullptr, nullptr);
+    });
+    failures += expect_invalid("target_logprobs rejects an oversized overlay", [&] {
+        ops::TargetLogprobOptions options;
+        DeviceBuffer config_data(sizeof(ops::SamplingConfig));
+        DeviceBuffer overlay_data(9 * 3 * sizeof(std::int32_t));
+        options.configs         = static_cast<const ops::SamplingConfig*>(config_data.p);
+        options.penalty_overlay = static_cast<const std::int32_t*>(overlay_data.p);
+        options.overlay_rows    = ops::kMaxPenaltyOverlayRows + 1;
+        ops::target_logprobs(logits, targets, 8, options, output, nullptr, nullptr, nullptr);
     });
     return failures;
 }
@@ -238,6 +450,51 @@ int main() {
                          make_shift_logits(257, 257, 31, 0.0f));
     failures += run_case("target_logprobs shifted logits", 257, 257, 31,
                          make_shift_logits(257, 257, 31, 32.0f));
+
+    // Sampled generation: temperature scaling and a full 20-rank report at the ceiling.
+    RankingFixture temperature;
+    temperature.temperature = 0.5F;
+    temperature.top_k       = 20;
+    failures += run_ranked_case("target_logprobs ranked at temperature 0.5", 257, 257, 5,
+                                make_shift_logits(257, 257, 5, 0.0f), temperature);
+
+    // Penalties with a round-local overlay, and a narrower report than the ceiling.
+    RankingFixture penalties;
+    penalties.temperature       = 0.7F;
+    penalties.presence_penalty  = 0.5F;
+    penalties.frequency_penalty = 0.25F;
+    penalties.counts.resize(257);
+    for (std::int32_t row = 0; row < 257; ++row) { penalties.counts[static_cast<std::size_t>(row)] = row % 3; }
+    penalties.overlay_rows      = 2;
+    penalties.overlay.assign(static_cast<std::size_t>(penalties.overlay_rows) * 5,
+                             ops::kNoPenaltyOverlayToken);
+    for (std::int32_t column = 0; column < 5; ++column) {
+        penalties.overlay[static_cast<std::size_t>(column) * penalties.overlay_rows] = column * 7;
+        if (column > 0) {
+            penalties.overlay[1 + static_cast<std::size_t>(column) * penalties.overlay_rows] =
+                256 - column;
+        }
+    }
+    penalties.top_k = 4;
+    failures += run_ranked_case("target_logprobs ranked with penalties and overlay", 257, 257, 5,
+                                make_shift_logits(257, 257, 5, 4.0f), penalties);
+
+    // A greedy config has no temperature, so tau is 1 while penalties still apply.
+    RankingFixture greedy;
+    greedy.temperature        = 0.0F;
+    greedy.presence_penalty   = 0.5F;
+    greedy.counts.assign(13, 1);
+    greedy.top_k              = 5;
+    failures += run_ranked_case("target_logprobs greedy reports tau=1", 13, 13, 3,
+                                make_extreme_logits(13, 13, 3), greedy);
+
+    // The vocabulary is smaller than the report: the tail is the defined sentinel, not a value.
+    RankingFixture wide;
+    wide.temperature = 1.0F;
+    wide.top_k       = 20;
+    failures += run_ranked_case("target_logprobs ranking beyond the vocabulary", 17, 13, 3,
+                                make_random_logits(17, 13, 3), wide);
+
     failures += run_validation_cases();
 
     std::cout << (failures ? "FAIL" : "OK") << " target_logprobs\n";

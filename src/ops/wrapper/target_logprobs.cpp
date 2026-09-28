@@ -47,10 +47,55 @@ bool overlaps(const Tensor& lhs, const Tensor& rhs) {
     return lhs_begin - rhs_begin < rhs.bytes();
 }
 
+// Validates an optional ranking request: either both outputs are supplied with a common rank count
+// or neither is, so a caller cannot receive ids without probabilities or the reverse.
+std::int32_t validate_ranking(const Tensor& logits, Tensor* top_ids, Tensor* top_logprobs) {
+    if ((top_ids == nullptr) != (top_logprobs == nullptr)) {
+        throw std::invalid_argument("target_logprobs: top_ids and top_logprobs are requested "
+                                    "together or not at all");
+    }
+    if (top_ids == nullptr) { return 0; }
+    if (top_ids->dtype != DType::I32) {
+        throw std::invalid_argument("target_logprobs: top_ids must be I32");
+    }
+    if (top_logprobs->dtype != DType::FP32) {
+        throw std::invalid_argument("target_logprobs: top_logprobs must be FP32");
+    }
+    require_rank_two(*top_ids, "top_ids");
+    if (top_ids->ne[0] > kMaxReportedLogprobRanks) {
+        throw std::invalid_argument("target_logprobs: top_ids requests more than " +
+                                    std::to_string(kMaxReportedLogprobRanks) + " ranks");
+    }
+    if (top_ids->ne[1] != logits.ne[1] || top_ids->ne[2] != 1 || top_ids->ne[3] != 1) {
+        throw std::invalid_argument("target_logprobs: top_ids must have shape [ranks,columns]");
+    }
+    if (top_logprobs->ne[0] != top_ids->ne[0] || top_logprobs->ne[1] != top_ids->ne[1] ||
+        top_logprobs->ne[2] != 1 || top_logprobs->ne[3] != 1) {
+        throw std::invalid_argument("target_logprobs: top_logprobs must match the top_ids shape");
+    }
+    require_accessible(*top_ids, alignof(std::int32_t), "top_ids");
+    require_accessible(*top_logprobs, alignof(float), "top_logprobs");
+    return top_ids->ne[0];
+}
+
+void validate_options(const TargetLogprobOptions& options) {
+    if (options.configs == nullptr && options.penalty_overlay != nullptr) {
+        throw std::invalid_argument("target_logprobs: a penalty overlay requires configs");
+    }
+    if (options.penalty_overlay == nullptr && options.overlay_rows != 0) {
+        throw std::invalid_argument("target_logprobs: overlay_rows requires a penalty overlay");
+    }
+    if (options.overlay_rows < 0 || options.overlay_rows > kMaxPenaltyOverlayRows) {
+        throw std::invalid_argument("target_logprobs: overlay_rows must be in [0," +
+                                    std::to_string(kMaxPenaltyOverlayRows) + "]");
+    }
+}
+
 } // namespace
 
 void target_logprobs(const Tensor& logits, const Tensor& target_ids, std::int32_t valid_rows,
-                     Tensor& output, cudaStream_t stream) {
+                     const TargetLogprobOptions& options, Tensor& output, Tensor* top_ids,
+                     Tensor* top_logprobs, cudaStream_t stream) {
     if (logits.dtype != DType::BF16) {
         throw std::invalid_argument("target_logprobs: logits must be BF16");
     }
@@ -68,6 +113,7 @@ void target_logprobs(const Tensor& logits, const Tensor& target_ids, std::int32_
     if (valid_rows <= 0 || valid_rows > logits.ne[0]) {
         throw std::invalid_argument("target_logprobs: valid_rows must be in [1, physical_rows]");
     }
+    validate_options(options);
 
     (void)logits.bytes();
     (void)target_ids.bytes();
@@ -79,7 +125,19 @@ void target_logprobs(const Tensor& logits, const Tensor& target_ids, std::int32_
         throw std::invalid_argument("target_logprobs: output must not overlap either input");
     }
 
-    detail::target_logprobs_launch(logits, target_ids, valid_rows, output, stream);
+    const std::int32_t ranks = validate_ranking(logits, top_ids, top_logprobs);
+    if (ranks > 0) {
+        if (overlaps(*top_ids, logits) || overlaps(*top_ids, target_ids) ||
+            overlaps(*top_logprobs, logits) || overlaps(*top_logprobs, target_ids) ||
+            overlaps(*top_ids, output) || overlaps(*top_logprobs, output) ||
+            overlaps(*top_ids, *top_logprobs)) {
+            throw std::invalid_argument(
+                "target_logprobs: ranking outputs must not overlap any other tensor");
+        }
+    }
+
+    detail::target_logprobs_launch(logits, target_ids, valid_rows, options, output, top_ids,
+                                   top_logprobs, stream);
 }
 
 } // namespace ninfer::ops

@@ -1127,8 +1127,8 @@ std::vector<float> ProgramImplCore::causal_score(PreparedPromptData&& prompt,
             ops::linear(hidden, model.output_head, logits, device.stream);
             CUDA_CHECK(cudaMemcpyAsync(target_ids.data, staged_targets.data(), target_ids.bytes(),
                                        cudaMemcpyHostToDevice, device.stream));
-            ops::target_logprobs(logits, target_ids, TextConfig::token_domain, logprobs,
-                                 device.stream);
+            ops::target_logprobs(logits, target_ids, TextConfig::token_domain, {}, logprobs,
+                                 nullptr, nullptr, device.stream);
             CUDA_CHECK(cudaMemcpyAsync(score_logprobs_host->data(), logprobs.data, logprobs.bytes(),
                                        cudaMemcpyDeviceToHost, device.stream));
             device.synchronize();

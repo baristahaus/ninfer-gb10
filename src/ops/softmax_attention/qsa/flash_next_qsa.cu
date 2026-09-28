@@ -10,6 +10,7 @@
 #include "ops/softmax_attention/dense/causal_cache/prompt_common.cuh"
 #include "ops/linear/bf16/flash_next/bf16_launch.h"
 #include "ops/linear/fp8/fp8_flash_next.h"
+#include "ops/linear/fp8/fp8_format.h"
 #include "ops/common/device_info.h"
 #include "ops/kv_cache/fp8_e4m3_row_codec.cuh"
 #include "ops/kv_cache/hadamard_d256.cuh"
@@ -30,6 +31,10 @@
 
 namespace ninfer::ops {
 namespace {
+using detail::WeightFormats;
+using detail::fp8_row_weight;
+using detail::require_weight;
+
 
 constexpr int kHeadDim = 256;
 constexpr int kQueryHeads = 24;
@@ -1452,21 +1457,6 @@ __global__ void reduce_selected_attention_splits_kernel(
         output[lane_id + 32 * item + kHeadDim *
             (head + static_cast<std::int64_t>(kQueryHeads) * token)] =
             __float2bfloat16_rn(numerator[item] / denominator);
-    }
-}
-
-enum class WeightFormats { Bf16, Bf16OrFp8 };
-
-bool fp8_row_weight(const Weight& weight) {
-    return weight.qtype == QType::FP8_E4M3FN_ROW_BF16 && weight.layout == QuantLayout::RowScale;
-}
-
-void require_weight(const Weight& weight, int n, int k, const char* label,
-                    WeightFormats formats = WeightFormats::Bf16) {
-    const bool bf16 = weight.qtype == QType::BF16 && weight.layout == QuantLayout::Contiguous;
-    const bool allowed = bf16 || (formats == WeightFormats::Bf16OrFp8 && fp8_row_weight(weight));
-    if (!allowed || weight.qdata == nullptr || weight.n != n || weight.k != k) {
-        throw std::invalid_argument(label);
     }
 }
 

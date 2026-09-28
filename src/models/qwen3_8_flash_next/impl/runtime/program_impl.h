@@ -37,7 +37,7 @@ namespace {
 
 std::uint32_t normalized_private_capacity(const ContextCacheOptions& options) {
     if (!options.max_private_continuations || *options.max_private_continuations == 0) {
-        throw std::logic_error("Qwen3.6 context cache private capacity is not normalized");
+        throw std::logic_error("Qwen3.8 context cache private capacity is not normalized");
     }
     return *options.max_private_continuations;
 }
@@ -505,25 +505,25 @@ detail::PhysicalResources checked_resource_sum(detail::PhysicalResources left,
         return static_cast<std::uint32_t>(a + b);
     };
     if (right.host.kv_bytes > std::numeric_limits<std::size_t>::max() - left.host.kv_bytes) {
-        throw std::overflow_error("Qwen3.6 Host KV resource sum overflow");
+        throw std::overflow_error("Qwen3.8 Host KV resource sum overflow");
     }
     return detail::PhysicalResources{
         .device =
             {
                 .active_lanes  = add_u32(left.device.active_lanes, right.device.active_lanes,
-                                         "Qwen3.6 active-lane resource sum overflow"),
+                                         "Qwen3.8 active-lane resource sum overflow"),
                 .state_slots   = add_u32(left.device.state_slots, right.device.state_slots,
-                                         "Qwen3.6 StateImage resource sum overflow"),
+                                         "Qwen3.8 StateImage resource sum overflow"),
                 .main_kv_pages = add_u32(left.device.main_kv_pages, right.device.main_kv_pages,
-                                         "Qwen3.6 Main KV resource sum overflow"),
+                                         "Qwen3.8 Main KV resource sum overflow"),
                 .backend_kv_pages =
                     add_u32(left.device.backend_kv_pages, right.device.backend_kv_pages,
-                            "Qwen3.6 Backend KV resource sum overflow"),
+                            "Qwen3.8 Backend KV resource sum overflow"),
             },
         .host =
             {
                 .state_slots = add_u32(left.host.state_slots, right.host.state_slots,
-                                       "Qwen3.6 Host StateImage resource sum overflow"),
+                                       "Qwen3.8 Host StateImage resource sum overflow"),
                 .kv_bytes    = left.host.kv_bytes + right.host.kv_bytes,
             },
     };
@@ -537,7 +537,7 @@ detail::PhysicalResources checked_resource_difference(detail::PhysicalResources 
         removed.device.backend_kv_pages > value.device.backend_kv_pages ||
         removed.host.state_slots > value.host.state_slots ||
         removed.host.kv_bytes > value.host.kv_bytes) {
-        throw std::logic_error("Qwen3.6 resource subtraction underflow");
+        throw std::logic_error("Qwen3.8 resource subtraction underflow");
     }
     return detail::PhysicalResources{
         .device =
@@ -795,14 +795,14 @@ ProgramImplCore::ProgramImplCore(const LoadedModelData& model_in, const Sequence
                                CudaEventTimer(device_in, device_in.transfer_stream),
                                CudaEventTimer(device_in, device_in.transfer_stream)} {
     if (model.weight_bytes == 0) {
-        throw std::invalid_argument("Qwen3.6 model view has no owning weight arena");
+        throw std::invalid_argument("Qwen3.8 model view has no owning weight arena");
     }
     if (model.features != plan.features || model.mtp.has_value() != plan.features.mtp() ||
         model.dflash.has_value() != plan.features.dflash() ||
         model.optimized_proposal.has_value() != plan.features.optimized_proposal() ||
         model.vision.has_value() != plan.features.vision) {
         throw std::invalid_argument(
-            "Qwen3.6 loaded weights do not match the frozen startup features");
+            "Qwen3.8 loaded weights do not match the frozen startup features");
     }
     if (model.mtp.has_value() && model.dflash.has_value()) {
         throw std::invalid_argument("MTP and DFlash model views are mutually exclusive");
@@ -816,24 +816,24 @@ ProgramImplCore::ProgramImplCore(const LoadedModelData& model_in, const Sequence
         causal_scoring != (workspace_plan.causal_score != 0) ||
         (workspace_plan.vision &&
          workspace_plan.vision->general_capacity_bytes != workspace_plan.general_capacity)) {
-        throw std::invalid_argument("Qwen3.6 workspace plan does not match startup features");
+        throw std::invalid_argument("Qwen3.8 workspace plan does not match startup features");
     }
     const DeviceSpan backing = persistent.alloc_bytes(plan.persistent.bytes, 256);
     if (!plan.context_cache.max_private_continuations || !plan.context_cache.max_shared_prefixes) {
-        throw std::logic_error("Qwen3.6 context cache options are not normalized");
+        throw std::logic_error("Qwen3.8 context cache options are not normalized");
     }
     const std::uint64_t address_capacity64 =
         static_cast<std::uint64_t>(*plan.context_cache.max_private_continuations) +
         *plan.context_cache.max_shared_prefixes;
     if (address_capacity64 == 0 || address_capacity64 > std::numeric_limits<std::uint32_t>::max()) {
-        throw std::overflow_error("Qwen3.6 KV address-space capacity exceeds uint32");
+        throw std::overflow_error("Qwen3.8 KV address-space capacity exceeds uint32");
     }
     // One unpublished descriptor is reserved for the single in-flight active-capture snapshot.
     // Published private/shared address spaces remain bounded by P + S; the transaction slot lets a
     // full shared catalog replace one entry without releasing the old checkpoint before the new
     // snapshot has been prepared.
     if (address_capacity64 == std::numeric_limits<std::uint32_t>::max()) {
-        throw std::overflow_error("Qwen3.6 KV transaction address capacity exceeds uint32");
+        throw std::overflow_error("Qwen3.8 KV transaction address capacity exceeds uint32");
     }
     const auto address_capacity      = static_cast<std::uint32_t>(address_capacity64 + 1U);
     const auto logical_page_capacity = [&](const DeviceKVPagePool& pool) {
@@ -842,7 +842,7 @@ ProgramImplCore::ProgramImplCore(const LoadedModelData& model_in, const Sequence
             plan.context_cache.host_kv_capacity_bytes / host_layout.page_stride;
         const std::uint64_t total = static_cast<std::uint64_t>(pool.capacity_pages()) + host_pages;
         if (total > std::numeric_limits<std::uint32_t>::max()) {
-            throw std::overflow_error("Qwen3.6 logical KV page capacity exceeds uint32");
+            throw std::overflow_error("Qwen3.8 logical KV page capacity exceeds uint32");
         }
         return static_cast<std::uint32_t>(total);
     };
@@ -871,7 +871,7 @@ ProgramImplCore::ProgramImplCore(const LoadedModelData& model_in, const Sequence
         static_cast<std::uint64_t>(state_images->slot_count()) +
         plan.context_cache.host_state_slots;
     if (logical_state_capacity > std::numeric_limits<std::uint32_t>::max()) {
-        throw std::overflow_error("Qwen3.6 logical StateImage capacity exceeds uint32");
+        throw std::overflow_error("Qwen3.8 logical StateImage capacity exceeds uint32");
     }
     state_store = std::make_unique<StateImageStore>(
         *state_images, host_state_images.get(), static_cast<std::uint32_t>(logical_state_capacity));
@@ -941,7 +941,7 @@ ProgramImplCore::ProgramImplCore(const LoadedModelData& model_in, const Sequence
         const std::size_t extent_capacity =
             plan.context_cache.host_kv_capacity_bytes / minimum_stride;
         if (extent_capacity > std::numeric_limits<std::uint32_t>::max()) {
-            throw std::overflow_error("Qwen3.6 Host KV extent capacity exceeds uint32");
+            throw std::overflow_error("Qwen3.8 Host KV extent capacity exceeds uint32");
         }
         if (extent_capacity != 0) {
             host_kv_extents = std::make_unique<HostKVExtentStore>(

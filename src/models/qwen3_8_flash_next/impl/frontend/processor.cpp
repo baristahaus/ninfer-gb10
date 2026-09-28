@@ -718,7 +718,7 @@ void validate_special_token(const Tokenizer& tokenizer, std::string_view text, i
     const std::vector<int> ids = tokenizer.encode(text);
     if (ids.size() != 1 || ids.front() != expected) {
         throw std::invalid_argument(
-            "Qwen3.6 tokenizer vision token IDs do not match model contract");
+            "Qwen3.8 tokenizer vision token IDs do not match model contract");
     }
 }
 

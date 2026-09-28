@@ -4,7 +4,9 @@
 //
 // A CTA owns sixteen output rows and splits K across compile-time-selected warps. Persistent E4M3
 // codes are widened exactly to BF16 MMA operands; the represented BF16 row multiplier is applied
-// once to the complete FP32 dot product. The public activation is never quantized.
+// once to the complete FP32 dot product. The public activation is never quantized. K needs only be
+// a multiple of one warp's 64-column tile: when it is not a whole number of K groups, the last
+// group stages and multiplies only the tiles inside K, and the warps past it keep their sums.
 
 #include "ops/common/mma.cuh"
 #include "ops/common/memory.cuh"
@@ -36,7 +38,7 @@ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void fp8_a16_sl
     constexpr int kWarps         = Schedule::kKWarps;
     constexpr int kBlockRows     = Schedule::kBlockRows;
     constexpr int kBlockK        = Schedule::kBlockK;
-    const int kGroups            = kHidden / kBlockK;
+    const int kGroups            = (kHidden + kBlockK - 1) / kBlockK;
     constexpr int kBlockTokens   = Schedule::kBlockTokens;
     constexpr int kTokenMmas     = kBlockTokens / 8;
     static_assert(ActiveTokens >= 1 && ActiveTokens <= kBlockTokens);
@@ -68,6 +70,7 @@ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void fp8_a16_sl
         MaskedColumns ? min(ActiveTokens, operands.tokens - token_begin) : ActiveTokens;
 
     const auto stage_activation = [&](int stage, int group_k0) {
+        if (group_k0 + warp * kTileK >= kHidden) return;
         constexpr auto kActivationCache = Schedule::kActivationCache;
         constexpr bool kPadded     = Schedule::kActivationStage == Fp8ActivationStage::PaddedZero;
         constexpr int kStageTokens = kPadded ? kBlockTokens : ActiveTokens;
@@ -94,10 +97,11 @@ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void fp8_a16_sl
 
     const auto stage_codes = [&](int stage, int group_k0) {
         constexpr auto kWeightCache = Schedule::kWeightCache;
+        const int group_chunks      = min(kBlockK, kHidden - group_k0) / 16;
 #pragma unroll
         for (int row_item = 0; row_item < Schedule::kRowsPerLoaderWarp; ++row_item) {
             const int row = warp * Schedule::kRowsPerLoaderWarp + row_item;
-            for (int chunk = lane; chunk < kBlockK / 16; chunk += 32) {
+            for (int chunk = lane; chunk < group_chunks; chunk += 32) {
                 const int swizzled_chunk = chunk ^ (row & 7);
                 cp_async<16, kWeightCache>(
                     &code_shared[stage][row][swizzled_chunk * 16],
@@ -130,32 +134,36 @@ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void fp8_a16_sl
         else
             cp_wait<0>();
         __syncthreads();
+        const bool warp_in_k = group_index * kBlockK + warp_k0 < kHidden;
+        if (warp_in_k) {
 #pragma unroll
-        for (int k_step = 0; k_step < kTileK / 16; ++k_step) {
-            const int code_col        = k_step * 16 + lid * 2;
-            const auto load_code_pair = [&](int row, int col) {
-                const int chunk  = (warp_k0 + col) >> 4;
-                const int offset = (chunk ^ (row & 7)) * 16 + (col & 15);
-                return static_cast<unsigned>(
-                    *reinterpret_cast<const std::uint16_t*>(&code_shared[stage][row][offset]));
-            };
-            const unsigned a0 = fp8_e4m3x2_to_bf16x2_bits(load_code_pair(gid, code_col));
-            const unsigned a1 = fp8_e4m3x2_to_bf16x2_bits(load_code_pair(gid + 8, code_col));
-            const unsigned a2 = fp8_e4m3x2_to_bf16x2_bits(load_code_pair(gid, code_col + 8));
-            const unsigned a3 = fp8_e4m3x2_to_bf16x2_bits(load_code_pair(gid + 8, code_col + 8));
+            for (int k_step = 0; k_step < kTileK / 16; ++k_step) {
+                const int code_col        = k_step * 16 + lid * 2;
+                const auto load_code_pair = [&](int row, int col) {
+                    const int chunk  = (warp_k0 + col) >> 4;
+                    const int offset = (chunk ^ (row & 7)) * 16 + (col & 15);
+                    return static_cast<unsigned>(
+                        *reinterpret_cast<const std::uint16_t*>(&code_shared[stage][row][offset]));
+                };
+                const unsigned a0 = fp8_e4m3x2_to_bf16x2_bits(load_code_pair(gid, code_col));
+                const unsigned a1 = fp8_e4m3x2_to_bf16x2_bits(load_code_pair(gid + 8, code_col));
+                const unsigned a2 = fp8_e4m3x2_to_bf16x2_bits(load_code_pair(gid, code_col + 8));
+                const unsigned a3 =
+                    fp8_e4m3x2_to_bf16x2_bits(load_code_pair(gid + 8, code_col + 8));
 #pragma unroll
-            for (int token_mma = 0; token_mma < kTokenMmas; ++token_mma) {
-                unsigned b0;
-                unsigned b1;
-                const int row = token_mma * 8 + b_row;
-                ldmatrix_x2(
-                    b0, b1,
-                    smem_addr(
-                        &x_shared[stage][warp][row * kTileK + fp8_a16_shared_col_64(
-                                                                  row, k_step * 16 + b_k_offset)]));
-                mma_bf16(accumulators[token_mma][0], accumulators[token_mma][1],
-                         accumulators[token_mma][2], accumulators[token_mma][3], a0, a1, a2, a3, b0,
-                         b1);
+                for (int token_mma = 0; token_mma < kTokenMmas; ++token_mma) {
+                    unsigned b0;
+                    unsigned b1;
+                    const int row = token_mma * 8 + b_row;
+                    ldmatrix_x2(
+                        b0, b1,
+                        smem_addr(&x_shared[stage][warp]
+                                           [row * kTileK +
+                                            fp8_a16_shared_col_64(row, k_step * 16 + b_k_offset)]));
+                    mma_bf16(accumulators[token_mma][0], accumulators[token_mma][1],
+                             accumulators[token_mma][2], accumulators[token_mma][3], a0, a1, a2, a3,
+                             b0, b1);
+                }
             }
         }
 

@@ -48,7 +48,7 @@ const std::vector<ninfer::TokenId>& canonical_prompt() {
 // track the FP8 dense-route profile: a route change (template unification, T=2..4
 // Tensor Core re-route) re-records them from the new engine, validated by the gate.
 
-const std::string kFp8Recipe = "qwen3_8_flash_next_125b_a6b_nvfp4_fp8_dense-v3";
+const std::string kFp8Recipe = "qwen3_8_flash_next_125b_a6b_nvfp4_fp8_projections-v3";
 
 // Cross-path boundaries. The reuse checks compare a continuation served from captured
 // state against the same continuation computed cold. The two are distinct evaluations
@@ -78,13 +78,12 @@ const std::vector<ninfer::TokenId>& canonical_output(const std::string& recipe,
                                                      bool mtp_path) {
     static const std::vector<ninfer::TokenId> nvfp4{  // BF16 dense: the source checkpoint.
         29108, 4009, 27891, 8964, 579, 16078, 321, 1100, 9872, 303, 660, 17425};
+    // Recorded from the step 7a artifact (FP8 GDN/QSA projections, HyperConnection down and
+    // head). The fp8_projections recipe also moves the HyperConnection up projections and the
+    // shared expert to FP8, so these are re-recorded from its engine on its first run.
     static const std::vector<ninfer::TokenId> fp8_mtp{  // fp8_row_maxabs dense, MTP path.
         29108, 4009, 5435, 660, 7736, 314, 279, 9155, 19142, 11, 694, 22602};
     static const std::vector<ninfer::TokenId> fp8_ordinary{  // same artifact, plain decode.
-        // Re-recorded after the dense-route sync: the unified template's T=1 GEMV profile
-        // differs from the pre-sync 7a GEMV at ULP level, and the plain path now agrees
-        // with the MTP path on this fixture. The sync was quality-gated (step 7 PPL/drift
-        // flat vs the pre-sync engine, which itself was gated against the BF16 artifact).
         29108, 4009, 5435, 660, 7736, 314, 279, 9155, 19142, 11, 694, 22602};
     if (recipe == kFp8Recipe) {
         return mtp_path ? fp8_mtp : fp8_ordinary;

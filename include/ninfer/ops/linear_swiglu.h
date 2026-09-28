@@ -28,7 +28,8 @@ namespace ninfer::ops {
 /**
  * Policy-bearing capacity query. Q4/Q8 use A16 under every policy. NVFP4 uses A16 under
  * A16Only/AllowA8 through T=16; AllowA4 accepts every positive T. Row-scaled FP8 accepts all
- * policies, with A8 permitted by AllowA8/AllowA4.
+ * policies, with A8 permitted by AllowA8/AllowA4 on [34816,5120]; the Flash-Next [1280,2560]
+ * profile keeps A16 under every policy and needs no workspace.
  * A permissive policy covers whichever qualified route the private resolver selects across the
  * requested interval.
  */
@@ -50,10 +51,12 @@ linear_swiglu_workspace_capacity_bytes(QType qtype, std::int32_t gate_up_rows,
  *   - Q8_G32_FP16 weight [12288,2048], x [2048,T], out [6144,T];
  *   - Q8_G32_FP16 weight [34816,5120], x [5120,T], out [17408,T];
  *   - NVFP4 BlockScaleK16M128x4 weight [34816,5120], x [5120,T], out [17408,T];
- *   - FP8_E4M3FN_ROW_BF16 RowScale weight [34816,5120], x [5120,T], out [17408,T].
+ *   - FP8_E4M3FN_ROW_BF16 RowScale weight [34816,5120], x [5120,T], out [17408,T];
+ *   - FP8_E4M3FN_ROW_BF16 RowScale weight [1280,2560], x [2560,T], out [640,T] (the Qwen3.8
+ *     Flash-Next shared expert).
  *   Inputs and output are contiguous BF16. Q4/Q8 scales are FP16, NVFP4 scales are E4M3FN, and
- *   row-scaled FP8 has one BF16 multiplier per gate/up parent row. Gate rows `[0,17408)` precede
- *   their matching up rows `[17408,34816)`.
+ *   row-scaled FP8 has one BF16 multiplier per gate/up parent row. Gate rows `[0,M)` precede
+ *   their matching up rows `[M,2M)`.
  *
  * Numeric:
  *   The oracle exact-decodes the registered weight and evaluates `ideal` naively in FP64 from the

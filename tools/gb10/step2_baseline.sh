@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Step 2: unprofiled GB10 baseline. Measures sustained memory bandwidth, then ninfer_bench at 8K
-# and 64K prompts with 512 decode outputs for MTP off, MTP with DRAFT_TOKENS, and MTP3, then one
+# and 64K prompts with 512 decode outputs for MTP off, MTP with DRAFT_TOKENS, and MTP3 (greedy),
+# the 8K rows for MTP off and DRAFT_TOKENS again under the model's sampling preset, then one
 # decode-dominated run per configuration (1K prompt, 1536 outputs) under GPU telemetry for power,
 # clock and energy per token. With RUN_SERVING=1 it also runs the Flash-Next serving matrix. Run
 # on an otherwise idle machine.
@@ -42,6 +43,17 @@ for k in "${draft_counts[@]}"; do
     bench "mtp$k" -pg '8192,512;65536,512' "${spec[@]}" --warmup 1 -r 5 -o json \
         --output-file "$dir/mtp$k.json"
     reports+=("$dir/mtp$k.json")
+done
+
+# Greedy decoding is the best case for MTP: sampled tokens agree with the draft less often. The
+# model's registered preset (the sampling a served request gets by default) gives the realistic
+# acceptance and speed beside it.
+for k in 0 "$DRAFT_TOKENS"; do
+    [[ $k == 0 ]] && spec=() || spec=(--spec mtp --draft-tokens "$k" --lm-head-draft)
+    log "ninfer_bench K=$k, model sampling preset (8K prompt, 1 warmup + 3 measured)"
+    bench "sampled$k" -pg 8192,512 "${spec[@]}" --sampling model --seed 1 --warmup 1 -r 3 \
+        -o json --output-file "$dir/sampled$k.json"
+    reports+=("$dir/sampled$k.json")
 done
 
 log "modeling decode bytes per token from the artifact directory"
@@ -88,7 +100,8 @@ fi
     echo "## Step 2 — unprofiled baseline"
     echo
     machine_summary
-    echo "- Benchmark: -pg 8192,512 and 65536,512; --max-ctx 73728 --prefill-chunk 8192 --kv-dtype $KV_DTYPE; 1 warmup + 5 measured"
+    echo "- Benchmark: -pg 8192,512 and 65536,512; --max-ctx 73728 --prefill-chunk 8192 --kv-dtype $KV_DTYPE; 1 warmup + 5 measured, greedy"
+    echo "- Sampled rows: -pg 8192,512 with the model's registered sampling preset (--sampling model --seed 1); 1 warmup + 3 measured"
     echo "- Power mode: $(nvidia-smi --query-gpu=power.limit --format=csv,noheader 2>/dev/null | head -1 || echo unknown)"
     echo
     echo "Memory bandwidth probe:"

@@ -73,6 +73,14 @@ int main() {
             "LinearSwiGLU FP8_A8",
             {QType::FP8_E4M3FN_ROW_BF16, 34816, 5120, 17408, 1813U, ActivationCompute::A8},
             kA8Cases, std::array<std::int32_t, 3>{2, 65, 128});
+        // Qwen3.8 Flash-Next shared expert: GEMV at T=1, every sliced-K tile through 64 tokens
+        // and both GEMM schedules beyond, with graph replay at the decode and MTP widths.
+        constexpr std::array kFlashNextCases{1,  2,  3,  4,  5,  8,   9,   16,  17,  32,
+                                             33, 63, 64, 65, 96, 128, 129, 256, 1024};
+        failures += run_profile(
+            "LinearSwiGLU FP8_A16 Flash-Next",
+            {QType::FP8_E4M3FN_ROW_BF16, 1280, 2560, 640, 1819U, ActivationCompute::A16},
+            kFlashNextCases, std::array<std::int32_t, 3>{1, 3, 65});
         std::cout << (failures == 0 ? "OK" : "FAIL") << " LinearSwiGLU FP8 correctness\n";
         return failures == 0 ? 0 : 1;
     } catch (const std::exception& error) {

@@ -31,8 +31,9 @@ Reference device(artifact::Binder& binder, std::string_view name, QType format,
 }
 
 // Dense projections whose consuming Ops accept either representation: GDN qkv/z/out, QSA
-// query-gate/output, the HyperConnection down projection and the output head. The artifact's
-// recorded format selects the route; every other leaf keeps its single declared format.
+// query-gate/output, the HyperConnection down and up projections, the shared expert (an FP8
+// gate/up pair must be the two halves of one parent) and the output head. The artifact's recorded
+// format selects the route; every other leaf keeps its single declared format.
 Reference projection(artifact::Binder& binder, std::string_view name,
                      std::initializer_list<std::uint64_t> shape,
                      Placement placement = Placement::Device) {
@@ -85,8 +86,7 @@ HyperConnectionPlan bind_hc(artifact::Binder& binder, const std::string& prefix,
         .norm         = device(binder, prefix + "hc_norm.weight", QType::BF16, {10240}, placement),
         .down =
             projection(binder, prefix + "input_mix_weight_down.weight", {320, 10240}, placement),
-        .up = device(binder, prefix + "input_mix_weight_up.weight", QType::BF16, {10240, 320},
-                     placement),
+        .up = projection(binder, prefix + "input_mix_weight_up.weight", {10240, 320}, placement),
     };
 }
 
@@ -96,20 +96,16 @@ FinalHyperConnectionPlan bind_final_hc(artifact::Binder& binder, const std::stri
         .norm = device(binder, prefix + "hc_norm.weight", QType::BF16, {10240}, placement),
         .down =
             projection(binder, prefix + "input_mix_weight_down.weight", {320, 10240}, placement),
-        .up = device(binder, prefix + "input_mix_weight_up.weight", QType::BF16, {10240, 320},
-                     placement),
+        .up = projection(binder, prefix + "input_mix_weight_up.weight", {10240, 320}, placement),
     };
 }
 
 MoePlan bind_main_moe(artifact::Binder& binder, const std::string& prefix) {
     return {
-        .router = device(binder, prefix + "gate.weight", QType::BF16, {512, 2560}),
-        .shared_gate =
-            device(binder, prefix + "shared_expert.gate_proj.weight", QType::BF16, {640, 2560}),
-        .shared_up =
-            device(binder, prefix + "shared_expert.up_proj.weight", QType::BF16, {640, 2560}),
-        .shared_down =
-            device(binder, prefix + "shared_expert.down_proj.weight", QType::BF16, {2560, 640}),
+        .router      = device(binder, prefix + "gate.weight", QType::BF16, {512, 2560}),
+        .shared_gate = projection(binder, prefix + "shared_expert.gate_proj.weight", {640, 2560}),
+        .shared_up   = projection(binder, prefix + "shared_expert.up_proj.weight", {640, 2560}),
+        .shared_down = projection(binder, prefix + "shared_expert.down_proj.weight", {2560, 640}),
         .shared_scale =
             device(binder, prefix + "shared_expert_gate.weight", QType::BF16, {1, 2560}),
         .routed_gate_up = expert_bank(binder, prefix + "experts.gate_up", {512, 1280, 2560}),
@@ -121,13 +117,13 @@ MoePlan bind_main_moe(artifact::Binder& binder, const std::string& prefix) {
 
 MoePlan bind_mtp_moe(artifact::Binder& binder, const std::string& prefix, Placement placement) {
     return {
-        .router      = device(binder, prefix + "gate.weight", QType::BF16, {512, 2560}, placement),
-        .shared_gate = device(binder, prefix + "shared_expert.gate_proj.weight", QType::BF16,
-                              {640, 2560}, placement),
-        .shared_up   = device(binder, prefix + "shared_expert.up_proj.weight", QType::BF16,
-                              {640, 2560}, placement),
-        .shared_down = device(binder, prefix + "shared_expert.down_proj.weight", QType::BF16,
-                              {2560, 640}, placement),
+        .router = device(binder, prefix + "gate.weight", QType::BF16, {512, 2560}, placement),
+        .shared_gate =
+            projection(binder, prefix + "shared_expert.gate_proj.weight", {640, 2560}, placement),
+        .shared_up =
+            projection(binder, prefix + "shared_expert.up_proj.weight", {640, 2560}, placement),
+        .shared_down =
+            projection(binder, prefix + "shared_expert.down_proj.weight", {2560, 640}, placement),
         .shared_scale =
             device(binder, prefix + "shared_expert_gate.weight", QType::BF16, {1, 2560}, placement),
         .routed_gate_up = device(binder, prefix + "experts.gate_up_proj", QType::BF16,

@@ -2,6 +2,7 @@
 
 #include "artifact/reader.h"
 #include "artifact/views.h"
+#include "ninfer/ops/weight_input.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -131,20 +132,31 @@ ops::FlashNextExpertBank bf16_bank(const artifact::MaterializedArtifact& artifac
     };
 }
 
+// The FP8 recipe stores the shared gate and up projections as the two halves of one parent,
+// which LinearSwiGLU consumes whole; the BF16 artifact and the MTP layer keep two matrices.
+ops::FlashNextSharedGateUp shared_gate_up(const MoePlan& plan,
+                                          const artifact::MaterializedArtifact& artifact) {
+    const auto gate = artifact::bind_view(plan.shared_gate, artifact);
+    const auto up   = artifact::bind_view(plan.shared_up, artifact);
+    if (gate.parts.front().parent->geometry.format == QType::FP8_E4M3FN_ROW_BF16) {
+        return ops::prepare_linear_swiglu_weight({.weight = gate}, {.weight = up}).weight;
+    }
+    return ops::FlashNextSharedGateUpPair{.gate = native_weight(gate), .up = native_weight(up)};
+}
+
 ops::FlashNextMoeWeights moe(const MoePlan& plan, const artifact::MaterializedArtifact& artifact,
                              bool mtp) {
     return {
         .router         = bf16(artifact, plan.router, 512, 2560),
-        .shared_gate    = bf16(artifact, plan.shared_gate, 640, 2560),
-        .shared_up      = bf16(artifact, plan.shared_up, 640, 2560),
+        .shared_gate_up = shared_gate_up(plan, artifact),
         .shared_down    = bf16(artifact, plan.shared_down, 2560, 640),
         .shared_scale   = bf16(artifact, plan.shared_scale, 1, 2560),
         .routed_gate_up = mtp ? bf16_bank(artifact, plan.routed_gate_up, 1280, 2560)
                               : nvfp4_bank(artifact, plan.routed_gate_up,
                                            plan.routed_gate_up_input_divisors, 1280, 2560),
-        .routed_down = mtp ? bf16_bank(artifact, plan.routed_down, 2560, 640)
-                           : nvfp4_bank(artifact, plan.routed_down, plan.routed_down_input_divisors,
-                                        2560, 640),
+        .routed_down    = mtp ? bf16_bank(artifact, plan.routed_down, 2560, 640)
+                              : nvfp4_bank(artifact, plan.routed_down, plan.routed_down_input_divisors,
+                                           2560, 640),
     };
 }
 

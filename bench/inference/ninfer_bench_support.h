@@ -15,7 +15,7 @@
 
 namespace ninfer::bench {
 
-inline constexpr int kSchemaVersion                   = 15;
+inline constexpr int kSchemaVersion                   = 16;
 inline constexpr std::string_view kArtifactType       = "ninfer_bench_report";
 inline constexpr std::string_view kDefaultCorpusPath  = "bench/fixtures/bench_corpus.ids";
 inline constexpr int kDecodeSeedTokens                = 1;
@@ -63,6 +63,9 @@ struct BenchOptions {
     std::uint32_t prefill_chunk = kDefaultPrefillChunk;
     KvCacheStorage kv_cache     = KvCacheStorage::BFloat16;
     SpeculativeOptions speculative;
+    // Greedy by default. --sampling model leaves every field to the model's registered preset (the
+    // thinking-mode defaults for a token prompt); --temperature and --seed override on top.
+    SamplingOverrides sampling{.temperature = 0.0F};
     int device            = 0;
     bool use_cuda_graph   = true;
     bool profile_measured = false;
@@ -105,6 +108,7 @@ struct BenchEnvironment {
     std::uint32_t prefill_chunk = kDefaultPrefillChunk;
     KvCacheStorage kv_cache     = KvCacheStorage::BFloat16;
     SpeculativeOptions speculative;
+    SamplingOverrides sampling;
     bool use_cuda_graph                            = true;
     bool decode_graph_primed                       = false;
     std::uint32_t decode_graph_prime_output_tokens = 0;
@@ -146,6 +150,7 @@ std::string format_csv(const BenchEnvironment& env, const std::vector<TestResult
 std::string json_escape(std::string_view value);
 std::string kv_cache_name(KvCacheStorage storage);
 std::string proposal_head_name(ProposalHead head);
+std::string sampling_name(const SamplingOverrides& sampling);
 std::uint64_t file_size_or_zero(const std::string& path);
 
 } // namespace ninfer::bench

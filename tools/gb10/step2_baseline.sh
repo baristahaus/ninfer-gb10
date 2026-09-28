@@ -3,10 +3,12 @@
 # and 64K prompts with 512 decode outputs for MTP off, MTP with DRAFT_TOKENS, and MTP3, then one
 # decode-dominated run per configuration (1K prompt, 1536 outputs) under GPU telemetry for power,
 # clock and energy per token. With RUN_SERVING=1 it also runs the Flash-Next serving matrix. Run
-# on an otherwise idle machine.
-# Writes profiles/bench/gb10/step2/summary.md. Takes roughly 30-60 minutes without the matrix.
+# Writes profiles/bench/gb10/step2-<label>/summary.md (label defaults to the artifact's
+# parent directory name, override with LABEL=), so runs on different artifacts keep their
+# raw logs apart. Takes roughly 30-60 minutes without the matrix.
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
-dir=$(step_dir step2)
+LABEL=${LABEL:-$(basename "$(dirname "$ART")")}
+dir=$(step_dir "step2-$LABEL")
 require_binary "$BENCH_BIN"
 require_untraced_build
 

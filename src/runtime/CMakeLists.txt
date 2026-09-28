@@ -24,4 +24,9 @@ target_link_libraries(ninfer_engine PRIVATE
   ninfer_ops
   ninfer_text
   ninfer_media_decode)
+
+# Test-only fault-injection seam (worker OOM / invariant policy tests).
+if(BUILD_TESTING)
+    target_compile_definitions(ninfer_engine PRIVATE NINFER_ENGINE_FAULT_INJECTION=1)
+endif()
 add_library(ninfer::engine ALIAS ninfer_engine)

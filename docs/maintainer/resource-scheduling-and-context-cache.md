@@ -1,5 +1,33 @@
 # NInfer 资源调度与上下文缓存
 
+## English clarification
+
+This document is written in Chinese. It comes from the original NInfer repository (Neroued).
+The Chinese text below is the normative text. This section maps the document in English.
+It is a clarification added on 2026-09-27. It is not normative.
+
+English title: "NInfer Resource Scheduling and Context Cache"
+
+This document defines how NInfer selects, verifies, and commits context state under limited Device and Host resources.
+It is the maintainer authority for admission materialization, prefix reuse, cache retention, and pressure planning.
+A planning target is the full logical end state of one resource decision.
+
+Top-level sections:
+
+1. Terms and boundaries (术语与边界): owner, checkpoint, candidate, planning target, reservation, resource plan, placement.
+2. Decision ownership (决策所有权): the Scheduler, the ResourceManager, the Program.
+3. Resource model (资源模型): capacity axes, physical occupancy, post-state recovery, stage peaks, the resource revision.
+4. Continuations and checkpoints (Continuation 与 checkpoint): full recovery conditions, checkpoint kinds, valid and device-ready states, exact identity, cache participation.
+5. Placement semantics of state and KV (State 与 KV 的 placement 语义).
+6. Active completion guarantee.
+7. Materialization planning problem.
+8. Planning objective and algorithm (规划目标与算法).
+9. Resource transition.
+10. Retention, session, and publication (Retention、session 与 publication).
+11. Configuration semantics and boundedness (配置语义与有界性): the fixed capacities from `ContextCacheOptions`.
+12. Core invariants (核心不变量).
+13. Implementation locations (实现位置).
+
 本文定义 NInfer 在有限 Device/Host 资源下选择、验证并提交上下文状态的规则。它是 admission
 materialization、prefix reuse、cache retention 和 pressure planning 的维护者权威。
 

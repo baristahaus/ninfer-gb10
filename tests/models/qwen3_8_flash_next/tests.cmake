@@ -8,6 +8,12 @@ ninfer_add_test(ninfer_qwen3_8_flash_next_real_test
   SOURCES models/qwen3_8_flash_next_125b_a6b/test_engine_real.cpp
   LIBRARIES ninfer_engine ninfer_artifact)
 set_tests_properties(ninfer_qwen3_8_flash_next_real_test PROPERTIES SKIP_RETURN_CODE 77)
+ninfer_add_test(ninfer_qwen3_8_flash_next_fault_test
+  SOURCES models/qwen3_8_flash_next_125b_a6b/test_engine_fault.cpp
+  LIBRARIES ninfer_engine ninfer_artifact)
+target_compile_definitions(ninfer_qwen3_8_flash_next_fault_test PRIVATE
+  NINFER_ENGINE_FAULT_INJECTION=1)
+set_tests_properties(ninfer_qwen3_8_flash_next_fault_test PROPERTIES SKIP_RETURN_CODE 77)
 add_test(NAME ninfer_flash_next_performance_report_test
   COMMAND ${Python3_EXECUTABLE} -m unittest tests/test_flash_next_performance.py)
 set_tests_properties(ninfer_flash_next_performance_report_test PROPERTIES WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})

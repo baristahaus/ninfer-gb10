@@ -294,4 +294,3 @@ int main(int argc, char** argv) {
     std::printf("sink sanity: 0x%X\n", h);
     return 0;
 }
-

@@ -206,7 +206,7 @@ void validate_tokenizer_config(const FrontendResources& resources) {
     if (tokenizer_config.value("add_bos_token", true) ||
         tokenizer_config.value("add_prefix_space", true)) {
         throw std::invalid_argument(
-            "tokenizer_config.json does not match Qwen3.6 tokenizer prefix semantics");
+            "tokenizer_config.json does not match Qwen3.8 tokenizer prefix semantics");
     }
     if (!tokenizer_config.contains("pad_token") || !tokenizer_config.at("pad_token").is_string() ||
         tokenizer_config.at("pad_token").get<std::string>() != "<|endoftext|>") {
@@ -239,7 +239,7 @@ fi::CompiledChatTemplate compile_chat_template(const FrontendResources& resource
     case fi::ProcessorErrorKind::InvalidMedia:
         throw RequestError(RequestErrorKind::InvalidMedia, error.what());
     }
-    throw std::logic_error("unknown Qwen3.6 processor error kind");
+    throw std::logic_error("unknown Qwen3.8 processor error kind");
 }
 
 [[noreturn]] void throw_context_length_exceeded(std::uint32_t max_context) {

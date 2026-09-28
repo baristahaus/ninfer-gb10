@@ -344,3 +344,9 @@ feat(engine): cut over the registered target to native artifacts
 
 Use concise lowercase types consistent with repository history (`feat`, `fix`, `perf`, `bench`,
 `test`, `build`, `refactor`, `docs`, `chore`).
+
+## Language
+
+English only. Anything touched in a task (code, docs, commit messages) is
+written in English; non-English content in a touched section is translated to
+English (as done for engine-architecture.md §7.4 on 2026-09-28).

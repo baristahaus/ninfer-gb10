@@ -1,5 +1,25 @@
 # Q4 Linear 性能报告：N=6144，K=5120
 
+## English clarification
+
+This document is written in Chinese. It comes from the original NInfer repository (Neroued).
+The Chinese text below is the normative text. This section maps the document in English.
+It is a clarification added on 2026-09-27. It is not normative.
+
+English title: "Q4 Linear performance report: N=6144, K=5120"
+
+This report records the full Linear Op performance of the current implementation for one shape.
+The measurement date is 2026-09-15. The target is an RTX 5090 with CUDA 13.1 and sm_120a.
+The report serves as a reference for evaluation and later tuning.
+
+Top-level sections:
+
+1. Measurement subject and conditions (测量对象与条件): the weight format, the math shape, the policy, the hardware, the timing entry, the cache and sampling rules.
+2. Final latency curve (最终耗时曲线): the T=1 to 128 curve plus the 512 and 1024 anchors.
+3. Logical bandwidth and Tensor Core utilization (逻辑带宽与 Tensor Core 利用率).
+4. Curve reading and verification (曲线解读与验证): the shape implementation, the GEMV and MMA design.
+5. Reproduction (复现): the exact build and run commands.
+
 2026-09-15 测量。本文记录当前实现的完整 Linear Op 性能，供评估该 shape 和后续调优参考。
 
 ## 测量对象与条件

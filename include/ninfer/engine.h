@@ -110,6 +110,18 @@ public:
 
     void reset_memory_peaks() noexcept;
 
+#if defined(NINFER_ENGINE_FAULT_INJECTION)
+    // Test-only fault injection: the next worker unit rethrows the armed exception before
+    // doing any work. Oom models a transient allocation failure (recoverable: the admitted
+    // request ends with a retryable Overloaded error, the pending FIFO retries);
+    // InvariantError models an invariant violation (the whole Engine fails).
+    enum class WorkerFault : std::uint8_t {
+        Oom,
+        InvariantError,
+    };
+    void arm_next_worker_fault(WorkerFault fault) noexcept;
+#endif
+
 private:
     class Impl;
     std::shared_ptr<Impl> impl_;

@@ -10,6 +10,7 @@
 #include "ninfer/ops/gdn_gating.h"
 #include "ninfer/ops/linear.h"
 #include "ops/common/math.cuh"
+#include "ops/linear/fp8/fp8_format.h"
 #include "ops/linear_attention/gated_delta_net/launch.h"
 
 #include <cuda_bf16.h>
@@ -19,6 +20,9 @@
 
 namespace ninfer::ops {
 namespace {
+using detail::WeightFormats;
+using detail::fp8_row_weight;
+using detail::require_weight;
 
 constexpr int kHidden = 2560;
 constexpr int kHeads = 48;
@@ -127,21 +131,6 @@ __global__ void conv_replay_record_kernel(
             s1 = s2;
             s2 = current;
         }
-    }
-}
-
-enum class WeightFormats { Bf16, Bf16OrFp8 };
-
-bool fp8_row_weight(const Weight& weight) {
-    return weight.qtype == QType::FP8_E4M3FN_ROW_BF16 && weight.layout == QuantLayout::RowScale;
-}
-
-void require_weight(const Weight& weight, int rows, int columns, const char* label,
-                    WeightFormats formats = WeightFormats::Bf16) {
-    const bool bf16 = weight.qtype == QType::BF16 && weight.layout == QuantLayout::Contiguous;
-    const bool allowed = bf16 || (formats == WeightFormats::Bf16OrFp8 && fp8_row_weight(weight));
-    if (!allowed || weight.qdata == nullptr || weight.n != rows || weight.k != columns) {
-        throw std::invalid_argument(label);
     }
 }
 

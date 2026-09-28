@@ -571,6 +571,11 @@ void Program<Variant>::fail_all_cleanup() noexcept {
 }
 
 template <>
+bool Program<Variant>::quiescent_after_fail_all_cleanup() const noexcept {
+    return impl_->quiescent_after_fail_all_cleanup();
+}
+
+template <>
 bool Program<Variant>::isolated_request_feasible(
     const RequestBasePlan<Variant>& base) const noexcept {
     return impl_->isolated_request_feasible(base);

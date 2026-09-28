@@ -191,6 +191,20 @@ public:
         } catch (...) {}
     }
 
+#if defined(NINFER_ENGINE_FAULT_INJECTION)
+    void arm_next_worker_fault(std::exception_ptr error) noexcept {
+        std::visit(
+            [error = std::move(error)](auto& entry) mutable {
+                using CoreType = std::decay_t<decltype(entry)>;
+                if constexpr (std::is_same_v<CoreType, std::unique_ptr<GenerationCore>> ||
+                              std::is_same_v<CoreType, std::unique_ptr<FlashGenerationCore>>) {
+                    if (entry != nullptr) { entry->arm_next_worker_fault(std::move(error)); }
+                }
+            },
+            core);
+    }
+#endif
+
     EngineOptions options;
     DeviceContext device;
     runtime::ActiveModel active;
@@ -465,5 +479,16 @@ void Engine::reset_memory_peaks() noexcept {
         },
         impl_->core);
 }
+
+#if defined(NINFER_ENGINE_FAULT_INJECTION)
+void Engine::arm_next_worker_fault(WorkerFault fault) noexcept {
+    if (impl_ == nullptr) { return; }
+    std::exception_ptr error = fault == WorkerFault::Oom
+                                   ? std::make_exception_ptr(std::bad_alloc())
+                                   : std::make_exception_ptr(std::logic_error(
+                                         "test-injected invariant violation"));
+    impl_->arm_next_worker_fault(std::move(error));
+}
+#endif
 
 } // namespace ninfer

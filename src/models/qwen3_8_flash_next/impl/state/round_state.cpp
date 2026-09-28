@@ -318,9 +318,6 @@ MtpDecodeState::MtpDecodeState(DeviceSpan backing, const MtpDecodeStateLayout& l
     next_drafts =
         egress_tensor(offsetof(MtpDecodeEgress, next_drafts), DType::I32, {batch, drafts});
     next_extents     = egress_tensor(offsetof(MtpDecodeEgress, next_extents), DType::I32, {batch});
-    target_sampling = reinterpret_cast<const ops::SamplingConfig*>(
-        static_cast<const unsigned char*>(ingress.data) +
-        offsetof(MtpDecodeIngress, target_sampling));
     token_logprobs =
         egress_tensor(offsetof(MtpDecodeEgress, token_logprobs), DType::FP32, {batch * width});
     top_ids        = egress_tensor(offsetof(MtpDecodeEgress, top_ids), DType::I32,

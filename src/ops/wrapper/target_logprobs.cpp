@@ -78,24 +78,26 @@ std::int32_t validate_ranking(const Tensor& logits, Tensor* top_ids, Tensor* top
     return top_ids->ne[0];
 }
 
+// The count reconciliation only means something beside a sampling config: without configs there is
+// no committed-token array to correct. columns_per_lane must partition the reported columns
+// exactly, which is what lets one config and one lane token span serve a whole verify row.
 void validate_options(const TargetLogprobOptions& options, std::int32_t columns) {
-    if (options.round_drafts == nullptr) {
-        if (options.draft_rows != 0 || options.verify_width != 0) {
+    if (options.configs == nullptr) {
+        if (options.columns_per_lane != 1 || options.round_tokens != nullptr ||
+            options.round_produced != nullptr) {
             throw std::invalid_argument(
-                "target_logprobs: draft_rows and verify_width require a round draft array");
+                "target_logprobs: lane configs and round token arrays require configs");
         }
         return;
     }
-    if (options.configs == nullptr) {
-        throw std::invalid_argument("target_logprobs: a round draft array requires configs");
+    if (options.columns_per_lane <= 0 || options.columns_per_lane > columns ||
+        columns % options.columns_per_lane != 0) {
+        throw std::invalid_argument("target_logprobs: columns_per_lane must be in [1,columns] and "
+                                    "divide the column count exactly");
     }
-    if (options.draft_rows <= 0 || options.draft_rows > kMaxRoundDrafts) {
-        throw std::invalid_argument("target_logprobs: draft_rows must be in [1," +
-                                    std::to_string(kMaxRoundDrafts) + "]");
-    }
-    if (options.verify_width <= 0 || columns % options.verify_width != 0) {
+    if (options.round_produced != nullptr && options.round_tokens == nullptr) {
         throw std::invalid_argument(
-            "target_logprobs: verify_width must divide the column count exactly");
+            "target_logprobs: round produced counts require round tokens");
     }
 }
 

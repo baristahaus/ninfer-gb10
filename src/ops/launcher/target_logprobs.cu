@@ -1,6 +1,7 @@
 // Implements: include/ninfer/ops/target_logprobs.h
 // Match: wrapper-validated contiguous tensors and valid vocabulary rows.
-// Algorithm assumptions: one independent CTA per column; no global workspace.
+// Algorithm assumptions: one independent CTA per column; no global workspace. The ranking lists live
+// in shared memory, so reporting them is a compile-time choice and an unranked call allocates none.
 #include "ops/launcher/target_logprobs.h"
 
 #include "core/device.h"
@@ -8,21 +9,39 @@
 
 namespace ninfer::ops::detail {
 
+namespace {
+
+template <bool ReportRanking>
+void launch_columns(unsigned int columns, const Tensor& logits, const Tensor& target_ids,
+                    float* output, std::int32_t valid_rows, const TargetLogprobOptions& options,
+                    std::int32_t top_k, std::int32_t* top_ids, float* top_logprobs,
+                    cudaStream_t stream) {
+    target_logprobs_kernel<kTargetLogprobsBlock, ReportRanking>
+        <<<columns, kTargetLogprobsBlock, 0, stream>>>(
+            static_cast<const __nv_bfloat16*>(logits.data),
+            static_cast<const std::int32_t*>(target_ids.data), output, valid_rows,
+            static_cast<std::int32_t>(logits.ne[0]), options.configs, options.columns_per_lane,
+            options.round_tokens, options.round_produced, top_k, top_ids, top_logprobs);
+    CUDA_CHECK(cudaGetLastError());
+}
+
+} // namespace
+
 void target_logprobs_launch(const Tensor& logits, const Tensor& target_ids, std::int32_t valid_rows,
                             const TargetLogprobOptions& options, Tensor& output, Tensor* top_ids,
                             Tensor* top_logprobs, cudaStream_t stream) {
-    const auto columns = static_cast<unsigned int>(logits.ne[1]);
-    const auto top_k =
+    const unsigned int columns = static_cast<unsigned int>(logits.ne[1]);
+    float* output_values       = static_cast<float*>(output.data);
+    const std::int32_t top_k =
         top_ids != nullptr ? static_cast<std::int32_t>(top_ids->ne[0]) : static_cast<std::int32_t>(0);
-    target_logprobs_kernel<kTargetLogprobsBlock>
-        <<<columns, kTargetLogprobsBlock, 0, stream>>>(
-            static_cast<const __nv_bfloat16*>(logits.data),
-            static_cast<const std::int32_t*>(target_ids.data), static_cast<float*>(output.data),
-            valid_rows, logits.ne[0], options.configs, options.round_drafts, options.draft_rows,
-            options.verify_width, top_k,
-            top_ids != nullptr ? static_cast<std::int32_t*>(top_ids->data) : nullptr,
-            top_logprobs != nullptr ? static_cast<float*>(top_logprobs->data) : nullptr);
-    CUDA_CHECK(cudaGetLastError());
+    if (top_k > 0) {
+        launch_columns<true>(columns, logits, target_ids, output_values, valid_rows, options, top_k,
+                             static_cast<std::int32_t*>(top_ids->data),
+                             static_cast<float*>(top_logprobs->data), stream);
+        return;
+    }
+    launch_columns<false>(columns, logits, target_ids, output_values, valid_rows, options, 0,
+                          nullptr, nullptr, stream);
 }
 
 } // namespace ninfer::ops::detail

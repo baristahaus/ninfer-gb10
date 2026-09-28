@@ -75,10 +75,6 @@ struct MtpDecodeIngress {
     std::array<std::int32_t, kMaximumConcurrency> state_destination_slots{};
     std::array<std::int32_t, kMaximumConcurrency> rope_deltas{};
     std::array<ops::SamplingConfig, kMaximumConcurrency> sampling{};
-    // The verify and probability routes address columns, not lanes: column w of lane b is
-    // b * width + w. The host writes each lane's sampling config once per verify column.
-    std::array<ops::SamplingConfig, kMaximumConcurrency * kMtpDecodeMaximumWidth>
-        target_sampling{};
 };
 
 struct MtpDecodeEgress {
@@ -268,9 +264,7 @@ struct MtpDecodeState {
     Tensor accepted_drafts;
     Tensor next_drafts;
     Tensor next_extents;
-    // Per-verify-column sampling configs and the probability report; column w of lane b is
-    // b * width + w for every one of these.
-    const ops::SamplingConfig* target_sampling = nullptr;
+    // One report per verify column; column w of lane b is b * width + w.
     Tensor token_logprobs;
     Tensor top_ids;
     Tensor top_logprobs;

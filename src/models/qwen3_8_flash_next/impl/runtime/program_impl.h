@@ -952,6 +952,13 @@ ProgramImplCore::ProgramImplCore(const LoadedModelData& model_in, const Sequence
 
     io = qwen3_8_flash_next::RoundState(backing, plan.persistent.round);
     io.report_token_logprobs = plan.token_logprobs;
+    if (io.report_token_logprobs && speculative_backend == SpeculativeBackend::DFlash) {
+        // The DFlash verify schedule publishes tokens this report does not cover, so one report per
+        // generated token could not hold. The 125B-A6B instance selects no DFlash companion; rejecting
+        // here keeps a future one from quietly breaking the contract instead.
+        throw std::invalid_argument(
+            "token logprob reporting does not cover the DFlash decode schedule");
+    }
     if (io.mtp.has_value() != (speculative_backend == SpeculativeBackend::Mtp)) {
         throw std::logic_error("round-state MTP extension does not match the sequence plan");
     }
@@ -12228,11 +12235,6 @@ ProgramImplCore::decode_mtp_batch(std::span<const std::uint32_t> lanes,
             mtp_host_ingress->state_destination_slots[row] = selectors.destination;
             mtp_host_ingress->rope_deltas[row]             = sequence.rope_delta;
             mtp_host_ingress->sampling[row]                = request.sampling_host;
-            // The probability report addresses verify columns, not lanes: lane b owns columns
-            // [b*width, (b+1)*width) and every one of them draws with this lane's config.
-            for (std::size_t column = 0; column < width; ++column) {
-                mtp_host_ingress->target_sampling[row * width + column] = request.sampling_host;
-            }
 #ifdef NINFER_QWEN38_FLASH_NEXT
             if (!flash_ple_host || !flash_decode_ple) {
                 throw std::logic_error("Flash-Next MTP PLE staging is unavailable");

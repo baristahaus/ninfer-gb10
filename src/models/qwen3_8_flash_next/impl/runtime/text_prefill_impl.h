@@ -151,12 +151,15 @@ void sample_from_hidden(PrefillContext& state, const Tensor& hidden, std::int32_
                 state.execution.io.pos, purpose, state.execution.work,
                 state.execution.device.stream);
     if (state.execution.io.report_token_logprobs) {
-        // One column: the position that produced this token. A prefill step has no speculative
-        // prefix to reconcile, so the committed token counts are the whole history the draw saw.
+        // One column: the position that produced this token. ops::sample already counted the token
+        // it drew, so pass it back as this round's published token to recover the counts the draw
+        // actually saw.
         Tensor reported_ids      = state.execution.io.report_top_ids;
         Tensor reported_logprobs = state.execution.io.report_top_logprobs;
         ops::TargetLogprobOptions logprob_options;
-        logprob_options.configs = state.sampling;
+        logprob_options.configs      = state.sampling;
+        logprob_options.round_tokens =
+            reinterpret_cast<const std::int32_t*>(state.execution.io.token.data);
         ops::target_logprobs(logits, state.execution.io.token, TextConfig::token_domain,
                              logprob_options, state.execution.io.report_logprob, &reported_ids,
                              &reported_logprobs, state.execution.device.stream);

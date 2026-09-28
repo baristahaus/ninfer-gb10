@@ -2,8 +2,8 @@
 
 // Implements: include/ninfer/ops/target_logprobs.h
 // Match: contiguous BF16 [physical_rows,C], I32 [C], and FP32 [C] plus optional [top_k,C] outputs.
-// Algorithm assumptions: one 256-thread CTA per published column; a two-pass scaled logsumexp and a
-// per-thread bounded ranking merged by a shared pairwise merge tree.
+// Algorithm assumptions: one 256-thread CTA per published column; a two-pass scaled logsumexp and,
+// when ranking is compiled in, a per-thread bounded ranking merged by a shared pairwise merge tree.
 
 #include "ninfer/ops/target_logprobs.h"
 
@@ -48,19 +48,27 @@ __device__ __forceinline__ float target_logprobs_block_max(float value) {
     return result;
 }
 
-// One column's adjusted, temperature-scaled logit. Ordering by this value and by the reported
-// log-probability are the same relation because the scale is positive, so the ranking pass can use
-// it directly.
-__device__ __forceinline__ float target_logprob_scaled_value(const __nv_bfloat16* logits,
-                                                             std::int64_t base, std::int32_t row,
-                                                             const SamplingConfig& config,
-                                                             float inverse_temperature,
-                                                             const std::int32_t* overlay,
-                                                             std::int32_t prefix_len) {
-    const float raw = __bfloat162float(logits[base + row]);
-    return sampling_adjusted_logit(raw, static_cast<int>(row), config, overlay,
-                                   static_cast<int>(prefix_len)) *
-           inverse_temperature;
+// One column's penalty-adjusted, temperature-scaled logit, evaluated against the committed token
+// counts as they stood when this column was drawn. The penalty terms mirror sampling_adjusted_logit
+// exactly; the only difference is that the draw and every later token of the same round are removed
+// first, because the sampler and the accept step have already added them. Ordering by this value and
+// by the reported log-probability are the same relation, the scale being positive.
+__device__ __forceinline__ float target_logprob_scaled_value(
+    const __nv_bfloat16* logits, std::int64_t base, std::int32_t row, const SamplingConfig& config,
+    float inverse_temperature, const std::int32_t* round_tokens, std::int32_t subtract_begin,
+    std::int32_t subtract_end) {
+    float value = __bfloat162float(logits[base + row]);
+    if (config.presence_penalty != 0.0f || config.frequency_penalty != 0.0f) {
+        int count = config.token_counts != nullptr ? config.token_counts[row] : 0;
+        for (std::int32_t index = subtract_begin; index < subtract_end; ++index) {
+            if (round_tokens[index] == row) { --count; }
+        }
+        if (count > 0) { value -= config.presence_penalty; }
+        if (config.frequency_penalty != 0.0f) {
+            value -= config.frequency_penalty * static_cast<float>(count);
+        }
+    }
+    return value * inverse_temperature;
 }
 
 // Merges two descending ranking lists of exactly kMaxReportedLogprobRanks entries into the first,
@@ -96,38 +104,39 @@ __device__ __forceinline__ void target_logprob_merge_lists(
     }
 }
 
-template <int BlockSize>
+template <int BlockSize, bool ReportRanking>
 __launch_bounds__(BlockSize) __global__ void target_logprobs_kernel(
     const __nv_bfloat16* logits, const std::int32_t* target_ids, float* output,
     std::int32_t valid_rows, std::int32_t physical_rows, const SamplingConfig* configs,
-    const std::int32_t* round_drafts, std::int32_t draft_rows, std::int32_t verify_width,
-    std::int32_t top_k,
-    std::int32_t* top_ids, float* top_logprobs) {
-    static_assert(BlockSize == kTargetLogprobsBlock);
+    std::int32_t columns_per_lane, const std::int32_t* round_tokens,
+    const std::int32_t* round_produced, std::int32_t top_k, std::int32_t* top_ids,
+    float* top_logprobs) {
 
     constexpr int kRanks = kMaxReportedLogprobRanks;
-    __shared__ float list_value[BlockSize][kRanks];
-    __shared__ int list_id[BlockSize][kRanks];
+    __shared__ float list_value[ReportRanking ? BlockSize : 1][ReportRanking ? kRanks : 1];
+    __shared__ int list_id[ReportRanking ? BlockSize : 1][ReportRanking ? kRanks : 1];
 
     const std::int32_t column = static_cast<std::int32_t>(blockIdx.x);
     const std::int64_t base   = static_cast<std::int64_t>(column) * physical_rows;
     const int tid             = static_cast<int>(threadIdx.x);
 
     SamplingConfig config;
-    if (configs != nullptr) { config = configs[column]; }
+    if (configs != nullptr) { config = configs[column / columns_per_lane]; }
     const float inverse_temperature = config.temperature > 0.0f ? 1.0f / config.temperature : 1.0f;
-    // A speculative verify column g was drawn against drafts[0..w-1] of lane b under
-    // g = w + b*verify_width. A non-speculative round has no prefix to reconcile.
-    const std::int32_t* overlay = nullptr;
-    std::int32_t overlay_len    = 0;
-    if (round_drafts != nullptr) {
-        const std::int32_t lane   = column / verify_width;
-        const std::int32_t within = column - lane * verify_width;
-        overlay_len               = within < draft_rows ? within : draft_rows;
-        overlay = round_drafts + static_cast<std::int64_t>(lane) * draft_rows;
-    }
 
-    if (top_k > 0) {
+    const std::int32_t lane   = column / columns_per_lane;
+    const std::int32_t within = column - lane * columns_per_lane;
+    const std::int32_t* lane_tokens =
+        round_tokens != nullptr ? round_tokens + static_cast<std::int64_t>(lane) * columns_per_lane
+                                : nullptr;
+    const std::int32_t produced =
+        round_tokens == nullptr
+            ? within
+            : (round_produced != nullptr ? round_produced[lane] : columns_per_lane);
+    const std::int32_t subtract_begin = within < produced ? within : produced;
+    const std::int32_t subtract_end   = produced;
+
+    if constexpr (ReportRanking) {
 #pragma unroll
         for (int rank = 0; rank < kRanks; ++rank) {
             list_value[tid][rank] = -CUDART_INF_F;
@@ -138,10 +147,10 @@ __launch_bounds__(BlockSize) __global__ void target_logprobs_kernel(
     float local_max = -CUDART_INF_F;
     for (std::int32_t row = tid; row < valid_rows; row += BlockSize) {
         const float value =
-            target_logprob_scaled_value(logits, base, row, config, inverse_temperature, overlay,
-                                        overlay_len);
+            target_logprob_scaled_value(logits, base, row, config, inverse_temperature, lane_tokens,
+                                        subtract_begin, subtract_end);
         local_max = fmaxf(local_max, value);
-        if (top_k > 0) {
+        if constexpr (ReportRanking) {
             sampling_insert_candidate(list_value[tid], list_id[tid], static_cast<int>(top_k), value,
                                       static_cast<int>(row));
         }
@@ -151,13 +160,13 @@ __launch_bounds__(BlockSize) __global__ void target_logprobs_kernel(
     float local_sum = 0.0f;
     for (std::int32_t row = tid; row < valid_rows; row += BlockSize) {
         local_sum += expf(target_logprob_scaled_value(logits, base, row, config, inverse_temperature,
-                                                      overlay, overlay_len) -
+                                                      lane_tokens, subtract_begin, subtract_end) -
                           maximum);
     }
     __shared__ float warp_sums[BlockSize / kWarpSize];
     const float sum = block_reduce_sum<BlockSize>(local_sum, warp_sums);
 
-    if (top_k > 0) {
+    if constexpr (ReportRanking) {
         // The reductions above synchronized, so every thread's list is visible. Merge the BlockSize
         // sorted lists pairwise in shared memory: round stride merges lists stride apart, and every
         // merged list lands at a multiple of 2*stride for the next round to consume.
@@ -181,17 +190,17 @@ __launch_bounds__(BlockSize) __global__ void target_logprobs_kernel(
     if (tid != 0) { return; }
     output[column] =
         target_logprob_scaled_value(logits, base, target_ids[column], config, inverse_temperature,
-                                    overlay, overlay_len) -
+                                    lane_tokens, subtract_begin, subtract_end) -
         maximum - logf(sum);
 
-    if (top_k <= 0) { return; }
+    if constexpr (!ReportRanking) { return; }
     const std::int32_t reported   = top_k < valid_rows ? top_k : valid_rows;
     const float normalizer        = maximum + logf(sum);
     const std::int64_t column_off = static_cast<std::int64_t>(column) * top_k;
     for (std::int32_t rank = 0; rank < top_k; ++rank) {
         const std::int64_t destination = static_cast<std::int64_t>(rank) + column_off;
         if (rank < reported && list_id[0][rank] != INT_MAX) {
-            top_ids[destination]     = list_id[0][rank];
+            top_ids[destination]      = list_id[0][rank];
             top_logprobs[destination] = list_value[0][rank] - normalizer;
         } else {
             top_ids[destination]      = kNoReportedLogprobRank;

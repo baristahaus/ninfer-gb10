@@ -215,10 +215,12 @@ auto mtp_decode_batch_body(MtpBatchContext& state, std::int32_t batch_size, std:
             Tensor reported_logprobs = frame.top_logprobs.slice(1, 0, report_columns);
 
             ops::TargetLogprobOptions logprob_options;
-            logprob_options.configs      = frame.target_sampling;
-            logprob_options.round_drafts = static_cast<const std::int32_t*>(current_drafts.data);
-            logprob_options.draft_rows   = width - 1;
-            logprob_options.verify_width = width;
+            logprob_options.configs          = frame.sampling;
+            logprob_options.columns_per_lane = width;
+            logprob_options.round_tokens =
+                reinterpret_cast<const std::int32_t*>(licensed_tokens.data);
+            logprob_options.round_produced =
+                static_cast<const std::int32_t*>(licensed_counts.data);
             ops::target_logprobs(verify_logits, published, TextConfig::token_domain,
                                  logprob_options, chosen, &reported_ids, &reported_logprobs,
                                  state.execution.device.stream);

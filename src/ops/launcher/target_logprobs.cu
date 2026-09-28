@@ -18,8 +18,8 @@ void target_logprobs_launch(const Tensor& logits, const Tensor& target_ids, std:
         <<<columns, kTargetLogprobsBlock, 0, stream>>>(
             static_cast<const __nv_bfloat16*>(logits.data),
             static_cast<const std::int32_t*>(target_ids.data), static_cast<float*>(output.data),
-            valid_rows, logits.ne[0], options.configs, options.penalty_overlay,
-            options.overlay_rows, top_k,
+            valid_rows, logits.ne[0], options.configs, options.round_drafts, options.draft_rows,
+            options.verify_width, top_k,
             top_ids != nullptr ? static_cast<std::int32_t*>(top_ids->data) : nullptr,
             top_logprobs != nullptr ? static_cast<float*>(top_logprobs->data) : nullptr);
     CUDA_CHECK(cudaGetLastError());

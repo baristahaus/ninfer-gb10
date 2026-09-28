@@ -164,25 +164,34 @@ int run_case(const std::string& label, std::int32_t physical_rows, std::int32_t 
 
 // One column's penalty-adjusted, temperature-scaled FP64 logit. Mirrors the adjustment the Op
 // documents (and the sampler applies): counts come from the committed-token array plus the
-// column's round-local overlay, and a non-positive temperature reports the un-scaled distribution.
+// column's round-local draft prefix, and a non-positive temperature reports the un-scaled
+// distribution.
 struct RankingFixture {
     float temperature      = 1.0F;
     float presence_penalty = 0.0F;
     float frequency_penalty= 0.0F;
     std::vector<std::int32_t> counts;
-    std::vector<std::int32_t> overlay; // [overlay_rows, columns], column-major
-    std::int32_t overlay_rows          = 0;
-    std::int32_t top_k                 = 0;
+    std::vector<std::int32_t> drafts; // [draft_rows, lanes], column-major
+    std::int32_t draft_rows           = 0;
+    std::int32_t verify_width         = 0; // verify columns per lane
+    std::int32_t top_k                = 0;
 };
 
 double scaled_value(const std::vector<std::uint16_t>& logits, std::size_t base, std::int32_t row,
                     const RankingFixture& fixture, std::size_t column) {
     int count = 0;
     if (!fixture.counts.empty()) { count = fixture.counts[static_cast<std::size_t>(row)]; }
-    for (std::int32_t entry = 0; entry < fixture.overlay_rows; ++entry) {
-        if (fixture.overlay[entry + column * static_cast<std::size_t>(fixture.overlay_rows)] ==
-            row) {
-            ++count;
+    if (fixture.draft_rows > 0) {
+        const std::size_t lane = column / static_cast<std::size_t>(fixture.verify_width);
+        const std::int32_t within = static_cast<std::int32_t>(
+            column - lane * static_cast<std::size_t>(fixture.verify_width));
+        const std::int32_t prefix =
+            within < fixture.draft_rows ? within : fixture.draft_rows;
+        for (std::int32_t entry = 0; entry < prefix; ++entry) {
+            if (fixture.drafts[entry + lane * static_cast<std::size_t>(fixture.draft_rows)] ==
+                row) {
+                ++count;
+            }
         }
     }
     double value = static_cast<double>(bf16_to_f32(logits[base + static_cast<std::size_t>(row)]));
@@ -255,9 +264,9 @@ int run_ranked_case(const std::string& label, std::int32_t physical_rows, std::i
     if (!fixture.counts.empty()) {
         device_counts.copy_from_host(fixture.counts.data(), device_counts.bytes());
     }
-    GuardedDeviceBuffer device_overlay(fixture.overlay.size() * sizeof(std::int32_t));
-    if (!fixture.overlay.empty()) {
-        device_overlay.copy_from_host(fixture.overlay.data(), device_overlay.bytes());
+    GuardedDeviceBuffer device_drafts(fixture.drafts.size() * sizeof(std::int32_t));
+    if (!fixture.drafts.empty()) {
+        device_drafts.copy_from_host(fixture.drafts.data(), device_drafts.bytes());
     }
     std::vector<ops::SamplingConfig> configs(static_cast<std::size_t>(columns));
     for (auto& config : configs) {
@@ -286,9 +295,11 @@ int run_ranked_case(const std::string& label, std::int32_t physical_rows, std::i
 
     ops::TargetLogprobOptions options;
     options.configs = static_cast<const ops::SamplingConfig*>(device_configs.data());
-    options.penalty_overlay =
-        fixture.overlay_rows > 0 ? static_cast<const std::int32_t*>(device_overlay.data()) : nullptr;
-    options.overlay_rows = fixture.overlay_rows;
+    options.round_drafts = fixture.draft_rows > 0
+                               ? static_cast<const std::int32_t*>(device_drafts.data())
+                               : nullptr;
+    options.draft_rows   = fixture.draft_rows;
+    options.verify_width = fixture.verify_width;
 
     Tensor* top_ids_pointer   = &top_ids_tensor;
     Tensor* top_logprobs_pointer = &top_logprobs_tensor;
@@ -410,18 +421,27 @@ int run_validation_cases() {
         Tensor narrow_logprobs(rank_logprob_data.p, DType::FP32, {19, 3});
         ops::target_logprobs(logits, targets, 8, {}, output, &top_ids, &narrow_logprobs, nullptr);
     });
-    failures += expect_invalid("target_logprobs rejects overlay_rows without an overlay", [&] {
+    failures += expect_invalid("target_logprobs rejects draft_rows without drafts", [&] {
         ops::TargetLogprobOptions options;
-        options.overlay_rows = 2;
+        options.draft_rows = 2;
         ops::target_logprobs(logits, targets, 8, options, output, nullptr, nullptr, nullptr);
     });
-    failures += expect_invalid("target_logprobs rejects an oversized overlay", [&] {
+    failures += expect_invalid("target_logprobs rejects drafts without configs", [&] {
         ops::TargetLogprobOptions options;
-        DeviceBuffer config_data(sizeof(ops::SamplingConfig));
-        DeviceBuffer overlay_data(9 * 3 * sizeof(std::int32_t));
-        options.configs         = static_cast<const ops::SamplingConfig*>(config_data.p);
-        options.penalty_overlay = static_cast<const std::int32_t*>(overlay_data.p);
-        options.overlay_rows    = ops::kMaxPenaltyOverlayRows + 1;
+        DeviceBuffer draft_data(4 * 3 * sizeof(std::int32_t));
+        options.round_drafts = static_cast<const std::int32_t*>(draft_data.p);
+        options.draft_rows   = 2;
+        options.verify_width = 2;
+        ops::target_logprobs(logits, targets, 8, options, output, nullptr, nullptr, nullptr);
+    });
+    failures += expect_invalid("target_logprobs rejects a verify width that misses columns", [&] {
+        ops::TargetLogprobOptions options;
+        DeviceBuffer config_data(3 * sizeof(ops::SamplingConfig));
+        DeviceBuffer draft_data(4 * 3 * sizeof(std::int32_t));
+        options.configs      = static_cast<const ops::SamplingConfig*>(config_data.p);
+        options.round_drafts = static_cast<const std::int32_t*>(draft_data.p);
+        options.draft_rows   = 2;
+        options.verify_width = 2; // three columns do not divide by two
         ops::target_logprobs(logits, targets, 8, options, output, nullptr, nullptr, nullptr);
     });
     return failures;
@@ -458,25 +478,20 @@ int main() {
     failures += run_ranked_case("target_logprobs ranked at temperature 0.5", 257, 257, 5,
                                 make_shift_logits(257, 257, 5, 0.0f), temperature);
 
-    // Penalties with a round-local overlay, and a narrower report than the ceiling.
+    // Penalties with a round-local draft prefix, and a narrower report than the ceiling. One lane
+    // of five verify columns: column c was drawn against the first min(c, 4) drafts, and drafts 0
+    // and 1 repeat a row so a frequency penalty sees a count of two.
     RankingFixture penalties;
     penalties.temperature       = 0.7F;
     penalties.presence_penalty  = 0.5F;
     penalties.frequency_penalty = 0.25F;
     penalties.counts.resize(257);
     for (std::int32_t row = 0; row < 257; ++row) { penalties.counts[static_cast<std::size_t>(row)] = row % 3; }
-    penalties.overlay_rows      = 2;
-    penalties.overlay.assign(static_cast<std::size_t>(penalties.overlay_rows) * 5,
-                             ops::kNoPenaltyOverlayToken);
-    for (std::int32_t column = 0; column < 5; ++column) {
-        penalties.overlay[static_cast<std::size_t>(column) * penalties.overlay_rows] = column * 7;
-        if (column > 0) {
-            penalties.overlay[1 + static_cast<std::size_t>(column) * penalties.overlay_rows] =
-                256 - column;
-        }
-    }
+    penalties.draft_rows   = 4;
+    penalties.verify_width = 5;
+    penalties.drafts       = {3, 3, 100, 256};
     penalties.top_k = 4;
-    failures += run_ranked_case("target_logprobs ranked with penalties and overlay", 257, 257, 5,
+    failures += run_ranked_case("target_logprobs ranked with penalties and drafts", 257, 257, 5,
                                 make_shift_logits(257, 257, 5, 4.0f), penalties);
 
     // A greedy config has no temperature, so tau is 1 while penalties still apply.

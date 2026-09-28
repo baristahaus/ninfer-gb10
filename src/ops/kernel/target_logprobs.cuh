@@ -56,10 +56,10 @@ __device__ __forceinline__ float target_logprob_scaled_value(const __nv_bfloat16
                                                              const SamplingConfig& config,
                                                              float inverse_temperature,
                                                              const std::int32_t* overlay,
-                                                             std::int32_t overlay_rows) {
+                                                             std::int32_t prefix_len) {
     const float raw = __bfloat162float(logits[base + row]);
     return sampling_adjusted_logit(raw, static_cast<int>(row), config, overlay,
-                                   static_cast<int>(overlay_rows)) *
+                                   static_cast<int>(prefix_len)) *
            inverse_temperature;
 }
 
@@ -100,7 +100,8 @@ template <int BlockSize>
 __launch_bounds__(BlockSize) __global__ void target_logprobs_kernel(
     const __nv_bfloat16* logits, const std::int32_t* target_ids, float* output,
     std::int32_t valid_rows, std::int32_t physical_rows, const SamplingConfig* configs,
-    const std::int32_t* penalty_overlay, std::int32_t overlay_rows, std::int32_t top_k,
+    const std::int32_t* round_drafts, std::int32_t draft_rows, std::int32_t verify_width,
+    std::int32_t top_k,
     std::int32_t* top_ids, float* top_logprobs) {
     static_assert(BlockSize == kTargetLogprobsBlock);
 
@@ -115,10 +116,16 @@ __launch_bounds__(BlockSize) __global__ void target_logprobs_kernel(
     SamplingConfig config;
     if (configs != nullptr) { config = configs[column]; }
     const float inverse_temperature = config.temperature > 0.0f ? 1.0f / config.temperature : 1.0f;
-    const std::int32_t* overlay     = penalty_overlay != nullptr
-                                          ? penalty_overlay + static_cast<std::int64_t>(column) *
-                                                                    overlay_rows
-                                          : nullptr;
+    // A speculative verify column g was drawn against drafts[0..w-1] of lane b under
+    // g = w + b*verify_width. A non-speculative round has no prefix to reconcile.
+    const std::int32_t* overlay = nullptr;
+    std::int32_t overlay_len    = 0;
+    if (round_drafts != nullptr) {
+        const std::int32_t lane   = column / verify_width;
+        const std::int32_t within = column - lane * verify_width;
+        overlay_len               = within < draft_rows ? within : draft_rows;
+        overlay = round_drafts + static_cast<std::int64_t>(lane) * draft_rows;
+    }
 
     if (top_k > 0) {
 #pragma unroll
@@ -132,7 +139,7 @@ __launch_bounds__(BlockSize) __global__ void target_logprobs_kernel(
     for (std::int32_t row = tid; row < valid_rows; row += BlockSize) {
         const float value =
             target_logprob_scaled_value(logits, base, row, config, inverse_temperature, overlay,
-                                        overlay_rows);
+                                        overlay_len);
         local_max = fmaxf(local_max, value);
         if (top_k > 0) {
             sampling_insert_candidate(list_value[tid], list_id[tid], static_cast<int>(top_k), value,
@@ -144,7 +151,7 @@ __launch_bounds__(BlockSize) __global__ void target_logprobs_kernel(
     float local_sum = 0.0f;
     for (std::int32_t row = tid; row < valid_rows; row += BlockSize) {
         local_sum += expf(target_logprob_scaled_value(logits, base, row, config, inverse_temperature,
-                                                      overlay, overlay_rows) -
+                                                      overlay, overlay_len) -
                           maximum);
     }
     __shared__ float warp_sums[BlockSize / kWarpSize];
@@ -174,7 +181,7 @@ __launch_bounds__(BlockSize) __global__ void target_logprobs_kernel(
     if (tid != 0) { return; }
     output[column] =
         target_logprob_scaled_value(logits, base, target_ids[column], config, inverse_temperature,
-                                    overlay, overlay_rows) -
+                                    overlay, overlay_len) -
         maximum - logf(sum);
 
     if (top_k <= 0) { return; }

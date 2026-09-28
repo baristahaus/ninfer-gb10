@@ -78,16 +78,24 @@ std::int32_t validate_ranking(const Tensor& logits, Tensor* top_ids, Tensor* top
     return top_ids->ne[0];
 }
 
-void validate_options(const TargetLogprobOptions& options) {
-    if (options.configs == nullptr && options.penalty_overlay != nullptr) {
-        throw std::invalid_argument("target_logprobs: a penalty overlay requires configs");
+void validate_options(const TargetLogprobOptions& options, std::int32_t columns) {
+    if (options.round_drafts == nullptr) {
+        if (options.draft_rows != 0 || options.verify_width != 0) {
+            throw std::invalid_argument(
+                "target_logprobs: draft_rows and verify_width require a round draft array");
+        }
+        return;
     }
-    if (options.penalty_overlay == nullptr && options.overlay_rows != 0) {
-        throw std::invalid_argument("target_logprobs: overlay_rows requires a penalty overlay");
+    if (options.configs == nullptr) {
+        throw std::invalid_argument("target_logprobs: a round draft array requires configs");
     }
-    if (options.overlay_rows < 0 || options.overlay_rows > kMaxPenaltyOverlayRows) {
-        throw std::invalid_argument("target_logprobs: overlay_rows must be in [0," +
-                                    std::to_string(kMaxPenaltyOverlayRows) + "]");
+    if (options.draft_rows <= 0 || options.draft_rows > kMaxRoundDrafts) {
+        throw std::invalid_argument("target_logprobs: draft_rows must be in [1," +
+                                    std::to_string(kMaxRoundDrafts) + "]");
+    }
+    if (options.verify_width <= 0 || columns % options.verify_width != 0) {
+        throw std::invalid_argument(
+            "target_logprobs: verify_width must divide the column count exactly");
     }
 }
 
@@ -113,7 +121,7 @@ void target_logprobs(const Tensor& logits, const Tensor& target_ids, std::int32_
     if (valid_rows <= 0 || valid_rows > logits.ne[0]) {
         throw std::invalid_argument("target_logprobs: valid_rows must be in [1, physical_rows]");
     }
-    validate_options(options);
+    validate_options(options, columns);
 
     (void)logits.bytes();
     (void)target_ids.bytes();

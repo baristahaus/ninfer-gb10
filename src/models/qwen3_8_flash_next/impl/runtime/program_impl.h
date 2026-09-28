@@ -12209,6 +12209,11 @@ ProgramImplCore::decode_mtp_batch(std::span<const std::uint32_t> lanes,
             mtp_host_ingress->state_destination_slots[row] = selectors.destination;
             mtp_host_ingress->rope_deltas[row]             = sequence.rope_delta;
             mtp_host_ingress->sampling[row]                = request.sampling_host;
+            // The probability report addresses verify columns, not lanes: lane b owns columns
+            // [b*width, (b+1)*width) and every one of them draws with this lane's config.
+            for (std::size_t column = 0; column < width; ++column) {
+                mtp_host_ingress->target_sampling[row * width + column] = request.sampling_host;
+            }
 #ifdef NINFER_QWEN38_FLASH_NEXT
             if (!flash_ple_host || !flash_decode_ple) {
                 throw std::logic_error("Flash-Next MTP PLE staging is unavailable");
@@ -12321,6 +12326,21 @@ ProgramImplCore::decode_mtp_batch(std::span<const std::uint32_t> lanes,
             .row_counts = std::span<const std::int32_t>(mtp_host_egress->licensed_counts.data(),
                                                         lanes.size()),
             .row_stride = width,
+            // Same lane-major column order as licensed_tokens. A row publishes only its first
+            // licensed_counts entries; the reports after that column are never read.
+            .scores =
+                io.report_token_logprobs
+                    ? runtime::RoundTokenScores{
+                          std::span<const float>(mtp_host_egress->token_logprobs.data(),
+                                                 lanes.size() * width),
+                          std::span<const std::int32_t>(
+                              mtp_host_egress->top_ids.data(),
+                              lanes.size() * width * ops::kMaxReportedLogprobRanks),
+                          std::span<const float>(
+                              mtp_host_egress->top_logprobs.data(),
+                              lanes.size() * width * ops::kMaxReportedLogprobRanks),
+                          ops::kMaxReportedLogprobRanks}
+                    : runtime::RoundTokenScores{},
             .timing     = timing.finish(),
         };
     } catch (...) {

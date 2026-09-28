@@ -1,5 +1,37 @@
 # NInfer Paged KV Context Store
 
+## English clarification
+
+This document is written in Chinese. It comes from the original NInfer repository (Neroued).
+The Chinese text below is the normative text. This section maps the document in English.
+It is a clarification added on 2026-09-27. It is not normative.
+
+English title: "NInfer Paged KV Context Store"
+
+This document defines the physical storage and the consumption contract of the growing KV.
+The growing KV is the key-value state that grows with the context.
+It is the maintainer authority for the typed KV pools, the logical pages, and the replicas.
+It also covers the address spaces, the reservations, the block tables, and the GPU consumer views.
+It answers two questions.
+Can the current KV stores honor a chosen logical context target?
+How does the model execution unit consume the honored KV?
+
+Top-level sections:
+
+1. Physical model (物理模型): a startup-fixed set of homogeneous pools.
+2. Three independent granularities (三种独立粒度).
+3. Typed pool set and capacity (Typed pool set 与容量): pool set, main, automatic, backend, and host capacity.
+4. Page groups and physical layout (Page group 与物理 layout): grouping invariants, plane orders, the position domain, the page payload.
+5. Logical pages and replicas (Logical page 与 replicas): identity, Device and Host replicas, transfers.
+6. KV address space.
+7. Lifecycle (生命周期): activation and release.
+8. Sharing, move, and copy-on-write (Sharing、Move 与 COW).
+9. Speculative and non-growing KV (Speculative 与非 growing KV).
+10. Consumer contract.
+11. CUDA Graph and table publication (CUDA Graph 与 table publication).
+12. Core invariants (核心不变量).
+13. Implementation locations (实现位置).
+
 本文定义 NInfer growing KV 的物理存储与消费合同。它是 typed KV pools、logical pages、
 Device/Host replicas、address spaces、reservations、block tables 和 GPU consumer views 的维护者权威。
 

@@ -1,5 +1,36 @@
 # NInfer v3 容器规范
 
+## English clarification
+
+This document is written in Chinese. It comes from the original NInfer repository (Neroued).
+The Chinese text below is the normative text. This section maps the document in English.
+It is a clarification added on 2026-09-27. It is not normative.
+
+English title: "NInfer v3 Container Specification"
+
+V3 saves a compact model-instance config, the actual objects, the logical bindings, and the required resources.
+The model code defines the math, the component handoffs, and the state programs.
+A reader and a writer can build the file layout and the references from this document alone.
+The binder of each architecture then interprets the logical parameters and the config.
+An artifact has one fixed entry and one master catalog.
+A small artifact is one `.ninfer` file.
+A large artifact is the entry file plus continuation volumes.
+
+Top-level sections:
+
+1. Contract and notation (合同与记法): the authority for each part, plus the notation (U64, ID, Shape).
+2. File set and address space (文件集合与地址空间): entry and continuation volumes, the logical payload, the 32 GB per-file cap.
+3. Binary framing (二进制 framing): the 32-byte entry header, the continuation header, the file directory.
+4. JSON master catalog (JSON 总目录): the root record and the component records (text, vision, mtp, dflash, dflash2).
+5. Physical objects (物理对象): tensor objects, resource objects, object ranges and sharing.
+6. Number formats and layout names (V3 数值格式与布局名称): format names and the allowed format and shape per layout.
+7. Logical parameter binding (逻辑参数绑定): the two binding kinds.
+8. Uses and auxiliary inputs (使用许可与辅助输入): the `uses` array. Each Use names one read of a parameter.
+9. Resources and optional output representations (资源与可选输出表示): frontend resource references.
+10. Instance data and provenance (实例资料与 provenance): the `metadata` and `provenance` objects.
+11. Reading, writing, and error boundaries (读取、写入与错误边界): the generic reader and its failure rules.
+12. Concrete examples (具体例子): a complete Text-only catalog.
+
 V3 保存精简的模型实例配置、实际对象、逻辑绑定与所需资源。数学公式、组件交接和状态程序
 由模型代码定义。Reader 与 writer 根据本文即可独立实现文件组织和引用；
 对应架构的 binder 再解释逻辑参数与配置。

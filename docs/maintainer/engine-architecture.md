@@ -1,5 +1,32 @@
 # NInfer Engine 架构
 
+## English clarification
+
+This document is written in Chinese. It comes from the original NInfer repository (Neroued).
+The Chinese text below is the normative text. This section maps the document in English.
+It is a clarification added on 2026-09-27. It is not normative.
+
+English title: "NInfer Engine Architecture"
+
+This document defines the model instance, execution ownership, and the top-level control plane.
+It explains how weights enter a fixed model implementation.
+It also explains how requests, resources, and outputs commit together.
+It is the maintainer authority for the global architecture and the request lifecycle.
+It is also the authority for the cross-module commit relations.
+
+Top-level sections:
+
+1. Product execution model (产品执行模型): one GPU, one resident model, concurrency 1 to 8, a bounded FIFO queue, no preemption. Includes the Flash-Next family note.
+2. The four execution boundaries (四个执行边界): Gateway, Frontend, Engine, Program.
+3. Single ownership (唯一所有权): each fact has one owner: Scheduler, ResourceManager, Program, Engine lifetime, native parameters.
+4. Request and resource lifecycle (请求与资源生命周期): request states, logical lane states, capacity, continuation and session.
+5. Workers and scheduling (Worker 与调度): the single mutation owner.
+6. The two commit transactions (两类提交事务).
+7. Terminal, cancellation, and failure (Terminal、cancellation 与 failure).
+8. Top-level constraints of physical execution (物理执行的顶层约束).
+9. Core invariants (核心不变量).
+10. Implementation locations and neighboring authorities (实现位置与相邻权威).
+
 本文定义 NInfer 的模型实例、执行所有权与顶层控制面，说明权重如何进入固定模型实现，以及请求、
 资源和输出如何共同提交。它是全局架构、请求生命周期和跨模块提交关系的维护者权威。
 

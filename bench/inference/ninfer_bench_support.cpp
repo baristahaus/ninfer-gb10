@@ -303,6 +303,10 @@ std::string usage_text(std::string_view program) {
         << "  --draft-tokens <n>         MTP 1..5; DFlash/DFlash2 1..15\n"
         << "  --lm-head-draft             use the optimized proposal head; requires a speculative "
            "backend\n"
+        << "  --sampling <greedy|model>   greedy argmax (default) or the model's registered "
+           "sampling preset\n"
+        << "  --temperature <t>           override the temperature, 0..2 (0 is greedy)\n"
+        << "  --seed <n>                  sampling seed (default: 0)\n"
         << "  --device <id>               CUDA device ordinal (default: 0)\n"
         << "  --no-cuda-graph             use eager decode\n"
         << "  --profile-measured          bracket one measured repetition with CUDA profiler API\n"
@@ -359,6 +363,34 @@ BenchOptions parse_args(int argc, char** argv) {
             options.speculative.draft_tokens = parse_u32(value("--draft-tokens"), "draft-tokens");
         } else if (arg == "--lm-head-draft") {
             options.speculative.proposal_head = ProposalHead::Optimized;
+        } else if (arg == "--sampling") {
+            const std::string selected = value("--sampling");
+            const auto seed            = options.sampling.seed;
+            if (selected == "greedy") {
+                options.sampling = SamplingOverrides{.temperature = 0.0F};
+            } else if (selected == "model") {
+                options.sampling = SamplingOverrides{};
+            } else {
+                throw std::invalid_argument("--sampling must be greedy or model");
+            }
+            options.sampling.seed = seed;
+        } else if (arg == "--temperature") {
+            const std::string text = value("--temperature");
+            std::size_t used       = 0;
+            float temperature      = 0.0F;
+            try {
+                temperature = std::stof(text, &used);
+            } catch (const std::exception&) { used = 0; }
+            if (used != text.size() || !(temperature >= 0.0F && temperature <= 2.0F)) {
+                throw std::invalid_argument("--temperature must be a number in [0,2]");
+            }
+            options.sampling.temperature = temperature;
+        } else if (arg == "--seed") {
+            const std::string text = value("--seed");
+            if (text.empty() || text.find_first_not_of("0123456789") != std::string::npos) {
+                throw std::invalid_argument("--seed must be a non-negative integer");
+            }
+            options.sampling.seed = std::stoull(text);
         } else if (arg == "--device") {
             options.device = parse_nonnegative(value("--device"), "device");
         } else if (arg == "--no-cuda-graph") {
@@ -599,6 +631,7 @@ std::string format_table(const BenchEnvironment& env, const std::vector<TestResu
         << " spec=" << product::speculative_backend_name(env.speculative.backend)
         << " draft_tokens=" << env.speculative.draft_tokens
         << " proposal_head=" << proposal_head_name(env.speculative.proposal_head)
+        << " sampling=" << sampling_name(env.sampling)
         << " decode_path=" << decode_path_name(env.use_cuda_graph, env.speculative)
         << " graph_prime="
         << (env.decode_graph_primed
@@ -718,6 +751,7 @@ std::string format_json(const BenchEnvironment& env, const std::string& command,
         << "    \"draft_tokens\": " << env.speculative.draft_tokens << ",\n"
         << "    \"proposal_head\": \"" << proposal_head_name(env.speculative.proposal_head)
         << "\",\n"
+        << "    \"sampling\": \"" << sampling_name(env.sampling) << "\",\n"
         << "    \"use_cuda_graph\": " << (env.use_cuda_graph ? "true" : "false") << ",\n"
         << "    \"decode_path\": \"" << decode_path_name(env.use_cuda_graph, env.speculative)
         << "\",\n"
@@ -797,7 +831,7 @@ std::string format_csv(const BenchEnvironment& env, const std::vector<TestResult
            "context,prefill_chunk,"
            "speculative_"
            "backend,draft_tokens,"
-           "proposal_head,decode_path,kv_cache,kv_payload_bytes,load_host_to_device_bytes,"
+           "proposal_head,sampling,decode_path,kv_cache,kv_payload_bytes,load_host_to_device_bytes,"
            "weights_capacity_bytes,sequence_capacity_bytes,workspace_capacity_bytes,"
            "workspace_general_capacity_bytes,vision_handoff_capacity_bytes,"
            "cuda_graph_allowance_bytes,"
@@ -825,6 +859,7 @@ std::string format_csv(const BenchEnvironment& env, const std::vector<TestResult
             << ',' << product::speculative_backend_name(env.speculative.backend) << ','
             << env.speculative.draft_tokens << ','
             << proposal_head_name(env.speculative.proposal_head) << ','
+            << sampling_name(env.sampling) << ','
             << decode_path_name(env.use_cuda_graph, env.speculative) << ','
             << kv_cache_name(env.kv_cache) << ',' << env.memory.kv_payload_bytes << ','
             << env.load.host_to_device_bytes << ',' << env.memory.weights.capacity_bytes << ','
@@ -898,6 +933,19 @@ std::string kv_cache_name(KvCacheStorage storage) {
         return "k8v4";
     }
     return "unknown";
+}
+
+// "greedy", "model", or "model;temperature=T", with ";seed=N" when a seed is given.
+std::string sampling_name(const SamplingOverrides& sampling) {
+    std::ostringstream out;
+    if (sampling.temperature && *sampling.temperature == 0.0F) {
+        out << "greedy";
+    } else {
+        out << "model";
+        if (sampling.temperature) { out << ";temperature=" << *sampling.temperature; }
+    }
+    if (sampling.seed) { out << ";seed=" << *sampling.seed; }
+    return out.str();
 }
 
 std::string proposal_head_name(ProposalHead head) {

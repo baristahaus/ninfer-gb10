@@ -118,6 +118,9 @@ def cmd_bench(paths: list[Path]) -> None:
         spec = config.get("speculative_backend", "?")
         name = spec if spec == "none" else f"{spec} K={config.get('draft_tokens')}"
         name += f", KV {config.get('kv_cache')}"
+        sampling = config.get("sampling", "greedy")
+        if sampling != "greedy":
+            name += f", {sampling}"
         for test in report.get("tests", []):
             speculative = test.get("speculative") or {}
             accepted = speculative.get("acceptance_length") if speculative.get("enabled") else None

@@ -72,6 +72,11 @@ this behavioral probe complements numerical/state tests and is not a mathematica
 causal prompt scores using identical token IDs. See [perplexity](../../docs/perplexity.md) and
 [Flash-Next numerical diagnostics](../../docs/maintainer/qwen3.8-flash-next-125b-a6b-model.md#numerical-diagnostics).
 
+`compare_token_drift.py` compares two `ninfer-perplexity --token-scores` runs of the same corpus
+and protocol, typically two weight formats, by offset within each window: per-bin mean NLL
+difference and its slope, so error that accumulates through recurrent state is visible apart from
+the overall difference.
+
 ## Corpus baker
 
 `ninfer_bench` benchmarks prefill at an exact length by slicing the first `P` token ids of a

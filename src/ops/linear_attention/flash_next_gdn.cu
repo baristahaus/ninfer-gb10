@@ -10,6 +10,7 @@
 #include "ninfer/ops/gdn_gating.h"
 #include "ninfer/ops/linear.h"
 #include "ops/common/math.cuh"
+#include "ops/linear/fp8/fp8_format.h"
 #include "ops/linear_attention/gated_delta_net/launch.h"
 
 #include <cuda_bf16.h>
@@ -19,6 +20,9 @@
 
 namespace ninfer::ops {
 namespace {
+using detail::WeightFormats;
+using detail::fp8_row_weight;
+using detail::require_weight;
 
 constexpr int kHidden = 2560;
 constexpr int kHeads = 48;
@@ -130,21 +134,6 @@ __global__ void conv_replay_record_kernel(
     }
 }
 
-enum class WeightFormats { Bf16, Bf16OrFp8 };
-
-bool fp8_row_weight(const Weight& weight) {
-    return weight.qtype == QType::FP8_E4M3FN_ROW_BF16 && weight.layout == QuantLayout::RowScale;
-}
-
-void require_weight(const Weight& weight, int rows, int columns, const char* label,
-                    WeightFormats formats = WeightFormats::Bf16) {
-    const bool bf16 = weight.qtype == QType::BF16 && weight.layout == QuantLayout::Contiguous;
-    const bool allowed = bf16 || (formats == WeightFormats::Bf16OrFp8 && fp8_row_weight(weight));
-    if (!allowed || weight.qdata == nullptr || weight.n != rows || weight.k != columns) {
-        throw std::invalid_argument(label);
-    }
-}
-
 void validate(const Tensor& input, const FlashNextGdnWeights& weights,
               const Tensor& conv_in, const Tensor& conv_out, const Tensor& recurrent_in,
               const Tensor& recurrent_out, const Tensor& destination) {
@@ -197,15 +186,16 @@ std::size_t flash_next_gdn_workspace_capacity_bytes(std::int32_t tokens) {
     (void)layout.alloc(DType::BF16, {kValue, tokens});
     (void)layout.alloc(DType::BF16, {kValue, tokens});
     (void)layout.alloc_bytes(gated_delta_net_workspace_capacity_bytes(
-        kQkHeads, kHeads, true, tokens, tokens));
+        kQkHeads, kHeads, tokens, tokens));
     return layout.peak_bytes(1);
 }
 
 void flash_next_gdn(const Tensor& input, const FlashNextGdnWeights& weights,
                     const Tensor& convolution_state_in, Tensor& convolution_state_out,
                     const Tensor& recurrent_state_in, Tensor& recurrent_state_out,
-                    Tensor& destination, WorkspaceArena& workspace, cudaStream_t stream,
-                    Bf16GemmContext* bf16_gemm) {
+                    Tensor& destination, WorkspaceArena& workspace,
+                    DeviceExecutionView execution, Bf16GemmContext* bf16_gemm) {
+    const cudaStream_t stream = execution.stream;
     NINFER_PERF_SCOPE("gdn.prefill", input.ne[1], 1, 0,
                        flash_next_work::gdn(input.ne[1], 1, false, true,
                                             fp8_row_weight(weights.query_key_value)));
@@ -252,7 +242,7 @@ void flash_next_gdn(const Tensor& input, const FlashNextGdnWeights& weights,
     Tensor recurrent_heads = recurrent.view({kDim, kHeads, tokens});
     gated_delta_net(q_heads, k_heads, v_heads, g, beta, 0.08838834764831845F, true,
                     workspace, recurrent_state_in, recurrent_state_out,
-                    recurrent_heads, stream);
+                    recurrent_heads, execution);
     Tensor normalized = workspace.alloc(DType::BF16, {kValue, tokens});
     Tensor z_heads = z.view({kDim, kHeads, tokens});
     Tensor normalized_heads = normalized.view({kDim, kHeads, tokens});

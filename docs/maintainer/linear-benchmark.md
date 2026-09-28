@@ -1,5 +1,34 @@
 # Linear benchmark 合同与预置 suite
 
+## English clarification
+
+This document is written in Chinese. It comes from the original NInfer repository (Neroued).
+The Chinese text below is the normative text. This section maps the document in English.
+It is a clarification added on 2026-09-27. It is not normative.
+
+English title: "Linear benchmark contract and preset suites"
+
+This document is the current authority for `bench/ops/linear_bench.cu`.
+It defines the commands, the timing contract, the metrics, and the extension rules.
+It also defines the preset suites of the pure Linear benchmark.
+A suite is a named set of benchmark points.
+The benchmark never changes the production Linear route.
+It never reselects a route winner.
+Every measured call goes through the public entry `ninfer::ops::linear`.
+
+Top-level sections:
+
+1. Scope (范围): the public-entry rule, the banned private headers, the fused-Op exclusion.
+2. Use cases (使用场景): single point, NCU single point, small-T sweep, typical model suite.
+3. Typical suites (典型 suite): the default T set, the 27B and 35B-A3B suites, all.
+4. Request pipeline (请求流水线).
+5. Theoretical traffic (理论流量).
+6. Mathematical workload and route-neutral metrics (数学工作量与 route-neutral 指标).
+7. Timing contract (计时合同): one cold-cache contract for point, sweep, and suite.
+8. Output (输出): the fixed console header.
+9. Registration rules (注册规则): new production shapes, new routes.
+10. Recorded verification and measurements (已记录的验证与测量): completed checks and RTX 5090 numbers.
+
 ## 范围
 
 本文是 `bench/ops/linear_bench.cu` 的当前权威，定义 pure Linear benchmark 的命令、

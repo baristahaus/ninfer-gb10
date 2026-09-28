@@ -182,7 +182,7 @@ long last_real_user_query(const std::vector<ChatMessage>& messages) {
     throw std::invalid_argument("no user query found in chat messages");
 }
 
-// Split an assistant turn into (reasoning, content) exactly as the Qwen3.6 jinja
+// Split an assistant turn into (reasoning, content) exactly as the Qwen3.8 jinja
 // does when reasoning_content is not provided: reasoning is the text between the
 // last <think> and the first </think>; content is everything after the last
 // </think>. When there is no </think> the whole thing is content and reasoning is

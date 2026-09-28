@@ -2,6 +2,7 @@
 #include "core/weight.h"
 
 #include "core/arena.h"
+#include "core/device.h"
 #include "core/gdn_replay_records.h"
 #include "core/tensor.h"
 
@@ -33,12 +34,13 @@ struct FlashNextGdnWeights {
 // Exact single-sequence Flash-Next Gated DeltaNet block. The input is the 2560-row HC block
 // stream. The width-three BF16 convolution state and [128,128,48] FP32 recurrence state are
 // transitioned from the supplied source to destination; exact alias is allowed for each pair.
-// The BF16 [2560,T] destination is overwritten with the projected block result.
+// The BF16 [2560,T] destination is overwritten with the projected block result. `execution`
+// supplies the stream and the physical SM count the chunked recurrence decomposes over.
 void flash_next_gdn(const Tensor& input, const FlashNextGdnWeights& weights,
                     const Tensor& convolution_state_in, Tensor& convolution_state_out,
                     const Tensor& recurrent_state_in, Tensor& recurrent_state_out,
-                    Tensor& destination, WorkspaceArena& workspace, cudaStream_t stream,
-                    Bf16GemmContext* bf16_gemm = nullptr);
+                    Tensor& destination, WorkspaceArena& workspace,
+                    DeviceExecutionView execution, Bf16GemmContext* bf16_gemm = nullptr);
 
 // One-token exact-B selected-slot transition used by ordinary decode.
 void flash_next_gdn_batch_update(const Tensor& input, const FlashNextGdnWeights& weights,

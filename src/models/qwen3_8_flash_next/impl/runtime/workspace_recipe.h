@@ -1,6 +1,6 @@
 #pragma once
 
-// Typed Qwen3.6 phase-root allocation clusters shared by the real schedule and its startup
+// Typed Qwen3.8 phase-root allocation clusters shared by the real schedule and its startup
 // WorkspaceLayoutBuilder simulation. Child Op scratch remains owned by each Op capacity query.
 
 #include "core/arena.h"

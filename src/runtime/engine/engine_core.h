@@ -1959,13 +1959,29 @@ private:
         publish_runtime_stats();
     }
 
+public:
+#if defined(NINFER_ENGINE_FAULT_INJECTION)
+    // Test-only seam: each queued fault is rethrown at the top of the next worker unit,
+    // before any work. Queueing several exercises the consecutive-recovery cap; a
+    // logic_error exercises the invariant fail-all.
+    void arm_next_worker_fault(std::exception_ptr fault) noexcept {
+        std::lock_guard lock(fault_mutex_);
+        worker_faults_.push_back(std::move(fault));
+    }
+#endif
+private:
+
     // Recover from any std::bad_alloc in the work loop by clearing active state and
     // continuing.  The most common trigger is device-KV reservation failure, but host
     // allocations can also trigger it.  Errors active and materializing requests, resets
     // the scheduler and program state, but leaves pending requests in the FIFO so they
     // can retry once memory is freed.  The worker loop continues after this.
-    // The worker holds execution_mutex_ across the failing operation and this cleanup.
-    void recover_from_oom_locked(std::exception_ptr error) noexcept {
+    // The worker holds execution_mutex_ across the failing operation and this cleanup, so
+    // no Program introspection can observe a partially cleared physical state.
+    // Returns false when the cleanup did not quiesce the Program: the cleanup then only
+    // partially succeeded, and the Engine must fail rather than retry against a torn
+    // state (contract 7.4).
+    bool recover_from_oom_locked(std::exception_ptr error) noexcept {
         if (!error) { error = oom_fallback_error_; }
         try { scheduler_.reset(); } catch (...) {}
         const std::shared_ptr<Request> materializing_request =
@@ -1973,6 +1989,12 @@ private:
         try { materializing_.reset(); } catch (...) {}
         try { instance_.program->fail_all_cleanup(); } catch (...) {}
         try { resources_.clear_after_program_cleanup(); } catch (...) {}
+        if (!instance_.program->quiescent_after_fail_all_cleanup()) {
+            std::fprintf(stderr,
+                         "[engine] WORKER OOM: cleanup left the Program unquiesced — "
+                         "failing all\n");
+            return false;
+        }
         for (std::uint32_t lane = 0; lane < max_concurrency_; ++lane) {
             if (slots_[lane] != nullptr) {
                 auto slot_request = std::move(slots_[lane]);
@@ -1984,6 +2006,7 @@ private:
             force_complete_error(materializing_request, error);
         }
         try { publish_runtime_stats(); } catch (...) {}
+        return true;
     }
 
     // The worker holds execution_mutex_ across the failing operation and this cleanup, so no
@@ -2041,6 +2064,17 @@ private:
 
             std::unique_lock execution_lock(execution_mutex_);
             try {
+#if defined(NINFER_ENGINE_FAULT_INJECTION)
+                {
+                    std::exception_ptr armed;
+                    std::lock_guard lock(fault_mutex_);
+                    if (!worker_faults_.empty()) {
+                        armed = std::move(worker_faults_.front());
+                        worker_faults_.pop_front();
+                    }
+                    if (armed != nullptr) { std::rethrow_exception(armed); }
+                }
+#endif
                 set_host_work_class(HostWorkClass::Control);
                 HostPhaseMeasurement boundary = begin_host_phase();
                 const bool have_pending       = expire_pending_requests();
@@ -2141,34 +2175,32 @@ private:
                     fail_all_locked(fatal_error);
                     return;
                 }
-                std::exception_ptr oom_error;
-                try { oom_error = std::current_exception(); } catch (...) {}
-                if (!oom_error) { oom_error = oom_fallback_error_; }
+                // Surface the typed retryable error, not the raw allocation exception:
+                // the consumer's error contract is RequestError.
                 HostPhaseMeasurement cleanup = begin_host_phase();
-                recover_from_oom_locked(oom_error);
+                const bool recovered = recover_from_oom_locked(oom_fallback_error_);
                 finish_engine_phase(cleanup, EngineHostPhase::Maintenance);
+                if (!recovered) {
+                    fail_all_locked(oom_fallback_error_);
+                    return;
+                }
+                // Hold admission for a few iterations so the pending FIFO does not retry
+                // straight into the allocation that just failed.
                 oom_backoff_ = kOomBackoffIterations;
                 // Scheduler state was cleared by recover_from_oom_locked; treat the next
                 // iteration as a fresh scheduling boundary (no decode continuity).
                 previous_unit_was_decode = false;
                 continue;
-            } catch (const std::logic_error& logic_err) {
-                // Recoverable logic error (e.g. stale checkpoint state image).
-                // Fail the active/materializing requests but keep the worker alive.
-                std::fprintf(stderr, "[engine] WORKER RECOVER: %s\n", logic_err.what());
-                if (++oom_recovery_count_ > kOomMaxRecoveries) {
-                    std::fprintf(stderr,
-                                 "[engine] WORKER: %u consecutive recoveries — failing all\n",
-                                 oom_recovery_count_ - 1);
-                    fail_all_locked(std::current_exception());
-                    return;
-                }
+            } catch (const std::logic_error& invariant) {
+                // Invariant violation: the shared physical state can no longer be
+                // safely interpreted. Contract 7.4 requires the whole Engine to fail;
+                // invariant errors are never downgraded to a retry.
+                std::fprintf(stderr, "[engine] WORKER INVARIANT: %s — failing all\n",
+                             invariant.what());
                 HostPhaseMeasurement cleanup = begin_host_phase();
-                recover_from_oom_locked(std::current_exception());
+                fail_all_locked(std::current_exception());
                 finish_engine_phase(cleanup, EngineHostPhase::Maintenance);
-                oom_backoff_ = kOomBackoffIterations;
-                previous_unit_was_decode = false;
-                continue;
+                return;
             } catch (...) {
                 const std::exception_ptr error = std::current_exception();
                 try {
@@ -2224,6 +2256,10 @@ private:
     static constexpr std::uint32_t kOomMaxRecoveries = 8;  // before failing all pending
     std::uint32_t oom_backoff_                    = 0;  // iterations to skip admission after OOM
     std::uint32_t oom_recovery_count_ = 0;  // consecutive OOMs without a successful work unit
+#if defined(NINFER_ENGINE_FAULT_INJECTION)
+    std::mutex fault_mutex_;
+    std::deque<std::exception_ptr> worker_faults_;
+#endif
     const std::exception_ptr oom_fallback_error_ = std::make_exception_ptr(
         RequestError(RequestErrorKind::Overloaded, "engine out of memory during execution"));
     std::thread worker_;

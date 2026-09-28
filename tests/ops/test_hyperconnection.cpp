@@ -188,7 +188,8 @@ int run_case(int tokens, DownFormat format) {
 int run() {
     int failures = 0;
     for (const DownFormat format : {DownFormat::Bf16, DownFormat::Fp8}) {
-        for (const int tokens : {1, 2}) { failures += run_case(tokens, format); }
+        // T=1 GEMV, T=3 the MTP verify width (FP8 SIMT), T=9 sliced-K, T=65 tiled GEMM.
+        for (const int tokens : {1, 2, 3, 9, 65}) { failures += run_case(tokens, format); }
     }
     return failures;
 }

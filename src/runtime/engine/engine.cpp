@@ -159,9 +159,10 @@ public:
         : options(runtime::normalize_engine_options(std::move(engine_options))),
           device(initialize_device(options)) {
         nvtx::ScopedRange load_range(nvtx::Name::EngineLoad, nvtx::Category::Runtime);
-        auto constructed = runtime::construct_model(options, device);
-        active           = std::move(constructed.instance);
-        load             = std::move(constructed.load);
+        auto constructed    = runtime::construct_model(options, device);
+        active              = std::move(constructed.instance);
+        load                = std::move(constructed.load);
+        load.cuda_sync_mode = device.sync_mode();
         StartupPhaseScope finalize_phase(options.startup_observer, StartupPhase::EngineFinalize);
         std::visit(
             [&](auto& instance) {
@@ -190,6 +191,20 @@ public:
             device.synchronize();
         } catch (...) {}
     }
+
+#if defined(NINFER_ENGINE_FAULT_INJECTION)
+    void arm_next_worker_fault(std::exception_ptr error) noexcept {
+        std::visit(
+            [error = std::move(error)](auto& entry) mutable {
+                using CoreType = std::decay_t<decltype(entry)>;
+                if constexpr (std::is_same_v<CoreType, std::unique_ptr<GenerationCore>> ||
+                              std::is_same_v<CoreType, std::unique_ptr<FlashGenerationCore>>) {
+                    if (entry != nullptr) { entry->arm_next_worker_fault(std::move(error)); }
+                }
+            },
+            core);
+    }
+#endif
 
     EngineOptions options;
     DeviceContext device;
@@ -465,5 +480,16 @@ void Engine::reset_memory_peaks() noexcept {
         },
         impl_->core);
 }
+
+#if defined(NINFER_ENGINE_FAULT_INJECTION)
+void Engine::arm_next_worker_fault(WorkerFault fault) noexcept {
+    if (impl_ == nullptr) { return; }
+    std::exception_ptr error = fault == WorkerFault::Oom
+                                   ? std::make_exception_ptr(std::bad_alloc())
+                                   : std::make_exception_ptr(std::logic_error(
+                                         "test-injected invariant violation"));
+    impl_->arm_next_worker_fault(std::move(error));
+}
+#endif
 
 } // namespace ninfer

@@ -1194,7 +1194,7 @@ void TextContext::gdn_mix(const GdnLayerW& w, Tensor& x, int gidx, Phase ph) {
             state_.recurrent_slot(static_cast<std::uint32_t>(gidx), linear_state_destination_slot_);
         ops::gated_delta_net(q_recurrent, k_recurrent, vv, g, beta, kGdnScale,
                              /*normalize_qk=*/true, work_, recurrent_state_in, recurrent_state_out,
-                             o, s);
+                             o, ctx_.execution_view());
     }
 
     Tensor on = workspace_recipe::gdn_normalized_output<TextConfig>(work_, T).view(
@@ -1411,7 +1411,9 @@ void TextContext::run_flash_next_layers(Tensor& x, Phase ph) {
                 Tensor recurrent_out = state_.recurrent_slot(static_cast<std::uint32_t>(gdn_index),
                                                              linear_state_destination_slot_);
                 ops::flash_next_gdn(block_input, source.projection, conv_in, conv_out, recurrent_in,
-                                    recurrent_out, block_output, work_, stream, bf16_gemm_);
+                                    recurrent_out, block_output, work_,
+                                    DeviceExecutionView{stream, ctx_.multiprocessor_count()},
+                                    bf16_gemm_);
             }
             ++gdn_index;
         }

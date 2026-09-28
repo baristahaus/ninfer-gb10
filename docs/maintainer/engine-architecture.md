@@ -1,5 +1,35 @@
 # NInfer Engine 架构
 
+## English clarification
+
+This document is written in Chinese. It comes from the original NInfer repository (Neroued).
+The Chinese text below is the normative text. This section maps the document in English.
+It is a clarification added on 2026-09-27. It is not normative.
+
+English title: "NInfer Engine Architecture"
+
+This document defines the model instance, execution ownership, and the top-level control plane.
+It explains how weights enter a fixed model implementation.
+It also explains how requests, resources, and outputs commit together.
+It is the maintainer authority for the global architecture and the request lifecycle.
+It is also the authority for the cross-module commit relations.
+
+Top-level sections:
+
+1. Product execution model (产品执行模型): one GPU, one resident model, concurrency 1 to 8, a bounded FIFO queue, no preemption. Includes the Flash-Next family note.
+2. The four execution boundaries (四个执行边界): Gateway, Frontend, Engine, Program.
+3. Single ownership (唯一所有权): each fact has one owner: Scheduler, ResourceManager, Program, Engine lifetime, native parameters.
+4. Request and resource lifecycle (请求与资源生命周期): request states, logical lane states, capacity, continuation and session.
+5. Workers and scheduling (Worker 与调度): the single mutation owner.
+6. The two commit transactions (两类提交事务).
+7. Terminal, cancellation, and failure (Terminal、cancellation 与 failure).
+8. Top-level constraints of physical execution (物理执行的顶层约束).
+9. Core invariants (核心不变量).
+10. Implementation locations and neighboring authorities (实现位置与相邻权威).
+
+§7.4 (Engine-wide failure) is translated into English and maintained in English
+(2026-09-28). All other sections remain normative Chinese.
+
 本文定义 NInfer 的模型实例、执行所有权与顶层控制面，说明权重如何进入固定模型实现，以及请求、
 资源和输出如何共同提交。它是全局架构、请求生命周期和跨模块提交关系的维护者权威。
 
@@ -517,15 +547,30 @@ Cancellation 不修改 in-flight mapping，也不从未完成的 active state �
 
 ### 7.4 Engine-wide failure
 
-以下情况说明共享物理状态已无法安全解释，必须使整个 Engine 失败：
+The following situations indicate that the shared physical state can no longer be
+safely interpreted, and the whole Engine must fail:
 
-- GPU mutation 后既不能 commit 也不能形成稳定 abort；
-- `PendingBatch` membership 或 disposition 不一致；
-- handle owner/generation 不匹配；
-- resource、checkpoint completeness 或 noexcept adoption invariant 被破坏。
+- after a GPU mutation, neither commit nor a stable abort can be formed;
+- `PendingBatch` membership or disposition is inconsistent;
+- handle owner/generation mismatch;
+- a resource, checkpoint completeness, or noexcept adoption invariant is broken.
 
-Cleanup 顺序必须先终止 Program 中未决的 resource/model transaction，再释放 active state，最后清空
-ResourceManager 与完成所有 request response。内部不变量错误不能降级成 cache miss、等待或重试。
+The cleanup order must first terminate the pending resource/model transactions in the
+Program, then release active state, and finally clear the ResourceManager and complete
+every request response. Internal invariant errors must not be downgraded to a cache
+miss, a wait, or a retry.
+
+Worker-layer failure taxonomy:
+
+- Transient allocation failure (`std::bad_alloc`): the worker first synchronizes the
+  compute stream (draining the in-flight round kernels), then runs `fail_all_cleanup`
+  and the ResourceManager clear, and verifies the Program is quiescent (no pending
+  transaction, no active lane continuation, and every continuation and shared-prefix
+  slot Free). When the check passes, the active and materializing requests end with a
+  retryable Overloaded error and the pending FIFO retries, bounded by the
+  consecutive-recovery cap; when it does not, the whole Engine fails.
+- Internal invariant error (`std::logic_error`): the whole Engine fails immediately,
+  without entering the recovery path.
 
 ---
 

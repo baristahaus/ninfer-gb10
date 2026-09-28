@@ -1,5 +1,33 @@
 # ReplaySSM：GDN speculative state 的 raw-input replay
 
+## English clarification
+
+This document is written in Chinese. It comes from the original NInfer repository (Neroued).
+The Chinese text below is the normative text. This section maps the document in English.
+It is a clarification added on 2026-09-27. It is not normative.
+
+English title: "ReplaySSM: raw-input replay of the GDN speculative state"
+
+This document covers ReplaySSM for the Gated DeltaNet (GDN) in short-window speculative decoding.
+Target verify keeps the per-token recurrence.
+It does not store the full recurrent state at every verify position.
+It records only the raw inputs that drive the state transition.
+After the accept length is known, it replays the accepted prefix from the committed checkpoint.
+That replay produces the state for the next round.
+The fold must run the same finite-precision transition as verify.
+It must not compute an equivalent formula in the reals.
+
+Top-level sections:
+
+1. The problem (问题): speculative verify needs a selectable state prefix. The GDN state size, the snapshot baseline, the raw-input design.
+2. The GDN recurrence and the raw transition record (GDN recurrence 与 raw transition record).
+3. Accepted-prefix replay: verify, fold, and the correctness argument.
+4. The numerical core (数值核心): why an algebraically equivalent path still drifts the state.
+5. The finite-window state of the causal convolution (Causal convolution 的有限窗口状态).
+6. Space and compute characteristics (空间与计算特征).
+7. Core conclusions (核心结论).
+8. References (参考资料): the SGLang sources for raw-input replay and the closed-loop fold.
+
 本文讨论 Gated DeltaNet（GDN）在短窗口 speculative decoding 中的 ReplaySSM：
 target verify 保留原有的逐 token recurrence，但不保存每个 verify position 的完整 recurrent
 state；它只记录驱动状态转移的 raw inputs。最终接受长度确定后，再从 committed checkpoint

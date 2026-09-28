@@ -933,6 +933,13 @@ public:
     [[nodiscard]] ReleaseResult release_shared_prefix(SharedPrefixHandle&& shared) noexcept;
     void fail_all_cleanup() noexcept;
 
+    // True after fail_all_cleanup left the physical state fully quiescent: no context or
+    // pending transaction, no active lane continuation, and every continuation and
+    // shared-prefix slot free. The Engine worker's OOM recovery calls this after the
+    // cleanup pair; a false result means the cleanup only partially succeeded and the
+    // Engine must fail rather than retry against a torn state.
+    [[nodiscard]] bool quiescent_after_fail_all_cleanup() const noexcept;
+
     [[nodiscard]] bool isolated_request_feasible(const RequestBasePlan& base) const noexcept;
     [[nodiscard]] runtime::ProgramResourceRevision resource_revision() const noexcept;
     [[nodiscard]] PhysicalUsageSnapshot physical_usage() const noexcept;

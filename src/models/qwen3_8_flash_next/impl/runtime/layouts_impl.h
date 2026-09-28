@@ -95,11 +95,11 @@ TensorLayout add_tensor(LayoutBuilder& builder, DType dtype,
 
 PersistentLayout persistent_layout(const SequencePlanImpl& plan) {
     if (!plan.context_cache.device_state_slots) {
-        throw std::logic_error("Qwen3.6 context cache options are not normalized");
+        throw std::logic_error("Qwen3.8 context cache options are not normalized");
     }
     const std::int32_t state_image_slots = checked_i32(
         static_cast<std::uint64_t>(plan.max_concurrency) + *plan.context_cache.device_state_slots,
-        "Qwen3.6 StateImage slot count exceeds int32");
+        "Qwen3.8 StateImage slot count exceeds int32");
     const auto effective_prefill_chunk =
         static_cast<std::int32_t>(std::min(plan.prefill_chunk, plan.capacity));
     const std::uint32_t logical_pages  = page_count(plan.capacity);
@@ -367,7 +367,7 @@ WorkspacePlan build_workspace_plan(const SequencePlanImpl& plan) {
         if (path == GdnWorkspacePath::Prefill) {
             scratch(layout,
                     ops::gated_delta_net_workspace_capacity_bytes(
-                        TextConfig::gdn_key_heads, TextConfig::gdn_value_heads, true, first, last));
+                        TextConfig::gdn_key_heads, TextConfig::gdn_value_heads, first, last));
         }
         (void)workspace_recipe::gdn_normalized_output<TextConfig>(layout, last);
         scratch(layout, Variant::gdn_output_projection_workspace_capacity_bytes(
@@ -772,7 +772,7 @@ void validate_target_options(DeviceContext& device, const EngineOptions& options
     }
     if (device.compute_capability() != 120 && device.compute_capability() != 121) {
         throw std::invalid_argument(
-            "Qwen3.6 family runtime requires compute capability 12.0 or 12.1 (Blackwell)");
+            "Qwen3.8 family runtime requires compute capability 12.0 or 12.1 (Blackwell)");
     }
 }
 
@@ -899,7 +899,7 @@ make_sequence_planner_impl(DeviceContext& device, const EngineOptions& options,
     if (minimum_pages < maximum_pages) {
         auto adjacent = build_sequence_candidate(inputs, minimum_pages + 1U);
         if (adjacent->device_reservation_bytes <= planner->minimum->device_reservation_bytes) {
-            throw std::logic_error("Qwen3.6 sequence layout has a nonpositive KV capacity stride");
+            throw std::logic_error("Qwen3.8 sequence layout has a nonpositive KV capacity stride");
         }
         planner->curve.bytes_per_additional_main_page_group =
             adjacent->device_reservation_bytes - planner->minimum->device_reservation_bytes;
@@ -911,7 +911,7 @@ std::unique_ptr<SequencePlanImpl> finalize_sequence_plan_impl(
     std::unique_ptr<qwen3_8_flash_next::detail::SequencePlannerImpl<Variant>> planner,
     std::uint32_t main_page_groups) {
     if (planner == nullptr || planner->minimum == nullptr) {
-        throw std::invalid_argument("Qwen3.6 sequence planner is empty");
+        throw std::invalid_argument("Qwen3.8 sequence planner is empty");
     }
     const std::size_t expected = planner->curve.reservation_bytes(main_page_groups);
     std::unique_ptr<SequencePlanImpl> plan;
@@ -922,7 +922,7 @@ std::unique_ptr<SequencePlanImpl> finalize_sequence_plan_impl(
     }
     if (plan->device_reservation_bytes != expected) {
         throw std::logic_error(
-            "Qwen3.6 physical sequence layout is not affine in Main KV page capacity");
+            "Qwen3.8 physical sequence layout is not affine in Main KV page capacity");
     }
     return plan;
 }

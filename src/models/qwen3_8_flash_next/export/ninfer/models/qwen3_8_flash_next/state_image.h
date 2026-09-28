@@ -133,7 +133,7 @@ struct StateImageDeviceSlotView {
 };
 
 /**
- * Caller-backed fixed storage for Qwen3.6 continuation state.
+ * Caller-backed fixed storage for Qwen3.8 continuation state.
  *
  * Every absolute slot contains common GDN/hidden state and, for a DFlash Program, its local cyclic
  * K/V state. The pool owns neither slot roles nor logical checkpoint identity.

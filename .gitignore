@@ -65,3 +65,9 @@ profiles/
 
 # Local GB10 run configuration (tools/gb10/config.example.sh is the template)
 tools/gb10/config.local.sh
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+.beads-credential-key
+.beads/proxieddb/
+*.gate.lock*

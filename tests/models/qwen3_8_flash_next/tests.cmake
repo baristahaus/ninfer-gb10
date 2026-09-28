@@ -5,7 +5,8 @@ ninfer_add_op_test(ninfer_flash_next_moe_test SOURCES ops/test_flash_next_moe.cp
 ninfer_add_op_test(ninfer_flash_next_qsa_test SOURCES ops/test_flash_next_qsa.cpp LIBRARIES ninfer_ops)
 ninfer_add_op_test(ninfer_flash_next_gdn_test SOURCES ops/test_flash_next_gdn.cpp LIBRARIES ninfer_ops)
 ninfer_add_test(ninfer_qwen3_8_flash_next_real_test
-  SOURCES models/qwen3_8_flash_next_125b_a6b/test_engine_real.cpp LIBRARIES ninfer_engine)
+  SOURCES models/qwen3_8_flash_next_125b_a6b/test_engine_real.cpp
+  LIBRARIES ninfer_engine ninfer_artifact)
 set_tests_properties(ninfer_qwen3_8_flash_next_real_test PROPERTIES SKIP_RETURN_CODE 77)
 add_test(NAME ninfer_flash_next_performance_report_test
   COMMAND ${Python3_EXECUTABLE} -m unittest tests/test_flash_next_performance.py)

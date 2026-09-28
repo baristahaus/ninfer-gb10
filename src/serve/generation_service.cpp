@@ -255,6 +255,7 @@ GenerationService::GenerationService(ServeOptions options, StartupObserver start
     engine_options.kv_cache                 = options_.kv_cache;
     engine_options.enable_vision            = options_.enable_vision;
     engine_options.use_cuda_graph           = options_.use_cuda_graph;
+    engine_options.token_logprobs         = options_.token_logprobs;
     engine_options.speculative              = options_.speculative;
     engine_options.context_cache            = options_.context_cache;
     engine_options.context_cost.preset_path = options_.context_cost_presets;
@@ -434,6 +435,12 @@ GenerationOutcome GenerationService::run(PreparedRequest& prepared, const Stream
     outcome.reasoning           = std::move(result.reasoning);
     outcome.prompt_tokens       = static_cast<int>(result.prompt.prompt_tokens);
     outcome.completion_tokens   = static_cast<int>(result.generated_token_ids.size());
+    outcome.token_logprobs = std::move(result.token_logprobs);
+    if (!outcome.token_logprobs.empty()) {
+        // OpenAI's logprobs.content[].token is text, so the response layer needs the tokenizer piece
+        // for every reported token. Only a request that asked for reports pays for this.
+        outcome.token_pieces = engine_->token_pieces(result.generated_token_ids);
+    }
     outcome.reasoning_tokens    = static_cast<int>(result.reasoning_tokens);
     outcome.thinking            = result.thinking;
     outcome.finish_reason       = result.finish_reason;

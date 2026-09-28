@@ -682,7 +682,7 @@ OpenAIChatResponseIdentity identity() {
 int test_aggregate_response() {
     int failures              = 0;
     GenerationOutcome outcome = sample_outcome();
-    Json response             = Json::parse(make_chat_completion_response(identity(), outcome));
+    Json response = Json::parse(make_chat_completion_response(identity(), outcome, 0));
     failures += check(response["choices"][0]["message"]["content"] == "answer" &&
                           response["choices"][0]["message"]["reasoning_content"] == "thought" &&
                           response["choices"][0]["message"]["refusal"].is_null(),
@@ -707,7 +707,7 @@ int test_aggregate_response() {
         .name = "Edit",
         .arguments_json =
             R"({"file_path":"/tmp/probe.cpp","old_string":"old","new_string":"new"})"});
-    response         = Json::parse(make_chat_completion_response(identity(), outcome));
+    response         = Json::parse(make_chat_completion_response(identity(), outcome, 0));
     const Json& call = response["choices"][0]["message"]["tool_calls"][0];
     failures += check(response["choices"][0]["finish_reason"] == "tool_calls" &&
                           response["choices"][0]["message"]["content"].is_null(),
@@ -716,6 +716,36 @@ int test_aggregate_response() {
         call["id"].get<std::string>().starts_with("call_") && call["function"]["name"] == "Edit" &&
             !Json::parse(call["function"]["arguments"].get<std::string>()).contains("replace_all"),
         "OpenAI adapter owns wire tool-call identifiers");
+    return failures;
+}
+
+int test_aggregate_logprobs() {
+    int failures              = 0;
+    GenerationOutcome outcome = sample_outcome();
+    // Three generated tokens: a drawn token with reported alternatives, an Engine-injected control
+    // span, and a token whose piece ends inside a multi-byte character.
+    outcome.token_logprobs = {
+        ninfer::GeneratedTokenLogprob{
+            .token = 11, .logprob = -0.25F, .top = {{11, -0.25F}, {7, -1.5F}}},
+        ninfer::GeneratedTokenLogprob{.token = 5, .injected = true},
+        ninfer::GeneratedTokenLogprob{.token = 12, .logprob = -0.5F},
+    };
+    outcome.token_pieces = {"a", "b", "\xF0\x9F\x98"};
+    const Json logprobs =
+        Json::parse(make_chat_completion_response(identity(), outcome, 1))["choices"][0]["logprobs"];
+    failures += check(logprobs["content"].size() == 3 && logprobs["refusal"].is_null(),
+                      "logprobs reports one entry per generated token");
+    failures += check(logprobs["content"][0]["token"] == "a" &&
+                          logprobs["content"][0]["logprob"] == -0.25 &&
+                          logprobs["content"][0]["top_logprobs"].size() == 1 &&
+                          logprobs["content"][0]["top_logprobs"][0]["token"] == "a",
+                      "reported alternatives truncate to the requested count");
+    failures += check(logprobs["content"][1]["injected"] == true &&
+                          logprobs["content"][1]["logprob"] == 0,
+                      "an injected control span is marked and keeps its position");
+    failures += check(logprobs["content"][2]["bytes"].size() == 3 &&
+                          logprobs["content"][2]["token"].get<std::string>() == "\xEF\xBF\xBD",
+                      "a split character stays exact in bytes and lossy in text");
     return failures;
 }
 
@@ -1091,6 +1121,7 @@ int main() {
     failures += test_reasoning_and_extensions();
     failures += test_stops_and_ranges();
     failures += test_aggregate_response();
+    failures += test_aggregate_logprobs();
     failures += test_stream_response();
     failures += test_stream_observations();
     failures += test_common_objects();

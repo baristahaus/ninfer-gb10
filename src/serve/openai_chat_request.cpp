@@ -112,22 +112,18 @@ void validate_standard_output_controls(const Json& body) {
             }
         }
     }
+    // Per-token probability reporting is answered when the Engine was loaded with --token-logprobs.
+    // The request layer only fixes the shape here: a boolean flag and at most the sampler's own
+    // candidate ceiling of 20 reported alternatives. Whether this server can answer, and whether the
+    // route supports it at all, is decided against the loaded Engine.
     if (body.contains("logprobs") && !body.at("logprobs").is_null()) {
         if (!body.at("logprobs").is_boolean()) {
             bad_request("logprobs must be a boolean", "logprobs");
         }
-        if (body.at("logprobs").get<bool>()) {
-            bad_request("logprobs=true requires per-token log probabilities in the response, which "
-                        "NInfer does not provide",
-                        "logprobs", "logprobs_not_supported");
-        }
     }
     if (const std::optional<int> top_logprobs = optional_int(body, "top_logprobs")) {
-        if (*top_logprobs != 0) {
-            bad_request(
-                "nonzero top_logprobs requires alternative-token probabilities in the response, "
-                "which NInfer does not provide",
-                "top_logprobs", "logprobs_not_supported");
+        if (*top_logprobs < 0 || *top_logprobs > 20) {
+            bad_request("top_logprobs must be in [0,20]", "top_logprobs");
         }
     }
 
@@ -875,6 +871,10 @@ void parse_stream_options(const Json& body, OpenAIChatRequest& output) {
 void parse_response_observations(const Json& body, OpenAIChatRequest& output) {
     output.timings_per_token = get_bool(body, "timings_per_token", false);
     output.return_progress   = get_bool(body, "return_progress", false);
+    // Reporting fields join the other response-shape flags here: they change what the response
+    // carries, not what the Engine generates.
+    output.logprobs     = get_bool(body, "logprobs", false);
+    output.top_logprobs = optional_int(body, "top_logprobs").value_or(0);
 }
 
 void parse_output_limit(const Json& body, const RequestLimits& limits, OpenAIChatRequest& output) {

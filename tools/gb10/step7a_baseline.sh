@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Step 7a quality-gate baseline. For the named artifact, measure:
 #   1. fixed-token perplexity scores (full corpus, default 4096/2048 protocol,
-#      fp8 KV, --token-scores);
+#      fp8 KV, --token-scores), then the same at 65536/32768 for the drift
+#      comparison (PPL_LONG=0 skips it);
 #   2. MTP acceptance from a serving run (16 corpus streams, greedy, 1024
 #      generated tokens each; counters from the server request log);
 #   3. TEB hard-mode tool-call score (--hardmode --seed 42; single trial by
@@ -62,6 +63,22 @@ if [[ ${RESUME:-0} != 1 ]]; then
         --kv-dtype "$PPL_KV" --token-scores --output "$PPL_DIR" \
         >"$DIR/perplexity-stdout.log" 2>"$DIR/perplexity-stderr.log"
     log "phase 1 done: $PPL_DIR"
+
+    # ---- 1b. Long-window token scores for the drift comparison ---------------
+    # Every window starts from empty state, so drift through the FP32 GDN state
+    # can only show within one window: 4096-token windows cannot reveal it.
+    # tools/bench/compare_token_drift.py compares two artifacts' runs.
+    if [[ ${PPL_LONG:-1} == 1 ]]; then
+        PPL_LONG_DIR=$DIR/perplexity-64k
+        mkdir -p "$PPL_LONG_DIR"
+        log "phase 1b: perplexity token scores, 65536/32768 windows"
+        ./build/apps/ninfer-perplexity "$ART" \
+            --corpus eval/corpora/perplexity-1m/manifest.json \
+            --context 65536 --stride 32768 \
+            --kv-dtype "$PPL_KV" --token-scores --output "$PPL_LONG_DIR" \
+            >"$DIR/perplexity-64k-stdout.log" 2>"$DIR/perplexity-64k-stderr.log"
+        log "phase 1b done: $PPL_LONG_DIR"
+    fi
 fi
 
 # ---- 2. Server: MTP acceptance serving run -----------------------------------
@@ -83,8 +100,8 @@ log "phase 2 done: $DIR/acceptance.json"
 # ---- 3. TEB hardmode ----------------------------------------------------------
 # Quality-gate protocol (revised 2026-09-27): fixed-token scores are the primary
 # gate; one TEB hard-mode trial is the structural smoke test. Escalate to more
-# trials only when the single trial lands more than ~2 points below the 89.2
-# reference (5-trial scatter ~±0.9).
+# trials only when the single trial lands more than ~2 points below the BF16
+# artifact's single trial (90/100 on 2026-09-28; one-trial scatter ~±0.9).
 TEB_TRIALS=${TEB_TRIALS:-1}
 log "phase 3: TEB hardmode (--trials $TEB_TRIALS --seed 42; 92 scenarios)"
 command -v tool-eval-bench >/dev/null

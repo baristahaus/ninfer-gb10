@@ -43,7 +43,9 @@ const std::vector<ninfer::TokenId>& canonical_prompt() {
 // precision (FP8 dense) the MTP verify path and the plain decode path are distinct
 // numerical evaluations of the same model, so each is pinned exactly (on the BF16
 // dense artifact the two paths agree, one golden). A new dense-precision recipe must
-// add its goldens here.
+// add its goldens here. The FP8 goldens were recorded from the FP8 engine itself: they pin
+// against regressions and say nothing about quality, which the step 7 perplexity and drift
+// gate measures against the BF16 artifact.
 const std::vector<ninfer::TokenId>& canonical_output(const std::string& recipe,
                                                      bool mtp_path) {
     static const std::vector<ninfer::TokenId> nvfp4{  // BF16 dense: the source checkpoint.

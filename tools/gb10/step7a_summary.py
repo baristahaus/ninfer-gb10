@@ -45,6 +45,16 @@ def main():
     print("\n".join(tail_lines(f"{d}/perplexity-stdout.log", 14)))
     print("```\n")
 
+    long_report = json_load(f"{d}/perplexity-64k/report.json")
+    if long_report and isinstance(long_report.get("overall"), dict):
+        o = long_report["overall"]
+        print("## 1b. Perplexity token scores (65536/32768 windows, for drift)\n")
+        print(f"- overall mean NLL: {o.get('mean_nll')}")
+        print(f"- overall perplexity: {o.get('perplexity')}")
+        print(f"- scored tokens: {o.get('scored_tokens')}")
+        print("- compare two artifacts with `tools/bench/compare_token_drift.py "
+              "<baseline>/perplexity-64k <candidate>/perplexity-64k`\n")
+
     print("## 2. MTP acceptance (serving run, greedy, 1024 tokens/stream)\n")
     acc = json_load(f"{d}/acceptance.json")
     if acc:

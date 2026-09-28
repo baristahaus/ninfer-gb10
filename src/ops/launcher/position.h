@@ -9,6 +9,7 @@
 namespace ninfer::ops::detail {
 
 void fill_i32_positions_launch(Tensor& positions, std::int32_t start, cudaStream_t stream);
+void fill_i32_launch(Tensor& destination, std::int32_t value, cudaStream_t stream);
 void offset_i32_positions_launch(const Tensor& source, const Tensor& delta, Tensor& destination,
                                  cudaStream_t stream);
 void offset_i32_positions_block_launch(const Tensor& source, const Tensor& delta,

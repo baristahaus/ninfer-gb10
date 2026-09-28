@@ -14,6 +14,14 @@ void fill_i32_positions_launch(Tensor& positions, std::int32_t start, cudaStream
     CUDA_CHECK(cudaGetLastError());
 }
 
+void fill_i32_launch(Tensor& destination, std::int32_t value, cudaStream_t stream) {
+    constexpr int block = 256;
+    const int grid      = div_up(destination.ne[0], block);
+    fill_i32_kernel<<<grid, block, 0, stream>>>(static_cast<std::int32_t*>(destination.data),
+                                                destination.ne[0], value);
+    CUDA_CHECK(cudaGetLastError());
+}
+
 void offset_i32_positions_launch(const Tensor& source, const Tensor& delta, Tensor& destination,
                                  cudaStream_t stream) {
     offset_i32_positions_block_launch(source, delta, destination, 256, stream);

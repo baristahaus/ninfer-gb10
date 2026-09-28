@@ -31,6 +31,42 @@ int fill_case(std::int32_t count, std::int32_t start) {
     return failures;
 }
 
+// The fill value travels in the launch arguments: a captured fill must replay exactly with no
+// host source alive, the property the Flash-Next decode graphs rely on.
+int constant_fill_case(std::int32_t count, std::int32_t value, bool captured) {
+    const std::vector<std::int32_t> expected(static_cast<std::size_t>(count), value);
+    GuardedDeviceBuffer output(static_cast<std::size_t>(count) * sizeof(std::int32_t));
+    output.fill(0xcd);
+    Tensor output_tensor(output.data(), DType::I32, {count});
+    if (!captured) {
+        ops::fill_i32(output_tensor, value, nullptr);
+        cuda_synchronize();
+    } else {
+        cudaStream_t stream;
+        CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+        cudaGraph_t graph;
+        cudaGraphExec_t executable;
+        CUDA_CHECK(cudaStreamBeginCapture(stream, cudaStreamCaptureModeThreadLocal));
+        ops::fill_i32(output_tensor, value, stream);
+        CUDA_CHECK(cudaStreamEndCapture(stream, &graph));
+        CUDA_CHECK(cudaGraphInstantiate(&executable, graph, nullptr, nullptr, 0));
+        for (int replay = 0; replay < 2; ++replay) {
+            CUDA_CHECK(cudaMemsetAsync(output.data(), 0xcd, output.bytes(), stream));
+            CUDA_CHECK(cudaGraphLaunch(executable, stream));
+        }
+        CUDA_CHECK(cudaStreamSynchronize(stream));
+        CUDA_CHECK(cudaGraphExecDestroy(executable));
+        CUDA_CHECK(cudaGraphDestroy(graph));
+        CUDA_CHECK(cudaStreamDestroy(stream));
+    }
+    const std::string label = "fill_i32 T=" + std::to_string(count) +
+                              " value=" + std::to_string(value) + (captured ? " graph" : "");
+    int failures = verify_exact(
+        label.c_str(), from_device<std::int32_t>(output.data(), expected.size()), expected);
+    failures += output.verify_guards(label.c_str());
+    return failures;
+}
+
 int offset_case(std::int32_t count, std::int32_t delta_value, bool in_place) {
     std::vector<std::int32_t> source(static_cast<std::size_t>(count));
     std::vector<std::int32_t> expected(static_cast<std::size_t>(count));
@@ -149,6 +185,10 @@ int main() {
     failures += fill_case(1, 0);
     failures += fill_case(6, 262144);
     failures += fill_case(1024, 131072);
+    failures += constant_fill_case(1, 1, false);
+    failures += constant_fill_case(8, 1, true);
+    failures += constant_fill_case(1000, -5, false);
+    failures += constant_fill_case(8192, 8192, true);
     failures += offset_case(1, -17, false);
     failures += offset_case(6, 31, true);
     failures += offset_case(1024, -257, false);

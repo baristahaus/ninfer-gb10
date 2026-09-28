@@ -27,14 +27,17 @@ constexpr U projection_bytes(U rows, U columns, bool fp8) {
     return fp8 ? rows * columns + 2 * rows : 2 * rows * columns;
 }
 
-constexpr Work moe(U t, bool nvfp4) {
+constexpr Work moe(U t, bool nvfp4, bool fp8_shared_gate_up, bool fp8_shared_down) {
     constexpr U expert        = 3 * 2560 * 640;
     constexpr U shared_router = expert + 2560 * (512 + 1);
     // Unique experts are data dependent: all tokens may share ten, or use disjoint top-10s.
     // NVFP4 has one code nibble and one E4M3 scale per 16 values, plus four FP32
-    // gate-up/down weight/input divisors per expert. BF16 has no such scale planes.
+    // gate-up/down weight/input divisors per expert. BF16 has no such scale planes. The
+    // shared expert is BF16 or row-scaled FP8; the router and shared gate stay BF16.
     const U expert_bytes = nvfp4 ? expert / 2 + expert / 16 + 16 : 2 * expert;
-    const U common       = 2 * shared_router + 2 * 2560 * t * 2;
+    const U shared_bytes = projection_bytes(1280, 2560, fp8_shared_gate_up) +
+                           projection_bytes(2560, 640, fp8_shared_down) + 2 * 2560 * (512 + 1);
+    const U common       = shared_bytes + 2 * 2560 * t * 2;
     const U routed_flops = 2 * expert * 10 * t;
     return {common + 10 * expert_bytes, common + std::min<U>(512, 10 * t) * expert_bytes,
             2 * shared_router * t + (nvfp4 ? 0 : routed_flops), nvfp4 ? routed_flops : 0, 0};
@@ -69,10 +72,10 @@ constexpr Work qsa(U t, bool reuse, bool fp8_query_gate_output = false) {
     return dense_stored(parameters, weight_bytes, t, 4 * 2560 * t);
 }
 
-constexpr Work hyper(U t, bool injection, bool combine, bool fp8_down = false) {
+constexpr Work hyper(U t, bool injection, bool combine, bool fp8_down, bool fp8_up) {
     const U parameters   = 2 * 10240 * 320 + (injection ? 4 * 10240 : 0);
-    const U weight_bytes = projection_bytes(320, 10240, fp8_down) + 2 * 10240 * 320 +
-                           (injection ? 2 * 4 * 10240 : 0);
+    const U weight_bytes = projection_bytes(320, 10240, fp8_down) +
+                           projection_bytes(10240, 320, fp8_up) + (injection ? 2 * 4 * 10240 : 0);
     return dense_stored(
         parameters, weight_bytes, t,
         2 * t * (10240 + 2560 + (injection ? 4 : 0) + (combine ? 10240 + 2560 + 4 : 0)));

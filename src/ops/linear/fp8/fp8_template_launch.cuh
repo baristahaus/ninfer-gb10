@@ -14,8 +14,8 @@ template <class Schedule, class Output, class Epilogue, class Rows = Fp8Identity
 void launch_fp8_a16_gemv(const Fp8A16Operands& p, Output output, Epilogue epilogue,
                          cudaStream_t stream, Rows rows = {}) {
     validate_fp8_operands<Schedule>(p);
-    if (p.tokens != 1 || p.rows % Schedule::kBlockRows || p.k % (32 * Schedule::kValuesPerLane))
-        throw std::invalid_argument("FP8 GEMV requires T=1 and complete row/K tiles");
+    if (p.tokens != 1 || p.rows % Schedule::kBlockRows || p.k % Schedule::kValuesPerLane)
+        throw std::invalid_argument("FP8 GEMV requires T=1, complete row tiles and whole K packs");
     fp8_a16_gemv_kernel<Schedule><<<p.rows / Schedule::kBlockRows, Schedule::kThreads, 0, stream>>>(
         p.x, p.codes, p.scales, output, epilogue, rows, p.rows, p.k);
     CUDA_CHECK(cudaGetLastError());
@@ -71,10 +71,10 @@ void launch_fp8_a16_sliced_k_mma(const Fp8A16Operands& p, Output output, Epilogu
     constexpr int capacity =
         Schedule::kTokenCapacity ? Schedule::kTokenCapacity : Schedule::kBlockTokens;
     static_assert(capacity > 0 && capacity <= Schedule::kBlockTokens);
-    if (p.rows % Schedule::kBlockRows || p.k % Schedule::kBlockK ||
+    if (p.rows % Schedule::kBlockRows || p.k % Schedule::kTileKPerWarp ||
         (Schedule::kExactTokens && p.tokens != capacity))
         throw std::invalid_argument(
-            "FP8 sliced-K requires complete row/K tiles and matching tokens");
+            "FP8 sliced-K requires complete row tiles, whole warp K tiles and matching tokens");
     constexpr auto kernel = fp8_a16_sliced_k_mma_kernel<Schedule, Output, Epilogue, Rows>;
     const int bytes       = fp8_prepare_shared<Schedule::kSharedBytes, kernel>();
     for_each_token_slice(p.tokens, capacity, [&](int offset, int count) {

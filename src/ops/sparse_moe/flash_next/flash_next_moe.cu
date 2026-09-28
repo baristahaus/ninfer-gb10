@@ -4,6 +4,7 @@
 
 #include "core/device.h"
 #include "ninfer/ops/linear.h"
+#include "ninfer/ops/linear_swiglu.h"
 #include "ninfer/ops/silu_mul.h"
 #include "ops/common/device_info.h"
 #include "ops/linear/bf16/flash_next/bf16_config.h"
@@ -21,6 +22,7 @@
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
+#include <variant>
 
 namespace ninfer::ops {
 namespace {
@@ -728,9 +730,13 @@ std::size_t flash_next_moe_workspace_capacity_bytes(std::int32_t tokens) {
 void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Tensor& destination,
                     WorkspaceArena& workspace, cudaStream_t stream, Bf16GemmContext* bf16_gemm,
                     bool wide_decode_gate) {
-    NINFER_PERF_SCOPE(weights.routed_gate_up.qtype == QType::NVFP4 ? "moe.nvfp4" : "moe.bf16",
-                       input.ne[1], 0, 0,
-                       flash_next_work::moe(input.ne[1], weights.routed_gate_up.qtype == QType::NVFP4));
+    const auto* shared_pair   = std::get_if<FlashNextSharedGateUpPair>(&weights.shared_gate_up);
+    const auto* shared_packed = std::get_if<Weight>(&weights.shared_gate_up);
+    NINFER_PERF_SCOPE(
+        weights.routed_gate_up.qtype == QType::NVFP4 ? "moe.nvfp4" : "moe.bf16", input.ne[1], 0, 0,
+        flash_next_work::moe(input.ne[1], weights.routed_gate_up.qtype == QType::NVFP4,
+                             shared_packed != nullptr,
+                             weights.shared_down.qtype == QType::FP8_E4M3FN_ROW_BF16));
 
     const int tokens = input.ne[1];
     // One resident persistent wave sized for the active device, not the
@@ -742,11 +748,25 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
         tokens <= 0 || destination.dtype != DType::BF16 || !destination.is_contiguous() ||
         destination.ne[0] != kHidden || destination.ne[1] != tokens ||
         weights.router.n != kExperts || weights.router.k != kHidden ||
-        weights.shared_gate.n != kIntermediate || weights.shared_gate.k != kHidden ||
-        weights.shared_up.n != kIntermediate || weights.shared_up.k != kHidden ||
         weights.shared_down.n != kHidden || weights.shared_down.k != kIntermediate ||
         weights.shared_scale.n != 1 || weights.shared_scale.k != kHidden) {
         throw std::invalid_argument("flash_next_moe: invalid exact geometry");
+    }
+    const auto bf16 = [](const Weight& weight, int rows) {
+        return weight.qtype == QType::BF16 && weight.layout == QuantLayout::Contiguous &&
+               weight.n == rows && weight.k == kHidden;
+    };
+    const auto fp8 = [](const Weight& weight) {
+        return weight.qtype == QType::FP8_E4M3FN_ROW_BF16 && weight.layout == QuantLayout::RowScale;
+    };
+    if ((shared_pair != nullptr &&
+         (!bf16(shared_pair->gate, kIntermediate) || !bf16(shared_pair->up, kIntermediate))) ||
+        (shared_packed != nullptr &&
+         (!fp8(*shared_packed) || shared_packed->n != 2 * kIntermediate ||
+          shared_packed->k != kHidden)) ||
+        (!fp8(weights.shared_down) && (weights.shared_down.qtype != QType::BF16 ||
+                                       weights.shared_down.layout != QuantLayout::Contiguous))) {
+        throw std::invalid_argument("flash_next_moe: unsupported shared-expert representation");
     }
     require_bank(weights.routed_gate_up, 2 * kIntermediate, kHidden,
                  "flash_next_moe: invalid routed gate/up bank");
@@ -764,14 +784,16 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
         static_cast<const __nv_bfloat16*>(weights.shared_scale.qdata), static_cast<int*>(ids.data),
         static_cast<float*>(alpha.data), static_cast<float*>(shared_alpha.data), tokens);
     Tensor shared_activation = workspace.alloc(DType::BF16, {kIntermediate, tokens});
-    if (tokens == 1) {
-        detail::flash_next::launch_bf16_shared_swiglu_decode(input, weights.shared_gate, weights.shared_up,
-                                                 shared_activation, stream);
+    if (shared_packed != nullptr) {
+        linear_swiglu(input, *shared_packed, shared_activation, workspace, stream);
+    } else if (tokens == 1) {
+        detail::flash_next::launch_bf16_shared_swiglu_decode(
+            input, shared_pair->gate, shared_pair->up, shared_activation, stream);
     } else {
         Tensor shared_gate = workspace.alloc(DType::BF16, {kIntermediate, tokens});
         Tensor shared_up   = workspace.alloc(DType::BF16, {kIntermediate, tokens});
-        linear(input, weights.shared_gate, shared_gate, stream, bf16_gemm);
-        linear(input, weights.shared_up, shared_up, stream, bf16_gemm);
+        linear(input, shared_pair->gate, shared_gate, stream, bf16_gemm);
+        linear(input, shared_pair->up, shared_up, stream, bf16_gemm);
         silu_mul(shared_gate, shared_up, shared_activation, stream);
     }
     linear(shared_activation, weights.shared_down, destination, stream, bf16_gemm);

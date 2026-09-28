@@ -113,6 +113,17 @@ OrdinaryDecodeState::OrdinaryDecodeState(DeviceSpan backing,
     sampled_tokens = Tensor(static_cast<unsigned char*>(egress.data) +
                                 offsetof(OrdinaryDecodeEgress, sampled_tokens),
                             DType::I32, {count});
+    token_logprobs = Tensor(static_cast<unsigned char*>(egress.data) +
+                                offsetof(OrdinaryDecodeEgress, token_logprobs),
+                            DType::FP32, {count});
+    top_ids        = Tensor(static_cast<unsigned char*>(egress.data) +
+                            offsetof(OrdinaryDecodeEgress, top_ids),
+                            DType::I32,
+                            {ops::kMaxReportedLogprobRanks, count});
+    top_logprobs   = Tensor(static_cast<unsigned char*>(egress.data) +
+                            offsetof(OrdinaryDecodeEgress, top_logprobs),
+                            DType::FP32,
+                            {ops::kMaxReportedLogprobRanks, count});
     logits         = layout.logits.bind(backing);
     hidden         = layout.hidden.bind(backing);
 }
@@ -306,6 +317,15 @@ MtpDecodeState::MtpDecodeState(DeviceSpan backing, const MtpDecodeStateLayout& l
     next_drafts =
         egress_tensor(offsetof(MtpDecodeEgress, next_drafts), DType::I32, {batch, drafts});
     next_extents     = egress_tensor(offsetof(MtpDecodeEgress, next_extents), DType::I32, {batch});
+    target_sampling = reinterpret_cast<const ops::SamplingConfig*>(
+        static_cast<const unsigned char*>(ingress.data) +
+        offsetof(MtpDecodeIngress, target_sampling));
+    token_logprobs =
+        egress_tensor(offsetof(MtpDecodeEgress, token_logprobs), DType::FP32, {batch * width});
+    top_ids        = egress_tensor(offsetof(MtpDecodeEgress, top_ids), DType::I32,
+                            {ops::kMaxReportedLogprobRanks, batch * width});
+    top_logprobs   = egress_tensor(offsetof(MtpDecodeEgress, top_logprobs), DType::FP32,
+                            {ops::kMaxReportedLogprobRanks, batch * width});
     verify_ids       = layout.verify_ids.bind(backing);
     target_positions = layout.target_positions.bind(backing);
     target_argmax    = layout.target_argmax.bind(backing);

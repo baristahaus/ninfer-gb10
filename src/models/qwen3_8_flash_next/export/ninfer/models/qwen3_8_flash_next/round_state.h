@@ -3,6 +3,7 @@
 #include "core/layout.h"
 #include "core/tensor.h"
 #include "ninfer/ops/sampling.h"
+#include "ninfer/ops/target_logprobs.h"
 #include "ninfer/types.h"
 
 #include <array>
@@ -43,6 +44,12 @@ struct OrdinaryDecodeIngress {
 
 struct OrdinaryDecodeEgress {
     std::array<TokenId, kMaximumConcurrency> sampled_tokens{};
+    // Target-model probability report for each sampled token, indexed exactly like sampled_tokens.
+    // Ordinary decode has one column per lane, so the ingress sampling array is already the
+    // per-column array the probability Op needs.
+    std::array<float, kMaximumConcurrency> token_logprobs{};
+    std::array<std::int32_t, ops::kMaxReportedLogprobRanks * kMaximumConcurrency> top_ids{};
+    std::array<float, ops::kMaxReportedLogprobRanks * kMaximumConcurrency> top_logprobs{};
 };
 
 // Stable pinned/device transfer formats for concurrent MTP decode. The arrays use the maximum
@@ -61,6 +68,10 @@ struct MtpDecodeIngress {
     std::array<std::int32_t, kMaximumConcurrency> state_destination_slots{};
     std::array<std::int32_t, kMaximumConcurrency> rope_deltas{};
     std::array<ops::SamplingConfig, kMaximumConcurrency> sampling{};
+    // The verify and probability routes address columns, not lanes: column w of lane b is
+    // b * width + w. The host writes each lane's sampling config once per verify column.
+    std::array<ops::SamplingConfig, kMaximumConcurrency * kMtpDecodeMaximumWidth>
+        target_sampling{};
 };
 
 struct MtpDecodeEgress {
@@ -70,6 +81,16 @@ struct MtpDecodeEgress {
     // Step-major: all B rows for proposal step 0, followed by all B rows for step 1, etc.
     std::array<TokenId, kMaximumConcurrency * kMtpDecodeMaximumDrafts> next_drafts{};
     std::array<std::int32_t, kMaximumConcurrency> next_extents{};
+    // Probability report for every verify column, indexed exactly like licensed_tokens; ranks of
+    // column g occupy [g*ranks, (g+1)*ranks). Filled only when the engine was loaded with
+    // EngineOptions::token_logprobs.
+    std::array<float, kMaximumConcurrency * kMtpDecodeMaximumWidth> token_logprobs{};
+    std::array<std::int32_t,
+               ops::kMaxReportedLogprobRanks * kMaximumConcurrency * kMtpDecodeMaximumWidth>
+        top_ids{};
+    std::array<float,
+               ops::kMaxReportedLogprobRanks * kMaximumConcurrency * kMtpDecodeMaximumWidth>
+        top_logprobs{};
 };
 
 // Stable pinned/device transfer formats for one exact-B DFlash transaction. The proposal is
@@ -182,6 +203,9 @@ struct OrdinaryDecodeState {
     Tensor state_destination_slots;
     const ops::SamplingConfig* sampling = nullptr;
     Tensor sampled_tokens;
+    Tensor token_logprobs;
+    Tensor top_ids;
+    Tensor top_logprobs;
     Tensor logits;
     Tensor hidden;
 
@@ -236,6 +260,12 @@ struct MtpDecodeState {
     Tensor accepted_drafts;
     Tensor next_drafts;
     Tensor next_extents;
+    // Per-verify-column sampling configs and the probability report; column w of lane b is
+    // b * width + w for every one of these.
+    const ops::SamplingConfig* target_sampling = nullptr;
+    Tensor token_logprobs;
+    Tensor top_ids;
+    Tensor top_logprobs;
     Tensor verify_ids;
     Tensor target_positions;
     Tensor target_argmax;
@@ -309,6 +339,10 @@ struct RoundState {
     std::optional<DFlashPrefillState> dflash_prefill;
     std::optional<MtpDecodeState> mtp_decode;
     std::optional<DFlashDecodeState> dflash_decode;
+    // Selected once at load from EngineOptions::token_logprobs. It is read while a decode graph is
+    // captured, so the probability report is either present in a captured round or absent; a round
+    // never branches on it.
+    bool report_token_logprobs = false;
 
     RoundState() = default;
     RoundState(DeviceSpan backing, const RoundStateLayout& layout);

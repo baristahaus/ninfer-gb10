@@ -153,6 +153,11 @@ struct EngineOptions {
     std::filesystem::path artifact_path;
     std::filesystem::path chat_template_path;
     EnginePurpose purpose              = EnginePurpose::Generation;
+    // Report a target-model log probability for every published generated token. Fixed at startup
+    // because the probability is produced inside the captured decode round; a request that asks for
+    // probabilities against an engine loaded without this capability is rejected rather than
+    // answered with placeholders.
+    bool token_logprobs = false;
     int device                         = 0;
     std::uint32_t max_context          = 2048; // Logical ceiling of one request or score window.
     KvCapacityPolicy kv_capacity       = KvCapacityPolicy::explicit_capacity(2048);
@@ -564,10 +569,32 @@ enum class FinishReason : std::uint8_t {
     Cancelled,
 };
 
+// One reported vocabulary entry: a token and its natural-log probability under the target model,
+// scaled by the request temperature and after its presence/frequency penalties.
+struct TokenLogprob {
+    TokenId token   = 0;
+    float logprob   = 0.0F;
+};
+
+// The probability report for one published generated token. `top` holds the leading vocabulary
+// ranks for the same position in descending order and may or may not contain `token`; it is empty
+// when the request asked for no alternatives. Entries are produced for committed generated tokens
+// only, never for prompt, control or withheld tokens.
+struct GeneratedTokenLogprob {
+    TokenId token                          = 0;
+    float logprob                          = 0.0F;
+    std::vector<TokenLogprob> top;
+};
+
 struct OutputDelta {
     std::size_t tool_call_progress_bytes = 0;
     OutputChannel channel = OutputChannel::Content;
     std::string text;
+    // Reports for the generated tokens this delta publishes, in sequence order. Empty when the
+    // engine was loaded without EngineOptions::token_logprobs or when the delta carries no
+    // generated token. Concatenating each entry's detokenized text need not reproduce `text`, which
+    // the frontend may clean.
+    std::vector<GeneratedTokenLogprob> tokens;
 };
 
 // Exact prompt accounting selected at admission. Streaming consumers receive this once before any
@@ -796,6 +823,11 @@ struct MaterializationDiagnostics {
 struct GenerationResult {
     PromptSummary prompt;
     std::vector<TokenId> generated_token_ids;
+    // Probability reports for the published generated tokens, in sequence order. Present only when
+    // the engine was loaded with EngineOptions::token_logprobs; a token the frontend published no
+    // target-model logits for contributes no entry, so this may be shorter than
+    // generated_token_ids.
+    std::vector<GeneratedTokenLogprob> token_logprobs;
     std::string content;
     std::string reasoning;
     std::vector<GeneratedToolCall> tool_calls;

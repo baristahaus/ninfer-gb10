@@ -84,6 +84,8 @@ struct SequencePlanningInputs {
     bool causal_scoring = false;
     int device          = 0;
     ContextCacheOptions context_cache;
+    // Report a target-model log probability for every published generated token. Fixed at load.
+    bool token_logprobs = false;
 };
 
 } // namespace ninfer::models::qwen3_8_flash_next::detail::NINFER_QWEN38_FLASH_NEXT_RUNTIME_NS
@@ -107,6 +109,7 @@ struct SequencePlanImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT> {
     bool causal_scoring = false;
     int device          = 0;
     ContextCacheOptions context_cache;
+    bool token_logprobs = false;
     NINFER_QWEN38_FLASH_NEXT_RUNTIME_NS::PersistentLayout persistent;
     NINFER_QWEN38_FLASH_NEXT_RUNTIME_NS::WorkspacePlan workspace;
     std::size_t graph_allowance_bytes    = 0;

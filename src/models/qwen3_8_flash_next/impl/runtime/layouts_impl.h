@@ -799,6 +799,7 @@ std::unique_ptr<SequencePlanImpl> build_sequence_candidate(const SequencePlannin
     impl->device              = inputs.device;
     impl->context_cache       = inputs.context_cache;
     impl->kv_storage          = inputs.kv_storage;
+    impl->token_logprobs      = inputs.token_logprobs;
     impl->persistent          = persistent_layout(*impl);
     impl->workspace           = build_workspace_plan(*impl);
     if (impl->use_cuda_graph) {
@@ -876,6 +877,7 @@ make_sequence_planner_impl(DeviceContext& device, const EngineOptions& options,
         .causal_scoring = options.purpose == EnginePurpose::CausalScoring,
         .device         = options.device,
         .context_cache  = options.context_cache,
+        .token_logprobs = options.token_logprobs,
     };
     const std::uint32_t logical_pages = page_count(inputs.capacity);
     const std::uint32_t minimum_pages = std::max(logical_pages, inputs.max_concurrency);

@@ -950,6 +950,7 @@ ProgramImplCore::ProgramImplCore(const LoadedModelData& model_in, const Sequence
     }
 
     io = qwen3_8_flash_next::RoundState(backing, plan.persistent.round);
+    io.report_token_logprobs = plan.token_logprobs;
     if (io.mtp.has_value() != (speculative_backend == SpeculativeBackend::Mtp)) {
         throw std::logic_error("round-state MTP extension does not match the sequence plan");
     }
@@ -12081,6 +12082,20 @@ ProgramImplCore::decode_ordinary_batch(std::span<const std::uint32_t> lanes,
         return runtime::BatchedGeneratedRound{
             .tokens =
                 std::span<const TokenId>(ordinary_host_egress->sampled_tokens.data(), lanes.size()),
+            // Layout matches tokens: report i belongs to lane i, and lane i's alternative ranks
+            // occupy [i*ranks, (i+1)*ranks). Empty unless the engine loaded the capability.
+            .scores =
+                io.report_token_logprobs
+                    ? runtime::RoundTokenScores{
+                          std::span<const float>(ordinary_host_egress->token_logprobs.data(),
+                                                 lanes.size()),
+                          std::span<const std::int32_t>(
+                              ordinary_host_egress->top_ids.data(),
+                              lanes.size() * ops::kMaxReportedLogprobRanks),
+                          std::span<const float>(ordinary_host_egress->top_logprobs.data(),
+                                                 lanes.size() * ops::kMaxReportedLogprobRanks),
+                          ops::kMaxReportedLogprobRanks}
+                    : runtime::RoundTokenScores{},
             .timing = timing.finish(),
         };
     } catch (...) {

@@ -68,6 +68,19 @@ auto ordinary_batch_body(OrdinaryBatchContext& state, std::int32_t batch_size,
         }
         ops::sample(logits, sampled, TextConfig::token_domain, ordinary.sampling, cache_positions,
                     ops::kSamplePurposeDecode, state.execution.work, state.execution.device.stream);
+        // Ordinary decode has one column per lane, so the per-lane sampling configs are already the
+        // per-column array the probability Op needs, and no round-local prefix exists to reconcile:
+        // committed token counts are exactly the prefix this column saw.
+        if (state.execution.io.report_token_logprobs) {
+            Tensor chosen              = ordinary.token_logprobs.slice(0, 0, batch_size);
+            Tensor reported_ids        = ordinary.top_ids.slice(1, 0, batch_size);
+            Tensor reported_logprobs   = ordinary.top_logprobs.slice(1, 0, batch_size);
+            ops::TargetLogprobOptions logprob_options;
+            logprob_options.configs = ordinary.sampling;
+            ops::target_logprobs(logits, sampled, TextConfig::token_domain, logprob_options, chosen,
+                                 &reported_ids, &reported_logprobs,
+                                 state.execution.device.stream);
+        }
         CUDA_CHECK(cudaMemcpyAsync(&state.host_egress, ordinary.egress.data,
                                    sizeof(qwen3_8_flash_next::OrdinaryDecodeEgress),
                                    cudaMemcpyDeviceToHost, state.execution.device.stream));

@@ -147,15 +147,17 @@ low/high image detail, web search, moderation, low/high verbosity, stored Chat C
 non-empty legacy `functions`. Each capability rejection identifies the affected field and the
 guarantee NInfer cannot provide.
 
-JSON `response_format` is accepted: the JSON instruction and any schema are folded into a leading
-prompt block, and the returned content is tolerant-cleaned: a complete JSON object or array is
+JSON `response_format` is accepted: the JSON instruction and any schema are appended as a
+trailing text part of the final turn (the last user message, or the trailing tool result of an
+agentic loop), so a directive change between turns re-prefills only the conversation tail, and the
+returned content is tolerant-cleaned: a complete JSON object or array is
 returned as generated without surrounding whitespace; otherwise closed `<think>` blocks, a markdown
 fence, and surrounding prose are dropped to the first well-formed object or array, and content
 with none is returned unchanged. A streamed JSON answer is withheld until generation ends and then
 sent as one cleaned content delta. NInfer does not apply constrained decoding, so schema
 conformance is not guaranteed. `tool_choice:"required"` is
-likewise prompt-guided: a directive forces a tool call and the request's tools stay enabled, but
-the model is not constrained to one.
+likewise prompt-guided: a directive appended to the final turn forces a tool call and the
+request's tools stay enabled, but the model is not constrained to one.
 
 Known constrained-decoding aliases (`grammar`, `structured_outputs`, `guided_json`, `guided_regex`,
 `guided_choice`, and `guided_grammar`) receive the same explicit rejection instead of being treated
@@ -548,8 +550,8 @@ when the history contains earlier calls.
 
 NInfer does not execute functions or enforce JSON Schema through constrained decoding, so
 `strict:true`, named tool choice, hosted tools, remote MCP tools, and custom free-form
-tools are rejected. `tool_choice:"required"` is accepted as a prompt-level directive that forces
-a tool call. Deferred loading, output schemas, and caller restrictions that exclude direct
+tools are rejected. `tool_choice:"required"` is accepted as a prompt-level directive appended to
+the final turn that forces a tool call. Deferred loading, output schemas, and caller restrictions that exclude direct
 invocation are also rejected because their semantics cannot be honored.
 
 ### Response object and usage

@@ -716,8 +716,8 @@ void parse_tool_choice(const Json& body, GenerationRequest& output) {
                              "request",
                             "tool_choice", "tool_choice_not_supported");
             }
-            // Prompt-guided: a folded system directive forces a tool call (NInfer has no
-            // constrained decoding); see to_prompt_input.
+            // Prompt-guided: a directive appended to the final turn forces a tool call (NInfer
+            // has no constrained decoding); see to_prompt_input.
             output.tool_choice.mode = ToolChoiceMode::Required;
         } else {
             bad_request("tool_choice must be 'auto', 'none', 'required', or a function choice",

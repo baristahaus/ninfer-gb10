@@ -118,6 +118,9 @@ def cmd_bench(paths: list[Path]) -> None:
         spec = config.get("speculative_backend", "?")
         name = spec if spec == "none" else f"{spec} K={config.get('draft_tokens')}"
         name += f", KV {config.get('kv_cache')}"
+        sampling = config.get("sampling", "greedy")
+        if sampling != "greedy":
+            name += f", {sampling}"
         for test in report.get("tests", []):
             speculative = test.get("speculative") or {}
             accepted = speculative.get("acceptance_length") if speculative.get("enabled") else None
@@ -157,15 +160,100 @@ def cmd_serving(path: Path) -> None:
         print(f"| {case} | {len(group)} | " + " | ".join("—" if c is None else f"{c:,.3f}" for c in cells) + " |")
 
 
+def gpu_samples(path: Path) -> list[dict]:
+    """Rows of `nvidia-smi --query-gpu=timestamp,utilization.gpu,power.draw,clocks.sm,
+    temperature.gpu --format=csv,noheader,nounits`; unreadable fields ([N/A]) become None."""
+    def number(text: str):
+        try:
+            return float(text)
+        except ValueError:
+            return None
+    rows = []
+    for line in path.read_text(errors="replace").splitlines() if path.exists() else []:
+        fields = [field.strip() for field in line.split(",")]
+        if len(fields) == 5:
+            rows.append(dict(zip(("util", "power", "clock", "temp"), map(number, fields[1:]))))
+    return rows
+
+
+def active_window(rows: list[dict], threshold: float = 50.0) -> list[dict]:
+    busy = [index for index, row in enumerate(rows)
+            if row["util"] is not None and row["util"] >= threshold]
+    return rows[busy[0]:busy[-1] + 1] if busy else []
+
+
+def probe_peak_gbps(path: Path | None):
+    if path is None or not path.exists():
+        return None
+    match = re.search(r"Best sustained bus rate:\s*([0-9.]+) GB/s", path.read_text(errors="replace"))
+    return float(match.group(1)) if match else None
+
+
+def cmd_gpu(runs: list[str], bytes_path: Path | None, bandwidth_path: Path | None) -> None:
+    parts = json.loads(bytes_path.read_text()) if bytes_path and bytes_path.exists() else None
+    peak = probe_peak_gbps(bandwidth_path)
+    if parts:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from decode_bytes import bytes_per_token
+    print("| Run | Samples | GPU util % mean | Power W mean / p95 / peak | SM clock MHz mean / min "
+          "| Temp °C max | Decode tok/s | J / output token | Modeled GB / token "
+          "| Effective GB/s (% of probe) |")
+    print("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
+    for run in runs:
+        label, _, paths = run.partition("@")
+        csv_path, _, bench_path = paths.partition(":")
+        rows = gpu_samples(Path(csv_path))
+        window = rows if label == "idle" else active_window(rows)
+        power = sorted(row["power"] for row in window if row["power"] is not None)
+        clocks = [row["clock"] for row in window if row["clock"] is not None]
+        temps = [row["temp"] for row in window if row["temp"] is not None]
+        decode, per_token = None, None
+        if bench_path and Path(bench_path).exists():
+            report = json.loads(Path(bench_path).read_text())
+            tests = report.get("tests", [])
+            decode = tests[0].get("decode_output_tok_s_mean") if tests else None
+            speculative = (tests[0].get("speculative") or {}) if tests else {}
+            if parts:
+                drafts = int(report.get("config", {}).get("draft_tokens") or 0) \
+                    if speculative.get("enabled") else 0
+                accepted = speculative.get("acceptance_length") if drafts else 1.0
+                if accepted:
+                    per_token = bytes_per_token(parts, drafts, float(accepted))
+        power_mean = statistics.fmean(power) if power else None
+        cells = [
+            f"{len(window)}/{len(rows)}",
+            "—" if mean(row["util"] for row in window) is None
+            else f"{mean(row['util'] for row in window):.0f}",
+            "—" if not power else
+            f"{power_mean:.1f} / {power[min(len(power) - 1, int(0.95 * len(power)))]:.1f} / {power[-1]:.1f}",
+            "—" if not clocks else f"{statistics.fmean(clocks):.0f} / {min(clocks):.0f}",
+            "—" if not temps else f"{max(temps):.0f}",
+            "—" if decode is None else f"{decode:.1f}",
+            "—" if decode is None or power_mean is None or decode <= 0
+            else f"{power_mean / decode:.2f}",
+            "—" if per_token is None else f"{per_token / 1e9:.2f}",
+            "—" if per_token is None or decode is None else
+            f"{per_token * decode / 1e9:.0f}" + ("" if peak is None
+                                                 else f" ({100 * per_token * decode / 1e9 / peak:.0f}%)"),
+        ]
+        print(f"| {label} | " + " | ".join(cells) + " |")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
     for name in ("ctest", "stream", "chat", "serving"):
         sub.add_parser(name).add_argument("path", type=Path)
     sub.add_parser("bench").add_argument("paths", type=Path, nargs="+")
+    gpu = sub.add_parser("gpu", help="LABEL@samples.csv[:bench.json] ...")
+    gpu.add_argument("runs", nargs="+")
+    gpu.add_argument("--bytes", type=Path, help="decode_bytes.py output for the artifact")
+    gpu.add_argument("--bandwidth", type=Path, help="hbm_bandwidth_probe output")
     args = parser.parse_args()
     if args.command == "bench":
         cmd_bench(args.paths)
+    elif args.command == "gpu":
+        cmd_gpu(args.runs, args.bytes, args.bandwidth)
     else:
         {"ctest": cmd_ctest, "stream": cmd_stream, "chat": cmd_chat,
          "serving": cmd_serving}[args.command](args.path)

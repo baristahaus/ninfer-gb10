@@ -95,7 +95,9 @@ enum class LinearPolicy : std::uint8_t {
  * registered contiguous BF16 problems. Each format owns a finite registry of exact physical
  * weight problems and selects its kernel internally; a valid encoding and alignment do not imply
  * arbitrary N/K support. FP8 currently registers `[N,K]` in `{[14336,5120], [16384,5120],
- * [34816,5120], [248320,5120], [5120,6144], [5120,17408]}` at every positive T. The current NVFP4
+ * [34816,5120], [248320,5120], [5120,6144], [5120,17408]}` and the Qwen3.8 Flash-Next problems
+ * `{[10240,2560], [6144,2560], [12288,2560], [2560,6144], [320,10240], [248320,2560],
+ * [10240,320], [2560,640]}` at every positive T. The current NVFP4
  * problems register the five non-vocabulary FP8 geometries and accept every positive T. Q8 also
  * registers `[5120,25600]` at every positive T. BF16 registers `[14336,5120]`,
  * `[5120,6144]`, and `[256,5120]` at every positive T. Text and MTP packed-weight problems accept
@@ -120,8 +122,9 @@ enum class LinearPolicy : std::uint8_t {
  * FP8 accepts all three policies; AllowA8 and AllowA4 permit its A8 routes. Both resolve
  * `[14336,5120]` to A16 through T=11 and A8 from T=12; `[16384,5120]` to A16 through T=10 and A8
  * from T=11; `[34816,5120]` to A8 at T=1, A16 at T=2..4, and A8 from T=5; both `[5120,6144]` and
- * `[5120,17408]` resolve T<25 to A16 and T>=25 to A8. FP8 `[248320,5120]` admits A16Only, AllowA8,
- * and AllowA4; every policy retains A16 compute at every positive T. NVFP4 uses A16 for A16Only and
+ * `[5120,17408]` resolve T<25 to A16 and T>=25 to A8. FP8 `[248320,5120]` and the Flash-Next FP8
+ * problems admit A16Only, AllowA8, and AllowA4; every policy retains A16 compute at every
+ * positive T. NVFP4 uses A16 for A16Only and
  * AllowA8; AllowA4 permits the private resolver to select either a qualified A16 route or
  * activation quantization to NVFP4 at every positive T. The selected route depends only on the
  * registered problem and T.

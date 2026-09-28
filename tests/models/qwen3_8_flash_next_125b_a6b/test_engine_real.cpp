@@ -42,19 +42,50 @@ const std::vector<ninfer::TokenId>& canonical_prompt() {
 // different-precision artifact has its own greedy prefix by construction; at low
 // precision (FP8 dense) the MTP verify path and the plain decode path are distinct
 // numerical evaluations of the same model, so each is pinned exactly (on the BF16
-// dense artifact the two paths agree, one golden). A new dense-precision recipe must
-// add its goldens here. The FP8 goldens were recorded from the FP8 engine itself: they pin
-// against regressions and say nothing about quality, which the step 7 perplexity and drift
-// gate measures against the BF16 artifact.
+// dense artifact the two paths agree, one golden). The FP8 goldens were recorded from
+// the FP8 engine itself: they pin against regressions and say nothing about quality,
+// which the step 7 perplexity and drift gate measures against the BF16 artifact. They
+// track the FP8 dense-route profile: a route change (template unification, T=2..4
+// Tensor Core re-route) re-records them from the new engine, validated by the gate.
+
+const std::string kFp8Recipe = "qwen3_8_flash_next_125b_a6b_nvfp4_fp8_projections-v3";
+
+// Cross-path boundaries. The reuse checks compare a continuation served from captured
+// state against the same continuation computed cold. The two are distinct evaluations
+// for every recipe: the captured recurrent state comes from the first request's decode
+// and MTP verify kernels, the cold state from prefill kernels, and they differ by
+// rounding. Exact output equality therefore holds only where the fixture has no near-tie
+// greedy choice after the boundary, and the checks stay exact because an exact match is
+// what detects captured-state or lane corruption. When a route change moves a near-tie
+// onto a boundary (the T=2..4 FP8 Tensor Core re-route did: "wavelength" vs "blue
+// wavelengths"), the recipe's boundary is moved, as a golden is re-recorded; it is never
+// relaxed to a length check.
+struct CrossPathFixture {
+    ninfer::TokenId separator;         // appended after the first output before reuse
+    std::ptrdiff_t resumed_prefix;     // golden tokens a concurrent resumed request carries
+};
+
+// One boundary serves every recipe until a recipe's fixture needs its own; the failure
+// output prints both paths' tokens to choose it from.
+CrossPathFixture cross_path_fixture(const std::string& /*recipe*/) { return {198, 4}; }
+
+void print_tokens(const char* label, const std::vector<ninfer::TokenId>& tokens) {
+    std::cerr << label << ':';
+    for (const auto token : tokens) { std::cerr << ' ' << token; }
+    std::cerr << '\n';
+}
 const std::vector<ninfer::TokenId>& canonical_output(const std::string& recipe,
                                                      bool mtp_path) {
     static const std::vector<ninfer::TokenId> nvfp4{  // BF16 dense: the source checkpoint.
         29108, 4009, 27891, 8964, 579, 16078, 321, 1100, 9872, 303, 660, 17425};
+    // Recorded from the step 7a artifact (FP8 GDN/QSA projections, HyperConnection down and
+    // head). The fp8_projections recipe also moves the HyperConnection up projections and the
+    // shared expert to FP8, so these are re-recorded from its engine on its first run.
     static const std::vector<ninfer::TokenId> fp8_mtp{  // fp8_row_maxabs dense, MTP path.
-        29108, 4009, 5435, 660, 7736, 314, 279, 9155, 19142, 11, 864, 43000};
+        29108, 4009, 5435, 660, 7736, 314, 279, 9155, 19142, 11, 694, 22602};
     static const std::vector<ninfer::TokenId> fp8_ordinary{  // same artifact, plain decode.
-        29108, 4009, 5435, 660, 7736, 11, 694, 22602, 6105, 89661, 43000, 777};
-    if (recipe == "qwen3_8_flash_next_125b_a6b_nvfp4_fp8_dense-v3") {
+        29108, 4009, 5435, 660, 7736, 314, 279, 9155, 19142, 11, 694, 22602};
+    if (recipe == kFp8Recipe) {
         return mtp_path ? fp8_mtp : fp8_ordinary;
     }
     return nvfp4;
@@ -91,7 +122,8 @@ std::vector<std::uint8_t> gradient_ppm() {
 }
 
 int exercise_mtp_and_prefix(ninfer::Engine& engine,
-                            const std::vector<ninfer::TokenId>& expected_prefix) {
+                            const std::vector<ninfer::TokenId>& expected_prefix,
+                            const CrossPathFixture& fixture) {
     // Per-recipe greedy golden for the canonical non-thinking chat template (see
     // canonical_output). Checking semantic text would require duplicating the tokenizer in
     // this C++ integration test, so protect the exact token prefix instead. This catches
@@ -104,13 +136,17 @@ int exercise_mtp_and_prefix(ninfer::Engine& engine,
         first.speculative.backend != ninfer::SpeculativeBackend::Mtp ||
         first.speculative.rounds == 0) {
         std::cerr << "Flash-Next greedy text prefix is corrupt or did not complete through MTP\n";
+        print_tokens("mtp", first.generated_token_ids);
+        print_tokens("expected", expected_prefix);
+        std::cerr << "(backend mtp=" << (first.speculative.backend == ninfer::SpeculativeBackend::Mtp)
+                  << ", rounds " << first.speculative.rounds << ")\n";
         return 1;
     }
 
     std::vector<ninfer::TokenId> continuation = prompt;
     continuation.insert(continuation.end(), first.generated_token_ids.begin(),
                         first.generated_token_ids.end());
-    continuation.push_back(198);
+    continuation.push_back(fixture.separator);
     const ninfer::GenerationResult reused =
         engine.generate(engine.prepare_tokens(continuation), greedy_options(2, true));
     const ninfer::GenerationResult cold =
@@ -120,8 +156,9 @@ int exercise_mtp_and_prefix(ninfer::Engine& engine,
     if (reused.reused_prompt_tokens != expected_reuse || reused.generated_token_ids.size() != 2 ||
         cold.reused_prompt_tokens != 0 || cold.generated_token_ids != reused.generated_token_ids) {
         std::cerr << "Flash-Next prefix reuse is incorrect: reused=" << reused.reused_prompt_tokens
-                  << " expected=" << expected_reuse << " cold/reused output match="
-                  << (cold.generated_token_ids == reused.generated_token_ids) << '\n';
+                  << " expected=" << expected_reuse << '\n';
+        print_tokens("reused", reused.generated_token_ids);
+        print_tokens("cold", cold.generated_token_ids);
         return 1;
     }
 
@@ -144,7 +181,7 @@ int exercise_mtp_and_prefix(ninfer::Engine& engine,
     std::vector<ninfer::TokenId> stopped_continuation = prompt;
     stopped_continuation.insert(stopped_continuation.end(), stopped.generated_token_ids.begin(),
                                 stopped.generated_token_ids.end());
-    stopped_continuation.push_back(198);
+    stopped_continuation.push_back(fixture.separator);
     const ninfer::GenerationResult stopped_reuse =
         engine.generate(engine.prepare_tokens(stopped_continuation), greedy_options(1, true));
     const ninfer::GenerationResult stopped_cold =
@@ -153,11 +190,12 @@ int exercise_mtp_and_prefix(ninfer::Engine& engine,
         static_cast<std::uint32_t>(prompt.size() + stopped.generated_token_ids.size() - 1);
     if (stopped_reuse.reused_prompt_tokens != expected_stopped_reuse ||
         stopped_cold.reused_prompt_tokens != 0 ||
+        stopped_reuse.generated_token_ids.size() != 1 ||
         stopped_cold.generated_token_ids != stopped_reuse.generated_token_ids) {
         std::cerr << "Flash-Next partial MTP terminal reused " << stopped_reuse.reused_prompt_tokens
-                  << ", expected " << expected_stopped_reuse << ", cold/reused output match="
-                  << (stopped_cold.generated_token_ids == stopped_reuse.generated_token_ids)
-                  << '\n';
+                  << ", expected " << expected_stopped_reuse << '\n';
+        print_tokens("reused", stopped_reuse.generated_token_ids);
+        print_tokens("cold", stopped_cold.generated_token_ids);
         return 1;
     }
     return 0;
@@ -177,23 +215,21 @@ int exercise_ordinary_greedy(const char* artifact,
         result.generated_token_ids != expected_prefix) {
         std::cerr << "Flash-Next ordinary greedy output disagrees with the artifact's "
                      "ordinary-path golden\n";
-        std::cerr << "ordinary:";
-        for (const auto token : result.generated_token_ids) { std::cerr << ' ' << token; }
-        std::cerr << "\nexpected:";
-        for (const auto token : expected_prefix) { std::cerr << ' ' << token; }
-        std::cerr << '\n';
+        print_tokens("ordinary", result.generated_token_ids);
+        print_tokens("expected", expected_prefix);
         return 1;
     }
     return 0;
 }
 
 int exercise_concurrent_state(ninfer::Engine& engine,
-                              const std::vector<ninfer::TokenId>& expected_prefix) {
+                              const std::vector<ninfer::TokenId>& expected_prefix,
+                              const CrossPathFixture& fixture) {
     // Different frontiers exercise local prefill rows and shared decode rows. Repeat in
     // reversed admission order to reuse both physical lanes and recurrent state slots.
     auto continuation = canonical_prompt();
     continuation.insert(continuation.end(), expected_prefix.begin(),
-                        expected_prefix.begin() + 4);
+                        expected_prefix.begin() + fixture.resumed_prefix);
     const auto cold =
         engine.generate(engine.prepare_tokens(continuation), greedy_options(8, false));
     const auto before = engine.runtime_stats();
@@ -210,7 +246,11 @@ int exercise_concurrent_state(ninfer::Engine& engine,
         const auto& resumed = reverse ? a : b;
         if (root.generated_token_ids != expected_prefix ||
             resumed.generated_token_ids != cold.generated_token_ids) {
-            std::cerr << "Flash-Next concurrent lane reuse changed the canonical fixture\n";
+            std::cerr << "Flash-Next concurrent lane reuse changed the canonical fixture"
+                      << (reverse ? " (reversed admission)" : "") << '\n';
+            print_tokens("root", root.generated_token_ids);
+            print_tokens("resumed", resumed.generated_token_ids);
+            print_tokens("cold", cold.generated_token_ids);
             return 1;
         }
     }
@@ -258,6 +298,7 @@ int main() {
     const std::string recipe      = artifact_recipe(artifact);
     const auto& expected_prefix   = canonical_output(recipe, true);
     const auto& ordinary_prefix   = canonical_output(recipe, false);
+    const CrossPathFixture fixture = cross_path_fixture(recipe);
     try {
         for (const auto head : {ninfer::ProposalHead::Full, ninfer::ProposalHead::Optimized}) {
             auto options = engine_options(artifact);
@@ -269,8 +310,8 @@ int main() {
                 std::cerr << "Flash-Next Engine construction has an invalid load summary\n";
                 return 1;
             }
-            if (exercise_mtp_and_prefix(engine, expected_prefix) != 0) { return 1; }
-            if (exercise_concurrent_state(engine, expected_prefix) != 0) { return 1; }
+            if (exercise_mtp_and_prefix(engine, expected_prefix, fixture) != 0) { return 1; }
+            if (exercise_concurrent_state(engine, expected_prefix, fixture) != 0) { return 1; }
             if (exercise_vision(engine) != 0) { return 1; }
         }
         if (exercise_ordinary_greedy(artifact, ordinary_prefix) != 0) { return 1; }

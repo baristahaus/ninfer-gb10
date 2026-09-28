@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # Step 2: unprofiled GB10 baseline. Measures sustained memory bandwidth, then ninfer_bench at 8K
-# and 64K prompts with 512 decode outputs for MTP off, MTP with DRAFT_TOKENS, and MTP3. With
-# RUN_SERVING=1 it also runs the Flash-Next serving matrix. Run on an otherwise idle machine.
+# and 64K prompts with 512 decode outputs for MTP off, MTP with DRAFT_TOKENS, and MTP3 (greedy),
+# the 8K rows for MTP off and DRAFT_TOKENS again under the model's sampling preset, then one
+# decode-dominated run per configuration (1K prompt, 1536 outputs) under GPU telemetry for power,
+# clock and energy per token. With RUN_SERVING=1 it also runs the Flash-Next serving matrix. Run
+# on an otherwise idle machine.
 # Writes profiles/bench/gb10/step2/summary.md. Takes roughly 30-60 minutes without the matrix.
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 dir=$(step_dir step2)
@@ -42,6 +45,36 @@ for k in "${draft_counts[@]}"; do
     reports+=("$dir/mtp$k.json")
 done
 
+# Greedy decoding is the best case for MTP: sampled tokens agree with the draft less often. The
+# model's registered preset (the sampling a served request gets by default) gives the realistic
+# acceptance and speed beside it.
+for k in 0 "$DRAFT_TOKENS"; do
+    [[ $k == 0 ]] && spec=() || spec=(--spec mtp --draft-tokens "$k" --lm-head-draft)
+    log "ninfer_bench K=$k, model sampling preset (8K prompt, 1 warmup + 3 measured)"
+    bench "sampled$k" -pg 8192,512 "${spec[@]}" --sampling model --seed 1 --warmup 1 -r 3 \
+        -o json --output-file "$dir/sampled$k.json"
+    reports+=("$dir/sampled$k.json")
+done
+
+log "modeling decode bytes per token from the artifact directory"
+"$PYTHON" tools/gb10/decode_bytes.py "$ART" >"$dir/decode_bytes.json" 2>"$dir/decode_bytes.log" ||
+    log "decode byte model failed (see $dir/decode_bytes.log); effective bandwidth omitted"
+
+log "sampling idle GPU telemetry (10 s)"
+start_gpu_sampler "$dir/gpu_idle.csv"
+sleep 10
+stop_gpu_sampler
+gpu_runs=("idle@$dir/gpu_idle.csv")
+for k in "${draft_counts[@]}"; do
+    [[ $k == 0 ]] && spec=() || spec=(--spec mtp --draft-tokens "$k" --lm-head-draft)
+    log "decode power run K=$k (1K prompt, 1536 outputs, 1 warmup + 2 measured, GPU telemetry)"
+    start_gpu_sampler "$dir/gpu_mtp$k.csv"
+    bench "power$k" -pg 1024,1536 "${spec[@]}" --warmup 1 -r 2 -o json \
+        --output-file "$dir/power$k.json"
+    stop_gpu_sampler
+    gpu_runs+=("K=$k@$dir/gpu_mtp$k.csv:$dir/power$k.json")
+done
+
 serving_status="skipped (set RUN_SERVING=1 and TOKENIZER in the config to enable)"
 if [[ $RUN_SERVING == 1 ]]; then
     : "${TOKENIZER:?RUN_SERVING=1 needs TOKENIZER}"
@@ -67,7 +100,8 @@ fi
     echo "## Step 2 — unprofiled baseline"
     echo
     machine_summary
-    echo "- Benchmark: -pg 8192,512 and 65536,512; --max-ctx 73728 --prefill-chunk 8192 --kv-dtype $KV_DTYPE; 1 warmup + 5 measured"
+    echo "- Benchmark: -pg 8192,512 and 65536,512; --max-ctx 73728 --prefill-chunk 8192 --kv-dtype $KV_DTYPE; 1 warmup + 5 measured, greedy"
+    echo "- Sampled rows: -pg 8192,512 with the model's registered sampling preset (--sampling model --seed 1); 1 warmup + 3 measured"
     echo "- Power mode: $(nvidia-smi --query-gpu=power.limit --format=csv,noheader 2>/dev/null | head -1 || echo unknown)"
     echo
     echo "Memory bandwidth probe:"
@@ -76,6 +110,15 @@ fi
     echo '```'
     echo
     "${SUMMARIZE[@]}" bench "${reports[@]}"
+    echo
+    echo "GPU telemetry (decode-dominated runs; nvidia-smi every 0.5 s, window = samples between the"
+    echo "first and last with utilization >= 50%, so model loading is excluded):"
+    echo
+    echo "Effective GB/s = modeled bytes per emitted token (tools/gb10/decode_bytes.py: dense weights,"
+    echo "routed experts at 10/512 per token or their uniform-routing union per MTP round, GDN state,"
+    echo "MTP draft steps; KV/indexer and activations excluded) x decode tok/s, against the probe above."
+    echo
+    "${SUMMARIZE[@]}" gpu "${gpu_runs[@]}" --bytes "$dir/decode_bytes.json" --bandwidth "$dir/bandwidth.txt"
     echo
     echo "Serving matrix: $serving_status"
     if [[ -f $dir/serving.jsonl ]]; then

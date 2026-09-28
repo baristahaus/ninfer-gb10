@@ -4,7 +4,9 @@
 // naturally aligned E4M3 code packs. The persistent codes are decoded exactly, multiplied by the
 // represented BF16 activation with FP32 FMA, reduced within the warp, and scaled once by the
 // owning BF16 row multiplier. Output owns the physical row mapping so fused projections reuse the
-// same weight/decode mainloop without materializing a packed parent output.
+// same weight/decode mainloop without materializing a packed parent output. K needs only be a
+// multiple of the lane pack: a K that is not a whole number of warp phases ends with one
+// predicated phase in which the leading lanes read the remaining packs.
 
 #include "ops/common/math.cuh"
 #include "ops/common/memory.cuh"
@@ -109,7 +111,8 @@ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void fp8_a16_ge
     const int K                   = Schedule::kStaticK ? Schedule::kStaticK : input_rows;
     constexpr int kValuesPerPhase = kWarpSize * Schedule::kValuesPerLane;
     static_assert(!PairRows || (Schedule::kRowsPerWarp % 2) == 0);
-    const int kPhases = K / kValuesPerPhase;
+    const int kPhases    = K / kValuesPerPhase;
+    const int kTailBegin = kPhases * kValuesPerPhase;
     constexpr int kStoredRowsPerWarp =
         PairRows ? Schedule::kRowsPerWarp / 2 : Schedule::kRowsPerWarp;
     constexpr int kStoredRowsPerCta = Schedule::kWarpsPerCta * kStoredRowsPerWarp;
@@ -121,9 +124,7 @@ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void fp8_a16_ge
     const auto* activation_pairs = reinterpret_cast<const std::uint32_t*>(x);
     float accumulators[Schedule::kRowsPerWarp][Schedule::kAccumulatorChains] = {};
 
-#pragma unroll Schedule::kPhaseUnroll
-    for (int phase = 0; phase < kPhases; ++phase) {
-        const int value_begin = phase * kValuesPerPhase + lane * Schedule::kValuesPerLane;
+    const auto accumulate_phase = [&](int value_begin) {
         Fp8CodePack<Schedule::kValuesPerLane> row_codes[Schedule::kRowsPerWarp];
 #pragma unroll
         for (int local_row = 0; local_row < Schedule::kRowsPerWarp; ++local_row) {
@@ -138,6 +139,15 @@ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void fp8_a16_ge
                     load_fp8_codes<Schedule::kCodeCache, Schedule::kValuesPerLane>(source);
         }
         accumulate_rows(row_codes, activation_pairs + value_begin / 2, accumulators);
+    };
+
+#pragma unroll Schedule::kPhaseUnroll
+    for (int phase = 0; phase < kPhases; ++phase) {
+        accumulate_phase(phase * kValuesPerPhase + lane * Schedule::kValuesPerLane);
+    }
+    if (kTailBegin < K) {
+        const int value_begin = kTailBegin + lane * Schedule::kValuesPerLane;
+        if (value_begin < K) accumulate_phase(value_begin);
     }
 
     const auto destination = linear_output_tile<kStoredRowsPerCta>(

@@ -1,11 +1,18 @@
 #pragma once
 
 // A16 routes for the Flash-Next dense FP8 projections on the unified FP8 templates: GEMV at T=1,
-// SIMT at the MTP verify widths (T=2..4), sliced-K Tensor Core tiles through 64 tokens and tiled
-// Tensor Core GEMMs beyond. Output and epilogue are template parameters, so a fused consumer (the
-// HyperConnection down projection's scaled SiLU) runs the same route at every width. Schedules
-// follow upstream's measured RTX 5090 selections for the nearest shapes; they are not yet tuned
-// on GB10.
+// sliced-K Tensor Core tiles through 64 tokens and tiled Tensor Core GEMMs beyond. T=2..4 run
+// the same sliced-K route as the wider MTP verify batches rather than the CUDA-core SIMT
+// kernels: the verify forward (W=3 rows at single-stream serving) must keep one Tensor Core
+// per-element profile for the whole round, or the draft/verify argmax agreement drops (measured
+// 65.0% -> 63.2-63.6% MTP acceptance on GB10 with the SIMT selection, which carried no speed
+// benefit at these widths). Output and epilogue are template parameters, so a fused consumer
+// (the HyperConnection down projection's scaled SiLU) runs the same route at every width.
+// Schedules follow upstream's measured selections for the nearest shapes; the T=2..4
+// divergence above is the one GB10 re-tune. The short-K HyperConnection up (K=320) and
+// shared-expert down (K=640) projections take the same route with the sliced-K warp count and
+// GEMM K tile that their K admits: two K-warps (K=320 ends in a one-warp tail group) and 64-wide
+// GEMM K tiles where K is not a multiple of 128.
 
 #include "ops/linear/fp8/fp8_instances.cuh"
 #include "ops/linear/fp8/fp8_launch.h"
@@ -16,50 +23,52 @@
 
 namespace ninfer::ops::detail::flash_next {
 
-using Fp8FlashNextSimtT2 =
-    Fp8A16SimtSchedule<8, 2, 16, 2, 1, Fp8SimtActivationAccess::TokenPacked,
-                       Fp8CodeCache::Default, 1, Fp8SimtBlockOrder::RowsContiguous, 1>;
-using Fp8FlashNextSimtT4 =
-    Fp8A16SimtSchedule<8, 2, 16, 4, 1, Fp8SimtActivationAccess::TokenPacked,
-                       Fp8CodeCache::Default, 1, Fp8SimtBlockOrder::RowsContiguous, 1>;
+// The preferred sliced-K warp count when K is a whole number of its groups, otherwise the
+// largest smaller even count that divides K, otherwise two warps with a partial last group.
+template <int K, int Preferred>
+constexpr int sliced_k_warps() {
+    for (int warps = Preferred; warps >= 2; warps /= 2)
+        if (K % (warps * 64) == 0) return warps;
+    return 2;
+}
 
 template <class Geometry, class GemvSchedule, class Output, class Epilogue>
 void launch_fp8_dense_a16(const Tensor& x, const Weight& weight, Output output, Epilogue epilogue,
                           cudaStream_t stream) {
-    constexpr int K       = Geometry::kInputRows;
-    const auto operands   = fp8_a16_operands(x, weight);
+    constexpr int K = Geometry::kInputRows;
+    static_assert(K % 64 == 0, "the Flash-Next FP8 route needs whole 64-column K tiles");
+    constexpr int kWideWarps   = sliced_k_warps<K, 8>();
+    constexpr int kNarrowWarps = sliced_k_warps<K, 4>();
+    constexpr int kGemmK       = K % 128 == 0 ? 128 : 64;
+    const auto operands        = fp8_a16_operands(x, weight);
     const int tokens      = x.ne[1];
     if (tokens == 1) {
         return launch_fp8_a16_gemv<Fp8ScheduleInstance<GemvSchedule, K>>(operands, output,
                                                                          epilogue, stream);
     }
-    if (tokens <= 2) {
-        return launch_fp8_a16_simt<Fp8ScheduleInstance<Fp8FlashNextSimtT2, K, 2>>(
-            operands, output, epilogue, stream);
-    }
-    if (tokens <= 4) {
-        return launch_fp8_a16_simt<Fp8ScheduleInstance<Fp8FlashNextSimtT4, K, 4>>(
-            operands, output, epilogue, stream);
-    }
     if (tokens <= 8) {
-        return launch_fp8_a16_sliced_k_mma<Fp8ScheduleInstance<Fp8SlicedInstance<8, 8, 2>, K>>(
-            operands, output, epilogue, stream);
+        return launch_fp8_a16_sliced_k_mma<
+            Fp8ScheduleInstance<Fp8SlicedInstance<8, kWideWarps, 2>, K>>(operands, output, epilogue,
+                                                                         stream);
     }
     if (tokens <= 16) {
-        return launch_fp8_a16_sliced_k_mma<Fp8ScheduleInstance<Fp8SlicedInstance<16, 8, 2>, K>>(
-            operands, output, epilogue, stream);
+        return launch_fp8_a16_sliced_k_mma<
+            Fp8ScheduleInstance<Fp8SlicedInstance<16, kWideWarps, 2>, K>>(operands, output,
+                                                                          epilogue, stream);
     }
     if (tokens <= 32) {
-        return launch_fp8_a16_sliced_k_mma<Fp8ScheduleInstance<Fp8SlicedInstance<16, 4, 2>, K>>(
-            operands, output, epilogue, stream);
+        return launch_fp8_a16_sliced_k_mma<
+            Fp8ScheduleInstance<Fp8SlicedInstance<16, kNarrowWarps, 2>, K>>(operands, output,
+                                                                            epilogue, stream);
     }
     if (tokens <= 64) {
-        return launch_fp8_a16_sliced_k_mma<Fp8ScheduleInstance<Fp8SlicedInstance<32, 4, 1>, K>>(
-            operands, output, epilogue, stream);
+        return launch_fp8_a16_sliced_k_mma<
+            Fp8ScheduleInstance<Fp8SlicedInstance<32, kNarrowWarps, 1>, K>>(operands, output,
+                                                                            epilogue, stream);
     }
     if (tokens <= 128) {
         return launch_fp8_a16_mma<
-            Fp8ScheduleInstance<Fp8A16MmaSchedule<64, 64, 128, 32, 16, 2, 2>, K>>(
+            Fp8ScheduleInstance<Fp8A16MmaSchedule<64, 64, kGemmK, 32, 16, 2, 2>, K>>(
             operands, output, epilogue, stream);
     }
     launch_fp8_a16_mma<Fp8ScheduleInstance<Fp8A16MmaSchedule<64, 128, 64, 64, 16, 2, 2>, K>>(

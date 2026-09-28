@@ -26,7 +26,9 @@ std::vector<Invocation> a16_capacity_calls() {
 }
 
 // Flash-Next problems use one generic A16 route: GEMV at T=1, every K-split tile through 48
-// tokens, and the tiled GEMM with its packing intervals and tails beyond.
+// tokens, and the tiled GEMM with its packing intervals and tails beyond. The short-K problems
+// ([10240,320], [2560,640]) end their GEMV rows in a predicated phase, and K=320 also ends its
+// K-split in a partial group and runs 64-wide GEMM K tiles.
 std::vector<Invocation> flash_next_calls() {
     std::vector<Invocation> calls;
     for (int t = 1; t <= 48; ++t) calls.push_back({t});
@@ -112,7 +114,8 @@ int run_fp8_a16() {
     const auto flash_next_invocations = flash_next_calls();
     std::uint32_t flash_next_seed     = 841U;
     for (auto [n, k] : {std::pair{10240, 2560}, std::pair{6144, 2560}, std::pair{12288, 2560},
-                        std::pair{2560, 6144}, std::pair{320, 10240}, std::pair{248320, 2560}}) {
+                        std::pair{2560, 6144}, std::pair{320, 10240}, std::pair{248320, 2560},
+                        std::pair{10240, 320}, std::pair{2560, 640}}) {
         failures +=
             run_shape("FP8_A16", ActivationCompute::A16, make_fp8_weight,
                       {n, k, flash_next_seed, Comparison::Sampled, true, flash_next_invocations});
@@ -145,7 +148,8 @@ int run_fp8_a16() {
     for (auto [n, k] : {std::pair{14336, 5120}, std::pair{16384, 5120}, std::pair{34816, 5120},
                         std::pair{248320, 5120}, std::pair{5120, 6144}, std::pair{5120, 17408},
                         std::pair{10240, 2560}, std::pair{6144, 2560}, std::pair{12288, 2560},
-                        std::pair{2560, 6144}, std::pair{320, 10240}, std::pair{248320, 2560}}) {
+                        std::pair{2560, 6144}, std::pair{320, 10240}, std::pair{248320, 2560},
+                        std::pair{10240, 320}, std::pair{2560, 640}}) {
         failures += verify_workspace_envelopes(QType::FP8_E4M3FN_ROW_BF16, n, k);
     }
     return failures;

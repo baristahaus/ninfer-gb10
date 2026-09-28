@@ -27,7 +27,7 @@ if ((build_rc == 0)); then
     ctest_rc=$?
     log "running Flash-Next real-artifact tests (log: $dir/ctest_flash_next_real.log)"
     NINFER_QWEN38_FLASH_NEXT_WEIGHTS="$ART" ctest --test-dir build \
-        -R 'ninfer_qwen3_8_flash_next_(real|load_plan|frontend)_test' --output-on-failure \
+        -R 'ninfer_qwen3_8_flash_next_(real|load_plan|frontend|fault)_test' --output-on-failure \
         >"$dir/ctest_flash_next_real.log" 2>&1
     real_rc=$?
 fi

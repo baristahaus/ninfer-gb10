@@ -10,8 +10,14 @@ if [[ ! -f $GB10_CONFIG ]]; then
     echo "  cp tools/gb10/config.example.sh $GB10_CONFIG   # then edit ART and SERVE_ARGS" >&2
     exit 2
 fi
+# A value passed in the environment (each script's usage line documents ART=...)
+# takes precedence over the config file default.
+ART_FROM_ENV=${ART-}
 # shellcheck source=config.example.sh
 source "$GB10_CONFIG"
+if [[ -n $ART_FROM_ENV ]]; then
+    ART=$ART_FROM_ENV
+fi
 : "${ART:?ART must name the Flash-Next artifact}" "${PORT:?}" "${KV_DTYPE:?}" "${DRAFT_TOKENS:?}"
 PYTHON=${PYTHON:-python3}
 RUN_SERVING=${RUN_SERVING:-0}
@@ -28,6 +34,12 @@ SERVE_BIN=build/apps/ninfer-serve
 BENCH_BIN=build/bench/ninfer_bench
 BASE_URL="http://127.0.0.1:$PORT"
 SUMMARIZE=("$PYTHON" tools/gb10/summarize.py)
+
+cleanup_background() {
+    stop_gpu_sampler
+    stop_server
+}
+trap cleanup_background EXIT
 
 # step_dir NAME: fresh output directory for one step.
 step_dir() {
@@ -54,6 +66,23 @@ require_untraced_build() {
     fi
 }
 
+# GPU telemetry for the run that follows: utilization, power draw, SM clock and temperature from
+# nvidia-smi every 0.5 s into a CSV (summarize.py gpu condenses it). Fields the driver cannot
+# read print [N/A]; a missing nvidia-smi leaves the CSV empty rather than failing the step.
+GPU_SAMPLER_PID=
+start_gpu_sampler() { # $1 = CSV path
+    nvidia-smi --query-gpu=timestamp,utilization.gpu,power.draw,clocks.sm,temperature.gpu \
+        --format=csv,noheader,nounits -lms 500 >"$1" 2>/dev/null &
+    GPU_SAMPLER_PID=$!
+}
+stop_gpu_sampler() {
+    if [[ -n $GPU_SAMPLER_PID ]]; then
+        kill "$GPU_SAMPLER_PID" 2>/dev/null || true
+        wait "$GPU_SAMPLER_PID" 2>/dev/null || true
+    fi
+    GPU_SAMPLER_PID=
+}
+
 SERVER_PID=
 stop_server() {
     if [[ -n $SERVER_PID ]] && kill -0 "$SERVER_PID" 2>/dev/null; then
@@ -77,7 +106,6 @@ start_server() {
     log "starting server on port $PORT (log: $server_log)"
     "$SERVE_BIN" "$ART" --port "$PORT" "${SERVE_ARGS[@]}" "$@" >"$server_log" 2>&1 &
     SERVER_PID=$!
-    trap stop_server EXIT
     local waited=0
     until curl -sf "$BASE_URL/health" >/dev/null 2>&1; do
         if ! kill -0 "$SERVER_PID" 2>/dev/null; then

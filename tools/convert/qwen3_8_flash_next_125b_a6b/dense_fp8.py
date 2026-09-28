@@ -5,9 +5,14 @@ are the checkpoint's words, so no source checkpoint is needed. The projections w
 `fp8_e4m3fn_row_bf16` are quantized from those exact words with `fp8_row_maxabs` rounding: one BF16
 row multiplier (the round-to-nearest-even BF16 value of the row's max |w| / 448) and E4M3FN codes
 rounded to nearest even. They are the GDN query/key/value, output-gate and output projections, the
-QSA packed query/gate and output projections, the text HyperConnection down projections and the
-output head. Their A16Only Uses, like every binding and component, are unchanged. Every other
-object, including the MTP layer, the routed experts and the PLE table, is copied byte for byte.
+QSA packed query/gate and output projections, the text HyperConnection down and up projections,
+the text shared-expert projections and the output head. Each keeps its object id, except the
+shared expert's gate and up projections: their rows are stacked into one [1280,2560] parent
+(`...shared_expert.gate_up_proj.weight`, gate rows first) that the fused SwiGLU consumes whole,
+and their bindings become its two row ranges. Rows are quantized independently, so stacking does
+not change any code or multiplier. Every Use, component and other binding is unchanged. Every
+other object, including the MTP layer, the routed experts and the PLE table, is copied byte for
+byte.
 """
 
 from __future__ import annotations
@@ -19,7 +24,7 @@ import os
 import time
 from concurrent.futures import Executor, ThreadPoolExecutor
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import Mapping, NamedTuple, Sequence
 
 import numpy as np
 import torch
@@ -40,16 +45,30 @@ from . import inventory
 
 FP8_ROW = "fp8_e4m3fn_row_bf16"
 ROW_SCALE = "row_scale_v1"
-OUTPUT_BASENAME = "qwen3_8_flash_next_125b_a6b_nvfp4_fp8.ninfer"
-RECIPE_ID = "qwen3_8_flash_next_125b_a6b_nvfp4_fp8_dense-v3"
+OUTPUT_BASENAME = "qwen3_8_flash_next_125b_a6b_nvfp4_fp8_projections.ninfer"
+RECIPE_ID = "qwen3_8_flash_next_125b_a6b_nvfp4_fp8_projections-v3"
 # Row chunks of about this many elements are quantized concurrently; the NumPy rounding releases
 # the GIL, so the pool scales with the host's cores.
 QUANTIZE_CHUNK_ELEMENTS = 1 << 21
 _E4M3FN_VALUES = torch.arange(256, dtype=torch.uint8).view(torch.float8_e4m3fn).double().numpy()
 
 
+class PackedParent(NamedTuple):
+    """One FP8 parent whose rows stack whole BF16 logical matrices in order."""
+
+    parameters: tuple[str, ...]
+    shape: tuple[int, int]
+
+
+def _hyper_connection(prefix: str) -> dict[str, tuple[int, int]]:
+    return {
+        prefix + "input_mix_weight_down.weight": (320, 10240),
+        prefix + "input_mix_weight_up.weight": (10240, 320),
+    }
+
+
 def dense_fp8_parameters() -> dict[str, tuple[int, int]]:
-    """Logical text projections re-encoded by this recipe, with their exact shapes."""
+    """Logical text projections re-encoded in place by this recipe, with their exact shapes."""
 
     text = "model.language_model."
     parameters: dict[str, tuple[int, int]] = {}
@@ -63,51 +82,97 @@ def dense_fp8_parameters() -> dict[str, tuple[int, int]]:
             parameters[prefix + "linear_attn.in_proj_z.weight"] = (6144, 2560)
             parameters[prefix + "linear_attn.out_proj.weight"] = (2560, 6144)
         for connection in ("attn_hyper_connection.", "mlp_hyper_connection."):
-            parameters[prefix + connection + "input_mix_weight_down.weight"] = (320, 10240)
-    parameters[text + "hyper_connection_mixer.input_mix_weight_down.weight"] = (320, 10240)
+            parameters.update(_hyper_connection(prefix + connection))
+        parameters[prefix + "mlp.shared_expert.down_proj.weight"] = (2560, 640)
+    parameters.update(_hyper_connection(text + "hyper_connection_mixer."))
     parameters["lm_head.weight"] = (248320, 2560)
     return parameters
+
+
+def dense_fp8_packed_parents() -> dict[str, PackedParent]:
+    """New FP8 parents by object id: each text layer's shared-expert gate rows, then up rows."""
+
+    packed: dict[str, PackedParent] = {}
+    for layer in inventory.LAYERS:
+        prefix = f"model.language_model.layers.{layer}.mlp.shared_expert."
+        packed[prefix + "gate_up_proj.weight"] = PackedParent(
+            (prefix + "gate_proj.weight", prefix + "up_proj.weight"), (1280, 2560)
+        )
+    return packed
 
 
 def _binding_objects(binding: object, objects: Mapping[str, object], label: str) -> set[str]:
     return {object_id for object_id, _, _ in binding_parts(binding, objects, label)}
 
 
+def _whole_bf16_object(artifact: Artifact, name: str, shape: tuple[int, int]) -> str:
+    """The id of the one whole contiguous BF16 object that parameter `name` binds."""
+
+    binding = artifact.directory.bindings.get(name)
+    if binding is None:
+        raise ValueError(f"missing logical parameter {name}")
+    parts = binding_parts(binding, artifact.by_id, name)
+    object_id, begin, end = parts[0]
+    obj = artifact.object(object_id)
+    if (
+        len(parts) != 1
+        or not isinstance(obj, TensorObject)
+        or obj.format != "bf16"
+        or obj.layout != "contiguous_le_v1"
+        or tuple(obj.shape) != shape
+        or (begin, end) != (0, shape[0] * shape[1])
+    ):
+        raise ValueError(f"{name}: expected one whole contiguous BF16 {list(shape)} object")
+    return object_id
+
+
 def _select_objects(
-    artifact: Artifact, parameters: Mapping[str, tuple[int, int]]
-) -> dict[str, tuple[int, int]]:
-    """Resolve each parameter to one whole BF16 object that no other consumer references."""
+    artifact: Artifact,
+    parameters: Mapping[str, tuple[int, int]],
+    packed: Mapping[str, PackedParent],
+) -> tuple[dict[str, tuple[int, int]], dict[str, tuple[str, ...]]]:
+    """Resolve the re-encoded parameters to whole BF16 objects that no other consumer references.
+
+    Returns the objects re-encoded in place with their shapes, and each packed parent's source
+    objects in row order.
+    """
 
     directory = artifact.directory
     selected: dict[str, tuple[int, int]] = {}
-    for name, shape in parameters.items():
-        binding = directory.bindings.get(name)
-        if binding is None:
-            raise ValueError(f"missing logical parameter {name}")
-        parts = binding_parts(binding, artifact.by_id, name)
-        object_id, begin, end = parts[0]
-        obj = artifact.object(object_id)
-        if (
-            len(parts) != 1
-            or not isinstance(obj, TensorObject)
-            or obj.format != "bf16"
-            or obj.layout != "contiguous_le_v1"
-            or tuple(obj.shape) != shape
-            or (begin, end) != (0, shape[0] * shape[1])
-        ):
-            raise ValueError(f"{name}: expected one whole contiguous BF16 {list(shape)} object")
-        if object_id in selected:
+    sources: dict[str, tuple[str, ...]] = {}
+    claimed: set[str] = set()
+
+    def claim(name: str, object_id: str) -> None:
+        if object_id in claimed:
             raise ValueError(f"{name}: object {object_id} is shared by two selected parameters")
+        claimed.add(object_id)
+
+    for name, shape in parameters.items():
+        object_id = _whole_bf16_object(artifact, name, shape)
+        claim(name, object_id)
         selected[object_id] = shape
+    for packed_id, parent in packed.items():
+        if packed_id in artifact.by_id:
+            raise ValueError(f"packed parent {packed_id} collides with an existing object")
+        rows = parent.shape[0] // len(parent.parameters)
+        if rows * len(parent.parameters) != parent.shape[0]:
+            raise ValueError(f"packed parent {packed_id} does not split into equal row blocks")
+        ids = []
+        for name in parent.parameters:
+            object_id = _whole_bf16_object(artifact, name, (rows, parent.shape[1]))
+            claim(name, object_id)
+            ids.append(object_id)
+        sources[packed_id] = tuple(ids)
+    names = set(parameters) | {name for parent in packed.values() for name in parent.parameters}
     for name, binding in directory.bindings.items():
-        if name not in parameters and _binding_objects(binding, artifact.by_id, name) & set(selected):
+        if name not in names and _binding_objects(binding, artifact.by_id, name) & claimed:
             raise ValueError(f"{name} shares a re-encoded object with a BF16 consumer")
     for use in directory.uses:
         for role, binding in use.get("auxiliaries", {}).items():
             label = f"{use['parameter']}@{use['input']}/{role}"
-            if _binding_objects(binding, artifact.by_id, label) & set(selected):
+            if _binding_objects(binding, artifact.by_id, label) & claimed:
                 raise ValueError(f"{label} references a re-encoded object")
-    return selected
+    return selected, sources
 
 
 def _float64(bf16: torch.Tensor) -> np.ndarray:
@@ -132,12 +197,12 @@ def _quantize_rows(values: torch.Tensor) -> tuple[RowScaledFp8Words, float, floa
 
 
 def _fp8_payload(
-    artifact: Artifact, obj: TensorObject, shape: tuple[int, int], pool: Executor
+    artifact: Artifact, object_ids: Sequence[str], shape: tuple[int, int], pool: Executor
 ) -> tuple[bytes, dict]:
-    """Quantize one BF16 matrix in concurrent row chunks; return its payload and error."""
+    """Quantize the row-stacked BF16 objects in concurrent row chunks; return payload and error."""
 
     n, k = shape
-    raw = bytearray(artifact.read_object(obj.id))
+    raw = bytearray(b"".join(artifact.read_object(object_id) for object_id in object_ids))
     values = torch.frombuffer(raw, dtype=torch.bfloat16).reshape(n, k)
     rows = max(1, QUANTIZE_CHUNK_ELEMENTS // k)
     chunks = list(pool.map(_quantize_rows, (values[r : r + rows] for r in range(0, n, rows))))
@@ -159,22 +224,51 @@ def reencode(
     parameters: Mapping[str, tuple[int, int]],
     *,
     recipe_id: str,
+    packed: Mapping[str, PackedParent] | None = None,
 ) -> dict:
-    """Write a copy of `source_path` whose selected BF16 matrices are row-scaled FP8."""
+    """Write a copy of `source_path` whose selected BF16 matrices are row-scaled FP8.
+
+    `parameters` are re-encoded in place; each `packed` parent replaces its source objects, at
+    the position of the first, and its parameters bind consecutive row ranges of it.
+    """
 
     started = time.perf_counter()
     output = Path(out_path)
+    packed = dict(packed or {})
     with Artifact(source_path) as artifact:
         directory = artifact.directory
-        selected = _select_objects(artifact, parameters)
+        selected, sources = _select_objects(artifact, parameters, packed)
+        first_source = {ids[0]: packed_id for packed_id, ids in sources.items()}
+        later_sources = {object_id for ids in sources.values() for object_id in ids[1:]}
+        # One step per written object: (output id, source ids, FP8 shape or None to copy).
+        steps: list[tuple[str, tuple[str, ...], tuple[int, int] | None]] = []
         specs: list[TensorSpec | ResourceSpec] = []
         for obj in directory.objects:
+            if obj.id in later_sources:
+                continue
             if isinstance(obj, ResourceObject):
                 specs.append(ResourceSpec(obj.id, obj.bytes, obj.encoding))
+                steps.append((obj.id, (obj.id,), None))
+            elif obj.id in first_source:
+                packed_id = first_source[obj.id]
+                shape = packed[packed_id].shape
+                specs.append(TensorSpec(packed_id, shape, FP8_ROW, ROW_SCALE))
+                steps.append((packed_id, sources[packed_id], shape))
             elif obj.id in selected:
                 specs.append(TensorSpec(obj.id, tuple(obj.shape), FP8_ROW, ROW_SCALE))
+                steps.append((obj.id, (obj.id,), selected[obj.id]))
             else:
                 specs.append(TensorSpec(obj.id, tuple(obj.shape), obj.format, obj.layout))
+                steps.append((obj.id, (obj.id,), None))
+        bindings = dict(directory.bindings)
+        for packed_id, parent in packed.items():
+            elements = parent.shape[0] * parent.shape[1] // len(parent.parameters)
+            for index, name in enumerate(parent.parameters):
+                bindings[name] = {
+                    "parts": [
+                        {"object": packed_id, "range": [index * elements, (index + 1) * elements]}
+                    ]
+                }
         provenance = {
             "source": directory.provenance.get("source"),
             "recipe": recipe_id,
@@ -187,20 +281,18 @@ def reencode(
             output,
             specs,
             components=directory.components,
-            bindings=directory.bindings,
+            bindings=bindings,
             uses=directory.uses,
             metadata=directory.metadata,
             provenance=provenance,
         ) as writer:
-            for index, obj in enumerate(directory.objects, start=1):
-                if obj.id in selected:
-                    payload, tensors[obj.id] = _fp8_payload(
-                        artifact, obj, selected[obj.id], pool
-                    )
-                    writer.write_object(obj.id, payload)
+            for index, (object_id, source_ids, shape) in enumerate(steps, start=1):
+                if shape is not None:
+                    payload, tensors[object_id] = _fp8_payload(artifact, source_ids, shape, pool)
+                    writer.write_object(object_id, payload)
                 else:
-                    writer.write_object(obj.id, artifact.iter_object(obj.id))
-                print(f"[{index}/{len(directory.objects)}] {obj.id}", flush=True)
+                    writer.write_object(object_id, artifact.iter_object(object_id))
+                print(f"[{index}/{len(steps)}] {object_id}", flush=True)
         source_id = artifact.artifact_id.hex()
         source_payload = artifact.payload_bytes
     with Artifact(output) as written:
@@ -233,7 +325,13 @@ def main(argv: Sequence[str] | None = None) -> None:
     args = parser.parse_args(argv)
     if args.out.name != OUTPUT_BASENAME:
         raise SystemExit(f"output basename must be {OUTPUT_BASENAME!r}")
-    report = reencode(args.source, args.out, dense_fp8_parameters(), recipe_id=RECIPE_ID)
+    report = reencode(
+        args.source,
+        args.out,
+        dense_fp8_parameters(),
+        recipe_id=RECIPE_ID,
+        packed=dense_fp8_packed_parents(),
+    )
     print(
         f"complete: {report['reencoded_tensors']} tensors, "
         f"{report['payload_bytes']['source']} -> {report['payload_bytes']['output']} payload bytes",

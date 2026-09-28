@@ -62,11 +62,12 @@ bool has_decode_tests(const std::vector<ninfer::bench::BenchTest>& tests) {
     return false;
 }
 
-ninfer::RequestOptions benchmark_request(const ninfer::bench::BenchTest& test) {
+ninfer::RequestOptions benchmark_request(const ninfer::bench::BenchTest& test,
+                                         const ninfer::SamplingOverrides& sampling) {
     ninfer::RequestOptions options;
     options.execution.requested_output_tokens = test.requested_output_tokens();
     options.execution.allow_prefix_reuse      = false;
-    options.execution.sampling.temperature    = 0.0F;
+    options.execution.sampling                = sampling;
     options.stop.include_model_defaults       = false;
     options.output.raw                        = true;
     options.output.preserve_special_tokens    = true;
@@ -75,13 +76,14 @@ ninfer::RequestOptions benchmark_request(const ninfer::bench::BenchTest& test) {
 
 ninfer::bench::RepTiming run_repetition(ninfer::Engine& engine,
                                         const ninfer::bench::BenchTest& test,
-                                        const std::vector<ninfer::TokenId>& corpus) {
+                                        const std::vector<ninfer::TokenId>& corpus,
+                                        const ninfer::SamplingOverrides& sampling) {
     const int prompt_tokens = test.kind == ninfer::bench::TestKind::Decode
                                   ? ninfer::bench::kDecodeSeedTokens
                                   : test.n_prompt;
     auto prompt = engine.prepare_tokens(ninfer::bench::prompt_slice(corpus, prompt_tokens), false);
     ninfer::GenerationResult generated =
-        engine.generate(std::move(prompt), benchmark_request(test));
+        engine.generate(std::move(prompt), benchmark_request(test, sampling));
 
     if (std::getenv("NINFER_BENCH_PRINT_TOKEN_IDS") != nullptr) {
         std::cerr << "[ninfer_bench] generated token ids:";
@@ -114,7 +116,7 @@ void prime_decode_graph(ninfer::Engine& engine, ninfer::bench::BenchEnvironment&
     const int decode_tokens = static_cast<int>(env.decode_graph_prime_output_tokens - 1);
     const ninfer::bench::BenchTest prime{ninfer::bench::TestKind::Decode, 0, decode_tokens,
                                          "decode-graph-prime"};
-    (void)run_repetition(engine, prime, corpus);
+    (void)run_repetition(engine, prime, corpus, env.sampling);
     env.decode_graph_primed = true;
 }
 
@@ -176,6 +178,7 @@ int main(int argc, char** argv) {
         env.prefill_chunk            = options.prefill_chunk;
         env.kv_cache                 = options.kv_cache;
         env.speculative              = options.speculative;
+        env.sampling                 = options.sampling;
         env.use_cuda_graph           = options.use_cuda_graph;
         env.repetitions              = options.repetitions;
         env.warmup                   = options.warmup;
@@ -208,7 +211,7 @@ int main(int argc, char** argv) {
             result.test = test;
             engine.reset_memory_peaks();
             for (int warmup = 0; warmup < options.warmup; ++warmup) {
-                (void)run_repetition(engine, test, corpus);
+                (void)run_repetition(engine, test, corpus, options.sampling);
             }
             result.reps.reserve(static_cast<std::size_t>(options.repetitions));
             if (options.profile_measured) {
@@ -217,7 +220,7 @@ int main(int argc, char** argv) {
             }
             for (int repetition = 0; repetition < options.repetitions; ++repetition) {
                 NINFER_PERF_SCOPE("ninfer.region/1|measured");
-                result.reps.push_back(run_repetition(engine, test, corpus));
+                result.reps.push_back(run_repetition(engine, test, corpus, options.sampling));
             }
             if (options.profile_measured) {
                 require_cuda(cudaDeviceSynchronize(), "profile post-boundary synchronize");

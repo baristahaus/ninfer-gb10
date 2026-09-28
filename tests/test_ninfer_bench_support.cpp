@@ -179,6 +179,45 @@ int test_cli_contract() {
     return failures;
 }
 
+int test_sampling_cli() {
+    int failures      = 0;
+    const auto greedy = parse_for_test({"ninfer_bench", "--weights", "model.ninfer"});
+    failures += expect(greedy.sampling.temperature == std::optional<float>(0.0F) &&
+                           !greedy.sampling.top_p && !greedy.sampling.seed,
+                       "greedy by default");
+    failures += expect(qb::sampling_name(greedy.sampling) == "greedy", "greedy name");
+    const auto model = parse_for_test(
+        {"ninfer_bench", "--weights", "model.ninfer", "--seed", "7", "--sampling", "model"});
+    failures += expect(!model.sampling.temperature && !model.sampling.top_k &&
+                           model.sampling.seed == std::optional<std::uint64_t>(7),
+                       "model preset keeps an earlier seed");
+    failures += expect(qb::sampling_name(model.sampling) == "model;seed=7", "model name");
+    const auto warm = parse_for_test(
+        {"ninfer_bench", "--weights", "model.ninfer", "--sampling", "model", "--temperature", "1"});
+    failures +=
+        expect(warm.sampling.temperature == std::optional<float>(1.0F), "temperature override");
+    for (const char* bad : {"2.5", "-0.1", "warm", "1x"}) {
+        failures += expect_throws<std::invalid_argument>(
+            [&] {
+                (void)parse_for_test(
+                    {"ninfer_bench", "--weights", "model.ninfer", "--temperature", bad});
+            },
+            std::string("rejects temperature ") + bad);
+    }
+    failures += expect_throws<std::invalid_argument>(
+        [&] {
+            (void)parse_for_test(
+                {"ninfer_bench", "--weights", "model.ninfer", "--sampling", "hot"});
+        },
+        "rejects an unknown sampling mode");
+    failures += expect_throws<std::invalid_argument>(
+        [&] {
+            (void)parse_for_test({"ninfer_bench", "--weights", "model.ninfer", "--seed", "-1"});
+        },
+        "rejects a negative seed");
+    return failures;
+}
+
 int test_measurement_contract() {
     int failures = 0;
     const ninfer::SpeculativeOptions mtp5{ninfer::SpeculativeBackend::Mtp, 5};
@@ -302,6 +341,7 @@ qb::BenchEnvironment sample_environment() {
     env.speculative.backend               = ninfer::SpeculativeBackend::Mtp;
     env.speculative.draft_tokens          = 5;
     env.speculative.proposal_head         = ninfer::ProposalHead::Optimized;
+    env.sampling = ninfer::SamplingOverrides{.temperature = 1.0F, .seed = 7};
     env.use_cuda_graph                    = true;
     env.decode_graph_primed               = true;
     env.decode_graph_prime_output_tokens  = 13;
@@ -324,7 +364,7 @@ int test_report_contract() {
         return fail(std::string("invalid benchmark JSON: ") + error.what());
     }
 
-    failures += expect(report.at("schema_version") == 15, "report schema v15");
+    failures += expect(report.at("schema_version") == 16, "report schema v16");
     failures += expect(report.at("config").at("speculative_backend") == "mtp" &&
                            report.at("config").at("draft_tokens") == 5,
                        "report identifies its backend and window");
@@ -348,6 +388,8 @@ int test_report_contract() {
                        "CUDA Graph allowance");
     failures += expect(report.at("memory").at("kv_payload_bytes") == 123456ULL, "KV payload");
     failures += expect(report.at("config").at("proposal_head") == "optimized", "proposal head");
+    failures += expect(report.at("config").at("sampling") == "model;temperature=1;seed=7",
+                       "report records the sampling overrides");
     failures += expect(report.at("config").at("decode_graph_prime").at("output_tokens") == 13,
                        "graph prime output count");
 
@@ -394,6 +436,8 @@ int test_human_and_csv_reports() {
     failures += expect(table.find("model.ninfer") != std::string::npos, "table artifact");
     failures +=
         expect(table.find("proposal_head=optimized") != std::string::npos, "table proposal head");
+    failures += expect(table.find("sampling=model;temperature=1;seed=7") != std::string::npos,
+                       "table sampling");
     failures +=
         expect(table.find("decode eng t/s") != std::string::npos, "table engine throughput");
     failures += expect(table.find("work peak") != std::string::npos, "table workspace peak");
@@ -408,7 +452,7 @@ int test_human_and_csv_reports() {
     failures += expect(csv.starts_with("label,kind,n_prompt,n_gen,architecture,prefill_signature"),
                        "CSV identity columns");
     for (const std::string_view field :
-         {"model_name", "artifact_path", "proposal_head", "kv_payload_bytes",
+         {"model_name", "artifact_path", "proposal_head", "sampling", "kv_payload_bytes",
           "load_host_to_device_bytes", "workspace_general_capacity_bytes",
           "vision_handoff_capacity_bytes", "cuda_graph_allowance_bytes", "workspace_peak_bytes",
           "workspace_allocator_peak_bytes", "spec_acceptance_rate", "decode_output_tok_s_mean",
@@ -425,6 +469,7 @@ int test_human_and_csv_reports() {
 int main() {
     int failures = 0;
     failures += test_cli_contract();
+    failures += test_sampling_cli();
     failures += test_measurement_contract();
     failures += test_report_contract();
     failures += test_human_and_csv_reports();

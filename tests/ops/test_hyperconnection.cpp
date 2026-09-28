@@ -19,7 +19,7 @@ constexpr int kHidden = 2560;
 constexpr int kHyper = kStreams * kHidden;
 constexpr int kRank = 320;
 
-enum class DownFormat { Bf16, Fp8 };
+enum class ProjectionFormat { Bf16, Fp8 };
 
 std::vector<std::uint16_t> encode(const std::vector<float>& values) {
     std::vector<std::uint16_t> bits(values.size());
@@ -42,11 +42,11 @@ Weight bf16_weight(const DeviceBuffer& storage, int rows, int columns) {
     return out;
 }
 
-// The down projection is either a sparse BF16 matrix or a dense patterned row-scaled FP8 matrix;
-// the FP64 reference uses the exactly decoded represented weights in both cases.
-int run_case(int tokens, DownFormat format) {
+// The down and up projections are either sparse BF16 matrices or dense patterned row-scaled FP8
+// matrices; the FP64 reference uses the exactly decoded represented weights in both cases.
+int run_case(int tokens, ProjectionFormat format) {
     const std::string label = std::string("HyperConnection ") +
-                              (format == DownFormat::Fp8 ? "FP8" : "BF16") +
+                              (format == ProjectionFormat::Fp8 ? "FP8" : "BF16") +
                               " T=" + std::to_string(tokens);
     std::vector<float> hyper(kHyper * tokens), norm(kHyper);
     fill_uniform(hyper, 913, -0.75F, 0.75F);
@@ -59,14 +59,20 @@ int run_case(int tokens, DownFormat format) {
     std::vector<float> inject(static_cast<std::size_t>(kStreams) * kHyper, 0.0F);
     const auto fp8_down = quantized_weight::make_patterned_weight(QType::FP8_E4M3FN_ROW_BF16,
                                                                   kRank, kHyper, 917U);
-    if (format == DownFormat::Fp8) {
-        std::vector<std::int32_t> rows(kRank);
-        for (int row = 0; row < kRank; ++row) { rows[row] = row; }
-        down = quantized_weight::materialize_rows_fp32(fp8_down, rows);
+    const auto fp8_up =
+        quantized_weight::make_patterned_weight(QType::FP8_E4M3FN_ROW_BF16, kHyper, kRank, 919U);
+    if (format == ProjectionFormat::Fp8) {
+        const auto all_rows = [](int count) {
+            std::vector<std::int32_t> rows(count);
+            for (int row = 0; row < count; ++row) { rows[row] = row; }
+            return rows;
+        };
+        down = quantized_weight::materialize_rows_fp32(fp8_down, all_rows(kRank));
+        up   = quantized_weight::materialize_rows_fp32(fp8_up, all_rows(kHyper));
     } else {
         for (int row = 0; row < kRank; ++row) { down[static_cast<std::size_t>(row) * kHyper + (37 * row) % kHyper] = 0.25F; }
+        for (int row = 0; row < kHyper; ++row) { up[static_cast<std::size_t>(row) * kRank + row % kRank] = (row & 1) ? -0.5F : 0.5F; }
     }
-    for (int row = 0; row < kHyper; ++row) { up[static_cast<std::size_t>(row) * kRank + row % kRank] = (row & 1) ? -0.5F : 0.5F; }
     for (int row = 0; row < kStreams; ++row) { inject[static_cast<std::size_t>(row) * kHyper + 777 * (row + 1)] = 0.75F; }
 
     std::vector<double> normalized(hyper.size());
@@ -111,9 +117,10 @@ int run_case(int tokens, DownFormat format) {
     const auto inject_bits = encode(inject);
     DeviceBuffer d_hyper = to_device(hyper_bits);
     DeviceBuffer d_norm = to_device(norm_bits);
-    DeviceBuffer d_down = format == DownFormat::Fp8 ? to_device(fp8_down.payload)
-                                                    : to_device(down_bits);
-    DeviceBuffer d_up = to_device(up_bits);
+    DeviceBuffer d_down =
+        format == ProjectionFormat::Fp8 ? to_device(fp8_down.payload) : to_device(down_bits);
+    DeviceBuffer d_up =
+        format == ProjectionFormat::Fp8 ? to_device(fp8_up.payload) : to_device(up_bits);
     DeviceBuffer d_inject = to_device(inject_bits);
     GuardedDeviceBuffer d_block(block_reference.size() * sizeof(std::uint16_t));
     GuardedDeviceBuffer d_injection(injection_reference.size() * sizeof(std::uint16_t));
@@ -122,10 +129,11 @@ int run_case(int tokens, DownFormat format) {
     Tensor block_tensor(d_block.data(), DType::BF16, {kHidden, tokens});
     Tensor injection_tensor(d_injection.data(), DType::BF16, {kStreams, tokens});
     ops::HyperConnectionWeights weights{
-        .norm = norm_tensor,
-        .down = format == DownFormat::Fp8 ? fp8_down.device_weight(d_down.p)
-                                          : bf16_weight(d_down, kRank, kHyper),
-        .up = bf16_weight(d_up, kHyper, kRank),
+        .norm      = norm_tensor,
+        .down      = format == ProjectionFormat::Fp8 ? fp8_down.device_weight(d_down.p)
+                                                     : bf16_weight(d_down, kRank, kHyper),
+        .up        = format == ProjectionFormat::Fp8 ? fp8_up.device_weight(d_up.p)
+                                                     : bf16_weight(d_up, kHyper, kRank),
         .injection = bf16_weight(d_inject, kStreams, kHyper),
     };
     WorkspaceArena workspace(ops::hyperconnection_mix_workspace_capacity_bytes(tokens, true));
@@ -187,8 +195,10 @@ int run_case(int tokens, DownFormat format) {
 
 int run() {
     int failures = 0;
-    for (const DownFormat format : {DownFormat::Bf16, DownFormat::Fp8}) {
-        // T=1 GEMV, T=3 the MTP verify width (FP8 SIMT), T=9 sliced-K, T=65 tiled GEMM.
+    for (const ProjectionFormat format : {ProjectionFormat::Bf16, ProjectionFormat::Fp8}) {
+        // T=1 GEMV, T=2/3 (3 is the MTP verify width) and T=9 sliced-K, T=65 tiled GEMM; the FP8
+        // up projection (K=320) ends its GEMV rows in a predicated phase and its sliced-K in a
+        // partial group, and runs 64-wide GEMM K tiles.
         for (const int tokens : {1, 2, 3, 9, 65}) { failures += run_case(tokens, format); }
     }
     return failures;

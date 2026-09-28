@@ -576,13 +576,19 @@ struct TokenLogprob {
     float logprob   = 0.0F;
 };
 
-// The probability report for one published generated token. `top` holds the leading vocabulary
-// ranks for the same position in descending order and may or may not contain `token`; it is empty
-// when the request asked for no alternatives. Entries are produced for committed generated tokens
-// only, never for prompt, control or withheld tokens.
+// The probability report for one generated token. `top` holds the leading vocabulary ranks for the
+// same position in descending order and may or may not contain `token`; it is empty when the request
+// asked for no alternatives.
+//
+// Reports stay index-aligned with the generated tokens they describe. A token the Engine injected
+// deterministically rather than drew from the target - a forced thinking-control or tool-call span -
+// reports zero with `injected` set and an empty `top`, because inventing a target-model value for a
+// position whose logits were never consumed would be false. A drawn token's logprob is a negative
+// number in practice, so the two cases never collide.
 struct GeneratedTokenLogprob {
-    TokenId token                          = 0;
-    float logprob                          = 0.0F;
+    TokenId token = 0;
+    float logprob = 0.0F;
+    bool injected = false;
     std::vector<TokenLogprob> top;
 };
 
@@ -823,10 +829,8 @@ struct MaterializationDiagnostics {
 struct GenerationResult {
     PromptSummary prompt;
     std::vector<TokenId> generated_token_ids;
-    // Probability reports for the published generated tokens, in sequence order. Present only when
-    // the engine was loaded with EngineOptions::token_logprobs; a token the frontend published no
-    // target-model logits for contributes no entry, so this may be shorter than
-    // generated_token_ids.
+    // Exactly one report per entry of generated_token_ids, in the same order. Present only when the
+    // engine was loaded with EngineOptions::token_logprobs.
     std::vector<GeneratedTokenLogprob> token_logprobs;
     std::string content;
     std::string reasoning;

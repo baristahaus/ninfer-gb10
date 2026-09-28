@@ -90,8 +90,13 @@ int run() {
     Tensor recurrent_state(d_recurrent_state.p, DType::FP32, {128, 128, 48});
     Tensor destination(d_destination.data(), DType::BF16, {hidden, 1});
     WorkspaceArena workspace(ops::flash_next_gdn_workspace_capacity_bytes(1));
+    int device = 0;
+    CUDA_CHECK(cudaGetDevice(&device));
+    int multiprocessors = 0;
+    CUDA_CHECK(cudaDeviceGetAttribute(&multiprocessors, cudaDevAttrMultiProcessorCount, device));
     ops::flash_next_gdn(input_tensor, weights, conv_state, conv_state, recurrent_state,
-                        recurrent_state, destination, workspace, nullptr);
+                        recurrent_state, destination, workspace,
+                        DeviceExecutionView{nullptr, multiprocessors});
     cuda_synchronize();
 
     const auto bf16 = [](double value) {

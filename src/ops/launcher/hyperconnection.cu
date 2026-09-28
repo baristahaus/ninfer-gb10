@@ -357,11 +357,11 @@ void finish_mix(const Tensor& normalized, const HyperConnectionWeights& weights,
                 cudaStream_t stream, Bf16GemmContext* bf16_gemm) {
     const int tokens = normalized.ne[1];
     Tensor low_rank = workspace.alloc(DType::BF16, {kRank, tokens});
+    // FP8 runs the fused down+SiLU at every width; BF16 fuses through its small-T family.
     const bool fp8_down        = weights.down.qtype == QType::FP8_E4M3FN_ROW_BF16;
-    const bool fused_down_silu = fp8_down ? tokens == 1 : tokens <= 16;
-    if (tokens == 1 && fp8_down) {
-        detail::flash_next::launch_fp8_hc_down_silu_decode(normalized, weights.down, low_rank,
-                                                           stream);
+    const bool fused_down_silu = fp8_down || tokens <= 16;
+    if (fp8_down) {
+        detail::flash_next::launch_fp8_hc_down_silu(normalized, weights.down, low_rank, stream);
     } else if (tokens == 1) {
         detail::flash_next::launch_bf16_hc_down_silu_decode(normalized, weights.down, low_rank, stream);
     } else if (fused_down_silu) {

@@ -2,12 +2,36 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 
 namespace ninfer {
 namespace {
+
+struct SyncSchedule {
+    std::string_view name;
+    unsigned int flags;
+};
+
+constexpr SyncSchedule kSyncSchedules[] = {
+    {"spin", cudaDeviceScheduleSpin},
+    {"blocking", cudaDeviceScheduleBlockingSync},
+    {"yield", cudaDeviceScheduleYield},
+    {"auto", cudaDeviceScheduleAuto},
+};
+
+// An explicit NINFER_CUDA_SYNC wins; unset leaves the choice to the device (see DeviceContext).
+std::optional<unsigned int> sync_schedule_from_environment() {
+    const char* value = std::getenv("NINFER_CUDA_SYNC");
+    if (value == nullptr) { return std::nullopt; }
+    for (const auto& schedule : kSyncSchedules) {
+        if (schedule.name == value) { return schedule.flags; }
+    }
+    throw std::invalid_argument("NINFER_CUDA_SYNC must be spin, blocking, yield, or auto");
+}
 
 std::string cuda_error_message(const char* prefix, cudaError_t err) {
     return std::string(prefix) + ": " + cudaGetErrorName(err) + ": " + cudaGetErrorString(err);
@@ -44,6 +68,7 @@ void cuda_check(cudaError_t err, const char* expr, const char* file, int line) {
 }
 
 DeviceContext::DeviceContext(int device_id) : device(device_id) {
+    const std::optional<unsigned int> sync_schedule = sync_schedule_from_environment();
     int count       = 0;
     cudaError_t err = cudaGetDeviceCount(&count);
     if (err != cudaSuccess) {
@@ -59,18 +84,16 @@ DeviceContext::DeviceContext(int device_id) : device(device_id) {
         throw std::runtime_error(cuda_error_message("cudaGetDeviceProperties failed", err));
     }
 
-    // On GB10 (integrated) a blocking synchronize returns 0.4-1.2 ms after the GPU finishes,
-    // growing with the wait; yield returns in ~3 us (tools/gb10/probe_sync.sh). Yield
-    // busy-waits with sched_yield between polls, but measured decode is 1.6-3.3% faster with
-    // it and the GPU clock is unchanged under GB10's shared CPU/GPU power budget. Discrete
-    // GPUs keep blocking, which frees the host core while the GPU runs.
-    const unsigned sync_flag =
-        props.integrated ? cudaDeviceScheduleYield : cudaDeviceScheduleBlockingSync;
-    err = cudaSetDeviceFlags(sync_flag);
+    // Unset NINFER_CUDA_SYNC selects per device. On GB10 (integrated) a blocking synchronize
+    // returns 0.4-1.2 ms after the GPU finishes, growing with the wait, while yield returns in
+    // ~3 us (tools/gb10/probe_sync.sh) and measured decode is 1.6-3.3% faster than blocking,
+    // with the GPU clock unchanged under GB10's shared CPU/GPU power budget. Discrete GPUs
+    // keep spin, which has the lowest synchronization latency there.
+    const unsigned int sync_flags = sync_schedule.value_or(
+        props.integrated ? cudaDeviceScheduleYield : cudaDeviceScheduleSpin);
+    err = cudaSetDeviceFlags(sync_flags);
     if (err != cudaSuccess) {
-        (void)cudaGetLastError(); // don't leak this into later launch checks
-        std::fprintf(stderr, "warning: %s; keeping default CUDA sync schedule\n",
-                     cuda_error_message("cudaSetDeviceFlags failed", err).c_str());
+        throw std::runtime_error(cuda_error_message("cudaSetDeviceFlags failed", err));
     }
 
     cudaStream_t compute = nullptr;
@@ -142,6 +165,19 @@ DeviceExecutionView DeviceContext::execution_view() const noexcept {
 }
 
 std::size_t DeviceContext::total_vram() const noexcept { return props.totalGlobalMem; }
+
+const char* DeviceContext::sync_mode() const {
+    bind_to_current_thread();
+    unsigned int flags    = 0;
+    const cudaError_t err = cudaGetDeviceFlags(&flags);
+    if (err != cudaSuccess) {
+        throw std::runtime_error(cuda_error_message("cudaGetDeviceFlags failed", err));
+    }
+    for (const auto& schedule : kSyncSchedules) {
+        if ((flags & cudaDeviceScheduleMask) == schedule.flags) { return schedule.name.data(); }
+    }
+    throw std::runtime_error("unknown CUDA synchronization schedule");
+}
 
 void DeviceContext::synchronize() const { CUDA_CHECK(cudaStreamSynchronize(stream)); }
 

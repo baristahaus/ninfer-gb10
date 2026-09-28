@@ -684,10 +684,12 @@ public:
         : owner_(std::exchange(other.owner_, nullptr)),
           transaction_(std::exchange(other.transaction_, 0)), rows_(other.rows_),
           row_count_(std::exchange(other.row_count_, 0)), tokens_(other.tokens_),
-          row_counts_(other.row_counts_), row_stride_(other.row_stride_), timing_(other.timing_) {
+          row_counts_(other.row_counts_), row_stride_(other.row_stride_), scores_(other.scores_),
+          timing_(other.timing_) {
         other.tokens_     = {};
         other.row_counts_ = {};
         other.row_stride_ = 0;
+        other.scores_     = {};
         other.timing_     = {};
     }
 
@@ -702,6 +704,9 @@ public:
     [[nodiscard]] std::span<const std::int32_t> row_counts() const noexcept { return row_counts_; }
 
     [[nodiscard]] std::uint32_t row_stride() const noexcept { return row_stride_; }
+    // The probability reports for exactly these tokens, valid for the same window between the
+    // round's decode and its commit or abort.
+    [[nodiscard]] runtime::RoundTokenScores scores() const noexcept { return scores_; }
 
     [[nodiscard]] runtime::ExecutionTiming execution_timing() const noexcept { return timing_; }
 
@@ -712,6 +717,7 @@ private:
     std::size_t row_count_ = 0;
     std::span<const TokenId> tokens_;
     std::span<const std::int32_t> row_counts_;
+    runtime::RoundTokenScores scores_;
     std::uint32_t row_stride_ = 0;
     runtime::ExecutionTiming timing_;
 
@@ -1106,7 +1112,7 @@ struct RuntimeContractAccess {
     make_pending(const void* owner, std::uint64_t transaction,
                  std::span<const SequenceHandle<Variant>> rows, std::span<const TokenId> tokens,
                  std::span<const std::int32_t> row_counts, std::uint32_t row_stride,
-                 runtime::ExecutionTiming timing) {
+                 runtime::RoundTokenScores scores, runtime::ExecutionTiming timing) {
         PendingBatch<Variant> out;
         out.owner_       = owner;
         out.transaction_ = transaction;
@@ -1115,6 +1121,7 @@ struct RuntimeContractAccess {
         out.tokens_     = tokens;
         out.row_counts_ = row_counts;
         out.row_stride_ = row_stride;
+        out.scores_     = scores;
         out.timing_     = timing;
         return out;
     }

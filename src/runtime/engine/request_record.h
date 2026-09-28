@@ -172,6 +172,9 @@ struct RequestRecord {
     std::optional<BeginSummary> admitted_begin;
     std::optional<BeginSummary> begin;
     std::vector<TokenId> generated;
+    // Exactly one entry per element of `generated`, in the same order, when the Engine reports per
+    // token probabilities; empty otherwise. Both grow and roll back together.
+    std::vector<GeneratedTokenLogprob> token_logprobs;
     std::string content;
     std::string reasoning;
     std::optional<LaneId> lane;

@@ -7175,6 +7175,12 @@ PendingBatch ProgramImplCore::wrap_pending(std::span<const std::uint32_t> lanes,
     if (pending_transaction_ || lanes.empty() || lanes.size() > max_concurrency) {
         throw std::logic_error("Program already owns a pending transaction");
     }
+    if (io.report_token_logprobs && round.scores.empty()) {
+        // Every published token has a report by contract, so a round that carries tokens and no
+        // reports would leave the Engine's two vectors misaligned. Failing here, before the batch
+        // reaches the Engine, keeps that impossible to observe.
+        throw std::logic_error("a Program round published tokens without probability reports");
+    }
     PendingTransaction transaction;
     transaction.id   = next_transaction_id_++;
     transaction.size = lanes.size();
@@ -7192,7 +7198,7 @@ PendingBatch ProgramImplCore::wrap_pending(std::span<const std::uint32_t> lanes,
     pending_transaction_ = transaction;
     return ContractAccess::make_pending(
         this, transaction.id, std::span<const SequenceHandle>(handles.data(), lanes.size()),
-        round.tokens, round.row_counts, round.row_stride, round.timing);
+        round.tokens, round.row_counts, round.row_stride, round.scores, round.timing);
 }
 
 PrefillProgress ProgramImplCore::wrap_prefill(std::uint32_t lane, runtime::PrefillStepResult step) {
@@ -7207,6 +7213,7 @@ PrefillProgress ProgramImplCore::wrap_prefill(std::uint32_t lane, runtime::Prefi
             .tokens     = step.round.tokens,
             .row_counts = {},
             .row_stride = 1,
+            .scores     = step.round.scores,
         };
         out.pending.emplace(wrap_pending(lanes, round));
     } else if (requests[lane].prefill && requests[lane].prefill->pending_capture_offer != 0) {

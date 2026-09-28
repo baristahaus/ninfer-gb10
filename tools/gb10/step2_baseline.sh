@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Step 2: unprofiled GB10 baseline. Measures sustained memory bandwidth, then ninfer_bench at 8K
-# and 64K prompts with 512 decode outputs for MTP off, MTP with DRAFT_TOKENS, and MTP3. With
-# RUN_SERVING=1 it also runs the Flash-Next serving matrix. Run on an otherwise idle machine.
+# and 64K prompts with 512 decode outputs for MTP off, MTP with DRAFT_TOKENS, and MTP3, then one
+# decode-dominated run per configuration (1K prompt, 1536 outputs) under GPU telemetry for power,
+# clock and energy per token. With RUN_SERVING=1 it also runs the Flash-Next serving matrix. Run
+# on an otherwise idle machine.
 # Writes profiles/bench/gb10/step2/summary.md. Takes roughly 30-60 minutes without the matrix.
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 dir=$(step_dir step2)
@@ -42,6 +44,25 @@ for k in "${draft_counts[@]}"; do
     reports+=("$dir/mtp$k.json")
 done
 
+log "modeling decode bytes per token from the artifact directory"
+"$PYTHON" tools/gb10/decode_bytes.py "$ART" >"$dir/decode_bytes.json" 2>"$dir/decode_bytes.log" ||
+    log "decode byte model failed (see $dir/decode_bytes.log); effective bandwidth omitted"
+
+log "sampling idle GPU telemetry (10 s)"
+start_gpu_sampler "$dir/gpu_idle.csv"
+sleep 10
+stop_gpu_sampler
+gpu_runs=("idle@$dir/gpu_idle.csv")
+for k in "${draft_counts[@]}"; do
+    [[ $k == 0 ]] && spec=() || spec=(--spec mtp --draft-tokens "$k" --lm-head-draft)
+    log "decode power run K=$k (1K prompt, 1536 outputs, 1 warmup + 2 measured, GPU telemetry)"
+    start_gpu_sampler "$dir/gpu_mtp$k.csv"
+    bench "power$k" -pg 1024,1536 "${spec[@]}" --warmup 1 -r 2 -o json \
+        --output-file "$dir/power$k.json"
+    stop_gpu_sampler
+    gpu_runs+=("K=$k@$dir/gpu_mtp$k.csv:$dir/power$k.json")
+done
+
 serving_status="skipped (set RUN_SERVING=1 and TOKENIZER in the config to enable)"
 if [[ $RUN_SERVING == 1 ]]; then
     : "${TOKENIZER:?RUN_SERVING=1 needs TOKENIZER}"
@@ -76,6 +97,15 @@ fi
     echo '```'
     echo
     "${SUMMARIZE[@]}" bench "${reports[@]}"
+    echo
+    echo "GPU telemetry (decode-dominated runs; nvidia-smi every 0.5 s, window = samples between the"
+    echo "first and last with utilization >= 50%, so model loading is excluded):"
+    echo
+    echo "Effective GB/s = modeled bytes per emitted token (tools/gb10/decode_bytes.py: dense weights,"
+    echo "routed experts at 10/512 per token or their uniform-routing union per MTP round, GDN state,"
+    echo "MTP draft steps; KV/indexer and activations excluded) x decode tok/s, against the probe above."
+    echo
+    "${SUMMARIZE[@]}" gpu "${gpu_runs[@]}" --bytes "$dir/decode_bytes.json" --bandwidth "$dir/bandwidth.txt"
     echo
     echo "Serving matrix: $serving_status"
     if [[ -f $dir/serving.jsonl ]]; then

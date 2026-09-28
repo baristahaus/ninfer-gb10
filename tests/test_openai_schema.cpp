@@ -874,7 +874,7 @@ int test_output_directives() {
     };
     auto acquire = [](const ContentPart&) { return ninfer::OwnedMedia{}; };
 
-    // No directive: system turns stay in place; no leading block is injected.
+    // No directive: system turns stay in place; no extra part is appended.
     {
         GenerationRequest request;
         request.messages = {text_turn(ChatRole::System, "You are a terse bot."),
@@ -882,12 +882,14 @@ int test_output_directives() {
         const ninfer::PromptInput input = to_prompt_input(request, semantics(request), acquire);
         failures += check(input.messages.size() == 2 &&
                               input.messages[0].role == ChatRole::System &&
-                              input.messages[1].role == ChatRole::User,
-                          "no directive leaves system turns in place");
+                              input.messages[0].parts.size() == 1 &&
+                              input.messages[1].role == ChatRole::User &&
+                              input.messages[1].parts.size() == 1,
+                          "no directive leaves the prompt untouched");
     }
 
-    // JSON schema: the leading block carries the JSON instruction, then the
-    // folded user system text.
+    // JSON schema: the directive is a trailing text part of the last user
+    // message; the system turn stays in place with its original text.
     {
         GenerationRequest request;
         request.messages = {text_turn(ChatRole::System, "You are a terse bot."),
@@ -897,19 +899,22 @@ int test_output_directives() {
         const ninfer::PromptInput input = to_prompt_input(request, semantics(request), acquire);
         failures += check(input.messages.size() == 2 &&
                               input.messages[0].role == ChatRole::System &&
-                              input.messages[1].role == ChatRole::User,
-                          "directive block leads and the folded system turn is skipped");
-        const std::string& block = input.messages[0].parts.front().text;
-        failures += check(block.find("single valid JSON object") != std::string::npos &&
-                              block.find(R"({"type":"object"})") != std::string::npos,
-                          "leading block carries the JSON instruction and schema");
-        failures += check(block.find("You are a terse bot.") != std::string::npos &&
-                              block.find("You are a terse bot.") > block.find("JSON Schema"),
-                          "folded system text follows the directive in the leading block");
+                              input.messages[0].parts.size() == 1 &&
+                              input.messages[0].parts.front().text == "You are a terse bot.",
+                          "system turn stays in place, unmodified, under a directive");
+        failures += check(input.messages[1].parts.size() == 2 &&
+                              input.messages[1].parts.front().text == "hi",
+                          "the user text leads its message");
+        const std::string& tail = input.messages[1].parts.back().text;
+        failures += check(tail.find("single valid JSON object") != std::string::npos &&
+                              tail.find(R"({"type":"object"})") != std::string::npos,
+                          "directive is a trailing part of the last user message");
+        failures += check(tail.find("You are a terse bot.") == std::string::npos,
+                          "system text is no longer absorbed into the directive");
     }
 
-    // tool_choice required: the tool-call directive is appended last, after any
-    // user system text.
+    // tool_choice required: the tool-call directive is the trailing part and the
+    // conflicting system guidance keeps its original position.
     {
         GenerationRequest request;
         request.messages = {text_turn(ChatRole::System, "Answer directly when you can."),
@@ -920,40 +925,76 @@ int test_output_directives() {
         request.tools.push_back(tool);
         request.tool_choice.mode = ToolChoiceMode::Required;
         const ninfer::PromptInput input = to_prompt_input(request, semantics(request), acquire);
-        const std::string& block = input.messages[0].parts.front().text;
-        failures += check(block.find("You MUST call a tool") != std::string::npos,
-                          "required tool choice injects a tool-call directive");
-        failures += check(block.find("You MUST call a tool") >
-                              block.find("Answer directly when you can."),
-                          "tool-call directive trails the folded user system text");
+        failures += check(input.messages.size() == 2 &&
+                              input.messages[0].parts.front().text ==
+                                  "Answer directly when you can.",
+                          "conflicting system turn is kept, not folded");
+        const std::string& tail = input.messages[1].parts.back().text;
+        failures += check(tail.find("You MUST call a tool") != std::string::npos &&
+                              tail.find("Answer directly when you can.") == std::string::npos,
+                          "tool-call directive trails the last user message");
         failures += check(!prompt(request).options.tool_jsons.empty(),
                           "required tool choice keeps the tools enabled");
     }
 
-    // A system turn carrying media is kept in place even under a directive.
+    // Both directives: the JSON instruction leads, the tool-call directive last,
+    // in one trailing part.
     {
         GenerationRequest request;
-        ChatTurn system;
-        system.role = ChatRole::System;
-        ContentPart text;
-        text.kind     = ContentKind::Text;
-        text.text      = "system text";
-        text.type_raw  = "text";
-        ContentPart image;
-        image.kind = ContentKind::Image;
-        system.content = {std::move(text), std::move(image)};
-        request.messages = {std::move(system), text_turn(ChatRole::User, "hi")};
+        request.messages = {text_turn(ChatRole::User, "hi")};
+        request.response_format.kind      = ResponseFormatKind::JsonSchema;
+        request.response_format.schema_json = R"({"type":"object"})";
+        ToolDefinition tool;
+        tool.name              = "weather";
+        tool.input_schema_json = R"({"type":"object"})";
+        request.tools.push_back(tool);
+        request.tool_choice.mode = ToolChoiceMode::Required;
+        const ninfer::PromptInput input = to_prompt_input(request, semantics(request), acquire);
+        const std::string& tail = input.messages[0].parts.back().text;
+        failures += check(tail.find("single valid JSON object") != std::string::npos &&
+                              tail.find("You MUST call a tool") != std::string::npos &&
+                              tail.find("You MUST call a tool") > tail.find("JSON Schema"),
+                          "combined directive: JSON first, tool-call last");
+    }
+
+    // Agentic tail: the conversation ends on a tool result, so the directive
+    // anchors to the trailing tool turn, not the earlier user turn.
+    {
+        GenerationRequest request;
+        ChatTurn assistant;
+        assistant.role = ChatRole::Assistant;
+        ToolCall call;
+        call.id             = "call_1";
+        call.name           = "weather";
+        call.arguments_json = R"({"q":"sf"})";
+        assistant.tool_calls.push_back(call);
+        ChatTurn tool;
+        tool.role          = ChatRole::Tool;
+        tool.tool_call_id  = "call_1";
+        tool.tool_result_name = "weather";
+        ContentPart result;
+        result.kind     = ContentKind::Text;
+        result.text      = "64 and sunny";
+        result.type_raw  = "text";
+        tool.content.push_back(std::move(result));
+        request.messages = {text_turn(ChatRole::User, "weather in SF?"), std::move(assistant),
+                            std::move(tool)};
         request.response_format.kind = ResponseFormatKind::JsonObject;
         const ninfer::PromptInput input = to_prompt_input(request, semantics(request), acquire);
         failures += check(input.messages.size() == 3 &&
-                              input.messages[0].role == ChatRole::System &&
-                              input.messages[1].role == ChatRole::System &&
-                              input.messages[1].parts.size() == 2,
-                          "media system turn is preserved in place under a directive");
+                              input.messages[0].parts.size() == 1 &&
+                              input.messages[1].parts.empty() &&
+                              input.messages[2].parts.size() == 2,
+                          "directive anchors to the trailing tool turn");
+        const std::string& tail = input.messages[2].parts.back().text;
+        failures += check(tail.find("single valid JSON object") != std::string::npos,
+                          "directive is the trailing part of the tool result turn");
     }
 
-    // Folded system turns must not shift the part-boundary markers of the turns
-    // that survive: a boundary on a kept turn reports its actual input position.
+    // Client system/developer turns keep their cache markers at their actual
+    // positions: a boundary on the first system text part is the leading
+    // instruction marker, and a boundary on a kept turn points at its input
+    // position (no fold shifts positions).
     {
         GenerationRequest request;
         ChatTurn system;
@@ -980,7 +1021,16 @@ int test_output_directives() {
         catch (...) { threw = true; }
         failures += check(!threw && input.messages.size() == 2 &&
                               input.context_cache.markers.size() == 2,
-                          "folded turn keeps the prompt and both boundaries representable");
+                          "directive request keeps the prompt and both boundaries");
+        const auto leading = std::find_if(
+            input.context_cache.markers.begin(), input.context_cache.markers.end(),
+            [](const ninfer::PromptCacheMarker& marker) {
+                return marker.location == ninfer::PromptCacheMarkerLocation::LeadingInstructionBoundary;
+            });
+        failures += check(
+            leading != input.context_cache.markers.end() &&
+                leading->leading_instruction_bytes == 11U,
+            "first system text part keeps the leading-instruction marker");
         const auto part_marker = std::find_if(
             input.context_cache.markers.begin(), input.context_cache.markers.end(),
             [](const ninfer::PromptCacheMarker& marker) {

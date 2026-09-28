@@ -10,8 +10,14 @@ if [[ ! -f $GB10_CONFIG ]]; then
     echo "  cp tools/gb10/config.example.sh $GB10_CONFIG   # then edit ART and SERVE_ARGS" >&2
     exit 2
 fi
+# A value passed in the environment (each script's usage line documents ART=...)
+# takes precedence over the config file default.
+ART_FROM_ENV=${ART-}
 # shellcheck source=config.example.sh
 source "$GB10_CONFIG"
+if [[ -n $ART_FROM_ENV ]]; then
+    ART=$ART_FROM_ENV
+fi
 : "${ART:?ART must name the Flash-Next artifact}" "${PORT:?}" "${KV_DTYPE:?}" "${DRAFT_TOKENS:?}"
 PYTHON=${PYTHON:-python3}
 RUN_SERVING=${RUN_SERVING:-0}

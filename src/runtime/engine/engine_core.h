@@ -2184,6 +2184,9 @@ private:
                     fail_all_locked(oom_fallback_error_);
                     return;
                 }
+                // Hold admission for a few iterations so the pending FIFO does not retry
+                // straight into the allocation that just failed.
+                oom_backoff_ = kOomBackoffIterations;
                 // Scheduler state was cleared by recover_from_oom_locked; treat the next
                 // iteration as a fresh scheduling boundary (no decode continuity).
                 previous_unit_was_decode = false;
@@ -2192,7 +2195,7 @@ private:
                 // Invariant violation: the shared physical state can no longer be
                 // safely interpreted. Contract 7.4 requires the whole Engine to fail;
                 // invariant errors are never downgraded to a retry.
-                std::fprintf(stderr, "[engine] WORKER INARIANT: %s — failing all\n",
+                std::fprintf(stderr, "[engine] WORKER INVARIANT: %s — failing all\n",
                              invariant.what());
                 HostPhaseMeasurement cleanup = begin_host_phase();
                 fail_all_locked(std::current_exception());

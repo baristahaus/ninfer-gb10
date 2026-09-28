@@ -44,6 +44,10 @@ for k in "${draft_counts[@]}"; do
     reports+=("$dir/mtp$k.json")
 done
 
+log "modeling decode bytes per token from the artifact directory"
+"$PYTHON" tools/gb10/decode_bytes.py "$ART" >"$dir/decode_bytes.json" 2>"$dir/decode_bytes.log" ||
+    log "decode byte model failed (see $dir/decode_bytes.log); effective bandwidth omitted"
+
 log "sampling idle GPU telemetry (10 s)"
 start_gpu_sampler "$dir/gpu_idle.csv"
 sleep 10
@@ -97,7 +101,11 @@ fi
     echo "GPU telemetry (decode-dominated runs; nvidia-smi every 0.5 s, window = samples between the"
     echo "first and last with utilization >= 50%, so model loading is excluded):"
     echo
-    "${SUMMARIZE[@]}" gpu "${gpu_runs[@]}"
+    echo "Effective GB/s = modeled bytes per emitted token (tools/gb10/decode_bytes.py: dense weights,"
+    echo "routed experts at 10/512 per token or their uniform-routing union per MTP round, GDN state,"
+    echo "MTP draft steps; KV/indexer and activations excluded) x decode tok/s, against the probe above."
+    echo
+    "${SUMMARIZE[@]}" gpu "${gpu_runs[@]}" --bytes "$dir/decode_bytes.json" --bandwidth "$dir/bandwidth.txt"
     echo
     echo "Serving matrix: $serving_status"
     if [[ -f $dir/serving.jsonl ]]; then

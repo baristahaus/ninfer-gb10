@@ -598,11 +598,10 @@ struct OutputDelta {
     std::size_t tool_call_progress_bytes = 0;
     OutputChannel channel = OutputChannel::Content;
     std::string text;
-    // Reports for the generated tokens this delta publishes, in sequence order. Empty when the
-    // engine was loaded without EngineOptions::token_logprobs or when the delta carries no
-    // generated token. Concatenating each entry's detokenized text need not reproduce `text`, which
-    // the frontend may clean.
-    std::vector<GeneratedTokenLogprob> tokens;
+    // Streaming carries no probability reports yet: a delta holds cleaned per-channel text, while
+    // reports belong to generated tokens, and the two cannot be aligned without changing how the
+    // frontend withholds and splits output. Chat Completions refuses logprobs with stream=true until
+    // that exists; GenerationResult::token_logprobs is the aggregate route that does.
 };
 
 // Exact prompt accounting selected at admission. Streaming consumers receive this once before any

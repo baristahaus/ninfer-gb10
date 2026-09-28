@@ -125,6 +125,14 @@ void validate_standard_output_controls(const Json& body) {
         if (*top_logprobs < 0 || *top_logprobs > 20) {
             bad_request("top_logprobs must be in [0,20]", "top_logprobs");
         }
+        // Alternatives without reports has no defined answer, and silently dropping the field hides a
+        // client's intent, so the combination fails instead.
+        const bool requested =
+            body.contains("logprobs") && !body.at("logprobs").is_null() &&
+            body.at("logprobs").is_boolean() && body.at("logprobs").get<bool>();
+        if (*top_logprobs > 0 && !requested) {
+            bad_request("top_logprobs requires logprobs=true", "top_logprobs");
+        }
     }
 
     if (body.contains("response_format") && !body.at("response_format").is_null()) {

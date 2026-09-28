@@ -29,26 +29,36 @@ __device__ __forceinline__ void sampling_insert_candidate(float* vals, int* idxs
     idxs[pos] = idx;
 }
 
-// Applies presence/frequency penalties to a raw logit. `overlay`/`overlay_len`
-// carry a round-local count overlay: tokens already committed earlier in the
-// current speculative round but not yet flushed to the global `token_counts`. For speculative
-// verify column `col` the overlay is exactly drafts[0..col-1] (statically known,
-// since column `col` is only consumed when every earlier draft was accepted), so
-// the penalty at each column sees the same prefix a per-token sampler would.
-// Non-speculative callers pass no overlay. The scan is bounded by k and
-// only runs when penalties are active, so it is free on the no-penalty path.
+// The penalty arithmetic itself: presence applies once to a token that has been seen at all,
+// frequency scales with how often. Every route that adjusts a logit for committed history ends here,
+// so a reported probability and the draw it describes cannot drift apart by arithmetic. What the
+// caller assembles into `count` is its own business, because the sampler's live counts and a
+// report's draw-time view are different questions about the same round.
+__device__ __forceinline__ float sampling_penalized(float raw, int count,
+                                                    const SamplingConfig& config) {
+    float value = raw;
+    if (count > 0) { value -= config.presence_penalty; }
+    if (config.frequency_penalty != 0.0f) {
+        value -= config.frequency_penalty * static_cast<float>(count);
+    }
+    return value;
+}
+
+// Applies the sampler's penalties to a raw logit. `overlay`/`overlay_len` carry a round-local count
+// overlay: tokens committed earlier in the current speculative round but not yet flushed to the
+// global `token_counts`. For speculative verify column `col` the overlay is exactly drafts[0..col-1]
+// (statically known, since column `col` is only consumed when every earlier draft was accepted), so
+// the penalty at each column sees the same prefix a per-token sampler would. Non-speculative callers
+// pass no overlay. The scan is bounded by k and only runs when penalties are active.
 __device__ __forceinline__ float sampling_adjusted_logit(float raw, int v, const SamplingConfig& c,
                                                          const std::int32_t* overlay = nullptr,
                                                          int overlay_len             = 0) {
-    float x = raw;
-    if (c.presence_penalty == 0.0f && c.frequency_penalty == 0.0f) { return x; }
+    if (c.presence_penalty == 0.0f && c.frequency_penalty == 0.0f) { return raw; }
     int cnt = c.token_counts != nullptr ? c.token_counts[v] : 0;
     for (int j = 0; j < overlay_len; ++j) {
         if (overlay[j] == v) { ++cnt; }
     }
-    if (cnt > 0) { x -= c.presence_penalty; }
-    if (c.frequency_penalty != 0.0f) { x -= c.frequency_penalty * static_cast<float>(cnt); }
-    return x;
+    return sampling_penalized(raw, cnt, c);
 }
 
 } // namespace ninfer::ops

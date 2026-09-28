@@ -43,8 +43,9 @@ struct TargetLogprobOptions {
  *   Let l[r,c] be the exact real value represented by logits[r,c]. Column c belongs to lane
  *   b = c / columns_per_lane at verify column w = c - b*columns_per_lane, and q(i) is
  *   round_tokens[b*columns_per_lane + i] with i < p, where p is round_produced[b] or
- *   columns_per_lane. With config = configs[b], cnt(r) = config.token_counts[r] (zero when that
- *   pointer is null) minus the number of q(i) with w <= i < p equal to r:
+ *   columns_per_lane. With config = configs[b], cnt(r) = config.token_counts[r] minus the number of
+ *   q(i) with w <= i < p equal to r. No adjustment applies when config.token_counts is null, so such
+ *   a caller reports the temperature-scaled distribution of the represented logits:
  *
  *     a[r,c] = l[r,c] - presence_penalty * (cnt(r) > 0) - frequency_penalty * cnt(r),
  *     tau    = config.temperature > 0 ? config.temperature : 1  (tau = 1 when configs is null, so
@@ -54,7 +55,8 @@ struct TargetLogprobOptions {
  *   The subtraction recovers the committed-token counts as they were when column w was drawn: the
  *   draw's own token and every later token of this round are already in the counts, and neither
  *   belonged to that column's prefix. A column at or beyond p is not a published token and no
- *   consumer reads its report.
+ *   consumer reads its report. round_tokens is ignored when there is no committed-count array, rather
+ *   than subtracted from zero.
  *
  *   output[c] = p(target_ids[c], c). Because tau is positive, ranking by a[r,c] and by p(r,c)
  *   coincide: when top_ids and top_logprobs are both non-null they receive the leading K ranks of

@@ -1670,6 +1670,12 @@ private:
                                          summary.effective_limit_reason);
         try {
             request->generated.reserve(summary.effective_output_tokens);
+            if (reports_token_logprobs_) {
+                // One report per generated token, so the admission reservation covers both and the
+                // commit path never grows the entry vector mid-round. Each entry's own ranking list
+                // is small and fills once, at the round that produced it.
+                request->token_logprobs.reserve(summary.effective_output_tokens);
+            }
         } catch (...) {
             const AdmissionProgress progress =
                 remove_pending_error(request, std::current_exception());
@@ -1915,6 +1921,7 @@ private:
         }
 
         std::array<std::size_t, kMaximumConcurrency> generated_sizes{};
+        std::array<std::size_t, kMaximumConcurrency> logprob_sizes{};
         std::array<std::optional<std::uint32_t>, kMaximumConcurrency> prefix_execution_splits{};
         bool generated_staged         = false;
         const auto rollback_generated = [&]() noexcept {
@@ -1923,6 +1930,9 @@ private:
                 const auto& request = slots_[membership.lanes[row]];
                 if (request != nullptr && request->generated.size() >= generated_sizes[row]) {
                     request->generated.resize(generated_sizes[row]);
+                    // The forced control spans append reports too, so a failed append has to drop
+                    // them; leaving them behind shifts every later report by one position.
+                    request->token_logprobs.resize(logprob_sizes[row]);
                 }
             }
             generated_staged = false;
@@ -1934,6 +1944,7 @@ private:
                 throw std::logic_error("thinking control membership lost its request");
             }
             generated_sizes[row] = request->generated.size();
+            logprob_sizes[row]   = request->token_logprobs.size();
         }
         generated_staged = true;
         try {

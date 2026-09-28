@@ -14,6 +14,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace ninfer::serve {
@@ -48,10 +49,13 @@ struct GenerationOutcome {
     std::string text;
     std::string reasoning;
     std::vector<ninfer::GeneratedToolCall> tool_calls;
-    // Per-token probability reports and their tokenizer pieces, index-aligned with each other and
-    // with the generated tokens. Both are empty unless the Engine was loaded with --token-logprobs.
+    // Per-token probability reports, empty unless the Engine was loaded with --token-logprobs, plus
+    // the tokenizer piece for every vocabulary id that appears in them - a report's own token and
+    // each of its alternatives. Keyed by id rather than by generated position on purpose: the
+    // alternatives of a position are other vocabulary ids, and their text has nothing to do with the
+    // position at which they were scored.
     std::vector<ninfer::GeneratedTokenLogprob> token_logprobs;
-    std::vector<std::string> token_pieces;
+    std::unordered_map<ninfer::TokenId, std::string> token_pieces;
     ninfer::ToolCallParseDiagnostics tool_call_parse;
     int prompt_tokens     = 0;
     int completion_tokens = 0;

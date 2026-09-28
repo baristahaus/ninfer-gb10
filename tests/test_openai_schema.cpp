@@ -722,29 +722,43 @@ int test_aggregate_response() {
 int test_aggregate_logprobs() {
     int failures              = 0;
     GenerationOutcome outcome = sample_outcome();
-    // Three generated tokens: a drawn token with reported alternatives, an Engine-injected control
-    // span, and a token whose piece ends inside a multi-byte character.
+    // Reports name vocabulary ids, and an alternative is a different id with its own text. Position in
+    // the generated sequence must never be what selects a piece.
     outcome.token_logprobs = {
         ninfer::GeneratedTokenLogprob{
-            .token = 11, .logprob = -0.25F, .top = {{11, -0.25F}, {7, -1.5F}}},
-        ninfer::GeneratedTokenLogprob{.token = 5, .injected = true},
-        ninfer::GeneratedTokenLogprob{.token = 12, .logprob = -0.5F},
+            .token = 151644, .logprob = -0.25F, .top = {{151644, -0.25F}, {198, -1.5F}}},
+        ninfer::GeneratedTokenLogprob{.token = 362, .injected = true},
+        ninfer::GeneratedTokenLogprob{
+            .token = 5215, .logprob = -0.5F, .top = {{264, -1.0F}}},
     };
-    outcome.token_pieces = {"a", "b", "\xF0\x9F\x98"};
+    outcome.token_pieces = {{151644, "Hello"},
+                            {198, "\n"},
+                            {362, " there"},
+                            {5215, " world"},
+                            // A piece that ends inside a multi-byte character: `token` is lossy, the
+                            // byte list is not.
+                            {264, "\xF0\x9F\x98"}};
     const Json logprobs =
-        Json::parse(make_chat_completion_response(identity(), outcome, 1))["choices"][0]["logprobs"];
+        Json::parse(make_chat_completion_response(identity(), outcome, 2))["choices"][0]["logprobs"];
     failures += check(logprobs["content"].size() == 3 && logprobs["refusal"].is_null(),
                       "logprobs reports one entry per generated token");
-    failures += check(logprobs["content"][0]["token"] == "a" &&
-                          logprobs["content"][0]["logprob"] == -0.25 &&
-                          logprobs["content"][0]["top_logprobs"].size() == 1 &&
-                          logprobs["content"][0]["top_logprobs"][0]["token"] == "a",
-                      "reported alternatives truncate to the requested count");
+    failures += check(logprobs["content"][0]["token"] == "Hello" &&
+                          logprobs["content"][0]["logprob"] == -0.25,
+                      "the chosen token reports its own piece");
+    // The regression this guards: alternatives are vocabulary ids. Id 198 is a tenth of a plausible
+    // position index and 151644 is far beyond any of them, so a lookup by position yields either
+    // nothing or the neighbouring token's text.
+    failures += check(logprobs["content"][0]["top_logprobs"][0]["token"] == "Hello" &&
+                          logprobs["content"][0]["top_logprobs"][1]["token"] == "\n" &&
+                          logprobs["content"][0]["top_logprobs"][1]["bytes"] == Json::array({10}),
+                      "each alternative resolves to the piece of the id it names");
     failures += check(logprobs["content"][1]["injected"] == true &&
-                          logprobs["content"][1]["logprob"] == 0,
+                          logprobs["content"][1]["logprob"] == 0 &&
+                          logprobs["content"][1]["token"] == " there",
                       "an injected control span is marked and keeps its position");
-    failures += check(logprobs["content"][2]["bytes"].size() == 3 &&
-                          logprobs["content"][2]["token"].get<std::string>() == "\xEF\xBF\xBD",
+    failures += check(logprobs["content"][2]["top_logprobs"][0]["bytes"].size() == 3 &&
+                          logprobs["content"][2]["top_logprobs"][0]["token"].get<std::string>() ==
+                              "\xEF\xBF\xBD",
                       "a split character stays exact in bytes and lossy in text");
     return failures;
 }

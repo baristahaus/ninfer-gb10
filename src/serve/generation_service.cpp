@@ -437,9 +437,20 @@ GenerationOutcome GenerationService::run(PreparedRequest& prepared, const Stream
     outcome.completion_tokens   = static_cast<int>(result.generated_token_ids.size());
     outcome.token_logprobs = std::move(result.token_logprobs);
     if (!outcome.token_logprobs.empty()) {
-        // OpenAI's logprobs.content[].token is text, so the response layer needs the tokenizer piece
-        // for every reported token. Only a request that asked for reports pays for this.
-        outcome.token_pieces = engine_->token_pieces(result.generated_token_ids);
+        // A report names a vocabulary id, and so does every alternative. Resolving the distinct ids
+        // in one call keeps this off the per-token path and makes an id-based lookup the only way to
+        // ask for a piece, so a generated position can never be mistaken for an identity.
+        std::vector<ninfer::TokenId> ids;
+        for (const auto& report : outcome.token_logprobs) {
+            ids.push_back(report.token);
+            for (const auto& alternative : report.top) { ids.push_back(alternative.token); }
+        }
+        std::sort(ids.begin(), ids.end());
+        ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+        const std::vector<std::string> pieces = engine_->token_pieces(ids);
+        for (std::size_t index = 0; index < ids.size() && index < pieces.size(); ++index) {
+            outcome.token_pieces.emplace(ids[index], pieces[index]);
+        }
     }
     outcome.reasoning_tokens    = static_cast<int>(result.reasoning_tokens);
     outcome.thinking            = result.thinking;

@@ -49,24 +49,26 @@ __device__ __forceinline__ float target_logprobs_block_max(float value) {
 }
 
 // One column's penalty-adjusted, temperature-scaled logit, evaluated against the committed token
-// counts as they stood when this column was drawn. The penalty terms mirror sampling_adjusted_logit
-// exactly; the only difference is that the draw and every later token of the same round are removed
-// first, because the sampler and the accept step have already added them. Ordering by this value and
-// by the reported log-probability are the same relation, the scale being positive.
+// counts as they stood when this column was drawn. The arithmetic is sampling_penalized, shared with
+// the sampler, so a report and the draw it describes cannot differ by adjustment. What differs is the
+// count: the draw's own token and every later token of the same round are removed first, because the
+// sampler and the accept step have already added them. Ordering by this value and by the reported
+// log-probability are the same relation, the scale being positive.
 __device__ __forceinline__ float target_logprob_scaled_value(
     const __nv_bfloat16* logits, std::int64_t base, std::int32_t row, const SamplingConfig& config,
     float inverse_temperature, const std::int32_t* round_tokens, std::int32_t subtract_begin,
     std::int32_t subtract_end) {
     float value = __bfloat162float(logits[base + row]);
-    if (config.presence_penalty != 0.0f || config.frequency_penalty != 0.0f) {
-        int count = config.token_counts != nullptr ? config.token_counts[row] : 0;
+    // With no committed-count array there is no history to adjust and nothing to subtract from: taking
+    // the round's own tokens out of zero would invent a negative count, which a frequency penalty
+    // then turns into a reward.
+    if (config.token_counts != nullptr &&
+        (config.presence_penalty != 0.0f || config.frequency_penalty != 0.0f)) {
+        int count = config.token_counts[row];
         for (std::int32_t index = subtract_begin; index < subtract_end; ++index) {
             if (round_tokens[index] == row) { --count; }
         }
-        if (count > 0) { value -= config.presence_penalty; }
-        if (config.frequency_penalty != 0.0f) {
-            value -= config.frequency_penalty * static_cast<float>(count);
-        }
+        value = sampling_penalized(value, count, config);
     }
     return value * inverse_temperature;
 }

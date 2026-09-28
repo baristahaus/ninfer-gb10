@@ -236,34 +236,40 @@ Json bytes_array(std::string_view piece) {
     return bytes;
 }
 
-Json logprob_entry(std::string_view piece, float logprob) {
-    return Json{{"token", lossy_token_text(piece)},
-                {"logprob", static_cast<double>(logprob)},
-                {"bytes", bytes_array(piece)},
-                {"top_logprobs", Json::array()}};
+// One reported vocabulary entry. `top_logprobs` belongs to a generated position only: OpenAI's
+// alternative entries carry token, logprob and bytes and nothing nested, so an alternative is built
+// without the field rather than with an empty list inside it.
+Json logprob_entry(std::string_view piece, float logprob, bool report_alternatives) {
+    Json entry{{"token", lossy_token_text(piece)},
+               {"logprob", static_cast<double>(logprob)},
+               {"bytes", bytes_array(piece)}};
+    if (report_alternatives) { entry["top_logprobs"] = Json::array(); }
+    return entry;
+}
+
+// The text a vocabulary id contributes. A missing entry means an id outside the Engine's own token
+// domain reached a report, which the reporting Op cannot produce; the empty piece then shows up as a
+// visibly wrong response rather than silently borrowing another token's text.
+std::string_view piece_for(const GenerationOutcome& outcome, ninfer::TokenId token) {
+    const auto found = outcome.token_pieces.find(token);
+    return found == outcome.token_pieces.end() ? std::string_view{}
+                                               : std::string_view(found->second);
 }
 
 // choices[].logprobs for a completed request: one entry per generated token, in order. The reported
-// alternatives are the Engine's leading ranks truncated to what the request asked for.
+// alternatives are the Engine's leading ranks truncated to what the request asked for. Each entry's
+// text is resolved from the id it names, never from its position, because an alternative is a
+// different vocabulary id with its own piece.
 Json logprobs_object(const GenerationOutcome& outcome, int reported_top_logprobs) {
     Json content = Json::array();
-    for (std::size_t index = 0; index < outcome.token_logprobs.size(); ++index) {
-        const ninfer::GeneratedTokenLogprob& report = outcome.token_logprobs[index];
-        const std::string_view piece =
-            index < outcome.token_pieces.size() ? std::string_view(outcome.token_pieces[index])
-                                                : std::string_view{};
-        Json entry         = logprob_entry(piece, report.logprob);
+    for (const auto& report : outcome.token_logprobs) {
+        Json entry = logprob_entry(piece_for(outcome, report.token), report.logprob, true);
         const int reported = reported_top_logprobs < static_cast<int>(report.top.size())
                                  ? reported_top_logprobs
                                  : static_cast<int>(report.top.size());
         for (int rank = 0; rank < reported; ++rank) {
-            const std::size_t alternative = static_cast<std::size_t>(report.top[rank].token);
-            const std::string_view alternative_piece =
-                alternative < outcome.token_pieces.size()
-                    ? std::string_view(outcome.token_pieces[alternative])
-                    : std::string_view{};
-            entry["top_logprobs"].push_back(
-                logprob_entry(alternative_piece, report.top[rank].logprob));
+            entry["top_logprobs"].push_back(logprob_entry(
+                piece_for(outcome, report.top[rank].token), report.top[rank].logprob, false));
         }
         // A forced control span is a certainty by construction, not a sample. It still occupies its
         // position so the array stays aligned with the generated tokens.

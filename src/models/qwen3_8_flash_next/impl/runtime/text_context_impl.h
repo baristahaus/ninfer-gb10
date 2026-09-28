@@ -533,9 +533,10 @@ void TextContext::mtp_forward_flash_next(const Tensor& ids, const Tensor& hidden
     if (active_valid_columns_ != nullptr) {
         valid = *active_valid_columns_;
     } else {
+        // Every row is full width. The device fill keeps the value in the launch arguments, so
+        // captured decode graphs replay it without referencing host memory.
         valid = work_.alloc(DType::I32, {batch});
-        std::vector<std::int32_t> host_valid(static_cast<std::size_t>(batch), width);
-        copy_i32(host_valid.data(), valid, stream);
+        ops::fill_i32(valid, width, stream);
     }
     const Tensor& rows = active_backend_kv_table_rows_ != nullptr ? *active_backend_kv_table_rows_
                                                                   : io_.backend_kv_table_row;
@@ -1309,9 +1310,10 @@ void TextContext::run_flash_next_layers(Tensor& x, Phase ph) {
     if (active_valid_columns_ != nullptr) {
         valid = *active_valid_columns_;
     } else {
+        // Every row is full width. The device fill keeps the value in the launch arguments, so
+        // captured decode graphs replay it without referencing host memory.
         valid = work_.alloc(DType::I32, {batch});
-        std::vector<std::int32_t> host_valid(static_cast<std::size_t>(batch), width);
-        copy_i32(host_valid.data(), valid, stream);
+        ops::fill_i32(valid, width, stream);
     }
     const Tensor& table_rows =
         active_kv_table_rows_ != nullptr ? *active_kv_table_rows_ : io_.text_kv_table_row;

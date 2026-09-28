@@ -34,6 +34,11 @@ void fill_i32_positions(Tensor& positions, std::int32_t start, cudaStream_t stre
     detail::fill_i32_positions_launch(positions, start, stream);
 }
 
+void fill_i32(Tensor& destination, std::int32_t value, cudaStream_t stream) {
+    require_i32_vector(destination, "fill_i32 destination");
+    detail::fill_i32_launch(destination, value, stream);
+}
+
 void offset_i32_positions(const Tensor& source, const Tensor& delta, Tensor& destination,
                           cudaStream_t stream) {
     require_i32_vector(source, "offset_i32_positions source");

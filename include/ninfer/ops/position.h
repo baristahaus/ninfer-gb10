@@ -30,6 +30,27 @@ namespace ninfer::ops {
 void fill_i32_positions(Tensor& positions, std::int32_t start, cudaStream_t stream);
 
 /**
+ * Op: fill_i32
+ *
+ * Math / indexing:
+ *   destination[i] = value, 0 <= i < T.
+ *
+ * Logical shapes:
+ *   destination is a contiguous I32 vector [T].
+ *
+ * Numeric:
+ *   T is positive; value is any I32.
+ *
+ * Effects:
+ *   Writes the full destination from the launch argument alone, so a captured graph replays the
+ *   same fill without reading host memory.
+ *
+ * Workspace:
+ *   None. The Op has no other state side effect.
+ */
+void fill_i32(Tensor& destination, std::int32_t value, cudaStream_t stream);
+
+/**
  * Op: offset_i32_positions
  *
  * Math / indexing:

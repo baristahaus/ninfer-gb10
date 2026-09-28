@@ -1,11 +1,15 @@
 #pragma once
 
 // A16 routes for the Flash-Next dense FP8 projections on the unified FP8 templates: GEMV at T=1,
-// SIMT at the MTP verify widths (T=2..4), sliced-K Tensor Core tiles through 64 tokens and tiled
-// Tensor Core GEMMs beyond. Output and epilogue are template parameters, so a fused consumer (the
-// HyperConnection down projection's scaled SiLU) runs the same route at every width. Schedules
-// follow upstream's measured RTX 5090 selections for the nearest shapes; they are not yet tuned
-// on GB10.
+// sliced-K Tensor Core tiles through 64 tokens and tiled Tensor Core GEMMs beyond. T=2..4 run
+// the same sliced-K route as the wider MTP verify batches rather than the CUDA-core SIMT
+// kernels: the verify forward (W=3 rows at single-stream serving) must keep one Tensor Core
+// per-element profile for the whole round, or the draft/verify argmax agreement drops (measured
+// 65.0% -> 63.2-63.6% MTP acceptance on GB10 with the SIMT selection, which carried no speed
+// benefit at these widths). Output and epilogue are template parameters, so a fused consumer
+// (the HyperConnection down projection's scaled SiLU) runs the same route at every width.
+// Schedules follow upstream's measured selections for the nearest shapes; the T=2..4
+// divergence above is the one GB10 re-tune.
 
 #include "ops/linear/fp8/fp8_instances.cuh"
 #include "ops/linear/fp8/fp8_launch.h"
@@ -16,13 +20,6 @@
 
 namespace ninfer::ops::detail::flash_next {
 
-using Fp8FlashNextSimtT2 =
-    Fp8A16SimtSchedule<8, 2, 16, 2, 1, Fp8SimtActivationAccess::TokenPacked,
-                       Fp8CodeCache::Default, 1, Fp8SimtBlockOrder::RowsContiguous, 1>;
-using Fp8FlashNextSimtT4 =
-    Fp8A16SimtSchedule<8, 2, 16, 4, 1, Fp8SimtActivationAccess::TokenPacked,
-                       Fp8CodeCache::Default, 1, Fp8SimtBlockOrder::RowsContiguous, 1>;
-
 template <class Geometry, class GemvSchedule, class Output, class Epilogue>
 void launch_fp8_dense_a16(const Tensor& x, const Weight& weight, Output output, Epilogue epilogue,
                           cudaStream_t stream) {
@@ -32,14 +29,6 @@ void launch_fp8_dense_a16(const Tensor& x, const Weight& weight, Output output, 
     if (tokens == 1) {
         return launch_fp8_a16_gemv<Fp8ScheduleInstance<GemvSchedule, K>>(operands, output,
                                                                          epilogue, stream);
-    }
-    if (tokens <= 2) {
-        return launch_fp8_a16_simt<Fp8ScheduleInstance<Fp8FlashNextSimtT2, K, 2>>(
-            operands, output, epilogue, stream);
-    }
-    if (tokens <= 4) {
-        return launch_fp8_a16_simt<Fp8ScheduleInstance<Fp8FlashNextSimtT4, K, 4>>(
-            operands, output, epilogue, stream);
     }
     if (tokens <= 8) {
         return launch_fp8_a16_sliced_k_mma<Fp8ScheduleInstance<Fp8SlicedInstance<8, 8, 2>, K>>(

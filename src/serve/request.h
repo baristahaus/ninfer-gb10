@@ -94,7 +94,7 @@ enum class ToolChoiceMode {
     Auto,
     None,
     // Prompt-level directive forcing at least one tool call; NInfer has no
-    // constrained decoding, so enforcement is a folded system instruction.
+    // constrained decoding, so enforcement is a directive appended to the final turn.
     Required,
 };
 
@@ -102,8 +102,8 @@ struct ToolChoice {
     ToolChoiceMode mode = ToolChoiceMode::Auto;
 };
 
-// Wire response_format steering. Non-text kinds are prompt-guided (a folded
-// system instruction) plus tolerant output cleaning; NInfer performs no
+// Wire response_format steering. Non-text kinds are prompt-guided (a directive
+// appended to the final turn) plus tolerant output cleaning; NInfer performs no
 // constrained decoding.
 enum class ResponseFormatKind {
     Text,

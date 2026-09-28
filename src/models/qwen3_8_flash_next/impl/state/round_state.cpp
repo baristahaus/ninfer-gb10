@@ -80,6 +80,7 @@ RoundStateLayout begin_round_state_layout(LayoutBuilder& builder, const RoundSta
     layout.logits     = add_tensor(builder, DType::BF16, {spec.output_rows, 1}, "step logits");
     layout.text_kv_table_row    = add_tensor(builder, DType::I32, {1}, "step Text KV table row");
     layout.backend_kv_table_row = add_tensor(builder, DType::I32, {1}, "step backend KV table row");
+    layout.report = builder.add(sizeof(PrefillRoundReport), kArenaAlign, "prefill round report");
     return layout;
 }
 
@@ -431,6 +432,19 @@ RoundState::RoundState(DeviceSpan backing, const RoundStateLayout& layout) {
     logits               = layout.logits.bind(backing);
     text_kv_table_row    = layout.text_kv_table_row.bind(backing);
     backend_kv_table_row = layout.backend_kv_table_row.bind(backing);
+    static_assert(std::is_standard_layout_v<PrefillRoundReport>);
+    report = layout.report.bind(backing);
+    report_logprob = Tensor(static_cast<unsigned char*>(report.data) +
+                                offsetof(PrefillRoundReport, token_logprob),
+                            DType::FP32, {1});
+    report_top_ids = Tensor(static_cast<unsigned char*>(report.data) +
+                                offsetof(PrefillRoundReport, top_ids),
+                            DType::I32,
+                            {ops::kMaxReportedLogprobRanks, 1});
+    report_top_logprobs =
+        Tensor(static_cast<unsigned char*>(report.data) +
+                   offsetof(PrefillRoundReport, top_logprobs),
+               DType::FP32, {ops::kMaxReportedLogprobRanks, 1});
     if (layout.mtp) { mtp.emplace(backing, *layout.mtp); }
     if (layout.dflash_prefill) { dflash_prefill.emplace(backing, *layout.dflash_prefill); }
     if (layout.mtp_decode) {

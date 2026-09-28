@@ -768,6 +768,7 @@ ProgramImplCore::ProgramImplCore(const LoadedModelData& model_in, const Sequence
       continuation_states(continuation_capacity), continuation_slots(continuation_capacity),
       shared_prefix_states(shared_prefix_capacity), shared_prefix_slots(shared_prefix_capacity),
       round_host(sizeof(TokenId)),
+      round_report_host(sizeof(qwen3_8_flash_next::PrefillRoundReport)),
       score_logprobs_host(plan.causal_scoring ? std::make_optional<PinnedHostBuffer>(
                                                     kCausalScoreTile * sizeof(float))
                                               : std::nullopt),
@@ -1000,6 +1001,8 @@ ProgramImplCore::ProgramImplCore(const LoadedModelData& model_in, const Sequence
     set_device_i32(io.backend_kv_table_row, 0);
 
     host_tokens = static_cast<TokenId*>(round_host.data());
+    host_report =
+        static_cast<qwen3_8_flash_next::PrefillRoundReport*>(round_report_host.data());
     if (ordinary_host) {
         ordinary_host_ingress =
             static_cast<qwen3_8_flash_next::OrdinaryDecodeIngress*>(ordinary_host->data());
@@ -11530,6 +11533,10 @@ void ProgramImplCore::copy_tail(SequenceState& sequence, const Tensor& source,
 void ProgramImplCore::copy_round_token() {
     CUDA_CHECK(cudaMemcpyAsync(host_tokens, io.token.data, sizeof(TokenId), cudaMemcpyDeviceToHost,
                                device.stream));
+    if (io.report_token_logprobs) {
+        CUDA_CHECK(cudaMemcpyAsync(host_report, io.report.data, sizeof(PrefillRoundReport),
+                                   cudaMemcpyDeviceToHost, device.stream));
+    }
 }
 
 void ProgramImplCore::mark_workspace_usage(std::size_t phase_bytes) noexcept {
@@ -11923,7 +11930,19 @@ ProgramImplCore::advance_prefill(SequenceState& sequence, RequestControl& reques
         request.lifecycle = Lifecycle::Pending;
         return runtime::PrefillStepResult{
             .summary = summary,
-            .round   = runtime::GeneratedRound{.tokens = std::span<const TokenId>(host_tokens, 1)},
+            .round   = runtime::GeneratedRound{
+                .tokens = std::span<const TokenId>(host_tokens, 1),
+                // One column: the report for the single token this prefill step published.
+                .scores = io.report_token_logprobs
+                    ? runtime::RoundTokenScores{
+                          std::span<const float>(&host_report->token_logprob, 1),
+                          std::span<const std::int32_t>(host_report->top_ids.data(),
+                                                        ops::kMaxReportedLogprobRanks),
+                          std::span<const float>(host_report->top_logprobs.data(),
+                                                 ops::kMaxReportedLogprobRanks),
+                          ops::kMaxReportedLogprobRanks}
+                    : runtime::RoundTokenScores{},
+            },
             .processed_prompt_tokens = processed_prompt_tokens,
             .complete                = true,
             .timing                  = timing.finish(),

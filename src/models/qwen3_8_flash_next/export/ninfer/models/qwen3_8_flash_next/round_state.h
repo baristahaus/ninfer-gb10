@@ -29,6 +29,13 @@ struct RoundStateSpec {
     bool enable_mtp              = false;
     bool enable_dflash           = false;
 };
+// Pinned/device transfer format for the single token a prefill step publishes. Prefill keeps its
+// own tiny egress rather than a decode frame's, so the probability report travels beside it.
+struct PrefillRoundReport {
+    float token_logprob = 0.0F;
+    std::array<std::int32_t, ops::kMaxReportedLogprobRanks> top_ids{};
+    std::array<float, ops::kMaxReportedLogprobRanks> top_logprobs{};
+};
 
 // Stable pinned/device transfer format for ordinary decode. The full fixed-size object is copied
 // once per round; only its exact-B prefixes are consumed by the model schedule.
@@ -185,6 +192,7 @@ struct RoundStateLayout {
     TensorRegion logits;
     TensorRegion text_kv_table_row;
     TensorRegion backend_kv_table_row;
+    LayoutRegion report;
     std::optional<MtpPrefillStateLayout> mtp;
     std::optional<DFlashPrefillStateLayout> dflash_prefill;
     std::optional<MtpDecodeStateLayout> mtp_decode;
@@ -335,6 +343,10 @@ struct RoundState {
     Tensor logits;
     Tensor text_kv_table_row;
     Tensor backend_kv_table_row;
+    DeviceSpan report;
+    Tensor report_logprob;
+    Tensor report_top_ids;
+    Tensor report_top_logprobs;
     std::optional<MtpPrefillState> mtp;
     std::optional<DFlashPrefillState> dflash_prefill;
     std::optional<MtpDecodeState> mtp_decode;

@@ -377,6 +377,40 @@ int run(int kPrefillTokens) {
             ++failures;
         }
     }
+
+    // A wide call whose keys fit the selection budget attends densely. It must still publish the
+    // complete causal selection for a later reuse call: every visible position, -1 elsewhere, and
+    // -1 for the inactive final column.
+    constexpr int kDensePosition = 100;
+    std::vector<int> dense_positions(kPrefillTokens);
+    for (int token = 0; token < kPrefillTokens; ++token) {
+        dense_positions[token] = kDensePosition + token;
+    }
+    DeviceBuffer d_dense_positions = to_device_i32(dense_positions);
+    DeviceBuffer d_dense_selected = to_device_i32(std::vector<int>(2051 * kPrefillTokens, 1 << 30));
+    Tensor dense_selected(d_dense_selected.p, DType::I32, {2051, kPrefillTokens});
+    prefill_workspace.reset();
+    ops::flash_next_qsa(
+        Tensor(d_prefill_input.p, DType::BF16, {kHidden, kPrefillTokens}),
+        Tensor(d_dense_positions.p, DType::I32, {kPrefillTokens, 1}),
+        Tensor(d_prefill_rope.p, DType::I32, {kPrefillTokens, 1, 3}),
+        Tensor(d_prefill_valid.p, DType::I32, {1}), Tensor(d_rows.p, DType::I32, {1}),
+        weights, cache,
+        {.min_visible_keys = kDensePosition + 1,
+         .max_visible_keys = kDensePosition + kPrefillTokens},
+        prefill_destination, prefill_workspace, nullptr, nullptr,
+        {.selected_indices = &dense_selected});
+    cuda_synchronize();
+    std::vector<int> dense_expected(2051 * kPrefillTokens, -1);
+    for (int token = 0; token < active; ++token) {
+        for (int index = 0; index <= dense_positions[token]; ++index) {
+            dense_expected[2051 * token + index] = index;
+        }
+    }
+    if (from_device<int>(d_dense_selected, dense_expected.size()) != dense_expected) {
+        std::cerr << "QSA dense route published an incomplete selection\n";
+        ++failures;
+    }
     return failures;
 }
 

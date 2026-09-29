@@ -10,14 +10,21 @@ if [[ ! -f $GB10_CONFIG ]]; then
     echo "  cp tools/gb10/config.example.sh $GB10_CONFIG   # then edit ART and SERVE_ARGS" >&2
     exit 2
 fi
-# A value passed in the environment (each script's usage line documents ART=...)
-# takes precedence over the config file default.
-ART_FROM_ENV=${ART-}
+# A scalar setting passed in the environment (ART=..., KV_DTYPE=..., DRAFT_TOKENS=...) takes
+# precedence over the config file, whose plain assignments would otherwise overwrite it.
+# SERVE_ARGS is an array and comes from the config file only; it carries its own --kv-dtype and
+# --draft-tokens for the server, so a KV_DTYPE or DRAFT_TOKENS override needs a matching config.
+GB10_ENV_SETTINGS=(ART PORT KV_DTYPE DRAFT_TOKENS PYTHON RUN_SERVING TOKENIZER)
+declare -A gb10_from_env=()
+for name in "${GB10_ENV_SETTINGS[@]}"; do
+    if [[ -n ${!name-} ]]; then gb10_from_env[$name]=${!name}; fi
+done
 # shellcheck source=config.example.sh
 source "$GB10_CONFIG"
-if [[ -n $ART_FROM_ENV ]]; then
-    ART=$ART_FROM_ENV
-fi
+for name in "${!gb10_from_env[@]}"; do
+    printf -v "$name" '%s' "${gb10_from_env[$name]}"
+done
+unset gb10_from_env name
 : "${ART:?ART must name the Flash-Next artifact}" "${PORT:?}" "${KV_DTYPE:?}" "${DRAFT_TOKENS:?}"
 PYTHON=${PYTHON:-python3}
 RUN_SERVING=${RUN_SERVING:-0}

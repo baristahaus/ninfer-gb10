@@ -27,6 +27,9 @@ struct OpenAIChatRequest {
     // timings_per_token controls only cumulative timing snapshots on streamed output chunks.
     bool timings_per_token = false;
     bool return_progress   = false;
+    // Per-token probability reporting. The Engine must be loaded with --token-logprobs to answer it.
+    bool logprobs     = false;
+    int top_logprobs  = 0;
 };
 
 OpenAIChatRequest parse_chat_completion_request(const RequestJson& body,
@@ -40,7 +43,8 @@ struct OpenAIChatResponseIdentity {
 
 OpenAIChatResponseIdentity make_openai_chat_response_identity(std::string model);
 std::string make_chat_completion_response(const OpenAIChatResponseIdentity& identity,
-                                          const GenerationOutcome& outcome);
+                                          const GenerationOutcome& outcome,
+                                          int reported_top_log_logprobs);
 
 class OpenAIChatStream {
 public:

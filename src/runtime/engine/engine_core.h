@@ -67,6 +67,7 @@ public:
                ContextMachineCostModel context_cost)
         : instance_(instance), device_(device), max_context_(options.max_context),
           max_concurrency_(options.max_concurrency),
+          reports_token_logprobs_(options.token_logprobs),
           max_outstanding_(static_cast<std::size_t>(options.max_concurrency) +
                            options.max_pending_requests),
           pending_timeout_(std::chrono::milliseconds(options.pending_timeout_ms)),
@@ -878,6 +879,7 @@ private:
         GenerationResult result;
         result.prompt                  = request->prompt_summary;
         result.generated_token_ids     = std::move(request->generated);
+        result.token_logprobs          = std::move(request->token_logprobs);
         result.content                 = std::move(request->content);
         result.reasoning               = std::move(request->reasoning);
         result.tool_calls              = request->output.take_tool_calls();
@@ -1093,6 +1095,7 @@ private:
         std::array<FinishReason, kMaximumConcurrency> finish_reasons{};
         std::array<ContinuationAction, kMaximumConcurrency> continuations{};
         std::array<std::size_t, kMaximumConcurrency> generated_sizes{};
+        std::array<std::size_t, kMaximumConcurrency> logprob_sizes{};
         std::array<bool, kMaximumConcurrency> cancelled{};
         bool generated_staged = false;
         std::array<std::shared_ptr<Request>, kMaximumConcurrency> terminal_requests{};
@@ -1108,6 +1111,9 @@ private:
                 const auto& request = slots_[lane_indices[row]];
                 if (request != nullptr && request->generated.size() >= generated_sizes[row]) {
                     request->generated.resize(generated_sizes[row]);
+                    // Reports grow with the tokens they describe, so a rolled-back round has to drop
+                    // both halves or the two vectors stop being index-aligned.
+                    request->token_logprobs.resize(logprob_sizes[row]);
                 }
             }
             generated_staged = false;
@@ -1131,6 +1137,7 @@ private:
                 const auto row_tokens     = pending.tokens().subspan(row * pending.row_stride(),
                                                                      static_cast<std::size_t>(count));
                 generated_sizes[row]      = request->generated.size();
+                logprob_sizes[row]        = request->token_logprobs.size();
                 if (cancelled[row]) {
                     (void)request->output.preview_terminal(FinishReason::Cancelled);
                     decisions[row] = CommitDecision{
@@ -1173,6 +1180,38 @@ private:
                                    static_cast<std::ptrdiff_t>(row * pending.row_stride());
                 request->generated.insert(request->generated.end(), first,
                                           first + static_cast<std::ptrdiff_t>(accepted));
+                if (reports_token_logprobs_) {
+                    // These spans view the Program's pinned egress and stop being valid once the
+                    // round commits or aborts, so this is where they become owned data.
+                    const auto reports       = pending.scores();
+                    const std::size_t column0 = row * static_cast<std::size_t>(pending.row_stride());
+                    if (reports.ranks < 1 ||
+                        reports.chosen.size() < column0 + static_cast<std::size_t>(accepted) ||
+                        reports.top_ids.size() != reports.top_logprobs.size() ||
+                        reports.chosen.size() * static_cast<std::size_t>(reports.ranks) !=
+                            reports.top_ids.size()) {
+                        throw std::logic_error(
+                            "a reported round did not publish one probability per token");
+                    }
+                    for (std::uint32_t taken = 0; taken < accepted; ++taken) {
+                        const std::size_t column = column0 + taken;
+                        GeneratedTokenLogprob report;
+                        report.token   = first[taken];
+                        report.logprob = reports.chosen[column];
+                        for (std::int32_t rank = 0; rank < reports.ranks; ++rank) {
+                            const std::size_t at = static_cast<std::size_t>(rank) +
+                                                   column *
+                                                       static_cast<std::size_t>(reports.ranks);
+                            // Ranks past the vocabulary hold the defined negative sentinel and end
+                            // the list; everything before them is already in descending order.
+                            if (reports.top_ids[at] < 0) { break; }
+                            report.top.push_back(
+                                TokenLogprob{static_cast<TokenId>(reports.top_ids[at]),
+                                             reports.top_logprobs[at]});
+                        }
+                        request->token_logprobs.push_back(std::move(report));
+                    }
+                }
             }
         } catch (...) {
             const std::exception_ptr error = std::current_exception();
@@ -1631,6 +1670,12 @@ private:
                                          summary.effective_limit_reason);
         try {
             request->generated.reserve(summary.effective_output_tokens);
+            if (reports_token_logprobs_) {
+                // One report per generated token, so the admission reservation covers both and the
+                // commit path never grows the entry vector mid-round. Each entry's own ranking list
+                // is small and fills once, at the round that produced it.
+                request->token_logprobs.reserve(summary.effective_output_tokens);
+            }
         } catch (...) {
             const AdmissionProgress progress =
                 remove_pending_error(request, std::current_exception());
@@ -1876,6 +1921,7 @@ private:
         }
 
         std::array<std::size_t, kMaximumConcurrency> generated_sizes{};
+        std::array<std::size_t, kMaximumConcurrency> logprob_sizes{};
         std::array<std::optional<std::uint32_t>, kMaximumConcurrency> prefix_execution_splits{};
         bool generated_staged         = false;
         const auto rollback_generated = [&]() noexcept {
@@ -1884,6 +1930,9 @@ private:
                 const auto& request = slots_[membership.lanes[row]];
                 if (request != nullptr && request->generated.size() >= generated_sizes[row]) {
                     request->generated.resize(generated_sizes[row]);
+                    // The forced control spans append reports too, so a failed append has to drop
+                    // them; leaving them behind shifts every later report by one position.
+                    request->token_logprobs.resize(logprob_sizes[row]);
                 }
             }
             generated_staged = false;
@@ -1895,6 +1944,7 @@ private:
                 throw std::logic_error("thinking control membership lost its request");
             }
             generated_sizes[row] = request->generated.size();
+            logprob_sizes[row]   = request->token_logprobs.size();
         }
         generated_staged = true;
         try {
@@ -1925,6 +1975,14 @@ private:
                         "admission did not reserve thinking-control token capacity");
                 }
                 request->generated.insert(request->generated.end(), tokens.begin(), tokens.end());
+                if (reports_token_logprobs_) {
+                    // Engine-forced control spans, not draws: the target model's logits for these
+                    // positions were never consumed, so each report says so rather than inventing one.
+                    for (const TokenId forced : tokens) {
+                        request->token_logprobs.push_back(
+                            GeneratedTokenLogprob{.token = forced, .injected = true});
+                    }
+                }
             }
             phase.pause_range();
             ProgramCallScope program_call(*this);
@@ -2228,6 +2286,7 @@ private:
     DeviceContext& device_;
     const std::uint32_t max_context_;
     const std::uint32_t max_concurrency_;
+    const bool reports_token_logprobs_;
     const std::size_t max_outstanding_;
     const std::chrono::milliseconds pending_timeout_;
     ResourceManagement resources_;

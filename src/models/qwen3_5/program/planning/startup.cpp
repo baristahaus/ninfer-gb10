@@ -733,6 +733,13 @@ void validate_target_options(const execution::Parameters& parameters, DeviceCont
         parameters.model.config().text.full_attention_layers == 0) {
         throw std::invalid_argument("Qwen3.5 Program requires at least one full-attention layer");
     }
+    if (options.token_logprobs) {
+        // Per-token probability reporting exists for the Qwen3.8 Flash-Next family only. Failing at
+        // load, rather than loading the flag and publishing nothing, keeps a requested capability
+        // honest: the Engine never accepts a request whose reports it cannot produce.
+        throw std::invalid_argument(
+            "token_logprobs is implemented for the Qwen3.8 Flash-Next family only");
+    }
     if (parameters.model.options() != models::load_options(options)) {
         throw std::invalid_argument(
             "loaded components do not match the requested execution options");
@@ -801,8 +808,9 @@ void validate_target_options(const execution::Parameters& parameters, DeviceCont
         }
         break;
     }
-    if (device.compute_capability() != 120) {
-        throw std::invalid_argument("Qwen3.5 family runtime requires compute capability 12.0");
+    if (device.compute_capability() != 120 && device.compute_capability() != 121) {
+        throw std::invalid_argument(
+            "Qwen3.5 family runtime requires compute capability 12.0 or 12.1 (Blackwell)");
     }
 }
 

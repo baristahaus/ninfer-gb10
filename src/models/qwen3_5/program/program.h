@@ -687,6 +687,11 @@ public:
 
     [[nodiscard]] std::uint32_t row_stride() const noexcept { return row_stride_; }
 
+    // This family publishes no per-token probability reports; the Engine refuses
+    // EngineOptions::token_logprobs for Qwen3.5 at load, so this empty answer is never read. The
+    // accessor exists because the shared Engine token transaction is written against one contract.
+    [[nodiscard]] runtime::RoundTokenScores scores() const noexcept { return {}; }
+
     [[nodiscard]] runtime::ExecutionTiming execution_timing() const noexcept { return timing_; }
 
 private:

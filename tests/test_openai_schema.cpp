@@ -146,8 +146,24 @@ int test_standard_field_policy() {
 
     rejected("n", 2, "n_not_supported");
     rejected("logit_bias", Json{{"12", 1}}, "logit_bias_not_supported");
-    rejected("logprobs", true, "logprobs_not_supported");
-    rejected("top_logprobs", 2, "logprobs_not_supported");
+    {
+        // Probability reporting is an executable request now: the parser records it and the HTTP
+        // layer decides whether the loaded Engine can answer, so the parser must not reject it.
+        Json body                    = base_request();
+        body["logprobs"]             = true;
+        body["top_logprobs"]         = 5;
+        const OpenAIChatRequest reporting = parse(body);
+        failures += check(reporting.logprobs && reporting.top_logprobs == 5,
+                          "logprobs and top_logprobs are recorded for the response layer");
+    }
+    {
+        // Alternatives without reports has no defined answer, so the combination fails on its own
+        // field instead of the count being dropped.
+        Json body            = base_request();
+        body["top_logprobs"] = 2;
+        failures += check(api_error([&] { (void)parse(body); }).param == "top_logprobs",
+                          "top_logprobs without logprobs=true rejected");
+    }
     {
         // response_format json_object is accepted and recorded (prompt-guided JSON).
         Json body              = base_request();
@@ -682,7 +698,7 @@ OpenAIChatResponseIdentity identity() {
 int test_aggregate_response() {
     int failures              = 0;
     GenerationOutcome outcome = sample_outcome();
-    Json response             = Json::parse(make_chat_completion_response(identity(), outcome));
+    Json response = Json::parse(make_chat_completion_response(identity(), outcome, 0));
     failures += check(response["choices"][0]["message"]["content"] == "answer" &&
                           response["choices"][0]["message"]["reasoning_content"] == "thought" &&
                           response["choices"][0]["message"]["refusal"].is_null(),
@@ -707,7 +723,7 @@ int test_aggregate_response() {
         .name = "Edit",
         .arguments_json =
             R"({"file_path":"/tmp/probe.cpp","old_string":"old","new_string":"new"})"});
-    response         = Json::parse(make_chat_completion_response(identity(), outcome));
+    response         = Json::parse(make_chat_completion_response(identity(), outcome, 0));
     const Json& call = response["choices"][0]["message"]["tool_calls"][0];
     failures += check(response["choices"][0]["finish_reason"] == "tool_calls" &&
                           response["choices"][0]["message"]["content"].is_null(),
@@ -716,6 +732,50 @@ int test_aggregate_response() {
         call["id"].get<std::string>().starts_with("call_") && call["function"]["name"] == "Edit" &&
             !Json::parse(call["function"]["arguments"].get<std::string>()).contains("replace_all"),
         "OpenAI adapter owns wire tool-call identifiers");
+    return failures;
+}
+
+int test_aggregate_logprobs() {
+    int failures              = 0;
+    GenerationOutcome outcome = sample_outcome();
+    // Reports name vocabulary ids, and an alternative is a different id with its own text. Position in
+    // the generated sequence must never be what selects a piece.
+    outcome.token_logprobs = {
+        ninfer::GeneratedTokenLogprob{
+            .token = 151644, .logprob = -0.25F, .top = {{151644, -0.25F}, {198, -1.5F}}},
+        ninfer::GeneratedTokenLogprob{.token = 362, .injected = true},
+        ninfer::GeneratedTokenLogprob{
+            .token = 5215, .logprob = -0.5F, .top = {{264, -1.0F}}},
+    };
+    outcome.token_pieces = {{151644, "Hello"},
+                            {198, "\n"},
+                            {362, " there"},
+                            {5215, " world"},
+                            // A piece that ends inside a multi-byte character: `token` is lossy, the
+                            // byte list is not.
+                            {264, "\xF0\x9F\x98"}};
+    const Json logprobs =
+        Json::parse(make_chat_completion_response(identity(), outcome, 2))["choices"][0]["logprobs"];
+    failures += check(logprobs["content"].size() == 3 && logprobs["refusal"].is_null(),
+                      "logprobs reports one entry per generated token");
+    failures += check(logprobs["content"][0]["token"] == "Hello" &&
+                          logprobs["content"][0]["logprob"] == -0.25,
+                      "the chosen token reports its own piece");
+    // The regression this guards: alternatives are vocabulary ids. Id 198 is a tenth of a plausible
+    // position index and 151644 is far beyond any of them, so a lookup by position yields either
+    // nothing or the neighbouring token's text.
+    failures += check(logprobs["content"][0]["top_logprobs"][0]["token"] == "Hello" &&
+                          logprobs["content"][0]["top_logprobs"][1]["token"] == "\n" &&
+                          logprobs["content"][0]["top_logprobs"][1]["bytes"] == Json::array({10}),
+                      "each alternative resolves to the piece of the id it names");
+    failures += check(logprobs["content"][1]["injected"] == true &&
+                          logprobs["content"][1]["logprob"] == 0 &&
+                          logprobs["content"][1]["token"] == " there",
+                      "an injected control span is marked and keeps its position");
+    failures += check(logprobs["content"][2]["top_logprobs"][0]["bytes"].size() == 3 &&
+                          logprobs["content"][2]["top_logprobs"][0]["token"].get<std::string>() ==
+                              "\xEF\xBF\xBD",
+                      "a split character stays exact in bytes and lossy in text");
     return failures;
 }
 
@@ -1141,6 +1201,7 @@ int main() {
     failures += test_reasoning_and_extensions();
     failures += test_stops_and_ranges();
     failures += test_aggregate_response();
+    failures += test_aggregate_logprobs();
     failures += test_stream_response();
     failures += test_stream_observations();
     failures += test_common_objects();

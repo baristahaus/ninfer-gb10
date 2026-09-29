@@ -373,7 +373,7 @@ def main() -> None:
         hardware = Hardware(**json.loads(args.hardware.read_text()))
         benchmark = json.loads(args.benchmark.read_text())
         if (benchmark.get("artifact_type") != "ninfer_bench_report" or
-                benchmark.get("schema_version") != 15 or
+                benchmark.get("schema_version") != 16 or
                 benchmark.get("load", {}).get("architecture") != "Qwen3_8FlashNextForCausalLM" or
                 "nvfp4" not in benchmark.get("load", {}).get("formats", []) or
                 len(benchmark.get("tests", [])) != 1):

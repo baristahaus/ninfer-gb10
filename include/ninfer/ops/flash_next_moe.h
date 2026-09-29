@@ -46,7 +46,8 @@ struct FlashNextMoeWeights {
 [[nodiscard]] std::size_t flash_next_moe_workspace_capacity_bytes(std::int32_t tokens);
 
 // Exact Qwen3.8 Flash-Next 512-way, normalized top-10 routed MoE plus sigmoid-gated shared
-// expert. Main-model banks are expert-major NVFP4; the MTP bank is expert-major BF16. The
+// expert. Banks are expert-major NVFP4 (main layers, and the MTP layer of the FP8 profile) or
+// expert-major BF16 (the checkpoint's MTP banks); the bank's format selects the route. The
 // shared expert is BF16, or row-scaled FP8 with a packed gate/up parent (LinearSwiGLU's
 // Flash-Next profile). Destination is overwritten with the BF16 result.
 void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Tensor& destination,

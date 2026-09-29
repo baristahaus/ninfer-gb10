@@ -87,13 +87,15 @@ const std::vector<ninfer::TokenId>& canonical_output(const std::string& recipe,
                                                      bool mtp_path) {
     static const std::vector<ninfer::TokenId> nvfp4{  // BF16 dense: the source checkpoint.
         29108, 4009, 27891, 8964, 579, 16078, 321, 1100, 9872, 303, 660, 17425};
-    // Recorded from the step 7a artifact (FP8 GDN/QSA projections, HyperConnection down and
-    // head). The fp8_projections recipe also moves the HyperConnection up projections and the
-    // shared expert to FP8, so these are re-recorded from its engine on its first run.
+    // Recorded from the fp8_projections artifact's engine: FP8 GDN/QSA projections, HyperConnection
+    // down and up projections, the shared expert and the head. The MTP verify path re-records the
+    // tail against the 7a artifact (864 43000 vs 694 22602); the plain decode path stays on the
+    // model's confident branch and agrees with the BF16 prefix above. The cross-path boundary
+    // (11855) holds exactly on this artifact.
     static const std::vector<ninfer::TokenId> fp8_mtp{  // fp8_row_maxabs dense, MTP path.
-        29108, 4009, 5435, 660, 7736, 314, 279, 9155, 19142, 11, 694, 22602};
+        29108, 4009, 5435, 660, 7736, 314, 279, 9155, 19142, 11, 864, 43000};
     static const std::vector<ninfer::TokenId> fp8_ordinary{  // same artifact, plain decode.
-        29108, 4009, 5435, 660, 7736, 314, 279, 9155, 19142, 11, 694, 22602};
+        29108, 4009, 27891, 8964, 579, 16078, 321, 1100, 9872, 303, 660, 17425};
     if (recipe == kFp8Recipe) {
         return mtp_path ? fp8_mtp : fp8_ordinary;
     }

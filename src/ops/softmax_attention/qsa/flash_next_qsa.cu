@@ -732,6 +732,21 @@ __global__ void expand_indices_batched_kernel(const int* selected_groups,
     }
 }
 
+// Within the selection budget every causally visible key is selected. The dense attention route
+// publishes that complete selection so a later reuse call sees the same index contract as the
+// selected-group route.
+__global__ void dense_indices_batched_kernel(const int* cache_positions,
+                                             const int* valid_columns, int width,
+                                             int* output) {
+    const int token = static_cast<int>(blockIdx.y);
+    const int index = static_cast<int>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (index >= kOutputWidth) { return; }
+    const int batch_lane = token / width;
+    const int column = token - batch_lane * width;
+    output[index + static_cast<std::int64_t>(kOutputWidth) * token] =
+        column < valid_columns[batch_lane] && index <= cache_positions[token] ? index : -1;
+}
+
 // Match the collection order used by vLLM's short-row persistent top-k: its vectorized
 // histogram collector visits one element from each float4 before advancing to the next lane.
 // The selected set is unchanged; only the deterministic accumulation order is reproduced.
@@ -1795,6 +1810,13 @@ void flash_next_qsa(const Tensor& input, const Tensor& cache_positions,
     if (tokens > 16 && envelope.max_visible_keys <= kOutputWidth) {
         dispatch_batched(dim3(tokens, kKvHeads), nullptr, 1, nullptr, nullptr, nullptr,
                          static_cast<__nv_bfloat16*>(attention.data));
+        if (index_control.selected_indices != nullptr) {
+            dense_indices_batched_kernel<<<dim3((kOutputWidth + 255) / 256, tokens), 256, 0,
+                                           stream>>>(
+                static_cast<const int*>(cache_positions.data),
+                static_cast<const int*>(valid_columns.data), width,
+                static_cast<int*>(index_control.selected_indices->data));
+        }
         CUDA_CHECK(cudaGetLastError());
     } else {
         // Decode keeps a fixed launch extent across graph profiles.  Prompt

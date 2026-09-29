@@ -126,7 +126,8 @@ NInfer is a from-scratch C++/CUDA inference engine for maximum single-GPU perfor
 Qwen3.5 Dense/MoE and the fixed Qwen3.8 Flash-Next 125B-A6B architecture. V3 artifacts supply
 model configuration, encoded objects, logical bindings, Uses and selected component resources.
 Official 27B/35B recipes target RTX 5090; Flash-Next NVFP4 targets RTX PRO 6000 Blackwell.
-The implementation is compiled for `sm_120a`. Text, image/video Vision, MTP, prefix reuse, CLI,
+The implementation is compiled for `sm_120a` (RTX 5090 / RTX PRO 6000) and `sm_121a` (GB10).
+Text, image/video Vision, MTP, prefix reuse, CLI,
 OpenAI/Anthropic serving and measurement share the public `.ninfer` Engine route. The Qwen3.5
 family additionally supports DFlash/DFlash2 with the corresponding companion components.
 

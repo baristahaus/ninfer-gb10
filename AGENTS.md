@@ -380,6 +380,9 @@ Use the selected Python 3.11 interpreter explicitly. Do not install or upgrade d
 the task requires it. Never select an artifact by glob, modification time, or an unqualified
 “latest” name. Large artifacts, source checkpoints, and profiler outputs are local prerequisites;
 do not download or regenerate them unless that work is in scope.
+- GPU work is single-instance. Never launch a second device-allocating run (real-artifact
+  tests, serve batteries, sweeps) while one is in flight: the 121 GiB unified pool fits one
+  73.7 GiB model load at a time. Wait for the running job to complete before starting the next.
 
 ```bash
 PYTHON=python3

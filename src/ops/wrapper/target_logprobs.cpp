@@ -78,34 +78,10 @@ std::int32_t validate_ranking(const Tensor& logits, Tensor* top_ids, Tensor* top
     return top_ids->ne[0];
 }
 
-// The count reconciliation only means something beside a sampling config: without configs there is
-// no committed-token array to correct. columns_per_lane must partition the reported columns
-// exactly, which is what lets one config and one lane token span serve a whole verify row.
-void validate_options(const TargetLogprobOptions& options, std::int32_t columns) {
-    if (options.configs == nullptr) {
-        if (options.columns_per_lane != 1 || options.round_tokens != nullptr ||
-            options.round_produced != nullptr) {
-            throw std::invalid_argument(
-                "target_logprobs: lane configs and round token arrays require configs");
-        }
-        return;
-    }
-    if (options.columns_per_lane <= 0 || options.columns_per_lane > columns ||
-        columns % options.columns_per_lane != 0) {
-        throw std::invalid_argument("target_logprobs: columns_per_lane must be in [1,columns] and "
-                                    "divide the column count exactly");
-    }
-    if (options.round_produced != nullptr && options.round_tokens == nullptr) {
-        throw std::invalid_argument(
-            "target_logprobs: round produced counts require round tokens");
-    }
-}
-
 } // namespace
 
 void target_logprobs(const Tensor& logits, const Tensor& target_ids, std::int32_t valid_rows,
-                     const TargetLogprobOptions& options, Tensor& output, Tensor* top_ids,
-                     Tensor* top_logprobs, cudaStream_t stream) {
+                     Tensor& output, Tensor* top_ids, Tensor* top_logprobs, cudaStream_t stream) {
     if (logits.dtype != DType::BF16) {
         throw std::invalid_argument("target_logprobs: logits must be BF16");
     }
@@ -123,11 +99,7 @@ void target_logprobs(const Tensor& logits, const Tensor& target_ids, std::int32_
     if (valid_rows <= 0 || valid_rows > logits.ne[0]) {
         throw std::invalid_argument("target_logprobs: valid_rows must be in [1, physical_rows]");
     }
-    validate_options(options, columns);
 
-    (void)logits.bytes();
-    (void)target_ids.bytes();
-    (void)output.bytes();
     require_accessible(logits, alignof(std::uint16_t), "logits");
     require_accessible(target_ids, alignof(std::int32_t), "target_ids");
     require_accessible(output, alignof(float), "output");
@@ -146,8 +118,8 @@ void target_logprobs(const Tensor& logits, const Tensor& target_ids, std::int32_
         }
     }
 
-    detail::target_logprobs_launch(logits, target_ids, valid_rows, options, output, top_ids,
-                                   top_logprobs, stream);
+    detail::target_logprobs_launch(logits, target_ids, valid_rows, output, top_ids, top_logprobs,
+                                   stream);
 }
 
 } // namespace ninfer::ops

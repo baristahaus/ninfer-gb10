@@ -569,10 +569,11 @@ enum class FinishReason : std::uint8_t {
     Cancelled,
 };
 
-// One reported vocabulary entry: a token and its natural-log probability under the target model,
-// scaled by the request temperature and after its presence/frequency penalties. The reported
-// distribution is the whole vocabulary, not the top-k, top-p or min-p truncated set the sampler drew
-// from: it says what the model assigned, not what the selection policy allowed.
+// One reported vocabulary entry: a token and its natural-log probability under the target model's
+// own distribution - the full vocabulary, with no temperature scaling and no presence or frequency
+// adjustment. This is what vLLM reports and what an external scorer or calibrator needs: a model
+// property, not a sampling artefact. A token drawn under temperature or penalties is therefore not
+// necessarily the reported top-1.
 struct TokenLogprob {
     TokenId token   = 0;
     float logprob   = 0.0F;

@@ -146,8 +146,24 @@ int test_standard_field_policy() {
 
     rejected("n", 2, "n_not_supported");
     rejected("logit_bias", Json{{"12", 1}}, "logit_bias_not_supported");
-    rejected("logprobs", true, "logprobs_not_supported");
-    rejected("top_logprobs", 2, "logprobs_not_supported");
+    {
+        // Probability reporting is an executable request now: the parser records it and the HTTP
+        // layer decides whether the loaded Engine can answer, so the parser must not reject it.
+        Json body                    = base_request();
+        body["logprobs"]             = true;
+        body["top_logprobs"]         = 5;
+        const OpenAIChatRequest reporting = parse(body);
+        failures += check(reporting.logprobs && reporting.top_logprobs == 5,
+                          "logprobs and top_logprobs are recorded for the response layer");
+    }
+    {
+        // Alternatives without reports has no defined answer, so the combination fails on its own
+        // field instead of the count being dropped.
+        Json body            = base_request();
+        body["top_logprobs"] = 2;
+        failures += check(api_error([&] { (void)parse(body); }).param == "top_logprobs",
+                          "top_logprobs without logprobs=true rejected");
+    }
     {
         // response_format json_object is accepted and recorded (prompt-guided JSON).
         Json body              = base_request();

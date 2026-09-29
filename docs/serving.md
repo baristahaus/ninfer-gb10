@@ -160,11 +160,12 @@ beside it.
 
 `top_logprobs` selects how many leading alternatives each entry reports, in `[0,20]`; `0`, or omitting
 it, reports the chosen token alone, and a non-zero value without `logprobs: true` is rejected rather
-than dropped. The reported distribution is the whole vocabulary after the request's temperature and
-presence/frequency penalties — what the model assigned — not the top-k, top-p or min-p truncated set
-the sampler actually drew from. Each `token` field is the tokenizer's piece for that id, with anything
-that is not a complete UTF-8 sequence replaced, and each `bytes` field carries those same bytes
-exactly, because one token can end inside a multi-byte character.
+than dropped. The reported distribution is the model's own over the whole vocabulary: no temperature
+scaling and no presence or frequency adjustment, matching vLLM, so an external scorer agrees and a
+token drawn under a non-zero temperature or a penalty need not be the reported top-1. Each `token`
+field is the tokenizer's piece for that id, with anything that is not a complete UTF-8 sequence
+replaced, and each `bytes` field carries those same bytes exactly, because one token can end inside a
+multi-byte character.
 
 `logprobs.content` holds exactly one entry per generated token in order, including reasoning tokens
 and any control span the Engine inserted rather than sampled; the latter report `logprob: 0` with

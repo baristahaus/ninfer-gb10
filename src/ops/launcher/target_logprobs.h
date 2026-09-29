@@ -12,7 +12,7 @@
 namespace ninfer::ops::detail {
 
 void target_logprobs_launch(const Tensor& logits, const Tensor& target_ids, std::int32_t valid_rows,
-                            const TargetLogprobOptions& options, Tensor& output, Tensor* top_ids,
-                            Tensor* top_logprobs, cudaStream_t stream);
+                            Tensor& output, Tensor* top_ids, Tensor* top_logprobs,
+                            cudaStream_t stream);
 
 } // namespace ninfer::ops::detail

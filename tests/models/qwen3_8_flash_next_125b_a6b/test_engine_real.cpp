@@ -22,6 +22,11 @@ ninfer::EngineOptions engine_options(const char* artifact) {
     options.speculative.proposal_head        = ninfer::ProposalHead::Full;
     options.enable_vision                    = true;
     options.use_cuda_graph                   = true;
+    // Maintainer override: the built-in logit/state capture hooks reject graph capture.
+    if (const char* no_graphs = std::getenv("NINFER_TEST_NO_GRAPHS");
+        no_graphs != nullptr && *no_graphs != '\0') {
+        options.use_cuda_graph = false;
+    }
     options.max_concurrency                  = 2;
     options.max_pending_requests             = 2;
     options.context_cache.device_state_slots = 4;

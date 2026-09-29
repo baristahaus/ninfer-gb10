@@ -53,7 +53,14 @@ const std::vector<ninfer::TokenId>& canonical_prompt() {
 // track the FP8 dense-route profile: a route change (template unification, T=2..4
 // Tensor Core re-route) re-records them from the new engine, validated by the gate.
 
-const std::string kFp8Recipe = "qwen3_8_flash_next_125b_a6b_nvfp4_fp8_projections-v3";
+// The fp8_mtp profile carries the fp8_projections target weights unchanged and differs only in
+// its draft layer, so both share the FP8 goldens. The MTP golden records the verify path, whose
+// round widths follow the drafts' acceptance: a different draft layer can move it, and it is
+// then re-recorded like any route change.
+bool fp8_recipe(const std::string& recipe) {
+    return recipe == "qwen3_8_flash_next_125b_a6b_nvfp4_fp8_projections-v3" ||
+           recipe == "qwen3_8_flash_next_125b_a6b_nvfp4_fp8_mtp-v3";
+}
 
 // Cross-path boundaries. The reuse checks compare a continuation served from captured
 // state against the same continuation computed cold. The two are distinct evaluations
@@ -79,7 +86,7 @@ struct CrossPathFixture {
 // continuation at the old boundary, where the next choice is confident; the checks stay
 // exact.
 CrossPathFixture cross_path_fixture(const std::string& recipe) {
-    if (recipe == kFp8Recipe) { return {11855, 4}; }
+    if (fp8_recipe(recipe)) { return {11855, 4}; }
     return {198, 4};
 }
 
@@ -101,7 +108,7 @@ const std::vector<ninfer::TokenId>& canonical_output(const std::string& recipe,
         29108, 4009, 5435, 660, 7736, 314, 279, 9155, 19142, 11, 864, 43000};
     static const std::vector<ninfer::TokenId> fp8_ordinary{  // same artifact, plain decode.
         29108, 4009, 27891, 8964, 579, 16078, 321, 1100, 9872, 303, 660, 17425};
-    if (recipe == kFp8Recipe) {
+    if (fp8_recipe(recipe)) {
         return mtp_path ? fp8_mtp : fp8_ordinary;
     }
     return nvfp4;

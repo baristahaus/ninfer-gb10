@@ -1,5 +1,6 @@
 #include "models/qwen3_8_flash_next_125b_a6b/impl/variant.h"
 
+#include "ninfer/ops/flash_next_qsa.h"
 #include "ninfer/ops/gdn_gating.h"
 #include "ninfer/ops/linear.h"
 #include "ninfer/ops/residual_add.h"
@@ -45,13 +46,21 @@ std::vector<GraphExecutionProfile> Variant::mtp_graph_profiles(std::uint32_t cap
                                                                std::uint32_t draft_window) {
     if (draft_window == 0) { return {}; }
     auto out = profiles(capacity);
-    // The four-token MTP verify/draft schedule changes CUDA Graph topology between the 65K and
-    // 131K envelopes even though ordinary single-token decode can update one executable across
-    // that boundary. Keep the same execution frontiers while giving the two MTP definitions
-    // distinct executable owners.
+    // A profile's executable may be updated only to definitions of the same node topology. The MTP
+    // schedule changes topology where ordinary single-token decode does not:
+    // - between the 65K and 131K envelopes (the four-token verify/draft schedule);
+    // - where QSA attends densely: a verify batch wider than 16 tokens whose visible keys
+    //   (profile maximum + K + 1) all fit the selected-token budget runs one dense attention
+    //   kernel instead of the score/select/expand/attend pipeline. Batches of 6 x K=2 or 5 x K=3
+    //   reach that width, so those profiles own a separate executable at every batch size.
+    constexpr std::uint32_t kDenseQsa = 5;
     for (GraphExecutionProfile& profile : out) {
-        if (profile.max <= 65535U) { continue; }
-        profile.topology_class = profile.max <= 131071U ? 3U : 4U;
+        if (static_cast<std::uint64_t>(profile.max) + draft_window + 1ULL <=
+            static_cast<std::uint64_t>(ops::kFlashNextQsaSelectedTokens)) {
+            profile.topology_class = kDenseQsa;
+        } else if (profile.max > 65535U) {
+            profile.topology_class = profile.max <= 131071U ? 3U : 4U;
+        }
     }
     return out;
 }

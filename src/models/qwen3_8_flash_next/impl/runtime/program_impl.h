@@ -768,6 +768,7 @@ ProgramImplCore::ProgramImplCore(const LoadedModelData& model_in, const Sequence
       continuation_states(continuation_capacity), continuation_slots(continuation_capacity),
       shared_prefix_states(shared_prefix_capacity), shared_prefix_slots(shared_prefix_capacity),
       round_host(sizeof(TokenId)),
+      round_report_host(sizeof(qwen3_8_flash_next::PrefillRoundReport)),
       score_logprobs_host(plan.causal_scoring ? std::make_optional<PinnedHostBuffer>(
                                                     kCausalScoreTile * sizeof(float))
                                               : std::nullopt),
@@ -950,6 +951,14 @@ ProgramImplCore::ProgramImplCore(const LoadedModelData& model_in, const Sequence
     }
 
     io = qwen3_8_flash_next::RoundState(backing, plan.persistent.round);
+    io.report_token_logprobs = plan.token_logprobs;
+    if (io.report_token_logprobs && speculative_backend == SpeculativeBackend::DFlash) {
+        // The DFlash verify schedule publishes tokens this report does not cover, so one report per
+        // generated token could not hold. The 125B-A6B instance selects no DFlash companion; rejecting
+        // here keeps a future one from quietly breaking the contract instead.
+        throw std::invalid_argument(
+            "token logprob reporting does not cover the DFlash decode schedule");
+    }
     if (io.mtp.has_value() != (speculative_backend == SpeculativeBackend::Mtp)) {
         throw std::logic_error("round-state MTP extension does not match the sequence plan");
     }
@@ -999,6 +1008,8 @@ ProgramImplCore::ProgramImplCore(const LoadedModelData& model_in, const Sequence
     set_device_i32(io.backend_kv_table_row, 0);
 
     host_tokens = static_cast<TokenId*>(round_host.data());
+    host_report =
+        static_cast<qwen3_8_flash_next::PrefillRoundReport*>(round_report_host.data());
     if (ordinary_host) {
         ordinary_host_ingress =
             static_cast<qwen3_8_flash_next::OrdinaryDecodeIngress*>(ordinary_host->data());
@@ -1127,8 +1138,8 @@ std::vector<float> ProgramImplCore::causal_score(PreparedPromptData&& prompt,
             ops::linear(hidden, model.output_head, logits, device.stream);
             CUDA_CHECK(cudaMemcpyAsync(target_ids.data, staged_targets.data(), target_ids.bytes(),
                                        cudaMemcpyHostToDevice, device.stream));
-            ops::target_logprobs(logits, target_ids, TextConfig::token_domain, logprobs,
-                                 device.stream);
+            ops::target_logprobs(logits, target_ids, TextConfig::token_domain, logprobs, nullptr,
+                                 nullptr, device.stream);
             CUDA_CHECK(cudaMemcpyAsync(score_logprobs_host->data(), logprobs.data, logprobs.bytes(),
                                        cudaMemcpyDeviceToHost, device.stream));
             device.synchronize();
@@ -7164,6 +7175,12 @@ PendingBatch ProgramImplCore::wrap_pending(std::span<const std::uint32_t> lanes,
     if (pending_transaction_ || lanes.empty() || lanes.size() > max_concurrency) {
         throw std::logic_error("Program already owns a pending transaction");
     }
+    if (io.report_token_logprobs && round.scores.empty()) {
+        // Every published token has a report by contract, so a round that carries tokens and no
+        // reports would leave the Engine's two vectors misaligned. Failing here, before the batch
+        // reaches the Engine, keeps that impossible to observe.
+        throw std::logic_error("a Program round published tokens without probability reports");
+    }
     PendingTransaction transaction;
     transaction.id   = next_transaction_id_++;
     transaction.size = lanes.size();
@@ -7181,7 +7198,7 @@ PendingBatch ProgramImplCore::wrap_pending(std::span<const std::uint32_t> lanes,
     pending_transaction_ = transaction;
     return ContractAccess::make_pending(
         this, transaction.id, std::span<const SequenceHandle>(handles.data(), lanes.size()),
-        round.tokens, round.row_counts, round.row_stride, round.timing);
+        round.tokens, round.row_counts, round.row_stride, round.scores, round.timing);
 }
 
 PrefillProgress ProgramImplCore::wrap_prefill(std::uint32_t lane, runtime::PrefillStepResult step) {
@@ -7196,6 +7213,7 @@ PrefillProgress ProgramImplCore::wrap_prefill(std::uint32_t lane, runtime::Prefi
             .tokens     = step.round.tokens,
             .row_counts = {},
             .row_stride = 1,
+            .scores     = step.round.scores,
         };
         out.pending.emplace(wrap_pending(lanes, round));
     } else if (requests[lane].prefill && requests[lane].prefill->pending_capture_offer != 0) {
@@ -11529,6 +11547,10 @@ void ProgramImplCore::copy_tail(SequenceState& sequence, const Tensor& source,
 void ProgramImplCore::copy_round_token() {
     CUDA_CHECK(cudaMemcpyAsync(host_tokens, io.token.data, sizeof(TokenId), cudaMemcpyDeviceToHost,
                                device.stream));
+    if (io.report_token_logprobs) {
+        CUDA_CHECK(cudaMemcpyAsync(host_report, io.report.data, sizeof(PrefillRoundReport),
+                                   cudaMemcpyDeviceToHost, device.stream));
+    }
 }
 
 void ProgramImplCore::mark_workspace_usage(std::size_t phase_bytes) noexcept {
@@ -11922,7 +11944,19 @@ ProgramImplCore::advance_prefill(SequenceState& sequence, RequestControl& reques
         request.lifecycle = Lifecycle::Pending;
         return runtime::PrefillStepResult{
             .summary = summary,
-            .round   = runtime::GeneratedRound{.tokens = std::span<const TokenId>(host_tokens, 1)},
+            .round   = runtime::GeneratedRound{
+                .tokens = std::span<const TokenId>(host_tokens, 1),
+                // One column: the report for the single token this prefill step published.
+                .scores = io.report_token_logprobs
+                    ? runtime::RoundTokenScores{
+                          std::span<const float>(&host_report->token_logprob, 1),
+                          std::span<const std::int32_t>(host_report->top_ids.data(),
+                                                        ops::kMaxReportedLogprobRanks),
+                          std::span<const float>(host_report->top_logprobs.data(),
+                                                 ops::kMaxReportedLogprobRanks),
+                          ops::kMaxReportedLogprobRanks}
+                    : runtime::RoundTokenScores{},
+            },
             .processed_prompt_tokens = processed_prompt_tokens,
             .complete                = true,
             .timing                  = timing.finish(),
@@ -12081,6 +12115,20 @@ ProgramImplCore::decode_ordinary_batch(std::span<const std::uint32_t> lanes,
         return runtime::BatchedGeneratedRound{
             .tokens =
                 std::span<const TokenId>(ordinary_host_egress->sampled_tokens.data(), lanes.size()),
+            // Layout matches tokens: report i belongs to lane i, and lane i's alternative ranks
+            // occupy [i*ranks, (i+1)*ranks). Empty unless the engine loaded the capability.
+            .scores =
+                io.report_token_logprobs
+                    ? runtime::RoundTokenScores{
+                          std::span<const float>(ordinary_host_egress->token_logprobs.data(),
+                                                 lanes.size()),
+                          std::span<const std::int32_t>(
+                              ordinary_host_egress->top_ids.data(),
+                              lanes.size() * ops::kMaxReportedLogprobRanks),
+                          std::span<const float>(ordinary_host_egress->top_logprobs.data(),
+                                                 lanes.size() * ops::kMaxReportedLogprobRanks),
+                          ops::kMaxReportedLogprobRanks}
+                    : runtime::RoundTokenScores{},
             .timing = timing.finish(),
         };
     } catch (...) {
@@ -12306,6 +12354,21 @@ ProgramImplCore::decode_mtp_batch(std::span<const std::uint32_t> lanes,
             .row_counts = std::span<const std::int32_t>(mtp_host_egress->licensed_counts.data(),
                                                         lanes.size()),
             .row_stride = width,
+            // Same lane-major column order as licensed_tokens. A row publishes only its first
+            // licensed_counts entries; the reports after that column are never read.
+            .scores =
+                io.report_token_logprobs
+                    ? runtime::RoundTokenScores{
+                          std::span<const float>(mtp_host_egress->token_logprobs.data(),
+                                                 lanes.size() * width),
+                          std::span<const std::int32_t>(
+                              mtp_host_egress->top_ids.data(),
+                              lanes.size() * width * ops::kMaxReportedLogprobRanks),
+                          std::span<const float>(
+                              mtp_host_egress->top_logprobs.data(),
+                              lanes.size() * width * ops::kMaxReportedLogprobRanks),
+                          ops::kMaxReportedLogprobRanks}
+                    : runtime::RoundTokenScores{},
             .timing     = timing.finish(),
         };
     } catch (...) {

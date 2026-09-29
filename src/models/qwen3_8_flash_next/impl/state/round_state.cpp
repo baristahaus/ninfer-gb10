@@ -80,6 +80,7 @@ RoundStateLayout begin_round_state_layout(LayoutBuilder& builder, const RoundSta
     layout.logits     = add_tensor(builder, DType::BF16, {spec.output_rows, 1}, "step logits");
     layout.text_kv_table_row    = add_tensor(builder, DType::I32, {1}, "step Text KV table row");
     layout.backend_kv_table_row = add_tensor(builder, DType::I32, {1}, "step backend KV table row");
+    layout.report = builder.add(sizeof(PrefillRoundReport), kArenaAlign, "prefill round report");
     return layout;
 }
 
@@ -113,6 +114,17 @@ OrdinaryDecodeState::OrdinaryDecodeState(DeviceSpan backing,
     sampled_tokens = Tensor(static_cast<unsigned char*>(egress.data) +
                                 offsetof(OrdinaryDecodeEgress, sampled_tokens),
                             DType::I32, {count});
+    token_logprobs = Tensor(static_cast<unsigned char*>(egress.data) +
+                                offsetof(OrdinaryDecodeEgress, token_logprobs),
+                            DType::FP32, {count});
+    top_ids        = Tensor(static_cast<unsigned char*>(egress.data) +
+                            offsetof(OrdinaryDecodeEgress, top_ids),
+                            DType::I32,
+                            {ops::kMaxReportedLogprobRanks, count});
+    top_logprobs   = Tensor(static_cast<unsigned char*>(egress.data) +
+                            offsetof(OrdinaryDecodeEgress, top_logprobs),
+                            DType::FP32,
+                            {ops::kMaxReportedLogprobRanks, count});
     logits         = layout.logits.bind(backing);
     hidden         = layout.hidden.bind(backing);
 }
@@ -306,6 +318,12 @@ MtpDecodeState::MtpDecodeState(DeviceSpan backing, const MtpDecodeStateLayout& l
     next_drafts =
         egress_tensor(offsetof(MtpDecodeEgress, next_drafts), DType::I32, {batch, drafts});
     next_extents     = egress_tensor(offsetof(MtpDecodeEgress, next_extents), DType::I32, {batch});
+    token_logprobs =
+        egress_tensor(offsetof(MtpDecodeEgress, token_logprobs), DType::FP32, {batch * width});
+    top_ids        = egress_tensor(offsetof(MtpDecodeEgress, top_ids), DType::I32,
+                            {ops::kMaxReportedLogprobRanks, batch * width});
+    top_logprobs   = egress_tensor(offsetof(MtpDecodeEgress, top_logprobs), DType::FP32,
+                            {ops::kMaxReportedLogprobRanks, batch * width});
     verify_ids       = layout.verify_ids.bind(backing);
     target_positions = layout.target_positions.bind(backing);
     target_argmax    = layout.target_argmax.bind(backing);
@@ -411,6 +429,19 @@ RoundState::RoundState(DeviceSpan backing, const RoundStateLayout& layout) {
     logits               = layout.logits.bind(backing);
     text_kv_table_row    = layout.text_kv_table_row.bind(backing);
     backend_kv_table_row = layout.backend_kv_table_row.bind(backing);
+    static_assert(std::is_standard_layout_v<PrefillRoundReport>);
+    report = layout.report.bind(backing);
+    report_logprob = Tensor(static_cast<unsigned char*>(report.data) +
+                                offsetof(PrefillRoundReport, token_logprob),
+                            DType::FP32, {1});
+    report_top_ids = Tensor(static_cast<unsigned char*>(report.data) +
+                                offsetof(PrefillRoundReport, top_ids),
+                            DType::I32,
+                            {ops::kMaxReportedLogprobRanks, 1});
+    report_top_logprobs =
+        Tensor(static_cast<unsigned char*>(report.data) +
+                   offsetof(PrefillRoundReport, top_logprobs),
+               DType::FP32, {ops::kMaxReportedLogprobRanks, 1});
     if (layout.mtp) { mtp.emplace(backing, *layout.mtp); }
     if (layout.dflash_prefill) { dflash_prefill.emplace(backing, *layout.dflash_prefill); }
     if (layout.mtp_decode) {

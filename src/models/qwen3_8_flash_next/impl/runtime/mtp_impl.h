@@ -201,6 +201,24 @@ auto mtp_decode_batch_body(MtpBatchContext& state, std::int32_t batch_size, std:
                                  envelopes.target_verify);
         }
 
+        if (state.execution.io.report_token_logprobs) {
+            // target_logits is [rows, width, batch]; column-major storage makes the same memory a
+            // [rows, width*batch] matrix whose column g is lane b's verify column w under
+            // g = w + b*width. licensed_tokens is bound as [width, batch] and read by the host as
+            // [row * width + column], so the two already share one column order.
+            const std::int32_t report_columns = width * batch_size;
+            Tensor verify_logits(target_logits.data, DType::BF16,
+                                 {target_logits.ne[0], report_columns});
+            Tensor published         = licensed_tokens.view({report_columns});
+            Tensor chosen            = frame.token_logprobs.slice(0, 0, report_columns);
+            Tensor reported_ids      = frame.top_ids.slice(1, 0, report_columns);
+            Tensor reported_logprobs = frame.top_logprobs.slice(1, 0, report_columns);
+
+            ops::target_logprobs(verify_logits, published, TextConfig::token_domain, chosen,
+                                 &reported_ids, &reported_logprobs,
+                                 state.execution.device.stream);
+        }
+
         {
             nvtx::ScopedRange draft_range(nvtx::Name::DecodeMtpDraft, nvtx::Category::Mtp,
                                           static_cast<std::uint64_t>(k) * batch_size);

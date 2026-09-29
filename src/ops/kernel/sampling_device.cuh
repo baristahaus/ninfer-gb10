@@ -9,6 +9,7 @@
 #include "ops/common/sampling_workspace.h"
 #include "ops/common/score_id_order.cuh"
 #include "ninfer/ops/sampling.h"
+#include "ops/kernel/sampling_order.cuh"
 
 #include <cub/block/block_merge_sort.cuh>
 #include <cub/warp/warp_merge_sort.cuh>
@@ -100,11 +101,6 @@ __device__ __forceinline__ float sampling_uniform(unsigned long long seed, int p
         (static_cast<unsigned long long>(sub) * 0x2545F4914F6CDD1Dull));
     const unsigned int bits = static_cast<unsigned int>(key >> 40); // 24 bits
     return static_cast<float>(bits) * (1.0f / 16777216.0f);
-}
-
-// Candidate ordering: higher value wins, ties broken by lower vocab index.
-__device__ __forceinline__ bool sampling_better(float v, int i, float bv, int bi) {
-    return v > bv || (v == bv && i < bi);
 }
 
 // True when (v,i) ranks strictly below pivot (pv,pi) in the ordering above.
@@ -234,41 +230,6 @@ __device__ inline void sampling_store_bf16_tile_topk(unsigned int (&keys)[kSampl
 
 __device__ __forceinline__ int sampling_dist_offset(int col, int j) {
     return col * kSamplerCandidateCap + j;
-}
-
-// Applies presence/frequency penalties to a raw logit. `overlay`/`overlay_len`
-// carry a round-local count overlay: tokens already committed earlier in the
-// current speculative round but not yet flushed to the global `token_counts`. For speculative
-// verify column `col` the overlay is exactly drafts[0..col-1] (statically known,
-// since column `col` is only consumed when every earlier draft was accepted), so
-// the penalty at each column sees the same prefix a per-token sampler would.
-// Non-speculative callers pass no overlay. The scan is bounded by k and
-// only runs when penalties are active, so it is free on the no-penalty path.
-__device__ __forceinline__ float sampling_adjusted_logit(float raw, int v, const SamplingConfig& c,
-                                                         const std::int32_t* overlay = nullptr,
-                                                         int overlay_len             = 0) {
-    float x = raw;
-    if (c.presence_penalty == 0.0f && c.frequency_penalty == 0.0f) { return x; }
-    int cnt = c.token_counts != nullptr ? c.token_counts[v] : 0;
-    for (int j = 0; j < overlay_len; ++j) {
-        if (overlay[j] == v) { ++cnt; }
-    }
-    if (cnt > 0) { x -= c.presence_penalty; }
-    if (c.frequency_penalty != 0.0f) { x -= c.frequency_penalty * static_cast<float>(cnt); }
-    return x;
-}
-
-__device__ __forceinline__ void sampling_insert_candidate(float* vals, int* idxs, int cap, float v,
-                                                          int idx) {
-    if (cap <= 0 || !sampling_better(v, idx, vals[cap - 1], idxs[cap - 1])) { return; }
-    int pos = cap - 1;
-    while (pos > 0 && sampling_better(v, idx, vals[pos - 1], idxs[pos - 1])) {
-        vals[pos] = vals[pos - 1];
-        idxs[pos] = idxs[pos - 1];
-        --pos;
-    }
-    vals[pos] = v;
-    idxs[pos] = idx;
 }
 
 __device__ inline void sampling_sort_tile_desc(float* vals, int* idxs) {

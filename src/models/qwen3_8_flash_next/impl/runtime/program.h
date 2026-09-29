@@ -688,8 +688,10 @@ public:
     DecodeGraphFamily dflash_graphs;
 
     PinnedHostBuffer round_host;
+    PinnedHostBuffer round_report_host;
     std::optional<PinnedHostBuffer> score_logprobs_host;
     TokenId* host_tokens = nullptr;
+    qwen3_8_flash_next::PrefillRoundReport* host_report = nullptr;
     std::optional<PinnedHostBuffer> ordinary_host;
     std::optional<PinnedHostBuffer> flash_ple_host;
     qwen3_8_flash_next::OrdinaryDecodeIngress* ordinary_host_ingress = nullptr;

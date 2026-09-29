@@ -68,6 +68,17 @@ auto ordinary_batch_body(OrdinaryBatchContext& state, std::int32_t batch_size,
         }
         ops::sample(logits, sampled, TextConfig::token_domain, ordinary.sampling, cache_positions,
                     ops::kSamplePurposeDecode, state.execution.work, state.execution.device.stream);
+        // The report is the target model's own distribution at this position: no temperature, no
+        // penalties. It is therefore a checkpoint property rather than a sampling artefact, and it
+        // reads no sampler state, no committed-token counts and no round-local token array - which is
+        // also why an external scorer can agree with it.
+        if (state.execution.io.report_token_logprobs) {
+            Tensor chosen            = ordinary.token_logprobs.slice(0, 0, batch_size);
+            Tensor reported_ids      = ordinary.top_ids.slice(1, 0, batch_size);
+            Tensor reported_logprobs = ordinary.top_logprobs.slice(1, 0, batch_size);
+            ops::target_logprobs(logits, sampled, TextConfig::token_domain, chosen, &reported_ids,
+                                 &reported_logprobs, state.execution.device.stream);
+        }
         CUDA_CHECK(cudaMemcpyAsync(&state.host_egress, ordinary.egress.data,
                                    sizeof(qwen3_8_flash_next::OrdinaryDecodeEgress),
                                    cudaMemcpyDeviceToHost, state.execution.device.stream));

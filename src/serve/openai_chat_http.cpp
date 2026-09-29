@@ -29,6 +29,30 @@ void HttpServer::handle_chat_completions(const httplib::Request& req, httplib::R
         limits.default_max_tokens = options_.default_max_tokens;
         request                   = parse_chat_completion_request(parse_json_body(req), limits);
         validate_openai_model(request.model, public_model_id_);
+        // Probability reporting needs the reports captured inside the Engine's decode graphs, so only
+        // a server started with --token-logprobs can answer it. Streaming is a separate refusal: the
+        // Engine attributes reports to generated tokens, not yet to the cleaned per-channel pieces a
+        // delta carries, so a streamed array could disagree with the text beside it.
+        if (request.logprobs && request.stream) {
+            ApiError error;
+            error.status  = 400;
+            error.type    = "invalid_request_error";
+            error.param   = "logprobs";
+            error.code    = "logprobs_not_supported";
+            error.message = "logprobs=true is not supported together with stream=true";
+            throw ApiException(std::move(error));
+        }
+        if (request.logprobs && !service_->engine_options().token_logprobs) {
+            ApiError error;
+            error.status  = 400;
+            error.type    = "invalid_request_error";
+            error.param   = "logprobs";
+            error.code    = "logprobs_not_enabled";
+            error.message =
+                "logprobs=true requires a server started with --token-logprobs on a Flash-Next "
+                "target";
+            throw ApiException(std::move(error));
+        }
     } catch (const ApiException& exception) {
         write_openai_error(res, exception.error());
         return;
@@ -90,7 +114,10 @@ void HttpServer::handle_chat_completions(const httplib::Request& req, httplib::R
         }
         lifecycle->done(outcome);
         try {
-            set_owned_json_content(res, make_chat_completion_response(identity, outcome),
+            set_owned_json_content(res,
+                                   make_chat_completion_response(
+                                       identity, outcome,
+                                       request.logprobs ? request.top_logprobs : 0),
                                    prepared.lifetime);
         } catch (const std::exception& exception) {
             lifecycle->response_failure(make_internal_request_failure(

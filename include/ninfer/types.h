@@ -153,6 +153,11 @@ struct EngineOptions {
     std::filesystem::path artifact_path;
     std::filesystem::path chat_template_path;
     EnginePurpose purpose              = EnginePurpose::Generation;
+    // Report a target-model log probability for every published generated token. Fixed at startup
+    // because the probability is produced inside the captured decode round; a request that asks for
+    // probabilities against an engine loaded without this capability is rejected rather than
+    // answered with placeholders.
+    bool token_logprobs = false;
     int device                         = 0;
     std::uint32_t max_context          = 2048; // Logical ceiling of one request or score window.
     KvCapacityPolicy kv_capacity       = KvCapacityPolicy::explicit_capacity(2048);
@@ -564,10 +569,40 @@ enum class FinishReason : std::uint8_t {
     Cancelled,
 };
 
+// One reported vocabulary entry: a token and its natural-log probability under the target model's
+// own distribution - the full vocabulary, with no temperature scaling and no presence or frequency
+// adjustment. This is what vLLM reports and what an external scorer or calibrator needs: a model
+// property, not a sampling artefact. A token drawn under temperature or penalties is therefore not
+// necessarily the reported top-1.
+struct TokenLogprob {
+    TokenId token   = 0;
+    float logprob   = 0.0F;
+};
+
+// The probability report for one generated token. `top` holds the leading vocabulary ranks for the
+// same position in descending order and may or may not contain `token`; it is empty when the request
+// asked for no alternatives.
+//
+// Reports stay index-aligned with the generated tokens they describe. A token the Engine injected
+// deterministically rather than drew from the target - a forced thinking-control or tool-call span -
+// reports zero with `injected` set and an empty `top`, because inventing a target-model value for a
+// position whose logits were never consumed would be false. A drawn token's logprob is a negative
+// number in practice, so the two cases never collide.
+struct GeneratedTokenLogprob {
+    TokenId token = 0;
+    float logprob = 0.0F;
+    bool injected = false;
+    std::vector<TokenLogprob> top;
+};
+
 struct OutputDelta {
     std::size_t tool_call_progress_bytes = 0;
     OutputChannel channel = OutputChannel::Content;
     std::string text;
+    // Streaming carries no probability reports yet: a delta holds cleaned per-channel text, while
+    // reports belong to generated tokens, and the two cannot be aligned without changing how the
+    // frontend withholds and splits output. Chat Completions refuses logprobs with stream=true until
+    // that exists; GenerationResult::token_logprobs is the aggregate route that does.
 };
 
 // Exact prompt accounting selected at admission. Streaming consumers receive this once before any
@@ -796,6 +831,9 @@ struct MaterializationDiagnostics {
 struct GenerationResult {
     PromptSummary prompt;
     std::vector<TokenId> generated_token_ids;
+    // Exactly one report per entry of generated_token_ids, in the same order. Present only when the
+    // engine was loaded with EngineOptions::token_logprobs.
+    std::vector<GeneratedTokenLogprob> token_logprobs;
     std::string content;
     std::string reasoning;
     std::vector<GeneratedToolCall> tool_calls;

@@ -141,11 +141,36 @@ The endpoint supports:
 
 Options whose observable behavior the Engine cannot provide are rejected when they request that
 behavior. This includes constrained-decoding JSON enforcement (schema validation of the model
-output), nonzero `logit_bias`, requested log probabilities, audio/file input or audio output,
+output), nonzero `logit_bias`, audio/file input or audio output,
 `strict:true`, named tool choice, `parallel_tool_calls:false` with enabled tools, explicit
 low/high image detail, web search, moderation, low/high verbosity, stored Chat Completions, and
 non-empty legacy `functions`. Each capability rejection identifies the affected field and the
 guarantee NInfer cannot provide.
+
+### Per-token log probabilities
+
+Chat Completions reports a log probability for every generated token when the server is started with
+`--token-logprobs` and the request sets `logprobs: true`. The flag is fixed at startup because the
+probabilities are computed inside the captured decode round; a request that asks for reports from a
+server without the flag fails with `400` and code `logprobs_not_enabled`, and so does a Flash-Next
+`DFlash` schedule or a Qwen3.5 target, which publish no reports. Together with `stream: true` it
+fails with `logprobs_not_supported`: reports are attributed to generated tokens, not yet to the
+cleaned per-channel pieces a stream delta carries, so a streamed array could disagree with the text
+beside it.
+
+`top_logprobs` selects how many leading alternatives each entry reports, in `[0,20]`; `0`, or omitting
+it, reports the chosen token alone, and a non-zero value without `logprobs: true` is rejected rather
+than dropped. The reported distribution is the model's own over the whole vocabulary: no temperature
+scaling and no presence or frequency adjustment, matching vLLM, so an external scorer agrees and a
+token drawn under a non-zero temperature or a penalty need not be the reported top-1. Each `token`
+field is the tokenizer's piece for that id, with anything that is not a complete UTF-8 sequence
+replaced, and each `bytes` field carries those same bytes exactly, because one token can end inside a
+multi-byte character.
+
+`logprobs.content` holds exactly one entry per generated token in order, including reasoning tokens
+and any control span the Engine inserted rather than sampled; the latter report `logprob: 0` with
+`injected: true` and no alternatives, because their logits were never consumed. Concatenating the
+pieces therefore need not reproduce `message.content`, which the frontend cleans.
 
 JSON `response_format` is accepted: the JSON instruction and any schema are appended as a
 trailing text part of the final turn (the last user message, or the trailing tool result of an
@@ -257,9 +282,9 @@ thinking, effort and preservation options use the template's defaults.
 Streaming begins with an assistant-role chunk, sends separate reasoning and content deltas, then a
 finish-reason chunk and `[DONE]`. When `stream_options.include_usage` is true, a final empty
 `choices` chunk contains completed usage. Aggregate and streamed usage include cached prompt tokens
-and reasoning-token details; choices carry `logprobs: null` when log probabilities were not
-requested, and aggregate assistant messages carry `refusal: null` because refusal output is not
-supported.
+and reasoning-token details; choices carry `logprobs: null` unless the request asked for reports and
+the server was started with `--token-logprobs`, and aggregate assistant messages carry
+`refusal: null` because refusal output is not supported.
 
 ### llama.cpp-compatible request observations
 
@@ -454,7 +479,7 @@ wire response contains typed `output` Items.
 | `parallel_tool_calls` | `true` by default; `false` is accepted only when no effective tool is callable |
 | `max_tool_calls` | non-negative integer accepted as a hosted-tool no-op; NInfer does not execute hosted tools |
 | `truncation` | omitted or `disabled`; overlong input fails instead of silently dropping Items |
-| `top_logprobs` | omitted or `0` |
+| `top_logprobs` | omitted or `0`; the Chat Completions route reports probabilities, see [per-token log probabilities](#per-token-log-probabilities) |
 | `service_tier` | omitted, `auto`, or `default`; the response reports `default` |
 | `background` | omitted or `false` |
 | `include` | omitted or an empty array |

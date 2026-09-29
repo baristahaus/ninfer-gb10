@@ -3,6 +3,7 @@
 #include "core/layout.h"
 #include "core/tensor.h"
 #include "ninfer/ops/sampling.h"
+#include "ninfer/ops/target_logprobs.h"
 #include "ninfer/types.h"
 
 #include <array>
@@ -28,6 +29,13 @@ struct RoundStateSpec {
     bool enable_mtp              = false;
     bool enable_dflash           = false;
 };
+// Pinned/device transfer format for the single token a prefill step publishes. Prefill keeps its
+// own tiny egress rather than a decode frame's, so the probability report travels beside it.
+struct PrefillRoundReport {
+    float token_logprob = 0.0F;
+    std::array<std::int32_t, ops::kMaxReportedLogprobRanks> top_ids{};
+    std::array<float, ops::kMaxReportedLogprobRanks> top_logprobs{};
+};
 
 // Stable pinned/device transfer format for ordinary decode. The full fixed-size object is copied
 // once per round; only its exact-B prefixes are consumed by the model schedule.
@@ -43,6 +51,12 @@ struct OrdinaryDecodeIngress {
 
 struct OrdinaryDecodeEgress {
     std::array<TokenId, kMaximumConcurrency> sampled_tokens{};
+    // Target-model probability report for each sampled token, indexed exactly like sampled_tokens.
+    // Ordinary decode has one column per lane, so the ingress sampling array is already the
+    // per-column array the probability Op needs.
+    std::array<float, kMaximumConcurrency> token_logprobs{};
+    std::array<std::int32_t, ops::kMaxReportedLogprobRanks * kMaximumConcurrency> top_ids{};
+    std::array<float, ops::kMaxReportedLogprobRanks * kMaximumConcurrency> top_logprobs{};
 };
 
 // Stable pinned/device transfer formats for concurrent MTP decode. The arrays use the maximum
@@ -70,6 +84,16 @@ struct MtpDecodeEgress {
     // Step-major: all B rows for proposal step 0, followed by all B rows for step 1, etc.
     std::array<TokenId, kMaximumConcurrency * kMtpDecodeMaximumDrafts> next_drafts{};
     std::array<std::int32_t, kMaximumConcurrency> next_extents{};
+    // Probability report for every verify column, indexed exactly like licensed_tokens; ranks of
+    // column g occupy [g*ranks, (g+1)*ranks). Filled only when the engine was loaded with
+    // EngineOptions::token_logprobs.
+    std::array<float, kMaximumConcurrency * kMtpDecodeMaximumWidth> token_logprobs{};
+    std::array<std::int32_t,
+               ops::kMaxReportedLogprobRanks * kMaximumConcurrency * kMtpDecodeMaximumWidth>
+        top_ids{};
+    std::array<float,
+               ops::kMaxReportedLogprobRanks * kMaximumConcurrency * kMtpDecodeMaximumWidth>
+        top_logprobs{};
 };
 
 // Stable pinned/device transfer formats for one exact-B DFlash transaction. The proposal is
@@ -164,6 +188,7 @@ struct RoundStateLayout {
     TensorRegion logits;
     TensorRegion text_kv_table_row;
     TensorRegion backend_kv_table_row;
+    LayoutRegion report;
     std::optional<MtpPrefillStateLayout> mtp;
     std::optional<DFlashPrefillStateLayout> dflash_prefill;
     std::optional<MtpDecodeStateLayout> mtp_decode;
@@ -182,6 +207,9 @@ struct OrdinaryDecodeState {
     Tensor state_destination_slots;
     const ops::SamplingConfig* sampling = nullptr;
     Tensor sampled_tokens;
+    Tensor token_logprobs;
+    Tensor top_ids;
+    Tensor top_logprobs;
     Tensor logits;
     Tensor hidden;
 
@@ -236,6 +264,10 @@ struct MtpDecodeState {
     Tensor accepted_drafts;
     Tensor next_drafts;
     Tensor next_extents;
+    // One report per verify column; column w of lane b is b * width + w.
+    Tensor token_logprobs;
+    Tensor top_ids;
+    Tensor top_logprobs;
     Tensor verify_ids;
     Tensor target_positions;
     Tensor target_argmax;
@@ -305,10 +337,18 @@ struct RoundState {
     Tensor logits;
     Tensor text_kv_table_row;
     Tensor backend_kv_table_row;
+    DeviceSpan report;
+    Tensor report_logprob;
+    Tensor report_top_ids;
+    Tensor report_top_logprobs;
     std::optional<MtpPrefillState> mtp;
     std::optional<DFlashPrefillState> dflash_prefill;
     std::optional<MtpDecodeState> mtp_decode;
     std::optional<DFlashDecodeState> dflash_decode;
+    // Selected once at load from EngineOptions::token_logprobs. It is read while a decode graph is
+    // captured, so the probability report is either present in a captured round or absent; a round
+    // never branches on it.
+    bool report_token_logprobs = false;
 
     RoundState() = default;
     RoundState(DeviceSpan backing, const RoundStateLayout& layout);

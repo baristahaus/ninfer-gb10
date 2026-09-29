@@ -13,14 +13,19 @@ int main() {
     try {
         ninfer::artifact::Reader reader{std::filesystem::path(path)};
         const auto& provenance = reader.directory().provenance;
-        const bool fp8_projections = provenance.contains("recipe") &&
-                                     provenance.at("recipe").is_string() &&
-                                     provenance.at("recipe").get<std::string>() ==
-                                         "qwen3_8_flash_next_125b_a6b_nvfp4_fp8_projections-v3";
-        // The fp8_projections profile packs each shared expert's gate/up into one [1280,2560]
-        // FP8 parent: 48 fewer device objects in every selection (96 gate/up objects become
-        // 48 parents).
+        const std::string recipe = provenance.contains("recipe") && provenance.at("recipe").is_string()
+                                       ? provenance.at("recipe").get<std::string>()
+                                       : std::string{};
+        const bool fp8_mtp = recipe == "qwen3_8_flash_next_125b_a6b_nvfp4_fp8_mtp-v3";
+        const bool fp8_projections =
+            fp8_mtp || recipe == "qwen3_8_flash_next_125b_a6b_nvfp4_fp8_projections-v3";
+        // The FP8 profiles pack each text shared expert's gate/up into one [1280,2560] FP8
+        // parent: 48 fewer device objects in every selection (96 gate/up objects become 48
+        // parents).
         const std::size_t text_objects = fp8_projections ? 1212 : 1260;
+        // The MTP layer binds 31 objects. The fp8_mtp profile packs its shared gate/up into one
+        // parent (one fewer) and adds the two NVFP4 banks' activation divisors (two more).
+        const std::size_t mtp_objects = fp8_mtp ? 32 : 31;
         ninfer::artifact::Binder binder(reader);
         const auto plan = ninfer::models::qwen3_8_flash_next_125b_a6b::plan_artifact(binder);
         if (plan.bindings.ple_mapping.size() != 320001536ULL * 160) {
@@ -32,7 +37,7 @@ int main() {
         ninfer::artifact::Binder mtp_binder(reader);
         const auto mtp_plan = ninfer::models::qwen3_8_flash_next_125b_a6b::plan_artifact(
             mtp_binder, {.speculative = ninfer::SpeculativeBackend::Mtp});
-        if (mtp_plan.materialization.device_objects.size() != text_objects + 31 ||
+        if (mtp_plan.materialization.device_objects.size() != text_objects + mtp_objects ||
             mtp_plan.materialization.device_capacity_bytes <=
                 plan.materialization.device_capacity_bytes) {
             throw std::runtime_error("MTP3 load plan did not upload exactly the draft tensors");
@@ -40,7 +45,7 @@ int main() {
         ninfer::artifact::Binder full_binder(reader);
         const auto full_plan = ninfer::models::qwen3_8_flash_next_125b_a6b::plan_artifact(
             full_binder, {.vision = true, .speculative = ninfer::SpeculativeBackend::Mtp});
-        if (full_plan.materialization.device_objects.size() != text_objects + 31 + 333 ||
+        if (full_plan.materialization.device_objects.size() != text_objects + mtp_objects + 333 ||
             full_plan.materialization.device_capacity_bytes <=
                 mtp_plan.materialization.device_capacity_bytes) {
             throw std::runtime_error("Vision load plan did not upload exactly the Vision tensors");

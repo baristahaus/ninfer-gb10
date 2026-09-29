@@ -6,7 +6,7 @@ mkdir -p "$OUT_ROOT"
 {
     echo "# GB10 report — $(date -u +%Y-%m-%dT%H:%MZ)"
     found=0
-    for step in step0 step1 step2 step3 probe; do
+    for step in step0 step1 step2 step2-* step3 probe; do
         if [[ -f $OUT_ROOT/$step/summary.md ]]; then
             echo
             cat "$OUT_ROOT/$step/summary.md"

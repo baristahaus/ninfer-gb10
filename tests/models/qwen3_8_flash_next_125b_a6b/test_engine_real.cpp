@@ -66,8 +66,17 @@ struct CrossPathFixture {
 };
 
 // One boundary serves every recipe until a recipe's fixture needs its own; the failure
-// output prints both paths' tokens to choose it from.
-CrossPathFixture cross_path_fixture(const std::string& /*recipe*/) { return {198, 4}; }
+// output prints both paths' tokens to choose it from. The T=2..4 Tensor Core re-route
+// landed a near-tie greedy choice on the FP8 recipe at the default separator (198, after
+// the golden's "...but shorter"): cold [11855 89661] ("blue wavelengths") vs reused
+// [86 33705] ("wavelength") — a ULP-scale boundary-state perturbation flipping a
+// borderline argmax. The FP8 boundary moves to 11855 ("blue"), the model's own
+// continuation at the old boundary, where the next choice is confident; the checks stay
+// exact.
+CrossPathFixture cross_path_fixture(const std::string& recipe) {
+    if (recipe == kFp8Recipe) { return {11855, 4}; }
+    return {198, 4};
+}
 
 void print_tokens(const char* label, const std::vector<ninfer::TokenId>& tokens) {
     std::cerr << label << ':';

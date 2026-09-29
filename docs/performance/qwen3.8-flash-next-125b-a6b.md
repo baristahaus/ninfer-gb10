@@ -298,3 +298,50 @@ The single-request corpus requests were submitted serially to a persistent `ninf
 over the loopback OpenAI-compatible HTTP endpoint. Each reported corpus fixture used five fixed
 seeds. Values are arithmetic mean ± sample standard deviation, and server warm-up completes before
 the measured requests. The concurrent campaign has its own sustained-wave method below.
+
+## GB10 (`sm_121a`) baseline — 2026-09-28
+
+NInfer's GB10 fork (`ninfer-gb10`) compiles the engine — upstream master at `c95b021b`,
+including the GB10 launch-constant and 48-SM decode work merged through the fork's PR #18/#19
+— for `sm_121a`. Hardware: NVIDIA GB10 (Grace Blackwell), 48 SMs, 24.0 MiB L2, 121.6 GiB
+unified LPDDR5x (273 GB/s specification; in-run sustained probes 232–247 GB/s), and a 20-core
+Arm CPU (10× Cortex-X925 + 10× A725; campaigns pinned to the X925 half). Artifacts: the
+125B-A6B v3 NVFP4-experts package with the dense projections in BF16 or FP8 E4M3 (126/123 GB
+multi-volume totals including the file-backed PLE n-gram table); row-scaled FP8 E4M3 KV at a
+73,728-token capacity; MTP with the optimized proposal head; one request, greedy, CUDA Graph
+decode, context limit 73,728, prefill chunk 8,192.
+
+Decode and prefill (8K/64K prompts, 512 outputs, one warmup + five measured; the bench corpus's
+acceptance is an upper bound, ~99–100%):
+
+| Dense projections | Decode 8K / 64K | MTP K=2 8K / 64K | MTP K=3 8K / 64K | 8K prefill |
+|---|---:|---:|---:|---:|
+| BF16 | 20.2 / 19.8 | 44.2 / 42.9 | 52.0 / 50.6 | 1,528 |
+| FP8 | 29.8 / 28.9 | 56.8 / 55.5 | 65.5 / 63.4 | 2,449 |
+
+Every configuration sits at 83–90% of the in-run memory probe (194–208 GB/s effective), with
+SM clock steady at ~2400–2470 MHz (floor 2392) and 70–76 °C: decode is memory-bound, not
+power- or thermally bound (peak draw 48–54 W, idle 8.4–8.6 W). Energy per emitted token,
+decode window with model load excluded: BF16 K=0 31.8 W / 1.59 J; FP8 K=0 35.2 W / 1.20 J —
+the FP8 dense route decodes 1.47× faster at K=0 at ~24% less energy per emitted token. The
+MTP telemetry rows decode a low-acceptance region of the bench corpus (effective draft
+acceptance ~52–70%), so their tok/s and energy figures are at a realistic-acceptance
+operating point, not the upper-bound corpus rows; the GB10 plan carries the derivation.
+
+Real-text MTP acceptance (16 corpus streams × 1,024 greedy tokens, served, K=2): BF16 65.89%,
+FP8 66.36% — about 2.3 committed per round, so real-text committed throughput at K=2 is
+~0.78× the bench-corpus row (≈ 44 tok/s for FP8 K=2, derived). Quality gates (fixed-token
+perplexity, 1,044,557 tokens scored, plus 65,536/32,768-window drift runs): BF16 PPL 3.973
+(4K) / 3.754 (64K), FP8 3.9999 / 3.7527; TEB hard-mode tool-call scores BF16 87 (three trials,
+zero scatter), FP8 89 (one trial).
+
+External reference points on one GB10/Spark (third-party boxes and runs): vLLM 43.9 tok/s with
+MTP, 15.4 eager; DGPP 24.3/32.7 (BF16/FP8 dense) and 44–61 with MTP; ExLlamaV3 EXL3 33 without
+drafting, up to 79 with MTP depth 5 on code; llama.cpp 24.5 without MTP, 47 on code with MTP 4.
+
+Reproduce on the GB10 fork: `tools/gb10/step0_build_test.sh` (build + tests),
+`step2_baseline.sh` (bandwidth probe, decode rows, GPU telemetry), `step7a_baseline.sh`
+(perplexity, acceptance, TEB), each with `ART=` set to the artifact; reports land under
+`profiles/bench/gb10/`. The GB10 work plan and its in-flight items (the pre-sync-build TEB
+attribution, the FP8 small-T family at the served MTP width) are in
+[maintainer/plan-2026-09-gb10.md](../maintainer/plan-2026-09-gb10.md).

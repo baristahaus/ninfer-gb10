@@ -25,6 +25,10 @@ fi
 
 LABEL=${LABEL:-$(basename "$(dirname "$ART")")}
 PPL_KV=${PPL_KV:-$KV_DTYPE}
+# PHASES selects a subset (comma list of 1,1b,2,3) so a comparison build can run the
+# TEB trials alone (PHASES=3) without re-measuring perplexity and acceptance.
+PHASES=${PHASES:-1,1b,2,3}
+phase() { case ",$PHASES," in *",$1,"*) return 0 ;; *) return 1 ;; esac; }
 if [[ ${RESUME:-0} == 1 ]]; then
     DIR=$OUT_ROOT/step7a-$LABEL
     if [[ ! -f $DIR/perplexity/report.json ]]; then
@@ -37,7 +41,7 @@ fi
 log "label: $LABEL"
 log "dir: $DIR"
 
-require_binary build/apps/ninfer-perplexity
+if phase 1 || phase 1b; then require_binary build/apps/ninfer-perplexity; fi
 require_binary "$SERVE_BIN"
 require_untraced_build
 
@@ -51,7 +55,7 @@ drop_caches() {
     echo 3 | sudo tee /proc/sys/vm/drop_caches >/dev/null
 }
 
-if [[ ${RESUME:-0} != 1 ]]; then
+if { phase 1 || phase 1b; } && [[ ${RESUME:-0} != 1 ]]; then
     # ---- 1. Perplexity token scores ------------------------------------------
     PPL_DIR=$DIR/perplexity
     mkdir -p "$PPL_DIR"
@@ -91,26 +95,33 @@ log "dropping page cache before server start"
 drop_caches
 
 
-start_server "$DIR/server.log" --request-log-jsonl "$REQ_JSONL"
-log "phase 2: MTP acceptance serving run"
-"$PYTHON" tools/gb10/step7a_acceptance.py "$BASE_URL" "$REQ_JSONL" "$DIR" \
-    >"$DIR/acceptance.log" 2>&1
-log "phase 2 done: $DIR/acceptance.json"
+if phase 2 || phase 3; then
+    start_server "$DIR/server.log" --request-log-jsonl "$REQ_JSONL"
+    if phase 2; then
+        log "phase 2: MTP acceptance serving run"
+        "$PYTHON" tools/gb10/step7a_acceptance.py "$BASE_URL" "$REQ_JSONL" "$DIR" \
+            >"$DIR/acceptance.log" 2>&1
+        log "phase 2 done: $DIR/acceptance.json"
+    fi
 
-# ---- 3. TEB hardmode ----------------------------------------------------------
-# Quality-gate protocol (revised 2026-09-27): fixed-token scores are the primary
-# gate; one TEB hard-mode trial is the structural smoke test. Escalate to more
-# trials only when the single trial lands more than ~2 points below the BF16
-# artifact's single trial (90/100 on 2026-09-28; one-trial scatter ~±0.9).
-TEB_TRIALS=${TEB_TRIALS:-1}
-log "phase 3: TEB hardmode (--trials $TEB_TRIALS --seed 42; 92 scenarios)"
-command -v tool-eval-bench >/dev/null
-tool-eval-bench run --base-url "$BASE_URL" --backend ninfer --seed 42 \
-    --hardmode --trials "$TEB_TRIALS" --no-live --json \
-    --output-dir "$DIR/teb" >"$DIR/teb.log" 2>&1
-log "phase 3 done: $DIR/teb"
+    # ---- 3. TEB hardmode ------------------------------------------------------
+    # Quality-gate protocol (revised 2026-09-27): fixed-token scores are the
+    # primary gate; one TEB hard-mode trial is the structural smoke test.
+    # Escalate to more trials only when the single trial lands more than ~2
+    # points below the BF16 artifact's single trial (90/100 on 2026-09-28;
+    # one-trial scatter ~±0.9).
+    if phase 3; then
+        TEB_TRIALS=${TEB_TRIALS:-1}
+        log "phase 3: TEB hardmode (--trials $TEB_TRIALS --seed 42; 92 scenarios)"
+        command -v tool-eval-bench >/dev/null
+        tool-eval-bench run --base-url "$BASE_URL" --backend ninfer --seed 42 \
+            --hardmode --trials "$TEB_TRIALS" --no-live --json \
+            --output-dir "$DIR/teb" >"$DIR/teb.log" 2>&1
+        log "phase 3 done: $DIR/teb"
+    fi
 
-stop_server
+    stop_server
+fi
 
 # ---- Summary ------------------------------------------------------------------
 {
@@ -124,6 +135,7 @@ stop_server
     echo "- CPU: pinned to X925 cores ${X925_CORES:-5-9,15-19} (taskset)"
 
 } >"$DIR/summary.md"
-"$PYTHON" tools/gb10/step7a_summary.py "$DIR" >>"$DIR/summary.md"
+"$PYTHON" tools/gb10/step7a_summary.py "$DIR" >>"$DIR/summary.md" \
+    || log "summary incomplete (PHASES=$PHASES); raw phase outputs remain in $DIR"
 log "summary: $DIR/summary.md"
 cat "$DIR/summary.md"

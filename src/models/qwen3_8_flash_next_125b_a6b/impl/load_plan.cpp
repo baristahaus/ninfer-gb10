@@ -115,12 +115,8 @@ MoePlan bind_main_moe(artifact::Binder& binder, const std::string& prefix) {
     };
 }
 
-// The MTP layer's routed experts are either the checkpoint's BF16 banks
-// (`experts.gate_up_proj`/`.down_proj`) or NVFP4 banks in the main layers' representation
-// (`experts.gate_up`/`.down` with activation divisors). The artifact's recorded parameter selects
-// the route; the flash_next_moe Op dispatches on the bank's format.
 MoePlan bind_mtp_moe(artifact::Binder& binder, const std::string& prefix, Placement placement) {
-    MoePlan out{
+    return {
         .router = device(binder, prefix + "gate.weight", QType::BF16, {512, 2560}, placement),
         .shared_gate =
             projection(binder, prefix + "shared_expert.gate_proj.weight", {640, 2560}, placement),
@@ -130,28 +126,11 @@ MoePlan bind_mtp_moe(artifact::Binder& binder, const std::string& prefix, Placem
             projection(binder, prefix + "shared_expert.down_proj.weight", {2560, 640}, placement),
         .shared_scale =
             device(binder, prefix + "shared_expert_gate.weight", QType::BF16, {1, 2560}, placement),
+        .routed_gate_up = device(binder, prefix + "experts.gate_up_proj", QType::BF16,
+                                 {512, 1280, 2560}, placement),
+        .routed_down =
+            device(binder, prefix + "experts.down_proj", QType::BF16, {512, 2560, 640}, placement),
     };
-    if (placement == Placement::Disabled) { return out; }
-    const auto& bindings = binder.reader().directory().bindings;
-    const bool nvfp4     = bindings.contains(prefix + "experts.gate_up");
-    if (nvfp4 == bindings.contains(prefix + "experts.gate_up_proj") ||
-        nvfp4 != bindings.contains(prefix + "experts.down") ||
-        nvfp4 == bindings.contains(prefix + "experts.down_proj")) {
-        throw artifact::ArtifactError(
-            "MTP experts must be one BF16 or one NVFP4 gate/up and down bank pair");
-    }
-    if (nvfp4) {
-        out.routed_gate_up = expert_bank(binder, prefix + "experts.gate_up", {512, 1280, 2560});
-        out.routed_gate_up_input_divisors = expert_input_divisors(binder, prefix + "experts.gate_up");
-        out.routed_down = expert_bank(binder, prefix + "experts.down", {512, 2560, 640});
-        out.routed_down_input_divisors = expert_input_divisors(binder, prefix + "experts.down");
-    } else {
-        out.routed_gate_up =
-            device(binder, prefix + "experts.gate_up_proj", QType::BF16, {512, 1280, 2560});
-        out.routed_down =
-            device(binder, prefix + "experts.down_proj", QType::BF16, {512, 2560, 640});
-    }
-    return out;
 }
 
 FullAttentionPlan bind_attention(artifact::Binder& binder, const std::string& prefix,

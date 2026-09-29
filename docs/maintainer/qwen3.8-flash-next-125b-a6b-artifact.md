@@ -29,36 +29,20 @@ extent, then exposes read-only mappings spanning the v3 payload shards. A gather
 cache own residency; the generic materializer does not allocate host or device storage for the
 complete 51.2 GB table. Prompt preparation gathers only the sixteen rows selected for each token.
 
-The FP8 profile (recipe `qwen3_8_flash_next_125b_a6b_nvfp4_fp8_mtp-v3`) gives the MTP layer the
-formats of a main layer. Its projections that every decode or draft step reads in full are
-`fp8_e4m3fn_row_bf16` with `row_scale_v1`: in the 48 text layers and the MTP layer, the GDN
-query/key/value, output-gate and output projections, the QSA packed query/gate and output
-projections, the HyperConnection down and up projections and the shared-expert projections; and
-the text and MTP final mixers and the output head. Each keeps its object and binding, except each
-shared expert's gate and up projections: one `[1280,2560]` parent,
-`...mlp.shared_expert.gate_up_proj.weight`, stacks the gate rows then the up rows, and the two
-parameters bind its first and second halves, so the fused SwiGLU consumes the whole parent. Their
-A16Only Uses are unchanged: activations stay BF16 and only the weights are quantized.
-
-The MTP routed experts become NVFP4 banks in the main layers' representation: parameters
-`mtp.layers.0.mlp.experts.gate_up` `[512,1280,2560]` and `.down` `[512,2560,640]` replace the
-checkpoint's BF16 `experts.gate_up_proj` and `experts.down_proj`, with `nvfp4` codes quantized by
-`nvfp4_maxabs` from the checkpoint words (`tensor-formats.md` 2.4) and AllowA4 Uses whose
-`activation_divisor` auxiliaries, `..._input_divisors`, give every expert the smallest divisor
-of the same role over the 48 main layers' calibrated banks (their largest input range). The
-conversion report records that divisor with each main layer's minimum and median.
-
-The router, norms, the MTP layer's `[2560,2560]` embedding and hidden projections (no main layer
-has them) and the small projections (QSA key/value/indexer, GDN a/b, PLE) keep the
-checkpoint-word representation. The profile has 49 fewer shared-expert objects and two more
-divisor objects than the checkpoint-word profile. It stores about 4.2 GB less for the text
-projections (8.3 GB of BF16 becomes 4.2 GB of FP8, the same amount off every decoded token's reads)
-and about 3.7 GB less for the MTP layer (its 5.03 GB BF16 banks become 1.42 GB of NVFP4; a draft
-step reads its ten experts, about 98 MB of BF16 before and 28 MB after, and about half the bytes of
-its FP8 dense leaves).
-
-The binder takes each of these leaves, and the MTP bank pair, in the representation the artifact
-records, so an artifact with BF16 projections or BF16 MTP banks loads through the same routes.
+The FP8-projection profile (recipe `qwen3_8_flash_next_125b_a6b_nvfp4_fp8_projections-v3`) has
+the same Uses and components. Its text projections that every decode step reads in full are
+`fp8_e4m3fn_row_bf16` with `row_scale_v1`: the GDN query/key/value, output-gate and output
+projections, the QSA packed query/gate and output projections, the 97 HyperConnection down and
+97 up projections (96 layer connections and the final mixer), the 48 shared-expert projections
+and the output head. Each keeps its object and binding, except the shared expert's gate and up
+projections: one `[1280,2560]` parent per layer, `...mlp.shared_expert.gate_up_proj.weight`,
+stacks the gate rows then the up rows, and the two parameters bind its first and second halves,
+so the fused SwiGLU consumes the whole parent. The profile therefore has 48 fewer objects. Their
+A16Only Uses are unchanged: activations stay BF16 and only the weights are quantized. Everything
+else, including the MTP layer, the router and the small projections (QSA key/value/indexer, GDN
+a/b, PLE), keeps the checkpoint-word representation. The profile stores about 4.2 GB less than
+the checkpoint-word profile (8.3 GB of BF16 becomes 4.2 GB of FP8) and removes the same amount
+from the bytes read per decoded token.
 
 The upgraded artifact occupies 134,755,956,216 bytes across five files capped at 32 GB each. Its format allocation is 1,249 BF16, 168 FP32,
 one FP8 table, 96 NVFP4 expert banks, 55 Q4, 54 Q5, one Q6, one INT32 map, and two Q8 tensors. The six embedded
@@ -85,13 +69,13 @@ The output basename is fixed. Conversion rejects missing, unexpected, incorrectl
 incorrectly typed source tensors, mismatched paired gate/up scales, invalid divisors, incompatible
 model configuration, and incomplete frontend resources.
 
-The FP8 profile is derived from a checkpoint-word artifact, whose BF16 words are the
+The FP8-projection profile is derived from a checkpoint-word artifact, whose BF16 words are the
 checkpoint's:
 
 ```bash
 python3 -m tools.convert.qwen3_8_flash_next_125b_a6b.dense_fp8 \
   --source out/qwen3_8_flash_next_125b_a6b_nvfp4.ninfer \
-  --out out/fp8mtp/qwen3_8_flash_next_125b_a6b_nvfp4_fp8_mtp.ninfer
+  --out out/fp8/qwen3_8_flash_next_125b_a6b_nvfp4_fp8_projections.ninfer
 ```
 
 Each selected matrix is quantized with `fp8_row_maxabs` rounding: one BF16 row multiplier, the
@@ -102,9 +86,7 @@ byte. The re-encoder rejects a selected parameter that is not one whole contiguo
 its exact shape, or whose object another binding or auxiliary also references, and a packed
 parent id that already names an object. The report beside the output records, per written
 matrix, the relative RMS and maximum absolute error of the represented weights against the BF16
-words. Each MTP expert is quantized with `nvfp4_maxabs` from its BF16 words, experts
-independently (one weight divisor each); the report records each bank's error the same way and the
-chosen activation divisors.
+words.
 
 ## Upgrade an existing v2 artifact
 

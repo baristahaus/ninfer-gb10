@@ -35,7 +35,7 @@ EXPERTS = 512
 TOP_K = 10
 GDN_STATE_BYTES = 36 * 48 * 128 * 128 * 4
 TEXT_EXPERT_BANK = re.compile(r"^model\.language_model\.layers\.\d+\.mlp\.experts\.(gate_up|down)$")
-MTP_EXPERT_BANK = re.compile(r"^mtp\.layers\.\d+\.mlp\.experts\.(gate_up|down)(_proj)?$")
+MTP_EXPERT_BANK = re.compile(r"^mtp\.layers\.\d+\.mlp\.experts\.(gate_up_proj|down_proj)$")
 
 
 def binding_bytes(artifact: Artifact, name: str, binding: object) -> float:

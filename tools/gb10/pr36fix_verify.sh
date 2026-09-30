@@ -23,7 +23,7 @@ fi
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
 PHASES=${PHASES:-A-BUILD,B-SETUP,A-TESTS,A-Driver,A-PPL,B-TESTS,B-PPL,REPORT}
-ROOT=$OUT_ROOT/pr36fix-verify
+ROOT=$GB10_ROOT/$OUT_ROOT/pr36fix-verify
 mkdir -p "$ROOT"
 A_TREE=$GB10_ROOT
 A_BRANCH=verify/pr36fix-2026-09-30
@@ -74,12 +74,12 @@ if want B-SETUP; then
         tests/models/qwen3_8_flash_next/tests.cmake \
         tests/models/qwen3_8_flash_next_125b_a6b/test_pr36fix_checks.cpp \
         >"$ROOT/B-SETUP/driver.patch"
-    git -C "$B_TREE" apply "$A_TREE/$ROOT/B-SETUP/driver.patch" \
+    git -C "$B_TREE" apply "$ROOT/B-SETUP/driver.patch" \
         >"$B_TREE/apply.log" 2>&1 || { log "driver patch failed to apply"; exit 1; }
     cmake -S "$B_TREE" -B "$B_TREE/build" -G Ninja -DCMAKE_BUILD_TYPE=Release \
         >"$ROOT/B-SETUP/configure.log" 2>&1 || { log "B configure failed"; exit 1; }
-    (cd "$B_TREE" && cmake --build build -j; echo $? >"$A_TREE/$ROOT/B-SETUP/build.rc") \
-        >"$A_TREE/$ROOT/B-SETUP/build.log" 2>&1 &
+    (cd "$B_TREE" && cmake --build build -j; echo $? >"$ROOT/B-SETUP/build.rc") \
+        >"$ROOT/B-SETUP/build.log" 2>&1 &
     echo $! >"$ROOT/B-SETUP/build.pid"
     log "base build started in the background (pid $(cat "$ROOT/B-SETUP/build.pid"))"
     finish B-SETUP

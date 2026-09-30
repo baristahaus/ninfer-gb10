@@ -1,0 +1,13 @@
+model qwen3.8-flash-next-125b-a6b
+warm 0: status 200 tokens 64
+== prose concurrency 4: 19:57:28.907 .. 19:57:43.676  wall 14.8 s
+   req 0: status 200 finish=length tokens 256 chunks 163 ttft 1535 ms  client update pace 81.68 ms/update
+   req 1: status 200 finish=length tokens 256 chunks 159 ttft 1112 ms  client update pace 84.34 ms/update
+   req 2: status 200 finish=length tokens 256 chunks 165 ttft 629 ms  client update pace 84.90 ms/update
+   req 3: status 200 finish=length tokens 256 chunks 162 ttft 251 ms  client update pace 86.38 ms/update
+   aggregate wall: 1024 tokens in 14.77 s = 69.34 tok/s (prefill included)
+   legacy output-span aggregate: 70.54500006599218 tok/s (initial TTFT excluded; later admissions included)
+== per-class wall aggregate tokens/s (prefill included), greedy, max_tokens 256
+| class | c=4 |
+|---|---|
+| prose | 69.3 |

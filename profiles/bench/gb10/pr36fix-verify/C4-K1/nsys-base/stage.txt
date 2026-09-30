@@ -1,0 +1,13 @@
+requests counted: 13 (skip=0); decode rounds: 1956
+QSA stage total: 1597.4 ms over 69065 launches
+per decode step (round): 0.817 ms
+     1342.3 ms  n=9589      0.1400 ms/launch  selected_attention_split_fp8_kernel(const __nv_bfloat16 *, c
+      140.4 ms  n=9797      0.0143 ms/launch  reduce_selected_attention_splits_kernel(const float *, const
+       26.7 ms  n=9875      0.0027 ms/launch  compress_index_groups_kernel(__nv_bfloat16 *, const int *, c
+       22.7 ms  n=9641      0.0024 ms/launch  score_groups_batched_kernel(const __nv_bfloat16 *, const __n
+       19.4 ms  n=9875      0.0020 ms/launch  prepare_index_query_kernel(const __nv_bfloat16 *, const __nv
+       15.3 ms  n=9641      0.0016 ms/launch  select_top_groups_kernel(const float *, const int *, int, in
+       10.7 ms  n=286       0.0373 ms/launch  selected_attention_batched_fp8_kernel(const __nv_bfloat16 *,
+       10.3 ms  n=9789      0.0010 ms/launch  order_groups_like_persistent_topk_kernel(int *, const int *,
+        7.4 ms  n=416       0.0177 ms/launch  hierarchical_top_groups_kernel(const float *, const int *, i
+        2.3 ms  n=156       0.0149 ms/launch  score_groups_mma_kernel(const __nv_bfloat16 *, const __nv_bf

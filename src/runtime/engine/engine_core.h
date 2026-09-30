@@ -1833,6 +1833,10 @@ private:
             }
 
             record_admission_block(head_inspection.block_reason);
+            if (head_inspection.block_reason ==
+                ResourceManagement::BlockReason::UnsettledStateFork) {
+                admission_waits_on_state_fork_ = true;
+            }
 
             const ActiveAdmissionSet active =
                 scheduler_.active_admission_set(slots_, max_concurrency_);
@@ -2164,6 +2168,11 @@ private:
                 cancel_active_requests(cancelled_at_boundary, boundary);
                 RoundMembership membership =
                     scheduler_.build_round_membership(slots_, max_concurrency_);
+                if (admission_waits_on_state_fork_ &&
+                    !instance_.program->has_unsettled_state_fork()) {
+                    admission_waits_on_state_fork_ = false;
+                    request_admission_check();
+                }
                 const bool admission_check_pending =
                     admission_check_pending_.load(std::memory_order_acquire);
                 const bool skip_admission = oom_backoff_ > 0;
@@ -2325,6 +2334,9 @@ private:
     std::optional<MaterializingRequest> materializing_;
     Scheduling scheduler_;
     std::atomic<bool> admission_check_pending_{false};
+    // The FIFO head was blocked by an unsettled StateImage fork. The fork settles in its lane's
+    // next prefill or decode round, which does not otherwise re-arm admission.
+    bool admission_waits_on_state_fork_        = false;
     std::uint64_t worker_accounted_elapsed_ns_ = 0;
     HostWorkClass current_host_work_class_     = HostWorkClass::Control;
     std::array<std::uint32_t, kMaximumConcurrency> current_decode_lanes_{};

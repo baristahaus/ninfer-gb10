@@ -232,14 +232,17 @@ int exercise_concurrent_state(ninfer::Engine& engine,
                               const std::vector<ninfer::TokenId>& expected_prefix,
                               const CrossPathFixture& fixture) {
     // Different frontiers exercise local prefill rows and shared decode rows. Repeat in
-    // reversed admission order to reuse both physical lanes and recurrent state slots.
+    // reversed admission order to reuse both physical lanes and recurrent state slots. Each
+    // order must decode both rows together: in the reversed order the resumed request forks a
+    // cached StateImage, and the root queued behind it is admitted once that fork settles, not
+    // after the resumed request completes.
     auto continuation = canonical_prompt();
     continuation.insert(continuation.end(), expected_prefix.begin(),
                         expected_prefix.begin() + fixture.resumed_prefix);
     const auto cold =
         engine.generate(engine.prepare_tokens(continuation), greedy_options(8, false));
-    const auto before = engine.runtime_stats();
     for (bool reverse : {false, true}) {
+        const auto before = engine.runtime_stats();
         auto first =
             engine.submit(engine.prepare_tokens(reverse ? continuation : canonical_prompt()),
                           greedy_options(reverse ? 8 : 12, false));
@@ -259,12 +262,13 @@ int exercise_concurrent_state(ninfer::Engine& engine,
             print_tokens("cold", cold.generated_token_ids);
             return 1;
         }
-    }
-    const auto after = engine.runtime_stats();
-    if (after.decode_row_rounds - before.decode_row_rounds <=
-        after.decode_rounds - before.decode_rounds) {
-        std::cerr << "Flash-Next concurrent fixture never executed a two-row decode\n";
-        return 1;
+        const auto after = engine.runtime_stats();
+        if (after.decode_row_rounds - before.decode_row_rounds <=
+            after.decode_rounds - before.decode_rounds) {
+            std::cerr << "Flash-Next concurrent fixture never executed a two-row decode"
+                      << (reverse ? " (reversed admission)" : "") << '\n';
+            return 1;
+        }
     }
     return 0;
 }

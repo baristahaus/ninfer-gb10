@@ -345,7 +345,10 @@ std::string_view resolve_reasoning_instructions(ChatTemplateSemantics semantics,
         return {};
     }
     if (!options.enable_thinking) {
-        if (options.reasoning_effort) {
+        // The protocol's "none" is an explicit disable: thinking-off with a None effort is the
+        // self-consistent no-instruction state the serve layer resolves it to. Real efforts
+        // still conflict with disabled thinking.
+        if (options.reasoning_effort && *options.reasoning_effort != ReasoningEffort::None) {
             throw std::invalid_argument(
                 "reasoning effort cannot be combined with disabled thinking");
         }

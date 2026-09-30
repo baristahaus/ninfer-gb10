@@ -89,6 +89,29 @@ void check_tool_call_recovery(const flash::Frontend& frontend) {
             "the quoted tool-call marker was not preserved as content");
 }
 
+// The protocol's "none" effort is an explicit thinking disable: disabled thinking with a None
+// effort prepares without reasoning instructions, while a real effort conflicts with it.
+void check_none_effort_with_disabled_thinking(const flash::Frontend& frontend) {
+    auto input = [](std::optional<ninfer::ReasoningEffort> effort) {
+        ninfer::PromptInput in;
+        ninfer::ChatMessage message;
+        message.role = ninfer::ChatRole::User;
+        message.parts.push_back({.kind = ninfer::MessagePartKind::Text, .text = "x"});
+        in.messages.push_back(std::move(message));
+        in.options.enable_thinking = false;
+        in.options.reasoning_effort = effort;
+        return in;
+    };
+    (void)frontend.prepare(input(ninfer::ReasoningEffort::None));
+    bool conflict_rejected = false;
+    try {
+        (void)frontend.prepare(input(ninfer::ReasoningEffort::Low));
+    } catch (const std::exception&) {
+        conflict_rejected = true;
+    }
+    require(conflict_rejected, "a real reasoning effort was accepted with disabled thinking");
+}
+
 } // namespace
 
 int main() {
@@ -142,6 +165,8 @@ int main() {
         std::cout << "OK Flash-Next quoted reasoning close stays in reasoning\n";
         check_tool_call_recovery(frontend);
         std::cout << "OK Flash-Next tool-call recovery after quoted marker and repeated parameter\n";
+        check_none_effort_with_disabled_thinking(frontend);
+        std::cout << "OK Flash-Next none-effort thinking disable prepares; real efforts conflict\n";
         return 0;
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';

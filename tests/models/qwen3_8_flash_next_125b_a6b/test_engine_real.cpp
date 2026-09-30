@@ -42,21 +42,17 @@ const std::vector<ninfer::TokenId>& canonical_prompt() {
     return prompt;
 }
 
-// Greedy outputs for the canonical non-thinking chat template, keyed on the artifact's
-// declared dense-precision recipe (provenance.recipe) and the execution path. A
-// different-precision artifact has its own greedy prefix by construction; at low
-// precision (FP8 dense) the MTP verify path and the plain decode path are distinct
-// numerical evaluations of the same model, so each is pinned exactly (on the BF16
-// dense artifact the two paths agree, one golden). The FP8 goldens were recorded from
-// the FP8 engine itself: they pin against regressions and say nothing about quality,
-// which the step 7 perplexity and drift gate measures against the BF16 artifact. They
-// track the FP8 dense-route profile: a route change (template unification, T=2..4
-// Tensor Core re-route) re-records them from the new engine, validated by the gate.
+// Greedy output for the canonical non-thinking chat template. The BF16-dense and FP8-dense
+// (fp8_projections, fp8_mtp) artifacts and the MTP verify and plain decode paths currently share
+// one greedy prefix; each path and recipe is still checked against it exactly. Exactness pins
+// regressions, not quality, which the step 7 perplexity gate measures. A near-tie greedy choice
+// is route-sensitive: until the within-budget QSA route, the fp8 MTP verify path met an exact
+// BF16 logit tie at generated index 2 (5435 and 27891 both at logprob -1.06157) and recorded its
+// own golden through the tie-break; the dense QSA route's reduction order resolves it to the
+// plain-decode choice by 0.375 nats with perplexity unchanged (3.998162 against 3.998118, floor
+// 1.3e-4). A route change that moves such a choice re-records the golden, validated by the gate;
+// if a recipe or path diverges again, it gets its own golden here.
 
-// The fp8_mtp profile carries the fp8_projections target weights unchanged and differs only in
-// its draft layer, so both share the FP8 goldens. The MTP golden records the verify path, whose
-// round widths follow the drafts' acceptance: a different draft layer can move it, and it is
-// then re-recorded like any route change.
 bool fp8_recipe(const std::string& recipe) {
     return recipe == "qwen3_8_flash_next_125b_a6b_nvfp4_fp8_projections-v3" ||
            recipe == "qwen3_8_flash_next_125b_a6b_nvfp4_fp8_mtp-v3";
@@ -95,23 +91,10 @@ void print_tokens(const char* label, const std::vector<ninfer::TokenId>& tokens)
     for (const auto token : tokens) { std::cerr << ' ' << token; }
     std::cerr << '\n';
 }
-const std::vector<ninfer::TokenId>& canonical_output(const std::string& recipe,
-                                                     bool mtp_path) {
-    static const std::vector<ninfer::TokenId> nvfp4{  // BF16 dense: the source checkpoint.
+const std::vector<ninfer::TokenId>& canonical_output() {
+    static const std::vector<ninfer::TokenId> golden{
         29108, 4009, 27891, 8964, 579, 16078, 321, 1100, 9872, 303, 660, 17425};
-    // Recorded from the fp8_projections artifact's engine: FP8 GDN/QSA projections, HyperConnection
-    // down and up projections, the shared expert and the head. The MTP verify path re-records the
-    // tail against the 7a artifact (864 43000 vs 694 22602); the plain decode path stays on the
-    // model's confident branch and agrees with the BF16 prefix above. The cross-path boundary
-    // (11855) holds exactly on this artifact.
-    static const std::vector<ninfer::TokenId> fp8_mtp{  // fp8_row_maxabs dense, MTP path.
-        29108, 4009, 5435, 660, 7736, 314, 279, 9155, 19142, 11, 864, 43000};
-    static const std::vector<ninfer::TokenId> fp8_ordinary{  // same artifact, plain decode.
-        29108, 4009, 27891, 8964, 579, 16078, 321, 1100, 9872, 303, 660, 17425};
-    if (fp8_recipe(recipe)) {
-        return mtp_path ? fp8_mtp : fp8_ordinary;
-    }
-    return nvfp4;
+    return golden;
 }
 
 std::string artifact_recipe(const char* artifact) {
@@ -319,8 +302,7 @@ int main() {
     const char* artifact = std::getenv("NINFER_QWEN38_FLASH_NEXT_WEIGHTS");
     if (artifact == nullptr || *artifact == '\0') { return 77; }
     const std::string recipe      = artifact_recipe(artifact);
-    const auto& expected_prefix   = canonical_output(recipe, true);
-    const auto& ordinary_prefix   = canonical_output(recipe, false);
+    const auto& expected_prefix   = canonical_output();
     const CrossPathFixture fixture = cross_path_fixture(recipe);
     try {
         for (const auto head : {ninfer::ProposalHead::Full, ninfer::ProposalHead::Optimized}) {
@@ -337,7 +319,7 @@ int main() {
             if (exercise_concurrent_state(engine, expected_prefix, fixture) != 0) { return 1; }
             if (exercise_vision(engine) != 0) { return 1; }
         }
-        if (exercise_ordinary_greedy(artifact, ordinary_prefix) != 0) { return 1; }
+        if (exercise_ordinary_greedy(artifact, expected_prefix) != 0) { return 1; }
         std::cout << "OK Qwen3.8 Flash Next real Engine\n";
         return 0;
     } catch (const std::exception& error) {

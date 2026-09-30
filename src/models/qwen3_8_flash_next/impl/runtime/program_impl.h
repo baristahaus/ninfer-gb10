@@ -4043,7 +4043,12 @@ runtime::PreflightStatus
 ProgramImplCore::revalidate_materialization(const AdmissionCandidate& plan,
                                             const PreparedPromptData& prompt) const {
     if (plan.impl_ == nullptr) { return runtime::PreflightStatus::InvariantFailure; }
-    if (has_context_transaction() || pending_transaction_ || has_unsettled_state_fork()) {
+    // A pending state fork is per-lane lifecycle state: a freshly adopted request keeps
+    // fork_pending until its first execution round, and fork pins are reference-counted per
+    // source (StateImageStore::begin_fork).  It changes no pressure policy, slot generation,
+    // or live occupancy, so it cannot stale another candidate's seal; the per-candidate
+    // identity and peak checks below re-verify the state the plan depends on.
+    if (has_context_transaction() || pending_transaction_) {
         return runtime::PreflightStatus::StalePolicyState;
     }
 

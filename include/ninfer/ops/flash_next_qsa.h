@@ -61,6 +61,13 @@ void flash_next_expand_text_positions(const Tensor& positions, Tensor& mrope_pos
 // is I32 [W,B,3], `valid_columns` and `table_rows` are I32 [B]. The cache owns BF16 or
 // row-scaled FP8 E4M3 main K/V followed by auxiliary raw-index-key BF16 and MRoPE-position I32
 // planes.
+//
+// When every visible key fits the kFlashNextQsaSelectedTokens budget (envelope.max_visible_keys)
+// and no reused selection is given (or the call is wider than 16 tokens), the selection is every
+// causally visible position: index scoring and top-k selection are skipped and attention reads
+// positions directly; a requested `selected_indices` receives that complete selection. The route,
+// and so the recorded node topology, depends on the envelope: a CUDA Graph executable must not be
+// updated across the budget.
 void flash_next_qsa(const Tensor& input, const Tensor& cache_positions,
                     const Tensor& rope_positions, const Tensor& valid_columns,
                     const Tensor& table_rows, const FlashNextQsaWeights& weights,

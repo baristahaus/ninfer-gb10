@@ -78,8 +78,8 @@ if want B-SETUP; then
         >"$B_TREE/apply.log" 2>&1 || { log "driver patch failed to apply"; exit 1; }
     cmake -S "$B_TREE" -B "$B_TREE/build" -G Ninja -DCMAKE_BUILD_TYPE=Release \
         >"$ROOT/B-SETUP/configure.log" 2>&1 || { log "B configure failed"; exit 1; }
-    (cd "$B_TREE" && cmake --build build -j; echo $? >"$ROOT/B-SETUP/build.rc") \
-        >"$ROOT/B-SETUP/build.log" 2>&1 &
+    (cd "$B_TREE" && cmake --build build -j; echo $? >"$A_TREE/$ROOT/B-SETUP/build.rc") \
+        >"$A_TREE/$ROOT/B-SETUP/build.log" 2>&1 &
     echo $! >"$ROOT/B-SETUP/build.pid"
     log "base build started in the background (pid $(cat "$ROOT/B-SETUP/build.pid"))"
     finish B-SETUP

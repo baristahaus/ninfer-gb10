@@ -281,7 +281,11 @@ the 64-token page size. `--kv-capacity auto` loads the selected weights, measure
 memory, and directly chooses the largest legal page capacity for the complete enabled runtime
 layout. This includes the selected speculative backend, fixed sequence state, unified workspace,
 and CUDA Graph allowance, while leaving the default 1 GiB automatic headroom
-unallocated. It does not probe allocations or resize the pool at request time. The single-request
+unallocated. On an integrated GPU that shares host memory (GB10), remaining memory is the kernel's
+`MemAvailable`, which counts reclaimable page cache, less the pinned Host KV capacity and a fixed
+6 GiB for Host StateImages, the cached part of the file-mapped PLE table and the process; a
+discrete GPU uses the driver's free memory. It does not probe allocations or resize the pool at
+request time. The single-request
 CLI normally leaves the option omitted so it follows
 `--max-context`; the distinction matters primarily to a concurrent Engine or server.
 

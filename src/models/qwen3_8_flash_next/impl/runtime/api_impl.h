@@ -426,6 +426,11 @@ bool Program<Variant>::has_context_transaction() const noexcept {
 }
 
 template <>
+bool Program<Variant>::has_unsettled_state_fork() const noexcept {
+    return impl_->has_unsettled_state_fork();
+}
+
+template <>
 PrefillProgress<Variant>
 Program<Variant>::advance_prefill(SequenceHandle<Variant> sequence,
                                   runtime::ExecutionTiming* failed_timing) {

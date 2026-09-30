@@ -987,6 +987,8 @@ public:
         return transaction_kind_ != TransactionKind::None;
     }
 
+    [[nodiscard]] bool has_unsettled_state_fork() const noexcept { return unsettled_state_fork; }
+
     [[nodiscard]] FakeCaptureAssessment inspect_capture(const FakeCaptureOffer&,
                                                         const FakeSharedPrefixHandle*,
                                                         const FakeSharedPrefixHandle*,
@@ -1143,6 +1145,7 @@ public:
     std::uint64_t pressure_checkpoint_recovery_ns        = 100;
     bool require_evictions                               = false;
     bool abort_start                                     = false;
+    bool unsettled_state_fork                            = false;
     bool abort_progress                                  = false;
     bool malform_last_private_victim                     = false;
     bool malform_last_capture_private_victim             = false;
@@ -2426,6 +2429,21 @@ void test_stale_revision_is_retryable() {
             "known-stale plan changed logical lane state");
 }
 
+// An adopted lane's StateImage Fork settles on its first execution round, which may not overlap
+// a context transaction. Admission must wait for that round rather than plan a materialization
+// the Program refuses to seal (GB10 Block I, I4: MC=8 N=8 failed every request).
+void test_unsettled_state_fork_defers_admission() {
+    FakeManager manager = make_manager(2, 4);
+    FakeProgram program;
+    program.unsettled_state_fork = true;
+    const auto blocked = manager.inspect(program, FakePreparedPrompt{3}, make_base(3), 1);
+    require(blocked.readiness == Readiness::TemporarilyBlocked && !blocked.choice,
+            "admission was planned while a StateImage Fork was unsettled");
+    program.unsettled_state_fork = false;
+    const auto admitted = manager.inspect(program, FakePreparedPrompt{3}, make_base(3), 2);
+    require(admitted.choice.has_value(), "admission stayed blocked after the fork settled");
+}
+
 void test_materialization_abort_preserves_source() {
     FakeManager manager = make_manager(1, 2);
     FakeProgram program;
@@ -3478,6 +3496,7 @@ int main() {
              test_dominating_identity_does_not_build_pressure_graph);
     run_test("root lifecycle and prefix reuse", test_root_lifecycle_and_prefix_reuse);
     run_test("stale revision is retryable", test_stale_revision_is_retryable);
+    run_test("unsettled fork defers admission", test_unsettled_state_fork_defers_admission);
     run_test("materialization abort preserves source", test_materialization_abort_preserves_source);
     run_test("committed victim survives abort", test_committed_victim_survives_transaction_abort);
     run_test("uncommitted pressure acknowledgement",

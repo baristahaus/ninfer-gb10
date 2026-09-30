@@ -498,6 +498,7 @@ public:
     progress_context_transaction(runtime::CancellationFlagView cancellation);
     void finalize_context_transaction() noexcept;
     [[nodiscard]] bool has_context_transaction() const noexcept;
+    [[nodiscard]] bool has_unsettled_state_fork() const noexcept;
     [[nodiscard]] bool quiescent_after_fail_all_cleanup() const noexcept;
     [[nodiscard]] PrefillProgress advance_prefill(SequenceHandle sequence,
                                                   runtime::ExecutionTiming* failed_timing);
@@ -950,7 +951,6 @@ private:
     [[nodiscard]] bool valid_capture_offer(const CaptureOffer& offer) const noexcept;
     [[nodiscard]] bool materialization_pins(std::uint32_t index,
                                             std::uint64_t generation) const noexcept;
-    [[nodiscard]] bool has_unsettled_state_fork() const noexcept;
     [[nodiscard]] bool valid_pending(const PendingBatch& pending) const noexcept;
     // Per-owner resources are intentionally distinct from global physical occupancy: an aliased
     // allocation contributes only when removing this owner would release it.

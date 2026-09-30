@@ -11,14 +11,18 @@
 #   I6  structured output without constrained decoding (step 4)
 #   I7  step 3 attribution refresh at K=3 on this artifact
 #   I8  PLE int6 side-check (7f; CPU only, needs BF16_SOURCE and FP8_SOURCE)
+#   I9  DGPP against NInfer on this machine, one client and one prompt set (needs DGPP_DIR)
 #
 # Settings (environment, besides tools/gb10/config.local.sh):
 #   ART           the adopted artifact (fp8mtp), required as always
-#   PHASES        comma list, default I0,I1,I2,I3,I4,I5,I6,I7,I8
+#   PHASES        comma list, default I0,I1,I2,I3,I4,I5,I6,I7,I8,I9
 #   TOKENIZER     Flash-Next tokenizer directory; I2 and I5 then also run on natural text
 #   QWEN35_ART    Qwen3.5 27B artifact for the I0 smoke (skipped when unset)
 #   BF16_SOURCE / FP8_SOURCE  checkpoints for I8 (skipped when either is unset); CONVERT_PYTHON is
 #                 an interpreter with torch and safetensors (defaults to PYTHON)
+#   DGPP_DIR      a built HawkBearPig/dgpp checkout for I9 (skipped when unset), with
+#   DGPP_START / DGPP_STOP  commands that start and stop its single-Spark RadixArk server (run
+#                 from DGPP_DIR), and DGPP_PORT its HTTP port (default 8000)
 # A phase whose DONE marker exists is skipped, so an interrupted campaign resumes. One GPU job at
 # a time throughout; phases drop the page cache where a cold start is part of the protocol.
 X925_CORES=${X925_CORES:-5-9,15-19}
@@ -27,7 +31,7 @@ if [[ -z ${PINNED:-} ]]; then
 fi
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
-PHASES=${PHASES:-I0,I1,I2,I3,I4,I5,I6,I7,I8}
+PHASES=${PHASES:-I0,I1,I2,I3,I4,I5,I6,I7,I8,I9}
 ROOT=$OUT_ROOT/block-i
 mkdir -p "$ROOT"
 want() { case ",$PHASES," in *",$1,"*) [[ ! -f $ROOT/$1/DONE ]] ;; *) return 1 ;; esac; }
@@ -209,6 +213,48 @@ if want I8; then
         echo "skipped: BF16_SOURCE and FP8_SOURCE not both set" >"$ROOT/I8/ple_int6.md"
     fi
     finish I8
+fi
+
+# ---- I9: DGPP against NInfer on the same machine ---------------------------------------------
+# One client for both engines: DGPP's own scripts/serve_load.py (its published C1/C2/C4 protocol:
+# five prompt classes, greedy, thinking off, 256 tokens, three repetitions). NInfer runs its
+# adopted artifact at K=1 (DGPP's published single-Spark depth), 2 and 3 with four slots.
+if want I9; then
+    begin I9 "DGPP against NInfer"
+    if [[ -n ${DGPP_DIR:-} && -n ${DGPP_START:-} && -n ${DGPP_STOP:-} ]]; then
+        load=("$PYTHON" "$DGPP_DIR/scripts/serve_load.py" 127.0.0.1)
+        load_args=(--concurrency 1,2,4 --classes prose,code,json,math,chat --max-tokens 256
+            --repeat 3)
+        git -C "$DGPP_DIR" log -1 --format='DGPP commit %h %cd' >"$ROOT/I9/dgpp-version.txt"
+        for k in 1 2 3; do
+            serve_args 4 "$k"
+            drop_caches
+            start_server "$ROOT/I9/ninfer-k$k.log" --request-log-jsonl "$ROOT/I9/ninfer-k$k.jsonl"
+            "${load[@]}" "$PORT" "${load_args[@]}" --json-out "$ROOT/I9/ninfer-k$k.json" \
+                >"$ROOT/I9/ninfer-k$k.txt" 2>&1 || log "I9 NInfer K=$k load exited nonzero"
+            stop_server
+            "$PYTHON" tools/gb10/request_log_summary.py "$ROOT/I9/ninfer-k$k.jsonl" \
+                >"$ROOT/I9/ninfer-k$k.md"
+        done
+        drop_caches
+        gpu_idle
+        ( cd "$DGPP_DIR" && eval "$DGPP_START" ) >"$ROOT/I9/dgpp-start.log" 2>&1
+        waited=0
+        until curl -sf "http://127.0.0.1:${DGPP_PORT:-8000}/v1/models" >/dev/null 2>&1; do
+            if ((waited >= 1800)); then log "DGPP not ready after 30 minutes"; break; fi
+            sleep 5
+            waited=$((waited + 5))
+        done
+        "${load[@]}" "${DGPP_PORT:-8000}" "${load_args[@]}" --json-out "$ROOT/I9/dgpp.json" \
+            >"$ROOT/I9/dgpp.txt" 2>&1 || log "I9 DGPP load exited nonzero"
+        curl -sf "http://127.0.0.1:${DGPP_PORT:-8000}/v1/metrics" >"$ROOT/I9/dgpp-metrics.json" || true
+        ( cd "$DGPP_DIR" && eval "$DGPP_STOP" ) >>"$ROOT/I9/dgpp-start.log" 2>&1 || true
+        "$PYTHON" "$DGPP_DIR/scripts/bench_compare.py" "$ROOT/I9/dgpp.json" \
+            "$ROOT/I9/ninfer-k1.json" >"$ROOT/I9/compare-k1.txt" 2>&1 || true
+    else
+        echo "skipped: DGPP_DIR, DGPP_START and DGPP_STOP not all set" >"$ROOT/I9/skipped.txt"
+    fi
+    finish I9
 fi
 
 log "Block I finished; results under $ROOT"

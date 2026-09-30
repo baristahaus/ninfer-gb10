@@ -23,14 +23,10 @@ import urllib.request
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_MODEL = Path("/home/lak/models/RadixArk/Qwen3.8-Flash-Next-NVFP4")
-DEFAULT_RUNTIME = Path(
-    "/home/lak/.local/share/vllm-qwen38next-55f69ea17-offload/dist-packages"
-)
-DEFAULT_DEPENDENCY_RUNTIME = Path(
-    "/home/lak/.local/share/vllm-qwen38-native/dist-packages"
-)
-DEFAULT_PYTHON = Path("/home/lak/.venv/bin/python")
+DEFAULT_MODEL = Path.home() / "models/RadixArk/Qwen3.8-Flash-Next-NVFP4"
+DEFAULT_RUNTIME = Path.home() / ".local/share/vllm-qwen38next-55f69ea17-offload/dist-packages"
+DEFAULT_DEPENDENCY_RUNTIME = Path.home() / ".local/share/vllm-qwen38-native/dist-packages"
+DEFAULT_PYTHON = Path.home() / ".venv/bin/python"
 DEFAULT_CORPUS = REPO_ROOT / "bench/fixtures/qwen3_8_flash_next_context.ids"
 DEFAULT_OUTPUT = REPO_ROOT / "profiles/bench/qwen3_8_flash_next_vllm_baseline.json"
 PROMPT_LENGTHS = (1024, 8192, 32768, 65536, 131072, 196608, 261632)

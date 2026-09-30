@@ -13,7 +13,7 @@ if [[ -z ${PINNED:-} ]]; then
     PINNED=1 exec env taskset -c "$X925_CORES" "$0" "$@"
 fi
 source tools/gb10/config.local.sh
-export ART=/home/apollo11/models/qwen3_8_flash_next_v3_fork/qwen3_8_flash_next_125b_a6b_nvfp4.ninfer
+export ART=$HOME/models/qwen3_8_flash_next_v3_fork/qwen3_8_flash_next_125b_a6b_nvfp4.ninfer
 PORT=18087
 SERVE_ARGS=(
   --max-context 73728

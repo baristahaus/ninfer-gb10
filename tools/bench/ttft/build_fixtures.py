@@ -21,7 +21,7 @@ FIXTURE_ROOT = REPO_ROOT / "bench" / "fixtures" / "ttft"
 TEXT_ROOT = FIXTURE_ROOT / "text"
 MEDIA_ROOT = FIXTURE_ROOT / "media"
 DEFAULT_TOKENIZER = Path(
-    "/home/neroued/models/llm/qwen/Qwen3.8-27B/base-hf-bf16"
+    str(Path.home() / "models/llm/qwen/Qwen3.8-27B/base-hf-bf16")
 )
 IMAGE_SIZE = 1024
 IMAGE_VISION_TOKENS = 1024

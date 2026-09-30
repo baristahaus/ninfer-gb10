@@ -17,8 +17,8 @@ if [[ -z ${PINNED:-} ]]; then
     PINNED=1 exec env taskset -c "$X925_CORES" "$0" "$@"
 fi
 source tools/gb10/config.local.sh
-ART_BF16=/home/apollo11/models/qwen3_8_flash_next_v3_fork/qwen3_8_flash_next_125b_a6b_nvfp4.ninfer
-ART_FP8=/home/apollo11/models/fp8/qwen3_8_flash_next_125b_a6b_nvfp4_fp8.ninfer
+ART_BF16=$HOME/models/qwen3_8_flash_next_v3_fork/qwen3_8_flash_next_125b_a6b_nvfp4.ninfer
+ART_FP8=$HOME/models/fp8/qwen3_8_flash_next_125b_a6b_nvfp4_fp8.ninfer
 BENCH_BIN=build/bench/ninfer_bench
 
 echo "=== 1. full ctest"

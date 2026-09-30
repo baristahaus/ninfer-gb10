@@ -606,6 +606,9 @@ int main() {
                                .context_progress_invocations  = 4,
                                .stats_publication_invocations = 5,
     };
+    throughput.previous.admission_blocked_no_feasible_plan = 5;
+    throughput.current.admission_blocked_no_feasible_plan  = 7;
+
     const std::string pretty_throughput = render_throughput(throughput).message;
     failures +=
         check(pretty_throughput ==
@@ -678,6 +681,9 @@ int main() {
             throughput_json.at("context_cache").at("occupancy").at("device_state_slots") == 3 &&
             throughput_json.at("context_cache").at("pressure").at("spill_pages") == 4 &&
             throughput_json.at("context_cache").at("pressure").at("private_owners_degraded") == 1 &&
+            throughput_json.at("context_cache").at("admission_blocked").at("no_feasible_plan") ==
+                2 &&
+            throughput_json.at("context_cache").at("admission_blocked").at("no_free_lane") == 0 &&
             !throughput_json.at("context_cache").contains("last_materialization"),
         "context-cache throughput statistics missing or not interval-scoped");
 

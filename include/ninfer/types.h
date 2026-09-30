@@ -945,6 +945,13 @@ struct RuntimeStats {
     std::uint32_t terminal_pending_requests = 0;
     std::uint64_t active_captures_completed = 0;
     std::uint64_t active_captures_aborted   = 0;
+    // Admission attempts whose FIFO head stayed blocked, by the gate that blocked it: an open
+    // context transaction, an unsettled StateImage fork, no free lane, or no feasible
+    // materialization plan.
+    std::uint64_t admission_blocked_context_transaction  = 0;
+    std::uint64_t admission_blocked_unsettled_state_fork = 0;
+    std::uint64_t admission_blocked_no_free_lane         = 0;
+    std::uint64_t admission_blocked_no_feasible_plan     = 0;
 
     std::uint64_t root_selections                    = 0;
     std::uint64_t private_endpoint_selections        = 0;

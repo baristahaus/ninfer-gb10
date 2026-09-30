@@ -553,6 +553,26 @@ private:
         published_stats_ = snapshot;
     }
 
+    void record_admission_block(typename ResourceManagement::BlockReason reason) noexcept {
+        using BlockReason = typename ResourceManagement::BlockReason;
+        switch (reason) {
+        case BlockReason::ContextTransaction:
+            ++cumulative_stats_.admission_blocked_context_transaction;
+            break;
+        case BlockReason::UnsettledStateFork:
+            ++cumulative_stats_.admission_blocked_unsettled_state_fork;
+            break;
+        case BlockReason::NoFreeLane:
+            ++cumulative_stats_.admission_blocked_no_free_lane;
+            break;
+        case BlockReason::NoFeasiblePlan:
+            ++cumulative_stats_.admission_blocked_no_feasible_plan;
+            break;
+        case BlockReason::None:
+            break;
+        }
+    }
+
     void record_prefix_selection(const RequestPlanSummary& summary) noexcept {
         switch (summary.prefix_reuse_path) {
         case PrefixReusePath::Root:
@@ -1811,6 +1831,8 @@ private:
                 return admit_planned_request(head, std::move(*head_inspection.choice),
                                              std::move(grant));
             }
+
+            record_admission_block(head_inspection.block_reason);
 
             const ActiveAdmissionSet active =
                 scheduler_.active_admission_set(slots_, max_concurrency_);

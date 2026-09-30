@@ -239,9 +239,19 @@ public:
     using ContextTransactionOutcome =
         std::variant<ContextTransactionInProgress, MaterializationOutcome, ActiveCaptureOutcome>;
 
+    // Why a temporarily blocked inspection could not plan; None for every other readiness.
+    enum class BlockReason : std::uint8_t {
+        None,
+        ContextTransaction,
+        UnsettledStateFork,
+        NoFreeLane,
+        NoFeasiblePlan,
+    };
+
     struct Inspection {
         Readiness readiness = Readiness::TemporarilyBlocked;
         std::optional<Choice> choice;
+        BlockReason block_reason = BlockReason::None;
     };
 
     ResourceManager(std::uint32_t lane_count, std::uint32_t private_catalog_capacity,
@@ -277,8 +287,13 @@ public:
         // overlap a context transaction; admission waits for that round instead of planning a
         // materialization the Program must refuse to seal.
         if (!std::holds_alternative<std::monostate>(transaction_) ||
-            program.has_context_transaction() || program.has_unsettled_state_fork()) {
-            return {.readiness = Readiness::TemporarilyBlocked};
+            program.has_context_transaction()) {
+            return {.readiness    = Readiness::TemporarilyBlocked,
+                    .block_reason = BlockReason::ContextTransaction};
+        }
+        if (program.has_unsettled_state_fork()) {
+            return {.readiness    = Readiness::TemporarilyBlocked,
+                    .block_reason = BlockReason::UnsettledStateFork};
         }
         if (publication_order == 0) {
             throw std::invalid_argument("request publication order is zero");
@@ -293,7 +308,10 @@ public:
                 break;
             }
         }
-        if (!destination) { return {.readiness = Readiness::TemporarilyBlocked}; }
+        if (!destination) {
+            return {.readiness    = Readiness::TemporarilyBlocked,
+                    .block_reason = BlockReason::NoFreeLane};
+        }
 
         const typename Planner::Clock::time_point planning_started = Planner::Clock::now();
         rebuild_prefix_index();
@@ -400,7 +418,10 @@ public:
         std::optional<Choice> selected =
             plan_materialization(program, prompt, base, *destination, candidates, publication_order,
                                  planning_started, provisional_demand, allowance);
-        if (!selected) { return {.readiness = Readiness::TemporarilyBlocked}; }
+        if (!selected) {
+            return {.readiness    = Readiness::TemporarilyBlocked,
+                    .block_reason = BlockReason::NoFeasiblePlan};
+        }
         return {
             .readiness = selected->needs_transfer() ? Readiness::NeedsTransfer : Readiness::Ready,
             .choice    = std::move(selected),

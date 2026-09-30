@@ -966,7 +966,10 @@ same interval. The
 `terminal_pending` fields are the Engine scheduler snapshot at the end of the interval. The JSONL
 `context_cache` object reports selection, capture, transfer, COW, pressure spill, private/shared
 owner degradation and eviction, checkpoint drop, pressure search, budget exhaustion, maximal fallback, and historical-fork
-counters as interval deltas; `occupancy` and `last_selection` are end-of-interval gauges. Materialization predictions are
+counters as interval deltas; `occupancy` and `last_selection` are end-of-interval gauges.
+`admission_blocked` counts, as interval deltas, admission attempts whose FIFO head stayed blocked,
+split by the gate that blocked it: `context_transaction`, `unsettled_state_fork`, `no_free_lane`,
+or `no_feasible_plan` (no materialization plan fits the current resources). Materialization predictions are
 request-owned and appear only on the corresponding `request_done` event.
 `pressure.searches` counts plans accepted into Program resource transactions, including a transaction that later ends in
 request-local abort; committed victim counters likewise report the resulting stable cache changes.

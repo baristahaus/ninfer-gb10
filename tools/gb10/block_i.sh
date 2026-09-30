@@ -238,7 +238,10 @@ if want I9; then
         done
         drop_caches
         gpu_idle
-        ( cd "$DGPP_DIR" && eval "$DGPP_START" ) >"$ROOT/I9/dgpp-start.log" 2>&1
+        # DGPP writes a prepacked weight image (~82 GiB) to ~/.cache/dgpp/resident on first load
+        # unless told not to; this comparison must not consume that disk.
+        ( cd "$DGPP_DIR" && export DGPP_RESIDENT_CACHE=off && eval "$DGPP_START" ) \
+            >"$ROOT/I9/dgpp-start.log" 2>&1
         waited=0
         until curl -sf "http://127.0.0.1:${DGPP_PORT:-8000}/v1/models" >/dev/null 2>&1; do
             if ((waited >= 1800)); then log "DGPP not ready after 30 minutes"; break; fi

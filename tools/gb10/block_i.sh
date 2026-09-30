@@ -150,9 +150,11 @@ if want I4; then
         drop_caches
         start_server "$ROOT/I4/server-k$k.log" --request-log-jsonl "$ROOT/I4/request-k$k.jsonl"
         "$PYTHON" tools/gb10/concurrency_sweep.py "$BASE_URL" "$ROOT/I4/distinct-k$k.json" \
-            --n 1,2,4,8 --max-tokens 1024 >"$ROOT/I4/distinct-k$k.txt" 2>&1
+            --n 1,2,4,8 --max-tokens 1024 >"$ROOT/I4/distinct-k$k.txt" 2>&1 ||
+            log "I4 k=$k distinct sweep exited nonzero; partial results in distinct-k$k.txt"
         "$PYTHON" tools/gb10/concurrency_sweep.py "$BASE_URL" "$ROOT/I4/shared-k$k.json" \
-            --n 8 --shared --max-tokens 1024 >"$ROOT/I4/shared-k$k.txt" 2>&1
+            --n 8 --shared --max-tokens 1024 >"$ROOT/I4/shared-k$k.txt" 2>&1 ||
+            log "I4 k=$k shared sweep exited nonzero; partial results in shared-k$k.txt"
         stop_server
         "$PYTHON" tools/gb10/request_log_summary.py "$ROOT/I4/request-k$k.jsonl" \
             >"$ROOT/I4/request-k$k.md"

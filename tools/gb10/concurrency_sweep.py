@@ -13,6 +13,9 @@ Per N it records each request's wall seconds and completion tokens, the batch wa
 first send to the last response, and aggregate tok/s (sum of completion tokens over the batch
 wall). Decode-only rates and per-round timings come from the server's request log
 (request_log_summary.py).
+
+Per-request HTTP errors are recorded in the result JSON instead of aborting the batch;
+the sweep exits nonzero only when every request in a batch failed.
 """
 import argparse
 import json
@@ -62,7 +65,13 @@ def run_batch(base_url, model, batch, max_tokens):
         }
         start.wait()
         t0 = time.time()
-        resp = post(base_url, payload)
+        try:
+            resp = post(base_url, payload)
+        except Exception as error:
+            t1 = time.time()
+            results[i] = {"stream": stream_id, "start": t0, "end": t1, "seconds": t1 - t0,
+                          "error": str(error)}
+            return
         t1 = time.time()
         results[i] = {"stream": stream_id, "start": t0, "end": t1, "seconds": t1 - t0,
                       "completion_tokens": resp["usage"]["completion_tokens"],
@@ -74,11 +83,16 @@ def run_batch(base_url, model, batch, max_tokens):
         t.start()
     for t in threads:
         t.join()
-    wall = max(r["end"] for r in results) - min(r["start"] for r in results)
-    tokens = sum(r["completion_tokens"] for r in results)
-    return {"n": len(batch), "wall_seconds": wall, "completion_tokens": tokens,
+    ok = [r for r in results if "error" not in r]
+    if not ok:
+        first = next(r["error"] for r in results if "error" in r)
+        raise SystemExit(f"all {len(batch)} requests failed; first error: {first}")
+    wall = max(r["end"] for r in ok) - min(r["start"] for r in results)
+    tokens = sum(r["completion_tokens"] for r in ok)
+    return {"n": len(batch), "failed": len(batch) - len(ok), "wall_seconds": wall,
+            "completion_tokens": tokens,
             "aggregate_tok_s": tokens / wall,
-            "per_request_tok_s": [r["completion_tokens"] / r["seconds"] for r in results],
+            "per_request_tok_s": [r["completion_tokens"] / r["seconds"] for r in ok],
             "requests": results}
 
 
@@ -99,8 +113,10 @@ def main():
         run = run_batch(args.base_url, model, batch, args.max_tokens)
         runs.append(run)
         per = run["per_request_tok_s"]
-        print(f"N={n}: aggregate {run['aggregate_tok_s']:.1f} tok/s, per request "
-              f"min {min(per):.1f} / max {max(per):.1f} tok/s, wall {run['wall_seconds']:.1f} s",
+        print(f"N={n}: aggregate {run['aggregate_tok_s']:.1f} tok/s"
+              + (f", {run['failed']} failed" if run["failed"] else "")
+              + f", per request min {min(per):.1f} / max {max(per):.1f} tok/s, "
+              f"wall {run['wall_seconds']:.1f} s",
               flush=True)
     with open(args.out_json, "w", encoding="utf-8") as f:
         json.dump({"shared": args.shared, "max_tokens": args.max_tokens, "runs": runs}, f,

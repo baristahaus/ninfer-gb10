@@ -7,11 +7,14 @@
 #include "ninfer/ops/rmsnorm.h"
 #include "ninfer/ops/rope.h"
 #include "ninfer/ops/sigmoid_mul.h"
-#include "ops/softmax_attention/dense/causal_cache/prompt_common.cuh"
 #include "ops/linear/bf16/flash_next/bf16_launch.h"
 #include "ops/linear/fp8/fp8_flash_next.h"
 #include "ops/linear/fp8/fp8_format.h"
 #include "ops/common/device_info.h"
+#include "ops/common/math.cuh"
+#include "ops/common/mma.cuh"
+#include "ops/common/warp.cuh"
+#include "ops/kernel/paged_kv_address.cuh"
 #include "ops/kv_cache/fp8_e4m3_row_codec.cuh"
 #include "ops/kv_cache/hadamard_d256.cuh"
 
@@ -31,6 +34,17 @@
 
 namespace ninfer::ops {
 namespace {
+
+// XOR-swizzled b16 element address for the 64-row MMA staging tiles, and the matching
+// ldmatrix lane address.
+__device__ __forceinline__ int qsa_swz(int row, int col) {
+    return (((col >> 3) ^ (row & 7)) << 3) | (col & 7);
+}
+
+__device__ __forceinline__ unsigned qsa_swz_addr(unsigned lane_base, unsigned ck, unsigned as,
+                                                 unsigned r) {
+    return lane_base + ((ck | as) ^ r);
+}
 using detail::WeightFormats;
 using detail::fp8_row_weight;
 using detail::require_weight;
@@ -388,7 +402,7 @@ __launch_bounds__(64, 4) __global__ void score_groups_mma_kernel(
         const int row = vector / kVectorsPerRow;
         const int d = (vector % kVectorsPerRow) * 8;
         __nv_bfloat16* destination = query_shared +
-            row * kIndexDim + causal_prompt_swz(row, d);
+            row * kIndexDim + qsa_swz(row, d);
         if (row < kIndexHeads) {
             const __nv_bfloat16* source = query + d + kIndexDim *
                 (row + static_cast<std::int64_t>(kIndexHeads) * token);
@@ -428,7 +442,7 @@ __launch_bounds__(64, 4) __global__ void score_groups_mma_kernel(
             const int row = vector / kVectorsPerRow;
             const int d = (vector % kVectorsPerRow) * 8;
             __nv_bfloat16* destination = key_shared +
-                row * kIndexDim + causal_prompt_swz(row, d);
+                row * kIndexDim + qsa_swz(row, d);
             const int group = tile_begin + row;
             if (group < groups) {
                 const int position = group * kRatio + (kRatio - 1);
@@ -448,11 +462,11 @@ __launch_bounds__(64, 4) __global__ void score_groups_mma_kernel(
         unsigned af[2][4];
         unsigned bf[2][kNTiles][2];
         ldmatrix_x4(af[0][0], af[0][1], af[0][2], af[0][3],
-                    causal_prompt_swz_addr(q_base, 0U, q_a, q_r));
+                    qsa_swz_addr(q_base, 0U, q_a, q_r));
 #pragma unroll
         for (int nt = 0; nt < kNTiles; nt += 2) {
             ldmatrix_x4(bf[0][nt][0], bf[0][nt][1], bf[0][nt + 1][0], bf[0][nt + 1][1],
-                        causal_prompt_swz_addr(k_base + static_cast<unsigned>(nt * 2048),
+                        qsa_swz_addr(k_base + static_cast<unsigned>(nt * 2048),
                                                0U, k_a, k_r));
         }
 #pragma unroll
@@ -462,13 +476,13 @@ __launch_bounds__(64, 4) __global__ void score_groups_mma_kernel(
             if (step + 1 < kKSteps) {
                 const unsigned contraction = static_cast<unsigned>((step + 1) << 5);
                 ldmatrix_x4(af[next][0], af[next][1], af[next][2], af[next][3],
-                            causal_prompt_swz_addr(q_base, contraction, q_a, q_r));
+                            qsa_swz_addr(q_base, contraction, q_a, q_r));
 #pragma unroll
                 for (int nt = 0; nt < kNTiles; nt += 2) {
                     ldmatrix_x4(
                         bf[next][nt][0], bf[next][nt][1],
                         bf[next][nt + 1][0], bf[next][nt + 1][1],
-                        causal_prompt_swz_addr(k_base + static_cast<unsigned>(nt * 2048),
+                        qsa_swz_addr(k_base + static_cast<unsigned>(nt * 2048),
                                                contraction, k_a, k_r));
                 }
             }
@@ -826,7 +840,7 @@ __device__ __forceinline__ void stage_selected_qsa_tile(
         const int row = vector / kVectorsPerRow;
         const int d = (vector % kVectorsPerRow) * 8;
         __nv_bfloat16* output = destination +
-            row * kHeadDim + causal_prompt_swz(row, d);
+            row * kHeadDim + qsa_swz(row, d);
         const int position = staged_positions[row];
         if (position >= 0) {
             const int page = physical_page(tables, logical_pages, table_row, position);
@@ -928,7 +942,7 @@ __device__ __forceinline__ void selected_attention_batched_body(
         const int row = vector / kVectorsPerRow;
         const int d = (vector % kVectorsPerRow) * 8;
         __nv_bfloat16* destination = query_shared +
-            row * kHeadDim + causal_prompt_swz(row, d);
+            row * kHeadDim + qsa_swz(row, d);
         if (row < kHeadsPerKv) {
             const int head = kv_head * kHeadsPerKv + row;
             const __nv_bfloat16* source = query + d + kHeadDim *
@@ -997,11 +1011,11 @@ __device__ __forceinline__ void selected_attention_batched_body(
             unsigned af[2][4];
             unsigned bf[2][kQkTiles][2];
             ldmatrix_x4(af[0][0], af[0][1], af[0][2], af[0][3],
-                        causal_prompt_swz_addr(q_base, 0U, q_a, q_r));
+                        qsa_swz_addr(q_base, 0U, q_a, q_r));
 #pragma unroll
             for (int nt = 0; nt < kQkTiles; nt += 2) {
                 ldmatrix_x4(bf[0][nt][0], bf[0][nt][1], bf[0][nt + 1][0], bf[0][nt + 1][1],
-                            causal_prompt_swz_addr(k_base + static_cast<unsigned>(nt * 4096),
+                            qsa_swz_addr(k_base + static_cast<unsigned>(nt * 4096),
                                                    0U, k_a, k_r));
             }
 #pragma unroll
@@ -1011,13 +1025,13 @@ __device__ __forceinline__ void selected_attention_batched_body(
                 if (step + 1 < kQkSteps) {
                     const unsigned contraction = static_cast<unsigned>((step + 1) << 5);
                     ldmatrix_x4(af[next][0], af[next][1], af[next][2], af[next][3],
-                                causal_prompt_swz_addr(q_base, contraction, q_a, q_r));
+                                qsa_swz_addr(q_base, contraction, q_a, q_r));
 #pragma unroll
                     for (int nt = 0; nt < kQkTiles; nt += 2) {
                         ldmatrix_x4(
                             bf[next][nt][0], bf[next][nt][1],
                             bf[next][nt + 1][0], bf[next][nt + 1][1],
-                            causal_prompt_swz_addr(k_base + static_cast<unsigned>(nt * 4096),
+                            qsa_swz_addr(k_base + static_cast<unsigned>(nt * 4096),
                                                    contraction, k_a, k_r));
                     }
                 }
@@ -1115,7 +1129,7 @@ __device__ __forceinline__ void selected_attention_batched_body(
         constexpr int kPvLoads = kPvSteps * kPvHalf;
         unsigned vf[2][4];
         ldmatrix_x4_t(vf[0][0], vf[0][1], vf[0][2], vf[0][3],
-                      causal_prompt_swz_addr(
+                      qsa_swz_addr(
                           v_base, static_cast<unsigned>((warp * kPvTiles) << 4), v_a, v_r));
 #pragma unroll
         for (int item = 0; item < kPvLoads; ++item) {
@@ -1128,7 +1142,7 @@ __device__ __forceinline__ void selected_attention_batched_body(
                 const int next_nt = warp * kPvTiles + ((item + 1) % kPvHalf) * 2;
                 ldmatrix_x4_t(
                     vf[next][0], vf[next][1], vf[next][2], vf[next][3],
-                    causal_prompt_swz_addr(
+                    qsa_swz_addr(
                         v_base + static_cast<unsigned>(next_step * 8192),
                         static_cast<unsigned>(next_nt << 4), v_a, v_r));
             }

@@ -70,36 +70,39 @@ std::size_t current_free_device_bytes() {
     return free_bytes;
 }
 
-// MemTotal/MemAvailable from /proc/meminfo in bytes; 0 when unavailable.
-std::pair<std::size_t, std::size_t> host_meminfo_bytes() {
-    std::size_t total = 0, available = 0;
-    std::size_t kib   = 0;
-    std::string key;
+// The kernel's reclaimable view of host memory (/proc/meminfo MemAvailable) in bytes.
+std::size_t host_available_bytes() {
     std::ifstream info("/proc/meminfo");
+    std::string key;
     std::string unit;
+    std::size_t kib = 0;
     while (info >> key >> kib >> unit) {
-        if (key == "MemTotal:") { total = kib; }
-        else if (key == "MemAvailable:") { available = kib; }
+        if (key == "MemAvailable:") { return kib * 1024; }
     }
-    return {total * 1024, available * 1024};
+    throw std::runtime_error("/proc/meminfo reports no MemAvailable");
 }
 
-// Device bytes still obtainable for new allocations.
+// Host memory an integrated device keeps out of Device sizing beyond the pinned Host KV arena:
+// Host StateImages, the resident part of the file-mapped PLE table, and the process itself. On
+// GB10 the eight default StateImages take about 1 GiB and a served run keeps about 3 GiB of PLE
+// pages cached (plan Block I, I7).
+constexpr std::size_t kIntegratedHostReserveBytes = 6ULL << 30;
+
+// Device bytes a new allocation can still obtain, before the Program's pinned Host KV arena is
+// allocated when `host_kv_pending` is set.
 //
-// Discrete devices keep the cudaMemGetInfo view. An integrated (unified-memory)
-// device reports the host's physical memory as its own, and its cudaMemGetInfo
-// free undercounts what cudaMalloc can obtain: clean page cache is reclaimable,
-// and MemAvailable is the kernel's reclaimable view (the PLE file mapping stays
-// reclaimable by design, plan section 11).
-std::size_t obtainable_device_bytes() {
-    const auto [mem_total, mem_available] = host_meminfo_bytes();
-    if (mem_total == 0 || mem_available == 0) {
-        return current_free_device_bytes();
-    }
-    std::size_t device_free  = 0;
-    std::size_t device_total = 0;
-    CUDA_CHECK(cudaMemGetInfo(&device_free, &device_total));
-    return device_total >= mem_total - mem_total / 10 ? mem_available : device_free;
+// A discrete device reports its own memory through cudaMemGetInfo. An integrated device shares
+// host memory, and cudaMalloc reclaims clean page cache that cudaMemGetInfo counts as used
+// (Block I, I1: 104 GiB obtained against 10 GiB reported free with the artifact cached), so its
+// budget is MemAvailable less the host memory that must stay out of Device use.
+std::size_t obtainable_device_bytes(const DeviceContext& device, const EngineOptions& options,
+                                    bool host_kv_pending) {
+    if (!device.props.integrated) { return current_free_device_bytes(); }
+    const std::size_t reserve =
+        kIntegratedHostReserveBytes +
+        (host_kv_pending ? options.context_cache.host_kv_capacity_bytes : 0);
+    const std::size_t available = host_available_bytes();
+    return available > reserve ? available - reserve : 0;
 }
 
 } // namespace
@@ -206,7 +209,7 @@ ConstructedModel construct_flash_next(const EngineOptions& options, DeviceContex
     auto plan        = Model::plan_load(binder, options, Model::WeightsProfile::Nvfp4);
     auto planner     = Model::make_sequence_planner(device, options, Model::WeightsProfile::Nvfp4);
     const auto curve = planner.capacity_curve();
-    const auto free  = obtainable_device_bytes();
+    const auto free  = obtainable_device_bytes(device, options, true);
     if (plan.materialization().device_capacity_bytes > free) {
         throw std::invalid_argument("Flash-Next weights exceed free GPU memory");
     }
@@ -216,13 +219,14 @@ ConstructedModel construct_flash_next(const EngineOptions& options, DeviceContex
     for (const auto& placement : plan.materialization().device_objects) {
         formats.insert(reader.directory().tensor(placement.object).format);
     }
-    auto backing     = artifact::materialize(reader, std::move(plan.materialization()), device,
-                                             &options.startup_observer);
-    const auto stats = backing.stats();
-    auto model       = Model::construct_loaded_model(std::move(plan), std::move(backing));
-    auto instance    = std::make_unique<FlashNextInstance>(std::move(model), options);
-    auto resolution  = resolve_kv_capacity(options.kv_capacity, curve, obtainable_device_bytes());
-    auto sequence    = std::move(planner).finalize(resolution.main_page_groups);
+    auto backing      = artifact::materialize(reader, std::move(plan.materialization()), device,
+                                              &options.startup_observer);
+    const auto stats  = backing.stats();
+    auto model        = Model::construct_loaded_model(std::move(plan), std::move(backing));
+    auto instance     = std::make_unique<FlashNextInstance>(std::move(model), options);
+    const auto budget = obtainable_device_bytes(device, options, true);
+    auto resolution   = resolve_kv_capacity(options.kv_capacity, curve, budget);
+    auto sequence     = std::move(planner).finalize(resolution.main_page_groups);
     if (sequence.device_reservation_bytes() != resolution.runtime_reservation_bytes ||
         sequence.kv_capacity() != resolution.resolved_tokens) {
         throw std::logic_error("Flash-Next resolved KV capacity differs from finalized plan");
@@ -231,8 +235,9 @@ ConstructedModel construct_flash_next(const EngineOptions& options, DeviceContex
     instance->program = Model::create_program(*instance->model, std::move(sequence), device,
                                               options.startup_observer);
     device.synchronize();
-    instance->kv_capacity_resolution.available_after_startup_bytes = obtainable_device_bytes();
-    auto cost                                                      = resolve_context_machine_cost(
+    instance->kv_capacity_resolution.available_after_startup_bytes =
+        obtainable_device_bytes(device, options, false);
+    auto cost = resolve_context_machine_cost(
         {.hardware_class =
              context_cost_hardware_class(device.props.name, device.props.major, device.props.minor),
          .prefill_signature = "qwen3_8_flash_next_125b_a6b-nvfp4-v3-1"},
@@ -287,7 +292,7 @@ ConstructedModel construct_model(const EngineOptions& options, DeviceContext& de
         options.context_cost.preset_path);
     auto planner    = models::qwen3_5::make_sequence_planner(instance->parameters, device, options);
     auto resolution = resolve_kv_capacity(options.kv_capacity, planner.capacity_curve(),
-                                          obtainable_device_bytes());
+                                          obtainable_device_bytes(device, options, true));
     auto sequence   = std::move(planner).finalize(resolution.main_page_groups);
     if (sequence.device_reservation_bytes() != resolution.runtime_reservation_bytes ||
         sequence.kv_capacity() != resolution.resolved_tokens) {
@@ -300,7 +305,8 @@ ConstructedModel construct_model(const EngineOptions& options, DeviceContext& de
                                                         device, options.startup_observer);
     device.synchronize();
     program.complete();
-    instance->kv_capacity_resolution.available_after_startup_bytes = obtainable_device_bytes();
+    instance->kv_capacity_resolution.available_after_startup_bytes =
+        obtainable_device_bytes(device, options, false);
     const auto& stats = instance->model->storage_stats();
     LoadSummary summary;
     summary.architecture = models::architecture_name(instance->model->config().text.architecture);

@@ -2,9 +2,12 @@
 
 #include "ninfer/engine.h"
 
+#include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <string>
 #include <utility>
 #include <vector>
@@ -232,17 +235,14 @@ int exercise_concurrent_state(ninfer::Engine& engine,
                               const std::vector<ninfer::TokenId>& expected_prefix,
                               const CrossPathFixture& fixture) {
     // Different frontiers exercise local prefill rows and shared decode rows. Repeat in
-    // reversed admission order to reuse both physical lanes and recurrent state slots. Each
-    // order must decode both rows together: in the reversed order the resumed request forks a
-    // cached StateImage, and the root queued behind it is admitted once that fork settles, not
-    // after the resumed request completes.
+    // reversed admission order to reuse both physical lanes and recurrent state slots.
     auto continuation = canonical_prompt();
     continuation.insert(continuation.end(), expected_prefix.begin(),
                         expected_prefix.begin() + fixture.resumed_prefix);
     const auto cold =
         engine.generate(engine.prepare_tokens(continuation), greedy_options(8, false));
+    const auto before = engine.runtime_stats();
     for (bool reverse : {false, true}) {
-        const auto before = engine.runtime_stats();
         auto first =
             engine.submit(engine.prepare_tokens(reverse ? continuation : canonical_prompt()),
                           greedy_options(reverse ? 8 : 12, false));
@@ -262,13 +262,64 @@ int exercise_concurrent_state(ninfer::Engine& engine,
             print_tokens("cold", cold.generated_token_ids);
             return 1;
         }
-        const auto after = engine.runtime_stats();
-        if (after.decode_row_rounds - before.decode_row_rounds <=
-            after.decode_rounds - before.decode_rounds) {
-            std::cerr << "Flash-Next concurrent fixture never executed a two-row decode"
-                      << (reverse ? " (reversed admission)" : "") << '\n';
-            return 1;
-        }
+    }
+    const auto after = engine.runtime_stats();
+    if (after.decode_row_rounds - before.decode_row_rounds <=
+        after.decode_rounds - before.decode_rounds) {
+        std::cerr << "Flash-Next concurrent fixture never executed a two-row decode\n";
+        return 1;
+    }
+    return 0;
+}
+
+// Concurrent response replays must be admitted together. Each replay forks its cached
+// StateImage, which settles in the replay's first round; a queued request inspected while that
+// fork is open is blocked, and admission must be re-armed when the fork settles instead of when
+// a running request completes. Four distinct prompts are served once, then resubmitted at once
+// with reuse (the GB10 C4 repro: 2 of 4 were held for the others' whole lifetime). A held
+// request queues at least as long as the shortest request lives; co-admitted replays queue
+// only through the staggered admissions ahead of them (under 1 s against about 3 s of
+// generation on GB10), so the check is relative and needs no absolute time bound.
+int exercise_replay_admission(const char* artifact) {
+    constexpr std::uint32_t kRequests               = 4;
+    constexpr std::uint32_t kOutputs                = 64;
+    ninfer::EngineOptions options                   = engine_options(artifact);
+    options.enable_vision                           = false;
+    options.max_concurrency                         = kRequests;
+    options.max_pending_requests                    = kRequests;
+    options.context_cache.device_state_slots        = kRequests;
+    options.context_cache.max_private_continuations = 2 * kRequests;
+    ninfer::Engine engine(std::move(options));
+
+    // Distinct user text: one prompt token takes a value from elsewhere in the same prompt.
+    std::array<std::vector<ninfer::TokenId>, kRequests> prompts;
+    const std::array<ninfer::TokenId, kRequests> substitutes{20139, 2716, 3069, 12515};
+    for (std::uint32_t i = 0; i < kRequests; ++i) {
+        prompts[i]    = canonical_prompt();
+        prompts[i][5] = substitutes[i];
+        (void)engine.generate(engine.prepare_tokens(prompts[i]), greedy_options(kOutputs, true));
+    }
+
+    std::vector<ninfer::GenerationHandle> handles;
+    handles.reserve(kRequests);
+    for (const auto& prompt : prompts) {
+        handles.push_back(
+            engine.submit(engine.prepare_tokens(prompt), greedy_options(kOutputs, true)));
+    }
+    double longest_queue  = 0.0;
+    double shortest_total = std::numeric_limits<double>::infinity();
+    std::uint32_t replays = 0;
+    for (auto& handle : handles) {
+        const ninfer::GenerationResult result = handle.wait();
+        longest_queue  = std::max(longest_queue, result.engine_timing.queue_wait_seconds);
+        shortest_total = std::min(shortest_total, result.timings.total_seconds);
+        if (result.reused_prompt_tokens != 0) { ++replays; }
+    }
+    if (replays != kRequests || 2.0 * longest_queue >= shortest_total) {
+        std::cerr << "Flash-Next concurrent replays were not admitted together: " << replays
+                  << " replays, longest queue wait " << longest_queue
+                  << " s against a shortest request of " << shortest_total << " s\n";
+        return 1;
     }
     return 0;
 }
@@ -323,6 +374,7 @@ int main() {
             if (exercise_concurrent_state(engine, expected_prefix, fixture) != 0) { return 1; }
             if (exercise_vision(engine) != 0) { return 1; }
         }
+        if (exercise_replay_admission(artifact) != 0) { return 1; }
         if (exercise_ordinary_greedy(artifact, expected_prefix) != 0) { return 1; }
         std::cout << "OK Qwen3.8 Flash Next real Engine\n";
         return 0;

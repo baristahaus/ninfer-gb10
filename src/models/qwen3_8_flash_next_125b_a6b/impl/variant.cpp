@@ -19,6 +19,15 @@
 namespace ninfer::models::qwen3_8_flash_next_125b_a6b::detail {
 namespace {
 
+// QSA attends densely, without index scoring or selection, when a call's visible keys all fit the
+// selected-token budget (ops::flash_next_qsa). A profile whose envelope fits therefore records a
+// different node topology from one that does not, and owns a separate executable.
+constexpr std::uint32_t kDenseQsa = 5;
+
+bool dense_qsa(std::uint64_t max_visible_keys) {
+    return max_visible_keys <= static_cast<std::uint64_t>(ops::kFlashNextQsaSelectedTokens);
+}
+
 std::vector<GraphExecutionProfile> profiles(std::uint32_t capacity) {
     if (capacity == 0) { return {}; }
     std::vector<GraphExecutionProfile> out;
@@ -39,7 +48,14 @@ std::vector<GraphExecutionProfile> profiles(std::uint32_t capacity) {
 } // namespace
 
 std::vector<GraphExecutionProfile> Variant::ordinary_graph_profiles(std::uint32_t capacity) {
-    return profiles(capacity);
+    auto out = profiles(capacity);
+    // Ordinary decode attends over at most the profile maximum plus the new token.
+    for (GraphExecutionProfile& profile : out) {
+        if (dense_qsa(static_cast<std::uint64_t>(profile.max) + 1ULL)) {
+            profile.topology_class = kDenseQsa;
+        }
+    }
+    return out;
 }
 
 std::vector<GraphExecutionProfile> Variant::mtp_graph_profiles(std::uint32_t capacity,
@@ -49,14 +65,12 @@ std::vector<GraphExecutionProfile> Variant::mtp_graph_profiles(std::uint32_t cap
     // A profile's executable may be updated only to definitions of the same node topology. The MTP
     // schedule changes topology where ordinary single-token decode does not:
     // - between the 65K and 131K envelopes (the four-token verify/draft schedule);
-    // - where QSA attends densely: a verify batch wider than 16 tokens whose visible keys
-    //   (profile maximum + K + 1) all fit the selected-token budget runs one dense attention
-    //   kernel instead of the score/select/expand/attend pipeline. Batches of 6 x K=2 or 5 x K=3
-    //   reach that width, so those profiles own a separate executable at every batch size.
-    constexpr std::uint32_t kDenseQsa = 5;
+    // - where the verify envelope (profile maximum + K + 1, clamped to the capacity like the
+    //   Program's envelope) fits the QSA budget and QSA attends densely.
     for (GraphExecutionProfile& profile : out) {
-        if (static_cast<std::uint64_t>(profile.max) + draft_window + 1ULL <=
-            static_cast<std::uint64_t>(ops::kFlashNextQsaSelectedTokens)) {
+        const std::uint64_t verify_visible = std::min<std::uint64_t>(
+            capacity, static_cast<std::uint64_t>(profile.max) + draft_window + 1ULL);
+        if (dense_qsa(verify_visible)) {
             profile.topology_class = kDenseQsa;
         } else if (profile.max > 65535U) {
             profile.topology_class = profile.max <= 131071U ? 3U : 4U;

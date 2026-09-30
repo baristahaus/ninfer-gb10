@@ -39,7 +39,7 @@ void store_bf16(DeviceBuffer& storage, std::size_t element, float value) {
 }
 
 int run(int kPrefillTokens) {
-    constexpr std::size_t kFullContextPrefillWorkspace = 2879492096ULL;
+    constexpr std::size_t kFullContextPrefillWorkspace = 2909048832ULL;
     if (ops::flash_next_qsa_workspace_capacity_bytes(8192, 262144) !=
         kFullContextPrefillWorkspace) {
         std::cerr << "Flash-Next QSA full-context prefill workspace regressed\n";
@@ -409,6 +409,69 @@ int run(int kPrefillTokens) {
     }
     if (from_device<int>(d_dense_selected, dense_expected.size()) != dense_expected) {
         std::cerr << "QSA dense route published an incomplete selection\n";
+        ++failures;
+    }
+
+    // Eight decode rows whose keys fit the budget take the split kernel over each row's own
+    // sequence, with no index scoring. FP64 oracle over the represented cache: the patterned
+    // K/V above for positions below 256, zero for positions the calls in this test overwrote
+    // (their projected K/V are zero) and for every position from 256 on.
+    constexpr int kSplitTokens   = 8;
+    constexpr int kSplitPosition = 200;
+    std::vector<int> split_positions(kSplitTokens);
+    for (int token = 0; token < kSplitTokens; ++token) {
+        split_positions[token] = kSplitPosition + token;
+    }
+    DeviceBuffer d_split_positions = to_device_i32(split_positions);
+    DeviceBuffer d_split_rope      = to_device_i32(std::vector<int>(3 * kSplitTokens, 0));
+    DeviceBuffer d_split_valid     = to_device_i32(std::vector<int>{kSplitTokens});
+    DeviceBuffer d_split_selected =
+        to_device_i32(std::vector<int>(2051 * kSplitTokens, 1 << 30));
+    Tensor split_selected(d_split_selected.p, DType::I32, {2051, kSplitTokens});
+    GuardedDeviceBuffer d_split_destination(
+        static_cast<std::size_t>(kHidden) * kSplitTokens * sizeof(std::uint16_t));
+    Tensor split_destination(d_split_destination.data(), DType::BF16, {kHidden, kSplitTokens});
+    prefill_workspace.reset();
+    ops::flash_next_qsa(
+        Tensor(d_prefill_input.p, DType::BF16, {kHidden, kSplitTokens}),
+        Tensor(d_split_positions.p, DType::I32, {kSplitTokens, 1}),
+        Tensor(d_split_rope.p, DType::I32, {kSplitTokens, 1, 3}),
+        Tensor(d_split_valid.p, DType::I32, {1}), Tensor(d_rows.p, DType::I32, {1}), weights,
+        cache,
+        {.min_visible_keys = kSplitPosition + 1,
+         .max_visible_keys = kSplitPosition + kSplitTokens},
+        split_destination, prefill_workspace, nullptr, nullptr,
+        {.selected_indices = &split_selected});
+    cuda_synchronize();
+    const auto overwritten = [&](int position) {
+        return (position >= kDensePosition && position < kDensePosition + kPrefillTokens) ||
+               (position >= kSplitPosition && position < kSplitPosition + kSplitTokens) ||
+               position >= 256;
+    };
+    std::vector<double> split_oracle(static_cast<std::size_t>(kHidden) * kSplitTokens, 0.0);
+    std::vector<int> split_expected(2051 * kSplitTokens, -1);
+    for (int token = 0; token < kSplitTokens; ++token) {
+        const double projected_query = 2.0 * query_input(token);
+        const double q =
+            projected_query / std::sqrt(projected_query * projected_query / 256.0 + 1.0e-6);
+        double numerator = 0.0, denominator = 0.0;
+        for (int position = 0; position <= split_positions[token]; ++position) {
+            const double key   = overwritten(position) ? 0.0 : 0.125 * (position % 7 - 3);
+            const double value = overwritten(position) ? 0.0 : 0.125 * (position % 11 - 5);
+            const double probability = std::exp(q * key / 16.0);
+            numerator += probability * value;
+            denominator += probability;
+            split_expected[2051 * token + position] = position;
+        }
+        split_oracle[static_cast<std::size_t>(token) * kHidden] =
+            numerator / denominator / (1.0 + std::exp(-2.0 * query_input(token)));
+    }
+    failures += verify_pointwise("QSA dense split decode",
+                                 from_device_bf16(d_split_destination.data(), split_oracle.size()),
+                                 split_oracle, {/*absolute*/ 4.0e-3, /*relative*/ 2.0e-2});
+    failures += d_split_destination.verify_guards("QSA dense split decode output");
+    if (from_device<int>(d_split_selected, split_expected.size()) != split_expected) {
+        std::cerr << "QSA dense split decode published an incomplete selection\n";
         ++failures;
     }
     return failures;

@@ -1257,6 +1257,16 @@ int decode_attention_splits(int tokens) {
     return 1;
 }
 
+// Dense decode (every visible key selected) partitions each token's own sequence, so the split
+// count follows the visible-key envelope instead of the 2051-slot selection width: enough
+// 128-thread blocks for about eight per SM, and no split shorter than one 16-key tile.
+int dense_decode_attention_splits(int tokens, std::uint32_t max_visible_keys) {
+    const int blocks_per_split = (kQueryHeads / kSplitHeadsPerBlock) * tokens;
+    const int by_device        = std::max(1, 8 * device_sm_count() / blocks_per_split);
+    const int by_work          = static_cast<int>((max_visible_keys + 15U) / 16U);
+    return std::max(1, std::min({by_device, by_work, kMaxDecodeAttentionSplits}));
+}
+
 template <bool Fp8>
 __device__ __forceinline__ void selected_attention_split_body(
     const __nv_bfloat16* query, const void* key_pages, const void* value_pages,
@@ -1516,19 +1526,21 @@ std::size_t flash_next_qsa_workspace_capacity_bytes(std::int32_t tokens,
     const std::uint64_t bf16 = static_cast<std::uint64_t>(tokens) * 39552ULL *
                                sizeof(__nv_bfloat16);
     const std::uint64_t groups = (static_cast<std::uint64_t>(max_context) + kRatio - 1) / kRatio;
-    const std::uint64_t hierarchy = tokens <= 16
-        ? 2 * ((groups + kTopkBlockItems - 1) / kTopkBlockItems) * kTopGroups *
-              (sizeof(float) + sizeof(std::int32_t))
-        : 0;
+    // The capacity covers every call of up to `tokens` rows. Calls of at most 16 rows take the
+    // decode route (hierarchical top-k scratch and split-attention partials), so those terms are
+    // sized for min(tokens, 16) rows, including in a workspace sized for a longer prefill chunk.
+    const std::uint64_t decode_rows = static_cast<std::uint64_t>(std::min<std::int32_t>(tokens, 16));
+    const std::uint64_t hierarchy = decode_rows * 2 *
+                                    ((groups + kTopkBlockItems - 1) / kTopkBlockItems) *
+                                    kTopGroups * (sizeof(float) + sizeof(std::int32_t));
     const std::uint64_t selection = static_cast<std::uint64_t>(tokens) *
-                                    (groups * sizeof(float) +
-                                     kTopGroups * sizeof(std::int32_t) + hierarchy);
+                                        (groups * sizeof(float) +
+                                         kTopGroups * sizeof(std::int32_t)) +
+                                    hierarchy;
     const std::uint64_t indices = static_cast<std::uint64_t>(tokens) * kOutputWidth *
                                   sizeof(std::int32_t);
-    const std::uint64_t split_partials = tokens <= 16
-        ? static_cast<std::uint64_t>(tokens) * kMaxDecodeAttentionSplits * kQueryHeads *
-              (kHeadDim + 2) * sizeof(float)
-        : 0;
+    const std::uint64_t split_partials = decode_rows * kMaxDecodeAttentionSplits * kQueryHeads *
+                                         (kHeadDim + 2) * sizeof(float);
     const std::uint64_t total = bf16 + indices + selection + split_partials + 16 * 256;
     if (total > std::numeric_limits<std::size_t>::max()) {
         throw std::overflow_error("Flash-Next QSA workspace size overflow");
@@ -1821,9 +1833,37 @@ void flash_next_qsa(const Tensor& input, const Tensor& cache_positions,
                          partial_numerator, num_splits);
         }
     };
-    if (tokens > 16 && envelope.max_visible_keys <= kOutputWidth) {
-        dispatch_batched(dim3(tokens, kKvHeads), nullptr, 1, nullptr, nullptr, nullptr,
-                         static_cast<__nv_bfloat16*>(attention.data));
+    const auto split_attention = [&](const int* indices, int num_splits) {
+        Tensor partial_maximum = workspace.alloc(DType::FP32, {kQueryHeads, tokens, num_splits});
+        Tensor partial_denominator =
+            workspace.alloc(DType::FP32, {kQueryHeads, tokens, num_splits});
+        Tensor partial_numerator =
+            workspace.alloc(DType::FP32, {kHeadDim, kQueryHeads, tokens, num_splits});
+        dispatch_split(indices, static_cast<float*>(partial_maximum.data),
+                       static_cast<float*>(partial_denominator.data),
+                       static_cast<float*>(partial_numerator.data), num_splits);
+        reduce_selected_attention_splits_kernel<<<dim3(kQueryHeads / kSplitHeadsPerBlock, tokens),
+                                                  kSplitHeadsPerBlock * 32, 0, stream>>>(
+            static_cast<const float*>(partial_maximum.data),
+            static_cast<const float*>(partial_denominator.data),
+            static_cast<const float*>(partial_numerator.data),
+            static_cast<const int*>(valid_columns.data), width, tokens,
+            static_cast<__nv_bfloat16*>(attention.data), num_splits);
+    };
+    const bool within_budget = envelope.max_visible_keys <= kOutputWidth;
+    // Within the selection budget every causally visible key is selected, so index scoring and
+    // top-k selection are skipped and attention reads positions directly: one batched kernel for
+    // wide calls, the split kernel over each token's own sequence otherwise. A call that reuses
+    // another call's selection keeps that selection below 17 tokens. The route depends only on
+    // the envelope, so a CUDA Graph executable must not mix envelopes across the budget.
+    if (within_budget && (tokens > 16 || index_control.reused_indices == nullptr)) {
+        if (tokens > 16) {
+            dispatch_batched(dim3(tokens, kKvHeads), nullptr, 1, nullptr, nullptr, nullptr,
+                             static_cast<__nv_bfloat16*>(attention.data));
+        } else {
+            split_attention(nullptr,
+                            dense_decode_attention_splits(tokens, envelope.max_visible_keys));
+        }
         if (index_control.selected_indices != nullptr) {
             dense_indices_batched_kernel<<<dim3((kOutputWidth + 255) / 256, tokens), 256, 0,
                                            stream>>>(
@@ -1959,29 +1999,23 @@ void flash_next_qsa(const Tensor& input, const Tensor& cache_positions,
                     static_cast<int*>(indices.data));
             }
         }
-        if (tokens <= 16) {
-            const bool dense_within_budget = envelope.max_visible_keys <= kOutputWidth;
-            const int num_splits = dense_within_budget ? kMaxDecodeAttentionSplits
-                                                       : decode_attention_splits(tokens);
+        if (tokens <= 16 && within_budget) {
+            // Reused selection within the budget: its 2051 slots hold every visible key.
+            split_attention(static_cast<const int*>(indices.data), kMaxDecodeAttentionSplits);
+        } else if (tokens <= 16) {
+            const int num_splits = decode_attention_splits(tokens);
             Tensor partial_maximum = workspace.alloc(
                 DType::FP32, {kQueryHeads, tokens, num_splits});
             Tensor partial_denominator = workspace.alloc(
                 DType::FP32, {kQueryHeads, tokens, num_splits});
             Tensor partial_numerator = workspace.alloc(
                 DType::FP32, {kHeadDim, kQueryHeads, tokens, num_splits});
-            if (dense_within_budget) {
-                dispatch_split(static_cast<const int*>(indices.data),
-                               static_cast<float*>(partial_maximum.data),
-                               static_cast<float*>(partial_denominator.data),
-                               static_cast<float*>(partial_numerator.data), num_splits);
-            } else {
-                dispatch_batched(dim3(tokens, kKvHeads, num_splits),
-                                 static_cast<const int*>(indices.data), num_splits,
-                                 static_cast<float*>(partial_maximum.data),
-                                 static_cast<float*>(partial_denominator.data),
-                                 static_cast<float*>(partial_numerator.data),
-                                 static_cast<__nv_bfloat16*>(attention.data));
-            }
+            dispatch_batched(dim3(tokens, kKvHeads, num_splits),
+                             static_cast<const int*>(indices.data), num_splits,
+                             static_cast<float*>(partial_maximum.data),
+                             static_cast<float*>(partial_denominator.data),
+                             static_cast<float*>(partial_numerator.data),
+                             static_cast<__nv_bfloat16*>(attention.data));
             reduce_selected_attention_splits_kernel<<<
                 dim3(kQueryHeads / kSplitHeadsPerBlock, tokens),
                 kSplitHeadsPerBlock * 32, 0, stream>>>(

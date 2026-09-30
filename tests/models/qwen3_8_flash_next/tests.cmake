@@ -8,6 +8,10 @@ ninfer_add_test(ninfer_qwen3_8_flash_next_real_test
   SOURCES models/qwen3_8_flash_next_125b_a6b/test_engine_real.cpp
   LIBRARIES ninfer_engine ninfer_artifact)
 set_tests_properties(ninfer_qwen3_8_flash_next_real_test PROPERTIES SKIP_RETURN_CODE 77)
+ninfer_add_test(ninfer_qwen3_8_flash_next_pr36fix_checks
+  SOURCES models/qwen3_8_flash_next_125b_a6b/test_pr36fix_checks.cpp
+  LIBRARIES ninfer_engine ninfer_artifact)
+set_tests_properties(ninfer_qwen3_8_flash_next_pr36fix_checks PROPERTIES SKIP_RETURN_CODE 77)
 ninfer_add_test(ninfer_qwen3_8_flash_next_fault_test
   SOURCES models/qwen3_8_flash_next_125b_a6b/test_engine_fault.cpp
   LIBRARIES ninfer_engine ninfer_artifact)

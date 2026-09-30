@@ -66,7 +66,7 @@ fi
 # ---- B-SETUP: the base worktree, its build overlapping the A GPU phases ---------------------
 if want B-SETUP; then
     begin B-SETUP "base worktree + background build (ed6525fa + driver patch)"
-    if [[ ! -d $B_TREE/.git ]]; then
+    if [[ ! -e $B_TREE/.git ]]; then
         git -C "$A_TREE" worktree add --detach "$B_TREE" "$B_COMMIT" \
             >"$ROOT/B-SETUP/worktree.log" 2>&1 || { log "worktree setup failed"; exit 1; }
     fi
@@ -74,8 +74,8 @@ if want B-SETUP; then
         tests/models/qwen3_8_flash_next/tests.cmake \
         tests/models/qwen3_8_flash_next_125b_a6b/test_pr36fix_checks.cpp \
         >"$ROOT/B-SETUP/driver.patch"
-    git -C "$B_TREE" apply "$ROOT/B-SETUP/driver.patch" \
-        >"$ROOT/B-SETUP/apply.log" 2>&1 || { log "driver patch failed to apply"; exit 1; }
+    git -C "$B_TREE" apply "$A_TREE/$ROOT/B-SETUP/driver.patch" \
+        >"$B_TREE/apply.log" 2>&1 || { log "driver patch failed to apply"; exit 1; }
     cmake -S "$B_TREE" -B "$B_TREE/build" -G Ninja -DCMAKE_BUILD_TYPE=Release \
         >"$ROOT/B-SETUP/configure.log" 2>&1 || { log "B configure failed"; exit 1; }
     (cd "$B_TREE" && cmake --build build -j; echo $? >"$ROOT/B-SETUP/build.rc") \

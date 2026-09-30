@@ -77,6 +77,7 @@ if want B-SETUP; then
     git -C "$B_TREE" apply "$ROOT/B-SETUP/driver.patch" \
         >"$B_TREE/apply.log" 2>&1 || { log "driver patch failed to apply"; exit 1; }
     cmake -S "$B_TREE" -B "$B_TREE/build" -G Ninja -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_CUDA_ARCHITECTURES=121a -DBUILD_TESTING=ON \
         >"$ROOT/B-SETUP/configure.log" 2>&1 || { log "B configure failed"; exit 1; }
     (cd "$B_TREE" && cmake --build build -j; echo $? >"$ROOT/B-SETUP/build.rc") \
         >"$ROOT/B-SETUP/build.log" 2>&1 &
@@ -172,7 +173,7 @@ if want B-TESTS; then
     cd "$B_TREE"
     gpu_idle
     NINFER_QWEN38_FLASH_NEXT_WEIGHTS="$ART" ctest --test-dir build \
-        -R 'ninfer_qwen3_8_flash_next_(real|load_plan|frontend|fault)_test' --output-on-failure \
+        -R '(ninfer_flash_next_qsa_test|ninfer_qwen3_8_flash_next_(real|load_plan|frontend|fault)_test)' --output-on-failure \
         >"$ROOT/B-TESTS/ctest-real.log" 2>&1 || real_rc=$?
     NINFER_QWEN38_FLASH_NEXT_WEIGHTS="$ART" ./build/tests/ninfer_qwen3_8_flash_next_pr36fix_checks \
         >"$ROOT/B-TESTS/driver.log" 2>&1 || driver_rc=$?

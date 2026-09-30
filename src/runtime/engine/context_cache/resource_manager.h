@@ -273,8 +273,11 @@ public:
     [[nodiscard]] Inspection inspect(Program& program, const PreparedPrompt& prompt,
                                      const RequestBasePlan& base, std::uint64_t publication_order,
                                      PlanningAllowance allowance = {}) {
+        // An unsettled StateImage Fork settles on its lane's next execution round, which may not
+        // overlap a context transaction; admission waits for that round instead of planning a
+        // materialization the Program must refuse to seal.
         if (!std::holds_alternative<std::monostate>(transaction_) ||
-            program.has_context_transaction()) {
+            program.has_context_transaction() || program.has_unsettled_state_fork()) {
             return {.readiness = Readiness::TemporarilyBlocked};
         }
         if (publication_order == 0) {
@@ -508,7 +511,7 @@ public:
         if (manager_transaction != program_transaction) {
             throw std::logic_error("capture observes inconsistent transaction ownership");
         }
-        if (program_transaction) {
+        if (program_transaction || program.has_unsettled_state_fork()) {
             program.skip_capture(std::move(offer));
             return ActiveCaptureReserveResult::Skipped;
         }

@@ -9,8 +9,10 @@
 
 #include <algorithm>
 #include <chrono>
+#include <fstream>
 #include <set>
 #include <stdexcept>
+#include <string>
 #include <utility>
 
 namespace ninfer::runtime {
@@ -66,6 +68,38 @@ std::size_t current_free_device_bytes() {
     std::size_t total_bytes = 0;
     CUDA_CHECK(cudaMemGetInfo(&free_bytes, &total_bytes));
     return free_bytes;
+}
+
+// MemTotal/MemAvailable from /proc/meminfo in bytes; 0 when unavailable.
+std::pair<std::size_t, std::size_t> host_meminfo_bytes() {
+    std::size_t total = 0, available = 0;
+    std::size_t kib   = 0;
+    std::string key;
+    std::ifstream info("/proc/meminfo");
+    std::string unit;
+    while (info >> key >> kib >> unit) {
+        if (key == "MemTotal:") { total = kib; }
+        else if (key == "MemAvailable:") { available = kib; }
+    }
+    return {total * 1024, available * 1024};
+}
+
+// Device bytes still obtainable for new allocations.
+//
+// Discrete devices keep the cudaMemGetInfo view. An integrated (unified-memory)
+// device reports the host's physical memory as its own, and its cudaMemGetInfo
+// free undercounts what cudaMalloc can obtain: clean page cache is reclaimable,
+// and MemAvailable is the kernel's reclaimable view (the PLE file mapping stays
+// reclaimable by design, plan section 11).
+std::size_t obtainable_device_bytes() {
+    const auto [mem_total, mem_available] = host_meminfo_bytes();
+    if (mem_total == 0 || mem_available == 0) {
+        return current_free_device_bytes();
+    }
+    std::size_t device_free  = 0;
+    std::size_t device_total = 0;
+    CUDA_CHECK(cudaMemGetInfo(&device_free, &device_total));
+    return device_total >= mem_total - mem_total / 10 ? mem_available : device_free;
 }
 
 } // namespace
@@ -172,7 +206,7 @@ ConstructedModel construct_flash_next(const EngineOptions& options, DeviceContex
     auto plan        = Model::plan_load(binder, options, Model::WeightsProfile::Nvfp4);
     auto planner     = Model::make_sequence_planner(device, options, Model::WeightsProfile::Nvfp4);
     const auto curve = planner.capacity_curve();
-    const auto free  = current_free_device_bytes();
+    const auto free  = obtainable_device_bytes();
     if (plan.materialization().device_capacity_bytes > free) {
         throw std::invalid_argument("Flash-Next weights exceed free GPU memory");
     }
@@ -187,7 +221,7 @@ ConstructedModel construct_flash_next(const EngineOptions& options, DeviceContex
     const auto stats = backing.stats();
     auto model       = Model::construct_loaded_model(std::move(plan), std::move(backing));
     auto instance    = std::make_unique<FlashNextInstance>(std::move(model), options);
-    auto resolution  = resolve_kv_capacity(options.kv_capacity, curve, current_free_device_bytes());
+    auto resolution  = resolve_kv_capacity(options.kv_capacity, curve, obtainable_device_bytes());
     auto sequence    = std::move(planner).finalize(resolution.main_page_groups);
     if (sequence.device_reservation_bytes() != resolution.runtime_reservation_bytes ||
         sequence.kv_capacity() != resolution.resolved_tokens) {
@@ -197,7 +231,7 @@ ConstructedModel construct_flash_next(const EngineOptions& options, DeviceContex
     instance->program = Model::create_program(*instance->model, std::move(sequence), device,
                                               options.startup_observer);
     device.synchronize();
-    instance->kv_capacity_resolution.available_after_startup_bytes = current_free_device_bytes();
+    instance->kv_capacity_resolution.available_after_startup_bytes = obtainable_device_bytes();
     auto cost                                                      = resolve_context_machine_cost(
         {.hardware_class =
              context_cost_hardware_class(device.props.name, device.props.major, device.props.minor),
@@ -253,7 +287,7 @@ ConstructedModel construct_model(const EngineOptions& options, DeviceContext& de
         options.context_cost.preset_path);
     auto planner    = models::qwen3_5::make_sequence_planner(instance->parameters, device, options);
     auto resolution = resolve_kv_capacity(options.kv_capacity, planner.capacity_curve(),
-                                          current_free_device_bytes());
+                                          obtainable_device_bytes());
     auto sequence   = std::move(planner).finalize(resolution.main_page_groups);
     if (sequence.device_reservation_bytes() != resolution.runtime_reservation_bytes ||
         sequence.kv_capacity() != resolution.resolved_tokens) {
@@ -266,7 +300,7 @@ ConstructedModel construct_model(const EngineOptions& options, DeviceContext& de
                                                         device, options.startup_observer);
     device.synchronize();
     program.complete();
-    instance->kv_capacity_resolution.available_after_startup_bytes = current_free_device_bytes();
+    instance->kv_capacity_resolution.available_after_startup_bytes = obtainable_device_bytes();
     const auto& stats = instance->model->storage_stats();
     LoadSummary summary;
     summary.architecture = models::architecture_name(instance->model->config().text.architecture);

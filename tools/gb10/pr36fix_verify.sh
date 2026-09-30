@@ -70,7 +70,7 @@ if want B-SETUP; then
         git -C "$A_TREE" worktree add --detach "$B_TREE" "$B_COMMIT" \
             >"$ROOT/B-SETUP/worktree.log" 2>&1 || { log "worktree setup failed"; exit 1; }
     fi
-    git -C "$A_TREE" show "$A_BRANCH" -- \
+    git -C "$A_TREE" diff eb9e87fa "$A_BRANCH" -- \
         tests/models/qwen3_8_flash_next/tests.cmake \
         tests/models/qwen3_8_flash_next_125b_a6b/test_pr36fix_checks.cpp \
         >"$ROOT/B-SETUP/driver.patch"

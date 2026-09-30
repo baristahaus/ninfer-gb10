@@ -1526,19 +1526,21 @@ std::size_t flash_next_qsa_workspace_capacity_bytes(std::int32_t tokens,
     const std::uint64_t bf16 = static_cast<std::uint64_t>(tokens) * 39552ULL *
                                sizeof(__nv_bfloat16);
     const std::uint64_t groups = (static_cast<std::uint64_t>(max_context) + kRatio - 1) / kRatio;
-    const std::uint64_t hierarchy = tokens <= 16
-        ? 2 * ((groups + kTopkBlockItems - 1) / kTopkBlockItems) * kTopGroups *
-              (sizeof(float) + sizeof(std::int32_t))
-        : 0;
+    // The capacity covers every call of up to `tokens` rows. Calls of at most 16 rows take the
+    // decode route (hierarchical top-k scratch and split-attention partials), so those terms are
+    // sized for min(tokens, 16) rows, including in a workspace sized for a longer prefill chunk.
+    const std::uint64_t decode_rows = static_cast<std::uint64_t>(std::min<std::int32_t>(tokens, 16));
+    const std::uint64_t hierarchy = decode_rows * 2 *
+                                    ((groups + kTopkBlockItems - 1) / kTopkBlockItems) *
+                                    kTopGroups * (sizeof(float) + sizeof(std::int32_t));
     const std::uint64_t selection = static_cast<std::uint64_t>(tokens) *
-                                    (groups * sizeof(float) +
-                                     kTopGroups * sizeof(std::int32_t) + hierarchy);
+                                        (groups * sizeof(float) +
+                                         kTopGroups * sizeof(std::int32_t)) +
+                                    hierarchy;
     const std::uint64_t indices = static_cast<std::uint64_t>(tokens) * kOutputWidth *
                                   sizeof(std::int32_t);
-    const std::uint64_t split_partials = tokens <= 16
-        ? static_cast<std::uint64_t>(tokens) * kMaxDecodeAttentionSplits * kQueryHeads *
-              (kHeadDim + 2) * sizeof(float)
-        : 0;
+    const std::uint64_t split_partials = decode_rows * kMaxDecodeAttentionSplits * kQueryHeads *
+                                         (kHeadDim + 2) * sizeof(float);
     const std::uint64_t total = bf16 + indices + selection + split_partials + 16 * 256;
     if (total > std::numeric_limits<std::size_t>::max()) {
         throw std::overflow_error("Flash-Next QSA workspace size overflow");

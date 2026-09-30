@@ -42,6 +42,8 @@ struct FlashNextQsaWeights {
     Tensor index_key_norm;
 };
 
+// Workspace for any call of 1..tokens rows whose cache holds at most max_context keys: a
+// workspace sized for a prefill chunk also serves the chunk's short tail and decode calls.
 [[nodiscard]] std::size_t flash_next_qsa_workspace_capacity_bytes(std::int32_t tokens,
                                                                   std::uint32_t max_context);
 

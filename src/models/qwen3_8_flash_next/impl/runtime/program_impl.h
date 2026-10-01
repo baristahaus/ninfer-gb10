@@ -12748,25 +12748,44 @@ bool ProgramImplCore::submit_successor(runtime::ExecutionTiming* failed_timing) 
     }
     const PendingTransaction& transaction = *pending_transaction_;
     const std::size_t rows                = transaction.size;
-    const std::uint32_t width             = draft_window + 1U;
     // The successor runs on the frame the pending round advanced, which holds only when that
     // round was a full MTP round over exactly these rows.
     if (rows == 0 || mtp_frame_rows != rows) { return false; }
-    std::uint32_t maximum_bound = 0;
+    // The pending round's advanced frame (echoed to mtp_host_frame) holds exactly the inputs the
+    // serial loop would build after a whole commit: the successor takes its graph profile and
+    // KV reservation from them, so a kept successor runs the serial round bit for bit.
+    const qwen3_8_flash_next::MtpDecodeIngress& next = *mtp_host_frame;
+    std::uint32_t maximum_frontier                   = 0;
     for (std::size_t row = 0; row < rows; ++row) {
         const std::uint32_t lane      = transaction.lanes[row];
         const RequestControl& request = requests[lane];
         const SequenceState& sequence = active_sequence(lane);
         if (request.lifecycle != Lifecycle::Pending ||
             request.pending.kind != PendingKind::Speculative || sequence.state.fork_pending ||
-            sequence.execution_frontier != request.pending.base_E) {
+            sequence.deferred_fold || sequence.execution_frontier != request.pending.base_E) {
             return false;
         }
-        // The successor's frontier is at most base + width, and it writes up to width further
-        // positions; both rounds' KV must fit and stay reserved until the successor is collected.
-        const std::uint64_t reach = static_cast<std::uint64_t>(request.pending.base_E) + 2U * width;
-        if (reach > capacity) { return false; }
-        maximum_bound = std::max(maximum_bound, request.pending.base_E + width);
+        const auto frontier = static_cast<std::uint32_t>(next.base_frontiers[row]);
+        const auto extent   = static_cast<std::uint32_t>(next.current_extents[row]);
+        if (frontier != request.pending.base_E + request.pending.produced ||
+            extent > draft_window) {
+            throw std::logic_error("MTP successor frame disagrees with the pending round");
+        }
+        // A row whose budget the pending round exhausts ends there: its successor would be
+        // discarded, so the loop stays serial.
+        if (next.remaining_budgets[row] <= 0 || frontier >= capacity) { return false; }
+        // The successor may write only the lane's two slots and its own KV rows.
+        const std::int32_t image = state_store->physical_slot(sequence.state.read);
+        const std::int32_t spare = mtp_lane_spare.at(lane);
+        const std::int32_t read  = next.state_source_slots[row];
+        const std::int32_t write = next.state_destination_slots[row];
+        if (!((read == image && write == spare) || (read == spare && write == image)) ||
+            next.text_kv_table_rows[row] != text_kv_addresses->bound_row(sequence.kv->text) ||
+            next.mtp_kv_table_rows[row] != backend_kv_addresses->bound_row(*sequence.kv->backend)) {
+            throw std::logic_error(
+                "MTP successor frame binds slots or KV rows the lane does not own");
+        }
+        maximum_frontier = std::max(maximum_frontier, frontier);
     }
     runtime::ExecutionTimingRecorder timing(runtime::ExecutionTimingPhase::Submit, failed_timing);
     nvtx::ScopedRange submit_range(nvtx::Name::DecodeMtpSubmit, nvtx::Category::Mtp,
@@ -12775,15 +12794,18 @@ bool ProgramImplCore::submit_successor(runtime::ExecutionTiming* failed_timing) 
     std::copy_n(transaction.lanes.begin(), rows, lanes.begin());
     const auto lane_span = std::span<const std::uint32_t>(lanes.data(), rows);
     try {
-        for (const std::uint32_t lane : lane_span) {
-            SequenceState& sequence    = active_sequence(lane);
-            const std::uint32_t base_E = requests[lane].pending.base_E;
-            materialize_sequence_kv(sequence, base_E + 2U * width,
-                                    std::min(capacity, base_E + width + 2U * draft_window));
+        // The serial loop's reservation for the round (build_mtp_ingress_rows), within the
+        // entitlement admission sized for it.
+        for (std::size_t row = 0; row < rows; ++row) {
+            SequenceState& sequence = active_sequence(lanes[row]);
+            const auto frontier     = static_cast<std::uint32_t>(next.base_frontiers[row]);
+            const auto extent       = static_cast<std::uint32_t>(next.current_extents[row]);
+            materialize_sequence_kv(sequence, frontier + extent + 1U,
+                                    std::min(capacity, frontier + extent + draft_window));
         }
     } catch (const std::bad_alloc&) {
-        // Not enough KV pages for two rounds in flight; the pending round's commit trims the
-        // extra reservation and the loop stays serial.
+        // Not enough KV pages; the pending round's commit trims the reservation and the loop
+        // stays serial.
         return false;
     }
     try {
@@ -12815,7 +12837,7 @@ bool ProgramImplCore::submit_successor(runtime::ExecutionTiming* failed_timing) 
         }
         const std::uint32_t parity = mtp_host_parity ^ 1U;
         // Every row's deferred fold is the pending round's, which the device frame carries.
-        launch_mtp_round(lane_span, maximum_bound, true, parity);
+        launch_mtp_round(lane_span, maximum_frontier, true, parity);
         mtp_successor = MtpSuccessor{
             .lanes = lanes, .row_count = rows, .parity = parity, .started = Clock::now()};
         mtp_frame_rows = 0;
@@ -12924,7 +12946,7 @@ void ProgramImplCore::discard_successor_rows(std::span<const std::uint32_t> lane
             produced <= static_cast<std::int32_t>(width)) {
             Tensor tokens =
                 io.mtp_decode->licensed_tokens.slice(1, static_cast<std::int32_t>(row), 1)
-                    .view({width})
+                    .view({static_cast<std::int32_t>(width)})
                     .slice(0, 0, produced);
             Tensor counts(request.sampling_host.token_counts, DType::I32,
                           {TextConfig::token_domain});

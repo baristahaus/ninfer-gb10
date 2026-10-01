@@ -1,0 +1,13 @@
+[k3diag] stage thread start served=0
+[k3diag] begin_round req=0 ans=0
+[k3diag] served seq=1 tokens=4
+ninfer: persistent grids sized for 48 SMs
+[k3diag] end_round req=1 ans=1
+[k3diag] LATE req=1 ans=1
+[k3diag] begin_round req=3 ans=1
+[k3diag] served seq=4 tokens=4
+[k3diag] end_round req=4 ans=4
+[k3diag] LATE req=4 ans=4
+[k3diag] end_round req=4 ans=4
+[engine] WORKER CRASH: Flash-Next PLE gather missed the round's deadline
+Qwen3.8 Flash Next real Engine: Flash-Next PLE gather missed the round's deadline

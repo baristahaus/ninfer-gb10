@@ -1,5 +1,6 @@
 #include "ops/softmax_attention/dense/causal_cache/int8/plan.h"
 #include "ops/softmax_attention/dense/causal_cache/int8/operands.h"
+#include "ops/common/device_info.h"
 #include <algorithm>
 #include <stdexcept>
 
@@ -19,7 +20,7 @@ Int8KvCausalPlan make_int8_kv_causal_plan(int heads, int width, int batch,
     const int tiles =
         family == Int8KvFamily::ParallelGrouped ? (width + grouped_limit - 1) / grouped_limit : 1;
     const int independent_tiles = batch * (heads == 24 ? 4 : 2) * tiles;
-    constexpr int sms           = 170;
+    const int sms               = device_sm_count();
     const int wave_ctas         = (sms / independent_tiles) * independent_tiles;
     const int budget = heads == 24 || width <= 4 || wave_ctas < sms * 9 / 10 ? 2 * sms : sms;
     Int8KvPartition partition{

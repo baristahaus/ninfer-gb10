@@ -1,5 +1,6 @@
 #include "ops/softmax_attention/dense/causal_cache/bf16/plan.h"
 #include "ops/softmax_attention/dense/causal_cache/bf16/operands.h"
+#include "ops/common/device_info.h"
 #include <algorithm>
 #include <stdexcept>
 
@@ -29,14 +30,15 @@ Bf16KvCausalPlan make_bf16_kv_causal_plan(int heads, int width, int batch,
     const auto description = bf16_kv_instance_description(instance);
     const int tiles        = ceil_div(rows, description.query_rows);
     // Two SM waves suffice for short partitions. For long contexts, preserve
-    // per-head parallelism until the whole grid reaches six waves on RTX 5090.
+    // per-head parallelism until the whole grid reaches six waves.
+    const int sms                   = device_sm_count();
     const int independent_tiles     = batch * kv_heads * tiles;
     const bool many_memory_tiles    = description.query_rows == 32 && independent_tiles >= 16;
     const bool multiple_query_tiles = tiles > 1;
     const int long_ctas             = many_memory_tiles || multiple_query_tiles
-                                          ? std::clamp(85 * independent_tiles, 340, 1020)
-                                          : 340;
-    Bf16KvPartition partition{1, std::clamp(340 / independent_tiles, 1, 256),
+                                          ? std::clamp(sms / 2 * independent_tiles, 2 * sms, 6 * sms)
+                                          : 2 * sms;
+    Bf16KvPartition partition{1, std::clamp(2 * sms / independent_tiles, 1, 256),
                               std::clamp(long_ctas / independent_tiles, 1, 256),
                               description.key_rows};
     // The envelope bounds the largest live row. Other batch rows may be shorter.

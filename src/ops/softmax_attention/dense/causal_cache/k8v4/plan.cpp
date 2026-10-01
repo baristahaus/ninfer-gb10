@@ -1,5 +1,6 @@
 #include "ops/softmax_attention/dense/causal_cache/k8v4/plan.h"
 #include "ops/softmax_attention/dense/causal_cache/k8v4/operands.h"
+#include "ops/common/device_info.h"
 #include <algorithm>
 #include <stdexcept>
 
@@ -22,8 +23,8 @@ K8V4KvCausalPlan make_k8v4_kv_causal_plan(int heads, int width, int batch,
         family == K8V4KvFamily::ParallelGrouped ? (width + 1) / 2 : std::min(width, grouped_limit);
     const int independent_tiles = batch * (heads == 24 ? 4 : 2) * tiles;
     // Decode permits two resident CTAs per SM. Spec uses one; add a wave when
-    // rounding to complete query tiles would leave over 10% of the 170 SMs idle.
-    constexpr int sms   = 170;
+    // rounding to complete query tiles would leave over 10% of the SMs idle.
+    const int sms       = device_sm_count();
     const int wave_ctas = (sms / independent_tiles) * independent_tiles;
     const int budget    = width == 1 || wave_ctas < sms * 9 / 10 ? 2 * sms : sms;
     K8V4KvPartition partition{

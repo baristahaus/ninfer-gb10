@@ -1,5 +1,6 @@
 #include "ops/softmax_attention/dense/causal_cache/nvfp4/plan.h"
 #include "ops/softmax_attention/dense/causal_cache/nvfp4/operands.h"
+#include "ops/common/device_info.h"
 #include <algorithm>
 #include <stdexcept>
 
@@ -22,7 +23,7 @@ Nvfp4KvCausalPlan make_nvfp4_kv_causal_plan(int heads, int width, int batch,
     const int query_tile =
         family == Nvfp4KvFamily::ParallelGrouped ? (width + 1) / 2 : std::min(width, grouped_limit);
     const int row_tiles = (query_tile * (heads == 24 ? 6 : 8) + 15) / 16;
-    constexpr int sms   = 170;
+    const int sms       = device_sm_count();
     const int wave_ctas = (sms / independent_tiles) * independent_tiles;
     const int budget    = row_tiles <= 2 || wave_ctas < sms * 9 / 10 ? 2 * sms : sms;
     Nvfp4KvPartition partition{

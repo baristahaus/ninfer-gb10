@@ -1,5 +1,35 @@
 # Qwen3.8 Flash-Next 125B-A6B performance
 
+## Swift 1.5 cold PLE prefill — 2026-10-01
+
+The Swift NVFP4 variant retains a 102.4 GB BF16 PLE table. On the local Btrfs volume with
+zstd compression, serial cold gathering caused a fresh 5,869-token HTTP prompt to take
+17.242 seconds at 340 tokens/s, with 72,101 major page faults and 7,334 MiB of disk reads.
+The gathered values occupy only about 29 MiB; compressed filesystem extents amplified
+random row reads, and serial gathering exposed the individual page-fault latency.
+
+The package now selects random-access mappings, and each Program owns sixteen prefill
+gather workers. The converter disables Btrfs compression on PLE-bearing output shards;
+the existing Swift table ranges were uncompressed in place without changing artifact bytes.
+The same prompt after this fix took 1.180 seconds at 4,975 tokens/s, with 90,142 major page
+faults and 352 MiB of disk reads. Cold prefill time improved by 14.6x. A warm run with a
+different leading prompt and zero prefix-cache hits took 0.714 seconds for 5,873 tokens,
+or 8,220 tokens/s. These are prefill measurements, not a decode-throughput comparison.
+
+Measurements use RTX PRO 6000 Blackwell, CUDA 13.4.92, the Swift 1.5 NVFP4 v3 artifact,
+BF16 KV, MTP3, CUDA Graphs, two active lanes, 1,024-token prefill chunks, greedy sampling,
+thinking disabled and one generated token. The probe selects 5,000 words using Python
+`random.Random(784123)` from the ordered unique lowercase `[a-z]{4,14}` words in
+`docs/maintainer/engine-architecture.md`, joins them with spaces and appends `\nReply OK.`.
+The fixed cold run evicts only PLE file-cache ranges before service startup. The warm run
+prepends `Second warm test. ` so it repeats prefill rather than restoring a cached prefix.
+
+An isolated cold gather of the first 4,096 corpus token IDs took 4.486 seconds with the
+former mapping and serial loop, 4.062 seconds with random mapping alone, 1.021 seconds
+with eight workers, and 0.478 seconds with sixteen workers on compressed storage. All
+gathered bytes match exactly. The synthetic gather test additionally protects token/head
+ordering across uneven worker partitions for both FP8 and BF16 tables.
+
 ## V3 migration qualification — 2026-09-23
 
 Matched loopback serving measurements on RTX PRO 6000 Blackwell compare the saved v2 binary with

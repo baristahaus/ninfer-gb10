@@ -5,7 +5,9 @@
 #include <algorithm>
 #include <bit>
 #include <limits>
+#include <future>
 #include <stdexcept>
+#include <vector>
 
 namespace ninfer::models::qwen3_8_flash_next {
 namespace {
@@ -71,15 +73,15 @@ void compute_ple_ids(std::span<const std::int32_t> tokens, std::span<PleIds> out
     }
 }
 
-void gather_ple(const artifact::MappedRange& table, DType dtype,
-                std::span<const PleIds> ids, std::span<std::byte> output) {
+void gather_ple(const artifact::MappedRange& table, DType dtype, std::span<const PleIds> ids,
+                std::span<std::byte> output, HostWorkerPool* workers) {
     NINFER_PERF_SCOPE("ninfer.host/1|ple.gather");
 
     if (dtype != DType::FP8_E4M3FN && dtype != DType::BF16) {
         throw std::invalid_argument("PLE table must be FP8 or BF16");
     }
     const std::uint64_t element_bytes = dtype == DType::BF16 ? 2U : 1U;
-    const std::uint64_t table_bytes = kPleRows * kPleHeadWidth * element_bytes;
+    const std::uint64_t table_bytes   = kPleRows * kPleHeadWidth * element_bytes;
     if (table.size() != table_bytes) {
         throw std::invalid_argument("PLE table has the wrong byte length");
     }
@@ -88,17 +90,42 @@ void gather_ple(const artifact::MappedRange& table, DType dtype,
     if (output.size() != required) {
         throw std::invalid_argument("PLE gathered output has the wrong byte length");
     }
-    for (std::size_t token = 0; token < ids.size(); ++token) {
-        for (std::size_t head = 0; head < kPleHeads; ++head) {
-            const std::uint64_t row = ids[token][head];
-            if (row >= kPleRows) { throw std::out_of_range("PLE row ID is outside the table"); }
-            const std::uint64_t source = row * kPleHeadWidth * element_bytes;
-            const std::uint64_t destination =
-                (static_cast<std::uint64_t>(token) * kPleEmbeddingDim + head * kPleHeadWidth) *
-                element_bytes;
-            table.copy(source, output.subspan(destination, kPleHeadWidth * element_bytes));
+    const auto gather = [&](std::size_t begin, std::size_t end) {
+        for (std::size_t token = begin; token < end; ++token) {
+            for (std::size_t head = 0; head < kPleHeads; ++head) {
+                const std::uint64_t row = ids[token][head];
+                if (row >= kPleRows) { throw std::out_of_range("PLE row ID is outside the table"); }
+                const std::uint64_t source = row * kPleHeadWidth * element_bytes;
+                const std::uint64_t destination =
+                    (static_cast<std::uint64_t>(token) * kPleEmbeddingDim + head * kPleHeadWidth) *
+                    element_bytes;
+                table.copy(source, output.subspan(destination, kPleHeadWidth * element_bytes));
+            }
+        }
+    };
+    if (workers == nullptr || ids.size() < 128) {
+        gather(0, ids.size());
+        return;
+    }
+    const std::size_t tasks = std::min<std::size_t>(workers->snapshot().threads, ids.size() / 64);
+    std::vector<std::future<void>> pending;
+    pending.reserve(tasks);
+    std::exception_ptr error;
+    try {
+        for (std::size_t task = 0; task < tasks; ++task) {
+            pending.push_back(workers->submit(
+                [&, task] { gather(ids.size() * task / tasks, ids.size() * (task + 1) / tasks); }));
+        }
+    } catch (...) { error = std::current_exception(); }
+    // Drain every task before propagating an error: workers borrow the caller's buffers.
+    for (auto& task : pending) {
+        try {
+            task.get();
+        } catch (...) {
+            if (!error) { error = std::current_exception(); }
         }
     }
+    if (error) { std::rethrow_exception(error); }
 }
 
 } // namespace ninfer::models::qwen3_8_flash_next

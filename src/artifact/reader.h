@@ -1,6 +1,7 @@
 #pragma once
 
 #include "artifact/framing.h"
+#include "artifact/file_io.h"
 #include "artifact/schema.h"
 #include "core/weight_view.h"
 
@@ -51,7 +52,9 @@ public:
     [[nodiscard]] const WeightGeometry& geometry(ObjectHandle handle) const;
     void validate_object(ObjectHandle handle) const;
 
-    [[nodiscard]] MappedRange map_range(std::uint64_t offset, std::uint64_t bytes) const;
+    [[nodiscard]] MappedRange map_range(
+        std::uint64_t offset, std::uint64_t bytes,
+        MappingAccess access = MappingAccess::Normal) const;
 
     [[nodiscard]] std::vector<ReadSegment> segments(std::uint64_t offset,
                                                     std::uint64_t bytes) const;

@@ -5,6 +5,7 @@
 #include "core/arena.h"
 #include "core/gdn_replay_records.h"
 #include "core/host_kv_arena.h"
+#include "core/host_worker_pool.h"
 #include "ninfer/ops/gdn_replay.h"
 #include "ninfer/ops/linear.h"
 #include "ninfer/ops/sampling.h"
@@ -650,6 +651,7 @@ public:
     DeviceArena workspace_storage;
     WorkspaceArena work;
     std::unique_ptr<ops::Bf16GemmContext> bf16_gemm;
+    std::unique_ptr<HostWorkerPool> ple_gather_workers;
     std::unique_ptr<qwen3_8_flash_next::DecoderState> decoder;
     std::unique_ptr<HostKVArena> host_kv_arena;
     std::unique_ptr<LogicalKVPageStore> text_kv_pages;

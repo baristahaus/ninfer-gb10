@@ -419,6 +419,7 @@ def convert(
             specs, **description,
             metadata={"name": source_repository if source_profile == "swift" else inventory.MODEL_ID},
             provenance={"source": source_repository, "recipe": RECIPE_ID + "-" + source_profile},
+            random_access_objects=(_PLE_TABLE,),
         ) as writer:
             for index, spec in enumerate(object_specs, start=1):
                 payload = (

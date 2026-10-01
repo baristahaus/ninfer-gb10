@@ -29,7 +29,11 @@ and whether the Op dequantizes or consumes the gathered BF16 words directly.
 It is the artifact's only file-mapped tensor. The reader validates its descriptor and payload
 extent, then exposes read-only mappings spanning the v3 payload shards. A gathered row may cross a shard boundary. Demand paging and the operating-system file
 cache own residency; the generic materializer does not allocate host or device storage for the
-complete 51.2 GB table. Prompt preparation gathers only the sixteen rows selected for each token.
+complete 51.2 GB FP8 or 102.4 GB BF16 table. Prompt preparation gathers only the sixteen rows selected for each token.
+The package maps PLE with random-access advice to suppress sequential readahead. Each Program
+owns sixteen host gather workers; prefill distributes token ranges across them and joins all
+reads before upload. Small decode gathers remain serial. This preserves token/head ordering
+and exact stored words while allowing cold page faults to overlap.
 
 The upgraded artifact occupies 134,755,956,216 bytes across five files capped at 32 GB each. Its format allocation is 1,249 BF16, 168 FP32,
 one FP8 table, 96 NVFP4 expert banks, 55 Q4, 54 Q5, one Q6, one INT32 map, and two Q8 tensors. The six embedded
@@ -45,6 +49,10 @@ It preserves BF16 and FP8 words, transposes channel-wise convolution kernels int
 and rearranges ModelOpt expert-major NVFP4 codes and scales into NInfer's bank layout without
 dequantizing or requantizing them. It concatenates the 128 PLE shards directly into the one table
 payload and writes a conversion report beside the artifact.
+The writer disables Btrfs compression before writing any shard that contains PLE. Compressed
+extents otherwise amplify each small random row read into a much larger disk read and
+decompression operation. This is a filesystem storage policy; artifact bytes and model
+precision are unchanged. Other filesystems retain their normal output behavior.
 
 ```bash
 python3 -m tools.convert.qwen3_8_flash_next_125b_a6b.convert \

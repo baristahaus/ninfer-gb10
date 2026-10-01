@@ -2,6 +2,7 @@
 
 #include "artifact/reader.h"
 #include "core/tensor.h"
+#include "core/host_worker_pool.h"
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -22,6 +23,7 @@ void compute_ple_ids(std::span<const std::int32_t> tokens, std::span<PleIds> out
 
 /** Gather the 16 FP8 or BF16 head rows for each token into token-major storage. */
 void gather_ple(const artifact::MappedRange& table, DType dtype,
-                std::span<const PleIds> ids, std::span<std::byte> output);
+                std::span<const PleIds> ids, std::span<std::byte> output,
+                HostWorkerPool* workers = nullptr);
 
 } // namespace ninfer::models::qwen3_8_flash_next

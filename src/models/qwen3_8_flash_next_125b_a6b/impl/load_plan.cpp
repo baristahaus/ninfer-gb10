@@ -284,7 +284,8 @@ ArtifactLoadPlan plan_artifact(artifact::Binder& binder,
             target.ple          = bind_ple(binder, prefix + "ple.");
             const auto& binding = target.ple.embedding_table.binding;
             const auto& object  = binder.reader().directory().tensor(binding.parts.front().object);
-            out.bindings.ple_mapping = binder.reader().map_range(object.offset, object.bytes);
+            out.bindings.ple_mapping = binder.reader().map_range(
+                object.offset, object.bytes, artifact::MappingAccess::Random);
         }
         target.mlp_hc = bind_hc(binder, prefix + "mlp_hyper_connection.");
         target.moe    = bind_main_moe(binder, prefix + "mlp.");

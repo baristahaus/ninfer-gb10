@@ -1,4 +1,5 @@
 #pragma once
+#include "core/host_worker_pool.h"
 #include "models/qwen3_8_flash_next/impl/runtime/instance.h"
 // Qwen3.6 family runtime implementation; instantiated only by exact variants.
 
@@ -175,6 +176,8 @@ public:
     void set_sampling(const ops::SamplingConfig* config) noexcept { sampling_config_ = config; }
 
     void set_bf16_gemm(ops::Bf16GemmContext* context) noexcept { bf16_gemm_ = context; }
+
+    void set_ple_gather_workers(HostWorkerPool* workers) noexcept { ple_gather_workers_ = workers; }
 
     void set_prefill_split_frontier(std::int64_t position) noexcept {
         prefill_split_frontier_ = position;
@@ -366,6 +369,7 @@ private:
     int proposal_head_n_                        = 0;
     const ops::SamplingConfig* sampling_config_ = nullptr;
     ops::Bf16GemmContext* bf16_gemm_            = nullptr;
+    HostWorkerPool* ple_gather_workers_          = nullptr;
     MtpW mtp_;
     std::array<FullLayerW, TextConfig::full_attention_layers()> full_{};
     std::array<GdnLayerW, TextConfig::gdn_layers()> gdn_{};

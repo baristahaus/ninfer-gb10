@@ -55,20 +55,22 @@ void file_set_and_bindings() {
 void mapped_shards() {
     Fixture fixture;
     fixture.write();
-    MappedRange mapped;
-    {
-        Reader reader(fixture.entry);
-        mapped = reader.map_range(256, 528);
+    for (const auto access : {MappingAccess::Normal, MappingAccess::Random}) {
+        MappedRange mapped;
+        {
+            Reader reader(fixture.entry);
+            mapped = reader.map_range(256, 528, access);
+        }
+        std::array<std::byte, 528> actual{};
+        mapped.copy(0, actual);
+        require(std::equal(actual.begin(), actual.end(), fixture.payload.begin() + 256),
+                "mapped parent crossing an unaligned shard boundary changed bytes");
+        std::array<std::byte, 160> row{};
+        mapped.copy(200, row);
+        require(std::equal(row.begin(), row.end(), fixture.payload.begin() + 456),
+                "mapped PLE-width row crossing a shard boundary changed bytes");
+        rejects([&] { mapped.copy(400, row); }, "mapped read beyond range accepted");
     }
-    std::array<std::byte, 528> actual{};
-    mapped.copy(0, actual);
-    require(std::equal(actual.begin(), actual.end(), fixture.payload.begin() + 256),
-            "mapped parent crossing an unaligned shard boundary changed bytes");
-    std::array<std::byte, 160> row{};
-    mapped.copy(200, row);
-    require(std::equal(row.begin(), row.end(), fixture.payload.begin() + 456),
-            "mapped PLE-width row crossing a shard boundary changed bytes");
-    rejects([&] { mapped.copy(400, row); }, "mapped read beyond range accepted");
     const auto raw = weight_geometry(QType::FP8_E4M3FN, QuantLayout::Contiguous,
                                     std::array<std::uint64_t, 2>{320001536, 160});
     require(raw.bytes == 51200245760ULL, "PLE FP8 geometry changed");

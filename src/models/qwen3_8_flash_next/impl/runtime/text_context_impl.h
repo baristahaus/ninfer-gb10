@@ -1607,7 +1607,7 @@ TextContext::prefill_impl(std::span<const int> ids, const TextPrefill* text_pref
             qwen3_8_flash_next::gather_ple(
                 *weights_.ple_table, weights_.ple_table_dtype,
                 std::span<const qwen3_8_flash_next::PleIds>(ple_ids).subspan(prompt_t0, len),
-                gathered);
+                gathered, ple_gather_workers_);
             Tensor gathered_device = work_.alloc(weights_.ple_table_dtype, {2560, len});
             CUDA_CHECK(cudaMemcpyAsync(gathered_device.data, gathered.data(), gathered.size(),
                                        cudaMemcpyHostToDevice, s));

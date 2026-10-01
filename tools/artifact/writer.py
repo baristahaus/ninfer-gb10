@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from .framing import HEADER, MAGIC, PART_MAGIC, PAYLOAD_ALIGNMENT
 from .layouts import align_up
-from .file_io import IO_CHUNK_BYTES, Writeback
+from .file_io import IO_CHUNK_BYTES, Writeback, disable_filesystem_compression
 from .schema import (
     ArtifactError,
     ArtifactObject,
@@ -120,6 +120,7 @@ class ArtifactWriter:
         metadata: dict | None = None,
         provenance: dict | None = None,
         max_file_bytes: int = DEFAULT_MAX_FILE_BYTES,
+        random_access_objects: Sequence[str] = (),
     ) -> None:
         self.path = Path(path)
         self.objects = plan_objects(specs)
@@ -143,6 +144,15 @@ class ArtifactWriter:
         self._prefixes = [0]
         for file in self.directory.files:
             self._prefixes.append(self._prefixes[-1] + file.payload_bytes)
+        random_access_files = set()
+        for name in random_access_objects:
+            obj = self.by_id[name]
+            for index in range(len(self.directory.files)):
+                if (
+                    obj.offset < self._prefixes[index + 1]
+                    and obj.offset + obj.bytes > self._prefixes[index]
+                ):
+                    random_access_files.add(index)
         self._destinations = [self.path] + [
             self.path.parent / file.path for file in self.directory.files[1:]
         ]
@@ -165,6 +175,8 @@ class ArtifactWriter:
                 )
                 self._fds.append(fd)
                 self._temporary.append(Path(temporary))
+                if index in random_access_files:
+                    disable_filesystem_compression(fd)
                 start = self.payload_offset if index == 0 else PAYLOAD_ALIGNMENT
                 os.ftruncate(fd, integer(start + file.payload_bytes, "file bytes"))
                 header = HEADER.pack(

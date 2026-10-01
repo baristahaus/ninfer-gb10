@@ -44,6 +44,7 @@ struct ExecutionCore {
     Tensor* mtp_prefill_hidden            = nullptr;
     Tensor* mtp_continuation_hidden_store = nullptr;
     ops::Bf16GemmContext* bf16_gemm       = nullptr;
+    HostWorkerPool* ple_gather_workers    = nullptr;
 };
 
 struct PrefillContext {

@@ -174,11 +174,12 @@ std::size_t Reader::read_direct(std::size_t file_index, std::uint64_t file_offse
     return impl_->file(file_index).read_direct(file_offset, destination);
 }
 
-MappedRange Reader::map_range(std::uint64_t offset, std::uint64_t bytes) const {
+MappedRange Reader::map_range(std::uint64_t offset, std::uint64_t bytes,
+                             MappingAccess access) const {
     MappedRange result;
     for (const auto& segment : segments(offset, bytes)) {
         result.segments.push_back(
-            {impl_->file(segment.file_index).map(segment.file_offset, segment.bytes),
+            {impl_->file(segment.file_index).map(segment.file_offset, segment.bytes, access),
              segment.destination_offset, segment.bytes});
     }
     return result;

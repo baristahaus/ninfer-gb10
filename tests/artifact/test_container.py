@@ -97,6 +97,7 @@ def test_shards_use_recorded_names_and_open_only_when_needed(tmp_path):
         components={"text": {"config": {}, "resources": {"data": "data"}}},
         bindings={},
         max_file_bytes=12288,
+        random_access_objects=("data",),
     ) as writer:
         writer.write_object(
             "data", (payload[:5000], payload[5000:9000], payload[9000:])

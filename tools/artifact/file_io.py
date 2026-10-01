@@ -2,11 +2,21 @@
 
 from __future__ import annotations
 
+import errno
 import os
 
 IO_CHUNK_BYTES = 8 * 1024 * 1024
 WRITEBACK_BYTES = 64 * 1024 * 1024
 _PAGE_BYTES = os.sysconf("SC_PAGE_SIZE")
+
+
+def disable_filesystem_compression(fd: int) -> None:
+    """Btrfs compressed extents amplify small random reads; set policy before writing."""
+    try:
+        os.setxattr(fd, "btrfs.compression", b"none")
+    except OSError as error:
+        if error.errno != errno.EOPNOTSUPP:
+            raise
 
 
 def discard_cached_pages(fd: int, offset: int = 0, count: int | None = None) -> None:

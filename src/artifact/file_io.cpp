@@ -93,7 +93,8 @@ std::size_t InputFile::read_direct(std::uint64_t offset, std::span<std::byte> de
     return static_cast<std::size_t>(read);
 }
 
-std::shared_ptr<const std::byte> InputFile::map(std::uint64_t offset, std::size_t bytes) const {
+std::shared_ptr<const std::byte> InputFile::map(std::uint64_t offset, std::size_t bytes,
+                                            MappingAccess access) const {
     if (!bytes || offset > bytes_ || bytes > bytes_ - offset) {
         throw std::invalid_argument("mapped range exceeds input file");
     }
@@ -104,6 +105,11 @@ std::shared_ptr<const std::byte> InputFile::map(std::uint64_t offset, std::size_
     void* ptr         = ::mmap(nullptr, length, PROT_READ, MAP_PRIVATE, fd_, start);
     if (ptr == MAP_FAILED) {
         throw std::system_error(errno, std::generic_category(), "map artifact range");
+    }
+    if (access == MappingAccess::Random && ::madvise(ptr, length, MADV_RANDOM) != 0) {
+        const int error = errno;
+        ::munmap(ptr, length);
+        throw std::system_error(error, std::generic_category(), "advise random artifact mapping");
     }
     return {static_cast<const std::byte*>(ptr) + delta,
             [ptr, length](const std::byte*) { ::munmap(ptr, length); }};

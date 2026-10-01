@@ -903,14 +903,24 @@ ProgramImplCore::ProgramImplCore(const LoadedModelData& model_in, const Sequence
             state_images->host_layout(), plan.context_cache.host_state_slots);
         host_state_phase.complete(host_state_bytes, host_state_bytes);
     }
+    const std::uint32_t lane_spares = mtp_lane_spare_slots(plan);
+    if (static_cast<std::uint64_t>(state_images->slot_count()) <= lane_spares) {
+        throw std::logic_error("StateImage pool has no slots beyond the MTP lane spares");
+    }
+    const auto managed_state_slots =
+        static_cast<std::uint32_t>(state_images->slot_count()) - lane_spares;
     const std::uint64_t logical_state_capacity =
-        static_cast<std::uint64_t>(state_images->slot_count()) +
-        plan.context_cache.host_state_slots;
+        static_cast<std::uint64_t>(managed_state_slots) + plan.context_cache.host_state_slots;
     if (logical_state_capacity > std::numeric_limits<std::uint32_t>::max()) {
         throw std::overflow_error("Qwen3.8 logical StateImage capacity exceeds uint32");
     }
     state_store = std::make_unique<StateImageStore>(
-        *state_images, host_state_images.get(), static_cast<std::uint32_t>(logical_state_capacity));
+        *state_images, host_state_images.get(), static_cast<std::uint32_t>(logical_state_capacity),
+        managed_state_slots);
+    mtp_lane_spare.fill(-1);
+    for (std::uint32_t lane = 0; lane < lane_spares; ++lane) {
+        mtp_lane_spare[lane] = static_cast<std::int32_t>(managed_state_slots + lane);
+    }
     pressure_private_owner_scratch_.resize(continuation_capacity);
     pressure_shared_owner_scratch_.resize(shared_prefix_capacity);
     pressure_private_drop_scratch_.resize(continuation_capacity);
@@ -9622,7 +9632,7 @@ detail::PhysicalResources ProgramImplCore::admission_capacity() const noexcept {
         .device =
             {
                 .active_lanes     = max_concurrency,
-                .state_slots      = static_cast<std::uint32_t>(state_images->slot_count()),
+                .state_slots      = state_store->device_capacity(),
                 .main_kv_pages    = decoder->text_kv.page_pool().capacity_pages(),
                 .backend_kv_pages = backend != nullptr ? backend->page_pool().capacity_pages() : 0U,
             },
@@ -10295,10 +10305,15 @@ runtime::ExecutionTiming ProgramImplCore::resolve_pending_raw(
                                  (!terminal[row] && committed != pending.produced)))) {
             throw std::logic_error("speculative pending row has an invalid committed prefix");
         }
-        const StateImageSelectors selectors = state_selectors(sequence);
+        // An MTP round read and committed into the slots its ingress recorded (out of place for
+        // an unforked lane); DFlash rounds use the store's binding.
+        const StateImageSelectors selectors =
+            speculative_backend == SpeculativeBackend::Mtp
+                ? StateImageSelectors{.source      = mtp_host_ingress->state_source_slots[row],
+                                      .destination = mtp_host_ingress->state_destination_slots[row]}
+                : state_selectors(sequence);
         const bool defer = speculative_backend == SpeculativeBackend::Mtp && !cancelled[row] &&
-                           !terminal[row] && committed != 0 &&
-                           selectors.source == selectors.destination;
+                           !terminal[row] && committed != 0 && !sequence.state.fork_pending;
         deferred_columns[row] = defer ? static_cast<std::int32_t>(committed) : 0;
         eager_fold            = eager_fold || (!defer && committed != 0);
         fold_rows[row]        = ops::GdnReplayFoldRow{
@@ -10350,12 +10365,16 @@ runtime::ExecutionTiming ProgramImplCore::resolve_pending_raw(
             Tensor destinations;
             if (speculative_backend == SpeculativeBackend::Mtp && io.mtp_decode) {
                 qwen3_8_flash_next::MtpDecodeState& frame = *io.mtp_decode;
-                // The selectors overwrite the advanced frame's extents.
+                // The selectors overwrite the advanced frame's extents, and the advanced frame's
+                // slots already belong to the next round: restore the round's destinations.
                 mtp_frame_rows  = 0;
                 selector_tensor = frame.current_extents.slice(0, 0, batch);
                 hidden          = frame.target_hidden.slice(2, 0, batch);
                 selected        = frame.target_continuation_hidden.slice(1, 0, batch);
                 destinations    = frame.state_destination_slots.slice(0, 0, batch);
+                CUDA_CHECK(cudaMemcpyAsync(
+                    destinations.data, mtp_host_ingress->state_destination_slots.data(),
+                    lanes.size() * sizeof(std::int32_t), cudaMemcpyHostToDevice, device.stream));
             } else if (speculative_backend == SpeculativeBackend::DFlash && io.dflash_decode) {
                 qwen3_8_flash_next::DFlashDecodeState& frame = *io.dflash_decode;
                 selector_tensor = frame.proposal_extents.slice(0, 0, batch);
@@ -10459,10 +10478,14 @@ runtime::ExecutionTiming ProgramImplCore::resolve_pending_raw(
 
             if (deferred_columns[row] != 0) {
                 sequence.deferred_fold = DeferredStateFold{
-                    .record_row = static_cast<std::int32_t>(row),
-                    .state_slot = fold_rows[row].destination_state_slot,
-                    .columns    = deferred_columns[row],
+                    .record_row       = static_cast<std::int32_t>(row),
+                    .source_slot      = fold_rows[row].source_state_slot,
+                    .destination_slot = fold_rows[row].destination_state_slot,
+                    .columns          = deferred_columns[row],
                 };
+            } else if (speculative_backend == SpeculativeBackend::Mtp) {
+                // The eager fold committed into the round's destination slot.
+                adopt_mtp_state_slot(sequence, fold_rows[row].destination_state_slot);
             }
             if (speculative_backend == SpeculativeBackend::Mtp) {
                 sequence.mtp_kv_valid = sequence.execution_frontier;
@@ -10655,6 +10678,28 @@ StateImageSelectors ProgramImplCore::state_selectors(const SequenceState& sequen
     return state_store->selectors(sequence.state.read, sequence.state.write);
 }
 
+StateImageSelectors ProgramImplCore::mtp_round_slots(const SequenceState& sequence) const {
+    if (sequence.state.fork_pending) { return state_selectors(sequence); }
+    if (sequence.deferred_fold) {
+        return {.source      = sequence.deferred_fold->destination_slot,
+                .destination = sequence.deferred_fold->source_slot};
+    }
+    const std::int32_t spare = mtp_lane_spare.at(sequence.lane);
+    if (spare < 0) { throw std::logic_error("MTP lane has no spare StateImage slot"); }
+    return {.source = state_selectors(sequence).source, .destination = spare};
+}
+
+void ProgramImplCore::adopt_mtp_state_slot(SequenceState& sequence, std::int32_t slot) {
+    if (sequence.state.fork_pending || sequence.state.read != sequence.state.write) {
+        throw std::logic_error("a forked StateImage cannot adopt an MTP lane slot");
+    }
+    if (state_store->physical_slot(sequence.state.read) == slot) { return; }
+    std::int32_t& spare = mtp_lane_spare.at(sequence.lane);
+    if (spare != slot) { throw std::logic_error("MTP commit slot is not the lane's spare"); }
+    spare = state_store->exchange_device_slot(sequence.state.read, slot);
+    refresh_state_views(sequence);
+}
+
 std::uint32_t ProgramImplCore::state_footprint(const SequenceState& sequence) const noexcept {
     if (!state_store) { return 0; }
     std::array<StateImageHandle, 4> unique{};
@@ -10790,8 +10835,8 @@ void ProgramImplCore::settle_deferred_folds() {
             throw std::logic_error("deferred commit folds share a record row");
         }
         rows[static_cast<std::size_t>(fold.record_row)] = ops::GdnReplayFoldRow{
-            .source_state_slot      = fold.state_slot,
-            .destination_state_slot = fold.state_slot,
+            .source_state_slot      = fold.source_slot,
+            .destination_state_slot = fold.destination_slot,
             .commit_columns         = fold.columns,
         };
         deferred_row[static_cast<std::size_t>(fold.record_row)] = true;
@@ -10806,7 +10851,8 @@ void ProgramImplCore::settle_deferred_folds() {
     const auto slot_in_use        = [&](std::int32_t slot) {
         for (std::int32_t row = 0; row < row_count; ++row) {
             if (deferred_row[static_cast<std::size_t>(row)] &&
-                rows[static_cast<std::size_t>(row)].destination_state_slot == slot) {
+                (rows[static_cast<std::size_t>(row)].source_state_slot == slot ||
+                 rows[static_cast<std::size_t>(row)].destination_state_slot == slot)) {
                 return true;
             }
         }
@@ -10838,7 +10884,12 @@ void ProgramImplCore::settle_deferred_folds() {
         *flash_ple_records, *state_images->ple_store(),
         std::span<const ops::FlashNextPleFoldRow>(ple_rows.data(), count), device.stream);
 #endif
-    for (SequenceState& sequence : continuation_states) { sequence.deferred_fold.reset(); }
+    for (SequenceState& sequence : continuation_states) {
+        if (!sequence.deferred_fold) { continue; }
+        const std::int32_t destination = sequence.deferred_fold->destination_slot;
+        sequence.deferred_fold.reset();
+        adopt_mtp_state_slot(sequence, destination);
+    }
 }
 
 bool ProgramImplCore::has_unsettled_state_fork() const noexcept {
@@ -12398,13 +12449,10 @@ ProgramImplCore::decode_mtp_batch(std::span<const std::uint32_t> lanes,
         mtp_host_ingress->pending_folds.fill(0);
         for (const SequenceState& sequence : continuation_states) {
             if (!sequence.deferred_fold) { continue; }
-            const DeferredStateFold fold = *sequence.deferred_fold;
-            if (fold.state_slot != state_selectors(sequence).source) {
-                throw std::logic_error("deferred commit fold no longer matches its state slot");
-            }
+            const DeferredStateFold fold              = *sequence.deferred_fold;
             const auto base                       = static_cast<std::size_t>(fold.record_row) * 4U;
-            mtp_host_ingress->pending_folds[base] = fold.state_slot;
-            mtp_host_ingress->pending_folds[base + 1] = fold.state_slot;
+            mtp_host_ingress->pending_folds[base]     = fold.source_slot;
+            mtp_host_ingress->pending_folds[base + 1] = fold.destination_slot;
             mtp_host_ingress->pending_folds[base + 2] = fold.columns;
         }
         for (std::size_t row = 0; row < lanes.size(); ++row) {
@@ -12436,7 +12484,7 @@ ProgramImplCore::decode_mtp_batch(std::span<const std::uint32_t> lanes,
                 text_kv_addresses->bound_row(sequence.kv->text);
             mtp_host_ingress->mtp_kv_table_rows[row] =
                 backend_kv_addresses->bound_row(*sequence.kv->backend);
-            const StateImageSelectors selectors            = state_selectors(sequence);
+            const StateImageSelectors selectors            = mtp_round_slots(sequence);
             mtp_host_ingress->state_source_slots[row]      = selectors.source;
             mtp_host_ingress->state_destination_slots[row] = selectors.destination;
             mtp_host_ingress->rope_deltas[row]             = sequence.rope_delta;

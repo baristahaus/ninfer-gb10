@@ -17,11 +17,11 @@ void mtp_prepare_next_round_launch(const Tensor& verify_ids, const Tensor& next_
 void mtp_advance_round_launch(const Tensor& anchors, const Tensor& frontiers,
                               const Tensor& licensed_counts, const Tensor& next_extents,
                               const Tensor& next_drafts, const Tensor& rope_deltas,
-                              const Tensor& state_slots, Tensor& remaining_budgets,
-                              Tensor& current_extents, Tensor& target_valid_columns,
-                              Tensor& current_drafts, Tensor& target_rope_positions,
-                              Tensor& pending_folds, const Tensor& verify_ids,
-                              const Tensor& licensed_tokens, Tensor& ple_history,
-                              cudaStream_t stream);
+                              Tensor& state_source_slots, Tensor& state_destination_slots,
+                              Tensor& remaining_budgets, Tensor& current_extents,
+                              Tensor& target_valid_columns, Tensor& current_drafts,
+                              Tensor& target_rope_positions, Tensor& pending_folds,
+                              const Tensor& verify_ids, const Tensor& licensed_tokens,
+                              Tensor& ple_history, cudaStream_t stream);
 
 } // namespace ninfer::ops::detail

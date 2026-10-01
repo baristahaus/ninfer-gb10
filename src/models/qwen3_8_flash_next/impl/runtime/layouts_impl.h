@@ -93,13 +93,20 @@ TensorLayout add_tensor(LayoutBuilder& builder, DType dtype,
     return builder.add_tensor(dtype, shape, kArenaAlign, label);
 }
 
+std::uint32_t mtp_lane_spare_slots(const SequencePlanImpl& plan) noexcept {
+    return plan.speculative_backend == SpeculativeBackend::Mtp ? plan.max_concurrency : 0U;
+}
+
 PersistentLayout persistent_layout(const SequencePlanImpl& plan) {
     if (!plan.context_cache.device_state_slots) {
         throw std::logic_error("Qwen3.8 context cache options are not normalized");
     }
-    const std::int32_t state_image_slots = checked_i32(
-        static_cast<std::uint64_t>(plan.max_concurrency) + *plan.context_cache.device_state_slots,
-        "Qwen3.8 StateImage slot count exceeds int32");
+    // MTP rounds fold out of place, so every MTP lane also owns one spare Device slot outside
+    // the StateImage store (mtp_lane_spare_slots).
+    const std::int32_t state_image_slots =
+        checked_i32(static_cast<std::uint64_t>(plan.max_concurrency) +
+                        *plan.context_cache.device_state_slots + mtp_lane_spare_slots(plan),
+                    "Qwen3.8 StateImage slot count exceeds int32");
     const auto effective_prefill_chunk =
         static_cast<std::int32_t>(std::min(plan.prefill_chunk, plan.capacity));
     const std::uint32_t logical_pages  = page_count(plan.capacity);

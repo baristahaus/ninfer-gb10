@@ -408,11 +408,14 @@ struct DecodeGraphFamily {
 // request which produced it has finished, so it is deliberately separate from request lifecycle,
 // output, sampling, and round-control state.
 // A continuing MTP round's commit fold, deferred to the head of the next MTP round's graph:
-// the round's record row, the in-place state slot and the accepted column count.
+// the round's record row, the slot the round read, the slot its commit lands in (the other of
+// the lane's two slots) and the accepted column count. MTP rounds fold out of place, so the
+// read slot stays intact until the next round has folded the commit.
 struct DeferredStateFold {
-    std::int32_t record_row = 0;
-    std::int32_t state_slot = 0;
-    std::int32_t columns    = 0;
+    std::int32_t record_row       = 0;
+    std::int32_t source_slot      = 0;
+    std::int32_t destination_slot = 0;
+    std::int32_t columns          = 0;
 };
 
 struct SequenceState {
@@ -581,6 +584,13 @@ public:
     // or replaces a sequence's state or the replay records, other than the next MTP round,
     // calls it first.
     void settle_deferred_folds();
+    // The slots an MTP round of this sequence reads and commits into: the store's fork for a
+    // pending fork; otherwise the slot holding the committed state (after the deferred fold, if
+    // any) and the lane's other slot.
+    [[nodiscard]] StateImageSelectors mtp_round_slots(const SequenceState& sequence) const;
+    // The sequence's committed state now lives in `slot`, the lane's spare: the active image
+    // takes that slot and the lane keeps the image's previous slot as its spare.
+    void adopt_mtp_state_slot(SequenceState& sequence, std::int32_t slot);
     [[nodiscard]] PrefillProgress advance_prefill(SequenceHandle sequence,
                                                   runtime::ExecutionTiming* failed_timing);
     [[nodiscard]] CaptureAssessment
@@ -678,6 +688,9 @@ public:
     std::unique_ptr<qwen3_8_flash_next::StateImageDevicePool> state_images;
     std::unique_ptr<qwen3_8_flash_next::HostStatePool> host_state_images;
     std::unique_ptr<StateImageStore> state_store;
+    // Per lane, the Device slot outside the store that MTP rounds commit into when the active
+    // image's own slot is the one the round reads (-1 without MTP).
+    std::array<std::int32_t, kMaximumConcurrency> mtp_lane_spare{};
     std::optional<GdnReplayRecords> replay_records;
     std::optional<ops::GdnReplayFoldPlan> replay_fold;
     std::optional<DFlashPersistentState> dflash;

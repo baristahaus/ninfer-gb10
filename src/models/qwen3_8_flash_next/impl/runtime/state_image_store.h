@@ -94,17 +94,18 @@ private:
 // Host replicas; published raw Tensor views are reconstructed only from an active Device binding.
 class StateImageStore {
 public:
+    // The store manages the pool's first `managed_device_slots` slots; the remaining slots are
+    // the Program's MTP lane spares, which enter the store only through exchange_device_slot.
     StateImageStore(qwen3_8_flash_next::StateImageDevicePool& device,
-                    qwen3_8_flash_next::HostStatePool* host, std::uint32_t logical_capacity)
+                    qwen3_8_flash_next::HostStatePool* host, std::uint32_t logical_capacity,
+                    std::uint32_t managed_device_slots)
         : device_(&device), host_(host), objects_(logical_capacity),
-          free_objects_(logical_capacity),
-          free_device_slots_(static_cast<std::size_t>(device.slot_count())),
-          free_object_count_(logical_capacity),
-          free_device_count_(static_cast<std::uint32_t>(device.slot_count())) {
-        if (logical_capacity == 0 || device.slot_count() <= 0 ||
-            logical_capacity < static_cast<std::uint32_t>(device.slot_count()) ||
-            (host != nullptr && logical_capacity < static_cast<std::uint32_t>(device.slot_count()) +
-                                                       host->capacity())) {
+          free_objects_(logical_capacity), free_device_slots_(managed_device_slots),
+          free_object_count_(logical_capacity), free_device_count_(managed_device_slots) {
+        if (logical_capacity == 0 || managed_device_slots == 0 ||
+            managed_device_slots > static_cast<std::uint32_t>(device.slot_count()) ||
+            logical_capacity < managed_device_slots ||
+            (host != nullptr && logical_capacity < managed_device_slots + host->capacity())) {
             throw std::invalid_argument("StateImageStore capacity is inconsistent");
         }
         for (std::uint32_t index = 0; index < logical_capacity; ++index) {
@@ -235,6 +236,22 @@ public:
             throw std::logic_error("StateImage checkpoint reference is not releasable");
         }
         --object.checkpoint_references;
+    }
+
+    // Rebinds an active image's Device replica to `slot`, a slot outside the store's free list
+    // that already holds the image's content, and returns the slot it leaves. MTP rounds fold
+    // out of place into a lane spare; this makes the spare the image's replica afterwards.
+    [[nodiscard]] std::int32_t exchange_device_slot(StateImageHandle handle, std::int32_t slot) {
+        Object& object = require(handle);
+        if (object.role != StateImageRole::ActiveMutable || !object.device_slot ||
+            object.host_slot || object.source_pins != 0 || object.destination_pinned ||
+            has_pending_replica(object) || slot < 0 || slot >= device_->slot_count() ||
+            slot == *object.device_slot) {
+            throw std::logic_error("StateImage Device replica is not exchangeable");
+        }
+        const std::int32_t previous = *object.device_slot;
+        object.device_slot          = slot;
+        return previous;
     }
 
     [[nodiscard]] std::int32_t physical_slot(StateImageHandle handle) const {

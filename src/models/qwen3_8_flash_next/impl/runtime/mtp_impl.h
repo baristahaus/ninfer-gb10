@@ -315,9 +315,10 @@ auto mtp_decode_batch_body(MtpBatchContext& state, std::int32_t batch_size, std:
         // continue with their whole licensed output.
         Tensor pending_folds = frame.pending_folds.slice(1, 0, batch_size);
         ops::mtp_advance_round(anchors, frontiers, licensed_counts, next_extents, next_drafts,
-                               rope_deltas, state_destinations, budgets, current_extents,
-                               target_valid, current_drafts, target_rope, pending_folds, verify_ids,
-                               licensed_tokens, ple_history, state.execution.device.stream);
+                               rope_deltas, state_sources, state_destinations, budgets,
+                               current_extents, target_valid, current_drafts, target_rope,
+                               pending_folds, verify_ids, licensed_tokens, ple_history,
+                               state.execution.device.stream);
 
         CUDA_CHECK(cudaMemcpyAsync(&state.host_egress, frame.egress.data,
                                    sizeof(qwen3_8_flash_next::MtpDecodeEgress),

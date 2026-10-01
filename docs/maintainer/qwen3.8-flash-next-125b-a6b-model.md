@@ -63,13 +63,17 @@ Each GDN layer retains three previous BF16 convolution columns and 48 FP32 recur
 shape `[128,128]`. PLE retains nine previous BF16 convolution columns. QSA KV/index state, GDN
 state, PLE state, HyperConnection state, and MTP state participate together in prefix snapshots,
 speculative replay/fold, commit, rollback, and restore. A generated token is public only after the
-target transaction commits it. When an MTP round's row continues in place (not terminal, not
-cancelled, no unsettled fork), its GDN and PLE fold is deferred: the next MTP round folds it at the
-head of its graph from device-resident row descriptors, before its verify reads the state or
-overwrites the records. Until then, the sequence's committed state is its slot plus that pending
-fold. Every other operation that reads or replaces the state or the records runs the fold on the
-stream first: admission, a context transaction, prefill, an active capture, forced tokens, a
-non-MTP decode, and finishing.
+target transaction commits it. An MTP round of an unforked sequence never writes the state it
+reads: every MTP lane owns one spare Device state slot besides its active image's slot, and a
+round reads one of the two and commits into the other (the GDN and PLE folds and the
+continuation hiddens). When the row continues (not terminal, not cancelled, no unsettled fork),
+its fold is deferred: the next MTP round folds it at the head of its graph from device-resident
+row descriptors, then reads the result and commits into the slot the previous round read. Until
+then, the sequence's committed state is the read slot plus that pending fold. Every other
+operation that reads or replaces the state or the records runs the fold on the stream first:
+admission, a context transaction, prefill, an active capture, forced tokens, a non-MTP decode,
+and finishing. When the committed state lands in the lane's spare, the active image takes that
+slot and the lane keeps the image's previous slot as its spare.
 
 ## MTP and Vision
 

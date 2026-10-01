@@ -87,9 +87,10 @@ void mtp_prepare_next_round(const Tensor& verify_ids, const Tensor& next_anchors
 void mtp_advance_round(const Tensor& anchors, const Tensor& frontiers,
                        const Tensor& licensed_counts, const Tensor& next_extents,
                        const Tensor& next_drafts, const Tensor& rope_deltas,
-                       const Tensor& state_slots, Tensor& remaining_budgets,
-                       Tensor& current_extents, Tensor& target_valid_columns,
-                       Tensor& current_drafts, Tensor& target_rope_positions, Tensor& pending_folds,
+                       Tensor& state_source_slots, Tensor& state_destination_slots,
+                       Tensor& remaining_budgets, Tensor& current_extents,
+                       Tensor& target_valid_columns, Tensor& current_drafts,
+                       Tensor& target_rope_positions, Tensor& pending_folds,
                        const Tensor& verify_ids, const Tensor& licensed_tokens, Tensor& ple_history,
                        cudaStream_t stream) {
     constexpr const char* op = "mtp_advance_round";
@@ -103,7 +104,8 @@ void mtp_advance_round(const Tensor& anchors, const Tensor& frontiers,
     require_vector(next_extents, DType::I32, batch, op, "next_extents");
     require_row_pitched_matrix(next_drafts, batch, k, op, "next_drafts");
     require_vector(rope_deltas, DType::I32, batch, op, "rope_deltas");
-    require_vector(state_slots, DType::I32, batch, op, "state_slots");
+    require_vector(state_source_slots, DType::I32, batch, op, "state_source_slots");
+    require_vector(state_destination_slots, DType::I32, batch, op, "state_destination_slots");
     require_vector(remaining_budgets, DType::I32, batch, op, "remaining_budgets");
     require_vector(current_extents, DType::I32, batch, op, "current_extents");
     require_vector(target_valid_columns, DType::I32, batch, op, "target_valid_columns");
@@ -113,10 +115,11 @@ void mtp_advance_round(const Tensor& anchors, const Tensor& frontiers,
     require_matrix(verify_ids, DType::I32, k + 1, batch, op, "verify_ids");
     require_matrix(licensed_tokens, DType::I32, k + 1, batch, op, "licensed_tokens");
     require_matrix(ple_history, DType::I32, 2, batch, op, "ple_history");
-    detail::mtp_advance_round_launch(
-        anchors, frontiers, licensed_counts, next_extents, next_drafts, rope_deltas, state_slots,
-        remaining_budgets, current_extents, target_valid_columns, current_drafts,
-        target_rope_positions, pending_folds, verify_ids, licensed_tokens, ple_history, stream);
+    detail::mtp_advance_round_launch(anchors, frontiers, licensed_counts, next_extents, next_drafts,
+                                     rope_deltas, state_source_slots, state_destination_slots,
+                                     remaining_budgets, current_extents, target_valid_columns,
+                                     current_drafts, target_rope_positions, pending_folds,
+                                     verify_ids, licensed_tokens, ple_history, stream);
 }
 
 } // namespace ninfer::ops

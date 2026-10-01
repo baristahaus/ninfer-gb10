@@ -1,0 +1,19 @@
+# Probe: 4-variant message pattern (PROBE_MESSAGES4=1), config B (kv auto, ctx 73728),
+# MTP draft 3 Full head, 4 state slots, graphs on, 64 outputs, fixed engine (6a0629a8).
+# 2026-10-01 (UTC), GB10 sm_121a, artifact qwen3_8_flash_next_125b_a6b_nvfp4_fp8_mtp.ninfer.
+--- kv=0 ctx=73728 draft=3 head=1 slots=4 graph=1 delay=0 out=64 ---
+warmM4-0               reused_prompt_tokens=  0  total=  1.541 s  queue=  0.006 s
+warmM4-1               reused_prompt_tokens= 49  total=  1.539 s  queue=  0.009 s
+warmM4-2               reused_prompt_tokens= 49  total=  1.870 s  queue=  0.009 s
+warmM4-3               reused_prompt_tokens= 49  total=  1.592 s  queue=  0.009 s
+resubM4-0              reused_prompt_tokens= 76  total=  3.117 s  queue=  0.007 s
+resubM4-1              reused_prompt_tokens= 79  total=  3.117 s  queue=  0.223 s
+resubM4-2              reused_prompt_tokens= 71  total=  3.503 s  queue=  0.474 s
+resubM4-3              reused_prompt_tokens= 76  total=  3.503 s  queue=  0.771 s
+
+# Single message pair (PROBE_MESSAGES=1), same config:
+warm-msg               reused_prompt_tokens=  0  total=  1.539 s  queue=  0.006 s
+resub-msg              reused_prompt_tokens= 76  total=  1.294 s  queue=  0.007 s
+resub-msg-2            reused_prompt_tokens= 76  total=  1.289 s  queue=  0.007 s
+
+# Same shapes via the raw-token path (prepare_tokens), every config tested: reused=0 for all.

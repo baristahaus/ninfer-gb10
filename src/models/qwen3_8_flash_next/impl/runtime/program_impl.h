@@ -11740,7 +11740,14 @@ void ProgramImplCore::prepare_graphs() {
         instantiate_graph_family(ordinary_graphs, "ordinary", device, prepare_representative);
     }
     if (speculative_backend == SpeculativeBackend::Mtp) {
+        // The instantiate-time warm launches run the MTP round graph, including its PLE publish;
+        // the stage must serve them or their in-graph waits time out and leave the late flag set.
+        if (ple_gather_stage) { ple_gather_stage->begin_round(); }
         instantiate_graph_family(mtp_graphs, "MTP", device, prepare_representative);
+        if (ple_gather_stage) {
+            ple_gather_stage->end_round();
+            ple_gather_stage->check();
+        }
     }
     if (speculative_backend == SpeculativeBackend::DFlash) {
         instantiate_graph_family(dflash_graphs, "DFlash", device, prepare_representative);

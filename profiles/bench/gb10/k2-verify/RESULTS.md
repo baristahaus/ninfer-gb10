@@ -38,15 +38,17 @@ device wait 69.6 ms/round, host exposed 8.93 ms/round.
 - The uploads fall in four clusters (13 / 10 / 11 / 4) aligned with the four
   load waves; the three inter-wave quiet gaps (10.5 s, 11.3 s, 13.5 s of
   steady rounds) contain **zero** uploads.
-- Upload count (38) ≈ membership boundaries (26 = 13 starts + 13 done) +
-  graph captures (32), with coalescing: a join/leave and a capture landing in
-  the same round produce one upload. The design's exactness rule lists
-  terminal/cancelled/forked rows, eager folds, membership changes, budget
-  changes and graph captures as upload triggers; no other trigger appears.
+- Upload accounting (verified against the trace): 1 startup upload before the first request
+  (graph preparation clears the frame) + 2 per admitted request (its first round is a
+  membership change; its second follows the state-fork settle, which folds on the host, so the
+  host's fold entry no longer matches the device's) + 1 per finished request at leave:
+  1 + 26 + 13 = 40, reduced to 38 by coalescing — a wave's last leave and the next wave's first
+  admission share a round, and the final request's leave has no next round to observe it.
 
-**Verdict:** the frame advances in steady state; uploads occur only at
-membership changes, graph captures and the explicit invalidations the design
-allows. K2 passes its checks.
+**Verdict:** the frame advances in steady state; uploads occur only at startup, membership
+changes (admission, settle, leave) and the design's explicit invalidations. None of the 32
+runtime `cuda_graph.capture` ranges falls within one round of an upload — the upload decision
+lives only in `decode_mtp_batch`, and captures are other graphs. K2 passes its checks.
 
 ## Notes
 

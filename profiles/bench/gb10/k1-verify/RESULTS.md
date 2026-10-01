@@ -56,9 +56,9 @@ totals over all requests of the run:
 | `abba2.log` | draft | 19.3 17.5 19.4 19.8 | 14.1 24.0 14.8 12.7 |
 | `abba3.log` | final `413ee809` | 19.6 18.3 19.6 20.1 | 13.1 20.1 13.5 12.0 |
 
-Device wait is 69–71 ms/round on every run: at C4 K=1 decode is
-device-wait-bound, and the removed second synchronize is not on the
-bottleneck path. `b1` (first B run) shows a host-side stall on every campaign
+The loop is serial, so host and GPU never overlap: every host millisecond adds to wall time,
+and the removed synchronize plus two launches (well under 1% of a ~70 ms round) were simply
+below run-to-run noise. `b1` (first B run) shows a host-side stall on every campaign
 (35.5 / 24.0 / 20.1 ms/round) — the same machine-state signature recorded in
 the item-3 campaign; `b2` and the A runs agree across campaigns.
 

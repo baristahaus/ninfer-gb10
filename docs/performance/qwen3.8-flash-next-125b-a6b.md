@@ -30,6 +30,46 @@ independent HyperConnection/PLE/QSA/GDN/MoE numerical oracles, and exact convers
 qualify the migration. The source converter's 296472 checkpoint tensor descriptors were validated
 against the local source; the complete artifact used here was produced by the v2-to-v3 upgrader.
 
+### Follow-up diagnosis — 2026-09-26
+
+Repeating the same HTTP matrix with the unchanged production binary gives the following
+descriptive comparison against the stored v2 measurements, not a fresh controlled v2/v3 A/B:
+
+| Workload | Current mean completion | Change from stored v2 |
+|---|---:|---:|
+| One 8K request | 3.532 s | +1.02% |
+| Two 8K requests | 5.436 s | +4.26% |
+| One 64K request | 9.525 s | -0.12% |
+| Two 64K requests | 17.262 s | -0.07% |
+| Mixed 8K/64K requests | 11.471 s | -0.77% |
+
+The first paired 8K wave took 5.733 s; the other two took 5.288 s each. A separate short-workload
+repeat after compilation finished averaged 3.598 s single and 5.396 s paired, respectively
++2.90% and +3.49% against stored v2. The first matrix overlapped the tracing build's compilation.
+The single-request outputs and token counts match the old fixture exactly. The earlier 64K
+prefill slowdown does not reproduce: current single-request TTFT is 6.351 s versus 6.453 s for v2
+and 6.568 s immediately after migration. Timing variation within the same current binary is
+comparable to the originally reported migration difference.
+
+A separate Release tracing build with CUDA 13.4.92 and Nsight Systems 2026.3.1 measured the
+public Engine on 65536 corpus tokens plus 32 generated tokens, BF16 KV, MTP3, optimized proposal,
+8192-token chunks, one warmup and one measured repetition. Its 6784 ms measured interval contains
+6724 ms of GPU busy time (99.1%); prefill GPU work is 6599 ms. Warm PLE gathering takes 23.3 ms
+and hashing 3.9 ms. CPU scopes may overlap GPU work. These costs cannot explain the earlier
+115 ms single-64K TTFT increase by themselves; current prefill is predominantly GPU execution.
+Profiled throughput is not a speed comparison with the HTTP runs or the old build.
+
+The v3 segmented PLE reader adds a lookup per row, but this trace does not establish its
+incremental cost against v2. GPU operating conditions, compiler effects and a small kernel
+regression remain unseparated: the original runs have no clock telemetry, and the saved v2
+binary/artifact were removed during requested cleanup. A uniform 2% migration regression and
+a PLE/scheduling explanation are therefore not established. Local measurements and the selected
+trace report are under `profiles/bench/flash_next_v3_diagnosis/`.
+
+The follow-up also repairs benchmark tracing: `NINFER_PERFORMANCE_TRACE` must be defined on
+`ninfer_bench` itself so its measured-region marker is emitted alongside the engine's work scopes.
+The corrected capture contains one measured marker and is accepted by `flash_next_performance.py`.
+
 
 ## v2 comparison with vLLM
 

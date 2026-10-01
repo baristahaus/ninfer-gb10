@@ -5,4 +5,7 @@ add_executable(ninfer_bench
 ninfer_internal_includes(ninfer_bench)
 target_include_directories(ninfer_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(ninfer_bench PRIVATE NINFER_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+if(NINFER_PERFORMANCE_TRACE)
+  target_compile_definitions(ninfer_bench PRIVATE NINFER_PERFORMANCE_TRACE=1)
+endif()
 target_link_libraries(ninfer_bench PRIVATE ninfer_engine CUDA::cudart)

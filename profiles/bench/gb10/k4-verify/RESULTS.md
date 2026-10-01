@@ -109,6 +109,62 @@ materialization demand overtakes it. Shape matrix:
 | C1, survivor as first request | OK (1234 B, S4) | OK but wrong text (1172 B, F1; S6) |
 | C4 batch with 3 short rows | OK (1234 B, S3) | OK but wrong text (1212 B, F1; S1) |
 
+
+## Reruns after the fix (2026-10-01, tree `b61f9867`, serve sha256 `d3b07d5f...`)
+
+Opus landed `97beaaaf` (F1/F3: successors now take the exact frontier from the pending
+round's advanced frame; no successor for a row the pending round exhausts; loud ownership
+guard) and `b61f9867` (shutdown drain + startup memory wait). Build: **zero warnings** (the
+two `-Wnarrowing` findings are gone). Gates on the fixed tree: 5 unit tests PASS, real test
+PASS bitwise (80 s).
+
+### F1 rerun: the 256-token request on all four shapes
+
+| Shape | Before fix | After fix | K4a reference |
+|---|---|---|---|
+| C4 batch, cold (3 short rows) | 1212 B `9f1893c5` | **1234 B `847314b2`** | 1234 B |
+| C1 solo cold, 4th of 4 (F3 sequence) | KV error (F3) | **1234 B `847314b2`** | 1234 B |
+| C1 solo, partial prefix (batch first) | 1212 B (replay of batch) | **1234 B `847314b2`** | 1234 B |
+| C1 solo cold, **first request** | 1172 B `86bd9884` | **1172 B `86bd9884` - UNCHANGED** | 1234 B |
+
+Three of four shapes now match the serial loop exactly. The remaining divergence is confined
+to the first request on a fresh serve that crosses a profile boundary (256 tokens cross 127):
+the value is byte-identical to the pre-fix value, so `97beaaaf` did not touch its cause. The
+short first requests (maxtok10/maxtok16, no boundary crossed) are correct as the first
+request, consistent with a first-request x profile-boundary interaction. A second F1 cause
+remains; the real-test bitwise gate still passes, so it is outside the real-test shapes.
+
+### F3 rerun: C1 sequence of three short requests then the 256-token one
+
+PASS: all four complete (37/50/80 B, survivor 1234 B `847314b2`); no entitlement error.
+
+### F2 rerun: C4 batch, then solo replay of each request
+
+All four solo replays are byte-identical to the batch's live outputs (37/50/80/1234 B, same
+shas), including stopword, which still gets a successor round (14 of a 128 budget, ending on
+the stop string - the requested repro shape). No "MTP successor frame" guard error in any
+serve log. Per the fix's own caveat, a clean pass here does not close F2: maxtok10 now ends
+on its budget and gets no successor, so the original corruption path is not re-exercised.
+F2 stays open.
+
+### Shutdown reruns
+
+- 4a, SIGTERM during a 512-token stream: PASS - the stream completed in full
+  (output 512/512, engine log `output limit`) 7.4 s after the signal, inside the 30 s
+  timeout; log: `shutdown requested | draining 1 in-flight | timeout 30 s`,
+  `drain complete in 7.4 s`, `engine released in 2.0 s`.
+- 4b, second SIGTERM: the engine cancels as designed (`req#1 done | cancelled | output
+  355`), but **the client saw `finish_reason=stop` with no 503 error event** - the spec
+  said the stream ends with a 503 error event. A client cannot distinguish cancellation
+  from a natural EOS. Protocol finding, filed separately.
+- 4c, immediate restart: the guard is active on this device (CUDA reports
+  `CU_DEVICE_ATTRIBUTE_INTEGRATED = 1`). Three immediate restarts (0.5 s after a graceful
+  exit and 0.5 s after a SIGKILL) all came up healthy. The wait line never fired because the
+  kernel reclaims the killed process's ~85 GiB in under 200 ms on this box (MemAvailable:
+  24.4 GiB while loaded, 109.8 GiB at the first 200 ms sample after the kill, flat after) -
+  there was nothing to wait for. The line is only printed when a wait actually grew
+  MemAvailable by >256 MiB.
+
 ## K4a gate data (3d3d7a25 + fix, serve sha256 82f77128... from the K4a verify turn)
 
 - Unit tests: PASS; real test: PASS bitwise (92 s)
@@ -126,7 +182,9 @@ materialization demand overtakes it. Shape matrix:
 
 ## State
 
-- Beads: `ninfer-gb10-nb2` (open - K4 verify: discard check PASS, tree FAILS F1-F3);
-  `ninfer-gb10-nkw` (closed, fix verified). New issues for F1/F2 and F3 filed 2026-10-01.
-- Machine state: tree at branch tip `57b0c264`, clean; build dir holds the K4b binary
-  (`7f5ae421...`); GPU free.
+- Beads: `ninfer-gb10-nb2` (open - K4 verify; F1-F3 filed); `ninfer-gb10-mol` (F1/F2 -
+  F1 fixed for 3 of 4 shapes by 97beaaaf, first-request shape residual noted 2026-10-01;
+  F2 replays faithful on rerun, stays open); `ninfer-gb10-3w8` (F3 - fixed by 97beaaaf,
+  verified on rerun, pending close); `ninfer-gb10-nkw` (closed).
+- Machine state: tree at branch tip `b61f9867`, clean; build dir holds that binary
+  (`d3b07d5f...`); GPU free.

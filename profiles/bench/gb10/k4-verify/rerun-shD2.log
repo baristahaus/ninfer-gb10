@@ -1,0 +1,19 @@
+2026-10-01 19:27:00.091  INFO  starting engine
+2026-10-01 19:27:00.871  INFO  loading weights | 70.2 GiB
+2026-10-01 19:27:10.872  INFO    loading weights 51.9% | 36.5 GiB/70.2 GiB | 4.89 GiB/s | ETA 6.9s
+2026-10-01 19:27:17.778  INFO  weights ready | 70.2 GiB | 16.9s | 4.15 GiB/s
+2026-10-01 19:27:18.306  INFO  pinning host state | 882.5 MiB
+2026-10-01 19:27:18.754  INFO  host state pinned | 882.5 MiB | 447 ms
+2026-10-01 19:27:18.756  INFO  pinning host KV | 8.00 GiB
+2026-10-01 19:27:21.869  INFO  host KV pinned | 8.00 GiB | 3.1s
+ninfer: persistent grids sized for 48 SMs
+2026-10-01 19:27:22.901  INFO  CUDA graphs ready | 1.0s
+2026-10-01 19:27:22.902  INFO  engine ready | qwen3.8-flash-next-125b-a6b | total 22.8s | weights 70.2 GiB | CUDA sync yield
+2026-10-01 19:27:22.902  INFO  capacity | KV 73,728 tokens, fp8, explicit | pages 1,152/1,152 | runtime 2.15 GiB | free 17.1 GiB
+2026-10-01 19:27:22.902  INFO  context cache | 1 active + 1 cached device states | host 8 states, 8.00 GiB KV | private 2 | shared 4 | anchors 2
+2026-10-01 19:27:23.156  INFO  warmup complete | 255 ms
+2026-10-01 19:27:23.157  INFO  listening on http://127.0.0.1:18779 | model qwen3.8-flash-next-125b-a6b | auth disabled
+2026-10-01 19:27:23.257  INFO  shutdown requested | draining 0 in-flight request(s) | timeout 30 s
+2026-10-01 19:27:23.257  INFO  drain complete in 0.0 s
+2026-10-01 19:27:25.177  INFO  engine released in 1.9 s
+2026-10-01 19:27:25.177  INFO  server stopped

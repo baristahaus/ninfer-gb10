@@ -6,6 +6,7 @@
 #include "ninfer/ops/linear.h"
 #include "ops/linear/bf16/flash_next/bf16_launch.h"
 #include "ops/linear/fp8/fp8_flash_next.h"
+#include "ops/launcher/hyperconnection_math.cuh"
 
 #include <cuda_bf16.h>
 #include <cuda_runtime.h>
@@ -17,10 +18,11 @@
 namespace ninfer::ops {
 namespace {
 
-constexpr int kStreams = 4;
-constexpr int kHidden = 2560;
-constexpr int kHyper = kStreams * kHidden;
-constexpr int kRank = 320;
+using detail::hyperconnection::kHidden;
+using detail::hyperconnection::kHyper;
+using detail::hyperconnection::kInjectionPartialsPerToken;
+using detail::hyperconnection::kRank;
+using detail::hyperconnection::kStreams;
 
 __global__ void repeat_kernel(const __nv_bfloat16* input, __nv_bfloat16* hyper,
                               std::int64_t count) {
@@ -45,9 +47,88 @@ __global__ void add_repeated_kernel(const __nv_bfloat16* embedding, __nv_bfloat1
     }
 }
 
+// One block normalizes one (stream, token) group. With injection weights it also writes the
+// group's injection partials: the dot of each destination stream's injection row with this
+// source stream's normalized slice, from the stored BF16 values, in a fixed reduction order.
+template <bool Inject>
+__device__ __forceinline__ void normalize_group(const __nv_bfloat16* hyper,
+                                                const __nv_bfloat16* weight,
+                                                const __nv_bfloat16* injection_weight,
+                                                __nv_bfloat16* normalized, float* partials,
+                                                int stream, int token, float sum) {
+    const std::int64_t base = static_cast<std::int64_t>(kHyper) * token + kHidden * stream;
+    __shared__ float partial[8][kStreams];
+    const int lane = static_cast<int>(threadIdx.x) & 31;
+    const int warp = static_cast<int>(threadIdx.x) >> 5;
+    for (int offset = 16; offset != 0; offset >>= 1) {
+        sum += __shfl_down_sync(0xffffffffU, sum, offset);
+    }
+    if (lane == 0) { partial[warp][0] = sum; }
+    __syncthreads();
+    __shared__ float inverse;
+    if (warp == 0) {
+        float value = lane < 8 ? partial[lane][0] : 0.0F;
+        for (int offset = 16; offset != 0; offset >>= 1) {
+            value += __shfl_down_sync(0xffffffffU, value, offset);
+        }
+        if (lane == 0) { inverse = rsqrtf(value / static_cast<float>(kHidden) + 1.0e-6F); }
+    }
+    __syncthreads();
+    float injection_sum[kStreams] = {};
+    for (int d = static_cast<int>(threadIdx.x); d < kHidden; d += static_cast<int>(blockDim.x)) {
+        const float x = __bfloat162float(hyper[base + d]);
+        const float scale = 1.0F + __bfloat162float(weight[kHidden * stream + d]);
+        const __nv_bfloat16 represented = __float2bfloat16_rn(x * inverse * scale);
+        normalized[base + d] = represented;
+        if constexpr (Inject) {
+            const float value = __bfloat162float(represented);
+#pragma unroll
+            for (int destination = 0; destination < kStreams; ++destination) {
+                injection_sum[destination] = fmaf(
+                    __bfloat162float(injection_weight[static_cast<std::int64_t>(destination) *
+                                                          kHyper +
+                                                      kHidden * stream + d]),
+                    value, injection_sum[destination]);
+            }
+        }
+    }
+    if constexpr (Inject) {
+#pragma unroll
+        for (int destination = 0; destination < kStreams; ++destination) {
+            for (int offset = 16; offset != 0; offset >>= 1) {
+                injection_sum[destination] +=
+                    __shfl_down_sync(0xffffffffU, injection_sum[destination], offset);
+            }
+        }
+        __syncthreads();
+        if (lane == 0) {
+#pragma unroll
+            for (int destination = 0; destination < kStreams; ++destination) {
+                partial[warp][destination] = injection_sum[destination];
+            }
+        }
+        __syncthreads();
+        if (warp == 0) {
+#pragma unroll
+            for (int destination = 0; destination < kStreams; ++destination) {
+                float value = lane < 8 ? partial[lane][destination] : 0.0F;
+                for (int offset = 16; offset != 0; offset >>= 1) {
+                    value += __shfl_down_sync(0xffffffffU, value, offset);
+                }
+                if (lane == 0) {
+                    partials[token * kInjectionPartialsPerToken + stream * kStreams +
+                             destination] = value;
+                }
+            }
+        }
+    }
+}
+
+template <bool Inject>
 __global__ void grouped_rmsnorm_kernel(const __nv_bfloat16* hyper,
                                        const __nv_bfloat16* weight,
-                                       __nv_bfloat16* normalized) {
+                                       const __nv_bfloat16* injection_weight,
+                                       __nv_bfloat16* normalized, float* partials) {
     const int stream = static_cast<int>(blockIdx.x);
     const int token = static_cast<int>(blockIdx.y);
     const std::int64_t base = static_cast<std::int64_t>(kHyper) * token + kHidden * stream;
@@ -56,33 +137,18 @@ __global__ void grouped_rmsnorm_kernel(const __nv_bfloat16* hyper,
         const float x = __bfloat162float(hyper[base + d]);
         sum = fmaf(x, x, sum);
     }
-    for (int offset = 16; offset != 0; offset >>= 1) {
-        sum += __shfl_down_sync(0xffffffffU, sum, offset);
-    }
-    __shared__ float partial[8];
-    const int lane = static_cast<int>(threadIdx.x) & 31;
-    const int warp = static_cast<int>(threadIdx.x) >> 5;
-    if (lane == 0) { partial[warp] = sum; }
-    __syncthreads();
-    if (warp == 0) {
-        float value = lane < 8 ? partial[lane] : 0.0F;
-        for (int offset = 16; offset != 0; offset >>= 1) {
-            value += __shfl_down_sync(0xffffffffU, value, offset);
-        }
-        if (lane == 0) { partial[0] = rsqrtf(value / static_cast<float>(kHidden) + 1.0e-6F); }
-    }
-    __syncthreads();
-    for (int d = static_cast<int>(threadIdx.x); d < kHidden; d += static_cast<int>(blockDim.x)) {
-        const float x = __bfloat162float(hyper[base + d]);
-        const float scale = 1.0F + __bfloat162float(weight[kHidden * stream + d]);
-        normalized[base + d] = __float2bfloat16_rn(x * partial[0] * scale);
-    }
+    normalize_group<Inject>(hyper, weight, injection_weight, normalized, partials, stream, token,
+                            sum);
 }
 
+// Commits the previous branch output into the hyper state, then normalizes. The previous
+// injection is read before this launch writes anything that aliases it: the new injection is
+// finished by a later launch of the same mix.
+template <bool Inject>
 __global__ void combine_grouped_rmsnorm_kernel(
     __nv_bfloat16* hyper, const __nv_bfloat16* block,
     const __nv_bfloat16* injection, const __nv_bfloat16* weight,
-    __nv_bfloat16* normalized) {
+    const __nv_bfloat16* injection_weight, __nv_bfloat16* normalized, float* partials) {
     const int stream = static_cast<int>(blockIdx.x);
     const int token = static_cast<int>(blockIdx.y);
     const std::int64_t base = static_cast<std::int64_t>(kHyper) * token + kHidden * stream;
@@ -97,29 +163,8 @@ __global__ void combine_grouped_rmsnorm_kernel(
         const float value = __bfloat162float(represented);
         sum = fmaf(value, value, sum);
     }
-    for (int offset = 16; offset != 0; offset >>= 1) {
-        sum += __shfl_down_sync(0xffffffffU, sum, offset);
-    }
-    __shared__ float partial[8];
-    const int lane = static_cast<int>(threadIdx.x) & 31;
-    const int warp = static_cast<int>(threadIdx.x) >> 5;
-    if (lane == 0) { partial[warp] = sum; }
-    __syncthreads();
-    if (warp == 0) {
-        float value = lane < 8 ? partial[lane] : 0.0F;
-        for (int offset = 16; offset != 0; offset >>= 1) {
-            value += __shfl_down_sync(0xffffffffU, value, offset);
-        }
-        if (lane == 0) {
-            partial[0] = rsqrtf(value / static_cast<float>(kHidden) + 1.0e-6F);
-        }
-    }
-    __syncthreads();
-    for (int d = static_cast<int>(threadIdx.x); d < kHidden; d += blockDim.x) {
-        const float value = __bfloat162float(hyper[base + d]);
-        const float scale = 1.0F + __bfloat162float(weight[kHidden * stream + d]);
-        normalized[base + d] = __float2bfloat16_rn(value * partial[0] * scale);
-    }
+    normalize_group<Inject>(hyper, weight, injection_weight, normalized, partials, stream, token,
+                            sum);
 }
 
 __global__ void scaled_silu_kernel(__nv_bfloat16* values, std::int64_t count) {
@@ -138,152 +183,60 @@ __global__ void gate_mix_kernel(const __nv_bfloat16* normalized,
          i < count; i += static_cast<std::int64_t>(blockDim.x) * gridDim.x) {
         const int d = static_cast<int>(i % kHidden);
         const int t = static_cast<int>(i / kHidden);
-        float sum = 0.0F;
+        float logits[kStreams];
 #pragma unroll
         for (int stream = 0; stream < kStreams; ++stream) {
-            const std::int64_t offset = d + static_cast<std::int64_t>(kHidden) *
-                (stream + static_cast<std::int64_t>(kStreams) * t);
-            const float gate = 1.0F / (1.0F + expf(-__bfloat162float(gate_logits[offset])));
-            sum = fmaf(gate, __bfloat162float(normalized[offset]), sum);
+            logits[stream] = __bfloat162float(
+                gate_logits[d + static_cast<std::int64_t>(kHidden) * (stream + kStreams * t)]);
         }
-        block_input[i] = __float2bfloat16_rn(sum * 0.25F);
+        detail::hyperconnection::gate_mix_position(logits, normalized, block_input, d, t);
     }
 }
 
+// The unfused routes' gate mix: block_input from the materialized gate logits, and the injection
+// finished from the normalization's partials, with the same per-element mathematics as the fused
+// FP8 up-mix epilogue.
 __global__ void gate_mix_injection_kernel(const __nv_bfloat16* normalized,
                                           const __nv_bfloat16* gate_logits,
-                                          const __nv_bfloat16* injection_weight,
-                                          __nv_bfloat16* block_input,
+                                          const float* partials, __nv_bfloat16* block_input,
                                           __nv_bfloat16* injection) {
     const int token = static_cast<int>(blockIdx.x);
-    float injection_sum[kStreams] = {};
     for (int d = static_cast<int>(threadIdx.x); d < kHidden;
          d += static_cast<int>(blockDim.x)) {
-        float mixed = 0.0F;
-#pragma unroll
-        for (int source_stream = 0; source_stream < kStreams; ++source_stream) {
-            const int k = source_stream * kHidden + d;
-            const std::int64_t offset = k + static_cast<std::int64_t>(kHyper) * token;
-            const float value = __bfloat162float(normalized[offset]);
-            const float gate =
-                1.0F / (1.0F + expf(-__bfloat162float(gate_logits[offset])));
-            mixed = fmaf(gate, value, mixed);
-#pragma unroll
-            for (int destination_stream = 0; destination_stream < kStreams;
-                 ++destination_stream) {
-                injection_sum[destination_stream] = fmaf(
-                    __bfloat162float(injection_weight[
-                        static_cast<std::int64_t>(destination_stream) * kHyper + k]),
-                    value, injection_sum[destination_stream]);
-            }
-        }
-        block_input[d + static_cast<std::int64_t>(kHidden) * token] =
-            __float2bfloat16_rn(mixed * 0.25F);
-    }
-
-    __shared__ float partial[8][kStreams];
-    const int lane = static_cast<int>(threadIdx.x) & 31;
-    const int warp = static_cast<int>(threadIdx.x) >> 5;
-#pragma unroll
-    for (int stream = 0; stream < kStreams; ++stream) {
-        for (int offset = 16; offset != 0; offset >>= 1) {
-            injection_sum[stream] +=
-                __shfl_down_sync(0xffffffffU, injection_sum[stream], offset);
-        }
-        if (lane == 0) { partial[warp][stream] = injection_sum[stream]; }
-    }
-    __syncthreads();
-    if (warp == 0) {
+        float logits[kStreams];
 #pragma unroll
         for (int stream = 0; stream < kStreams; ++stream) {
-            float value = lane < 8 ? partial[lane][stream] : 0.0F;
-            for (int offset = 16; offset != 0; offset >>= 1) {
-                value += __shfl_down_sync(0xffffffffU, value, offset);
-            }
-            if (lane == 0) {
-                injection[stream + static_cast<std::int64_t>(kStreams) * token] =
-                    __float2bfloat16_rn(value);
-            }
+            logits[stream] = __bfloat162float(
+                gate_logits[d + static_cast<std::int64_t>(kHidden) * (stream + kStreams * token)]);
         }
+        detail::hyperconnection::gate_mix_position(logits, normalized, block_input, d, token);
     }
-}
-
-__global__ void injection_kernel(const __nv_bfloat16* normalized,
-                                 const __nv_bfloat16* weight,
-                                 __nv_bfloat16* injection, int tokens) {
-    const int stream = static_cast<int>(blockIdx.x);
-    const int token = static_cast<int>(blockIdx.y);
-    float sum = 0.0F;
-    for (int k = static_cast<int>(threadIdx.x); k < kHyper; k += static_cast<int>(blockDim.x)) {
-        sum = fmaf(__bfloat162float(weight[static_cast<std::int64_t>(stream) * kHyper + k]),
-                   __bfloat162float(normalized[k + static_cast<std::int64_t>(kHyper) * token]), sum);
-    }
-    for (int offset = 16; offset != 0; offset >>= 1) {
-        sum += __shfl_down_sync(0xffffffffU, sum, offset);
-    }
-    __shared__ float partial[8];
-    const int lane = static_cast<int>(threadIdx.x) & 31;
-    const int warp = static_cast<int>(threadIdx.x) >> 5;
-    if (lane == 0) { partial[warp] = sum; }
-    __syncthreads();
-    if (warp == 0) {
-        float value = lane < 8 ? partial[lane] : 0.0F;
-        for (int offset = 16; offset != 0; offset >>= 1) {
-            value += __shfl_down_sync(0xffffffffU, value, offset);
-        }
-        if (lane == 0) { injection[stream + kStreams * token] = __float2bfloat16_rn(value); }
+    if (threadIdx.x < kStreams) {
+        detail::hyperconnection::finish_injection(partials, injection,
+                                                  static_cast<int>(threadIdx.x), token);
     }
 }
 
 __global__ void gate_mix_injection_decode_kernel(
-    const __nv_bfloat16* normalized, const __nv_bfloat16* gate_logits,
-    const __nv_bfloat16* injection_weight, __nv_bfloat16* block_input,
-    __nv_bfloat16* injection) {
+    const __nv_bfloat16* normalized, const __nv_bfloat16* gate_logits, const float* partials,
+    __nv_bfloat16* block_input, __nv_bfloat16* injection) {
     constexpr int kMixBlocks = kHidden / 256;
     const int work = static_cast<int>(blockIdx.x);
     const int token = static_cast<int>(blockIdx.y);
     if (work < kMixBlocks) {
         const int d = work * static_cast<int>(blockDim.x) + static_cast<int>(threadIdx.x);
-        float sum = 0.0F;
+        float logits[kStreams];
 #pragma unroll
         for (int stream = 0; stream < kStreams; ++stream) {
-            const std::int64_t offset = d + static_cast<std::int64_t>(kHidden) *
-                (stream + static_cast<std::int64_t>(kStreams) * token);
-            const float gate =
-                1.0F / (1.0F + expf(-__bfloat162float(gate_logits[offset])));
-            sum = fmaf(gate, __bfloat162float(normalized[offset]), sum);
+            logits[stream] = __bfloat162float(
+                gate_logits[d + static_cast<std::int64_t>(kHidden) * (stream + kStreams * token)]);
         }
-        block_input[d + static_cast<std::int64_t>(kHidden) * token] =
-            __float2bfloat16_rn(sum * 0.25F);
+        detail::hyperconnection::gate_mix_position(logits, normalized, block_input, d, token);
         return;
     }
-
-    const int destination_stream = work - kMixBlocks;
-    float sum = 0.0F;
-    for (int k = static_cast<int>(threadIdx.x); k < kHyper;
-         k += static_cast<int>(blockDim.x)) {
-        sum = fmaf(
-            __bfloat162float(injection_weight[
-                static_cast<std::int64_t>(destination_stream) * kHyper + k]),
-            __bfloat162float(normalized[k + static_cast<std::int64_t>(kHyper) * token]), sum);
-    }
-    for (int offset = 16; offset != 0; offset >>= 1) {
-        sum += __shfl_down_sync(0xffffffffU, sum, offset);
-    }
-    __shared__ float partial[8];
-    const int lane = static_cast<int>(threadIdx.x) & 31;
-    const int warp = static_cast<int>(threadIdx.x) >> 5;
-    if (lane == 0) { partial[warp] = sum; }
-    __syncthreads();
-    if (warp == 0) {
-        float value = lane < 8 ? partial[lane] : 0.0F;
-        for (int offset = 16; offset != 0; offset >>= 1) {
-            value += __shfl_down_sync(0xffffffffU, value, offset);
-        }
-        if (lane == 0) {
-            injection[destination_stream + static_cast<std::int64_t>(kStreams) * token] =
-                __float2bfloat16_rn(value);
-        }
+    if (threadIdx.x < kStreams) {
+        detail::hyperconnection::finish_injection(partials, injection,
+                                                  static_cast<int>(threadIdx.x), token);
     }
 }
 
@@ -352,9 +305,13 @@ void validate_combine_inputs(const Tensor& hyper, const Tensor& block_output,
     }
 }
 
-void finish_mix(const Tensor& normalized, const HyperConnectionWeights& weights,
-                Tensor& block_input, Tensor* injection, WorkspaceArena& workspace,
-                cudaStream_t stream, Bf16GemmContext* bf16_gemm) {
+// The projections and gate mix after the grouped RMSNorm. FP8 up projections at 2..64 tokens
+// fuse the gate mix and the injection finish into the up projection's epilogue; every other route
+// materializes the gate logits and mixes in a separate launch with the same per-element
+// mathematics. The injection is always finished from the normalization's partials.
+void finish_mix(const Tensor& normalized, const Tensor* partials,
+                const HyperConnectionWeights& weights, Tensor& block_input, Tensor* injection,
+                WorkspaceArena& workspace, cudaStream_t stream, Bf16GemmContext* bf16_gemm) {
     const int tokens = normalized.ne[1];
     Tensor low_rank = workspace.alloc(DType::BF16, {kRank, tokens});
     // FP8 runs the fused down+SiLU at every width; BF16 fuses through its small-T family.
@@ -374,6 +331,11 @@ void finish_mix(const Tensor& normalized, const HyperConnectionWeights& weights,
         scaled_silu_kernel<<<grid_for(low_rank.numel()), block, 0, stream>>>(
             static_cast<__nv_bfloat16*>(low_rank.data), low_rank.numel());
     }
+    if (weights.up.qtype == QType::FP8_E4M3FN_ROW_BF16 && tokens >= 2 && tokens <= 64) {
+        detail::flash_next::launch_fp8_hc_up_mix(low_rank, weights.up, normalized, partials,
+                                                 block_input, injection, stream);
+        return;
+    }
     Tensor gate = workspace.alloc(DType::BF16, {kHyper, tokens});
     linear(low_rank, weights.up, gate, stream, bf16_gemm);
     if (injection != nullptr) {
@@ -381,19 +343,18 @@ void finish_mix(const Tensor& normalized, const HyperConnectionWeights& weights,
             gate_mix_injection_kernel<<<tokens, block, 0, stream>>>(
                 static_cast<const __nv_bfloat16*>(normalized.data),
                 static_cast<const __nv_bfloat16*>(gate.data),
-                static_cast<const __nv_bfloat16*>(weights.injection.qdata),
+                static_cast<const float*>(partials->data),
                 static_cast<__nv_bfloat16*>(block_input.data),
                 static_cast<__nv_bfloat16*>(injection->data));
         } else {
             constexpr int kDecodeMixBlocks = kHidden / block;
             gate_mix_injection_decode_kernel<<<
-                dim3(kDecodeMixBlocks + kStreams, static_cast<unsigned int>(tokens)),
-                block, 0, stream>>>(
-                static_cast<const __nv_bfloat16*>(normalized.data),
-                static_cast<const __nv_bfloat16*>(gate.data),
-                static_cast<const __nv_bfloat16*>(weights.injection.qdata),
-                static_cast<__nv_bfloat16*>(block_input.data),
-                static_cast<__nv_bfloat16*>(injection->data));
+                dim3(kDecodeMixBlocks + 1, static_cast<unsigned int>(tokens)), block, 0,
+                stream>>>(static_cast<const __nv_bfloat16*>(normalized.data),
+                          static_cast<const __nv_bfloat16*>(gate.data),
+                          static_cast<const float*>(partials->data),
+                          static_cast<__nv_bfloat16*>(block_input.data),
+                          static_cast<__nv_bfloat16*>(injection->data));
         }
     } else {
         gate_mix_kernel<<<grid_for(block_input.numel()), block, 0, stream>>>(
@@ -446,12 +407,15 @@ std::size_t hyperconnection_mix_workspace_capacity_bytes(std::int32_t tokens,
                                                           bool with_injection) {
     if (tokens <= 0) { throw std::invalid_argument("HyperConnection token count must be positive"); }
     const std::uint64_t elements = static_cast<std::uint64_t>(tokens) * (kHyper + kRank + kHyper);
-    const std::uint64_t bytes = elements * sizeof(__nv_bfloat16);
+    const std::uint64_t partials =
+        with_injection ? static_cast<std::uint64_t>(tokens) * kInjectionPartialsPerToken *
+                             sizeof(float)
+                       : 0;
+    const std::uint64_t bytes = elements * sizeof(__nv_bfloat16) + partials;
     if (bytes > std::numeric_limits<std::size_t>::max()) {
         throw std::overflow_error("HyperConnection workspace size overflow");
     }
-    (void)with_injection;
-    return static_cast<std::size_t>(bytes) + 3 * 256;
+    return static_cast<std::size_t>(bytes) + 4 * 256;
 }
 
 void hyperconnection_mix(const Tensor& hyper, const HyperConnectionWeights& weights,
@@ -466,11 +430,23 @@ void hyperconnection_mix(const Tensor& hyper, const HyperConnectionWeights& weig
     const int tokens = hyper.ne[1];
     auto scope = workspace.scope();
     Tensor normalized = workspace.alloc(DType::BF16, {kHyper, tokens});
-    grouped_rmsnorm_kernel<<<dim3(kStreams, static_cast<unsigned int>(tokens)), 256, 0, stream>>>(
+    const dim3 grid(kStreams, static_cast<unsigned int>(tokens));
+    if (injection != nullptr) {
+        Tensor partials = workspace.alloc(DType::FP32, {kInjectionPartialsPerToken, tokens});
+        grouped_rmsnorm_kernel<true><<<grid, 256, 0, stream>>>(
+            static_cast<const __nv_bfloat16*>(hyper.data),
+            static_cast<const __nv_bfloat16*>(weights.norm.data),
+            static_cast<const __nv_bfloat16*>(weights.injection.qdata),
+            static_cast<__nv_bfloat16*>(normalized.data), static_cast<float*>(partials.data));
+        finish_mix(normalized, &partials, weights, block_input, injection, workspace, stream,
+                   bf16_gemm);
+        return;
+    }
+    grouped_rmsnorm_kernel<false><<<grid, 256, 0, stream>>>(
         static_cast<const __nv_bfloat16*>(hyper.data),
-        static_cast<const __nv_bfloat16*>(weights.norm.data),
-        static_cast<__nv_bfloat16*>(normalized.data));
-    finish_mix(normalized, weights, block_input, injection, workspace, stream, bf16_gemm);
+        static_cast<const __nv_bfloat16*>(weights.norm.data), nullptr,
+        static_cast<__nv_bfloat16*>(normalized.data), nullptr);
+    finish_mix(normalized, nullptr, weights, block_input, nullptr, workspace, stream, bf16_gemm);
 }
 
 void hyperconnection_combine_mix(Tensor& hyper, const Tensor& previous_block_output,
@@ -489,14 +465,27 @@ void hyperconnection_combine_mix(Tensor& hyper, const Tensor& previous_block_out
     const int tokens = hyper.ne[1];
     auto scope = workspace.scope();
     Tensor normalized = workspace.alloc(DType::BF16, {kHyper, tokens});
-    combine_grouped_rmsnorm_kernel<<<
-        dim3(kStreams, static_cast<unsigned int>(tokens)), 256, 0, stream>>>(
+    const dim3 grid(kStreams, static_cast<unsigned int>(tokens));
+    if (injection != nullptr) {
+        Tensor partials = workspace.alloc(DType::FP32, {kInjectionPartialsPerToken, tokens});
+        combine_grouped_rmsnorm_kernel<true><<<grid, 256, 0, stream>>>(
+            static_cast<__nv_bfloat16*>(hyper.data),
+            static_cast<const __nv_bfloat16*>(previous_block_output.data),
+            static_cast<const __nv_bfloat16*>(previous_injection.data),
+            static_cast<const __nv_bfloat16*>(weights.norm.data),
+            static_cast<const __nv_bfloat16*>(weights.injection.qdata),
+            static_cast<__nv_bfloat16*>(normalized.data), static_cast<float*>(partials.data));
+        finish_mix(normalized, &partials, weights, block_input, injection, workspace, stream,
+                   bf16_gemm);
+        return;
+    }
+    combine_grouped_rmsnorm_kernel<false><<<grid, 256, 0, stream>>>(
         static_cast<__nv_bfloat16*>(hyper.data),
         static_cast<const __nv_bfloat16*>(previous_block_output.data),
         static_cast<const __nv_bfloat16*>(previous_injection.data),
-        static_cast<const __nv_bfloat16*>(weights.norm.data),
-        static_cast<__nv_bfloat16*>(normalized.data));
-    finish_mix(normalized, weights, block_input, injection, workspace, stream, bf16_gemm);
+        static_cast<const __nv_bfloat16*>(weights.norm.data), nullptr,
+        static_cast<__nv_bfloat16*>(normalized.data), nullptr);
+    finish_mix(normalized, nullptr, weights, block_input, nullptr, workspace, stream, bf16_gemm);
 }
 
 void hyperconnection_combine(Tensor& hyper, const Tensor& block_output, const Tensor& injection,

@@ -73,7 +73,10 @@ int run_case(int tokens, ProjectionFormat format) {
         for (int row = 0; row < kRank; ++row) { down[static_cast<std::size_t>(row) * kHyper + (37 * row) % kHyper] = 0.25F; }
         for (int row = 0; row < kHyper; ++row) { up[static_cast<std::size_t>(row) * kRank + row % kRank] = (row & 1) ? -0.5F : 0.5F; }
     }
-    for (int row = 0; row < kStreams; ++row) { inject[static_cast<std::size_t>(row) * kHyper + 777 * (row + 1)] = 0.75F; }
+    // Dense injection rows: every source stream contributes to every destination, so the
+    // per-stream injection partials and their in-order sum are exercised.
+    fill_uniform(inject, 916, -0.01F, 0.01F);
+    round_to_bf16(inject);
 
     std::vector<double> normalized(hyper.size());
     std::vector<double> block_reference(kHidden * tokens);
@@ -216,10 +219,13 @@ int run_case(int tokens, ProjectionFormat format) {
 int run() {
     int failures = 0;
     for (const ProjectionFormat format : {ProjectionFormat::Bf16, ProjectionFormat::Fp8}) {
-        // T=1 GEMV, T=2/3 (3 is the MTP verify width) and T=9 sliced-K, T=65 tiled GEMM; the FP8
-        // up projection (K=320) ends its GEMV rows in a predicated phase and its sliced-K in a
-        // partial group, and runs 64-wide GEMM K tiles.
-        for (const int tokens : {1, 2, 3, 9, 65}) { failures += run_case(tokens, format); }
+        // T=1 GEMV, T=2/3 (3 is the MTP verify width), 8, 9, 16 and 33 sliced-K, T=65 tiled GEMM;
+        // the FP8 up projection (K=320) ends its GEMV rows in a predicated phase and its sliced-K
+        // in a partial group, and runs 64-wide GEMM K tiles. FP8 at 2..64 tokens takes the fused
+        // up-mix route; 8, 16 and 33 reach each of its token tiles.
+        for (const int tokens : {1, 2, 3, 8, 9, 16, 33, 65}) {
+            failures += run_case(tokens, format);
+        }
     }
     return failures;
 }

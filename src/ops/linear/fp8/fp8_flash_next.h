@@ -13,6 +13,12 @@ namespace ninfer::ops::detail::flash_next {
 // BF16 [320, T].
 void launch_fp8_hc_down_silu(const Tensor& x, const Weight& weight, Tensor& out,
                              cudaStream_t stream);
+// The HyperConnection up projection at 2..64 tokens with the gate mix fused into its epilogue:
+// writes block_input BF16 [2560, T] from low_rank BF16 [320, T] and normalized BF16 [10240, T],
+// and, when given, finishes injection BF16 [4, T] from injection_partials FP32 [16, T].
+void launch_fp8_hc_up_mix(const Tensor& low_rank, const Weight& weight, const Tensor& normalized,
+                          const Tensor* injection_partials, Tensor& block_input, Tensor* injection,
+                          cudaStream_t stream);
 // The QSA packed query/gate projection split into query and gate heads at T=1.
 void launch_fp8_query_gate_decode(const Tensor& x, const Weight& weight, Tensor& query,
                                   Tensor& gate, cudaStream_t stream);

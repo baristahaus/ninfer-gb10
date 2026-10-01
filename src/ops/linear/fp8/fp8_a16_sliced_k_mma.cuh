@@ -207,7 +207,7 @@ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void fp8_a16_sl
     __syncthreads();
 
     if (warp == 0) {
-        const auto destination =
+        [[maybe_unused]] const auto destination =
             linear_output_tile<kBlockRows / (RowPolicy::kPaired ? 2 : 1)>(output, row0);
         unsigned lane_scale = 0;
         if (lid < 2) {
@@ -236,30 +236,52 @@ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void fp8_a16_sl
             }
             const int local_token = token_mma * 8 + 2 * lid;
             const int token0      = token_begin + local_token;
-            const int row_a       = row_policy.weight_row(row0, gid, operands.rows);
-            const int row_b       = row_policy.weight_row(row0, gid + 8, operands.rows);
-            if constexpr (RowPolicy::kPaired) {
-                if (local_token < live_columns)
-                    epilogue.apply_pair(destination, row_a, token0, sum.x * top_scale,
-                                        sum.z * bottom_scale);
-                if (local_token + 1 < live_columns)
-                    epilogue.apply_pair(destination, row_a, token0 + 1, sum.y * top_scale,
-                                        sum.w * bottom_scale);
+            if constexpr (fp8_stream_quad_rows<RowPolicy>) {
+                // Lane gid holds streams gid/4 and gid/4 + 2 of position gid % 4; lane ^ 16
+                // (gid ^ 4) holds the other two. Both exchange, then the low half finishes
+                // token0 and the high half token0 + 1, each with all four streams in order.
+                const float own[4]{sum.x * top_scale, sum.y * top_scale, sum.z * bottom_scale,
+                                   sum.w * bottom_scale};
+                float other[4];
+#pragma unroll
+                for (int i = 0; i < 4; ++i) other[i] = __shfl_xor_sync(kMask, own[i], 16);
+                // Low lanes hold streams 0 and 2, high lanes streams 1 and 3.
+                const bool low   = gid < 4;
+                const int column = low ? 0 : 1;
+                const float streams[4]{low ? own[0] : other[1], low ? other[0] : own[1],
+                                       low ? own[2] : other[3], low ? other[2] : own[3]};
+                if (local_token + column < live_columns)
+                    epilogue.mix_streams((row0 >> 2) + (gid & 3), token0 + column, streams);
             } else {
-                if (local_token < live_columns) {
-                    destination.store(row_a, token0,
-                                      epilogue.apply(row_a, token0, sum.x * top_scale));
-                    destination.store(row_b, token0,
-                                      epilogue.apply(row_b, token0, sum.z * bottom_scale));
-                }
-                if (local_token + 1 < live_columns) {
-                    destination.store(row_a, token0 + 1,
-                                      epilogue.apply(row_a, token0 + 1, sum.y * top_scale));
-                    destination.store(row_b, token0 + 1,
-                                      epilogue.apply(row_b, token0 + 1, sum.w * bottom_scale));
+                const int row_a = row_policy.weight_row(row0, gid, operands.rows);
+                const int row_b = row_policy.weight_row(row0, gid + 8, operands.rows);
+                if constexpr (RowPolicy::kPaired) {
+                    if (local_token < live_columns)
+                        epilogue.apply_pair(destination, row_a, token0, sum.x * top_scale,
+                                            sum.z * bottom_scale);
+                    if (local_token + 1 < live_columns)
+                        epilogue.apply_pair(destination, row_a, token0 + 1, sum.y * top_scale,
+                                            sum.w * bottom_scale);
+                } else {
+                    if (local_token < live_columns) {
+                        destination.store(row_a, token0,
+                                          epilogue.apply(row_a, token0, sum.x * top_scale));
+                        destination.store(row_b, token0,
+                                          epilogue.apply(row_b, token0, sum.z * bottom_scale));
+                    }
+                    if (local_token + 1 < live_columns) {
+                        destination.store(row_a, token0 + 1,
+                                          epilogue.apply(row_a, token0 + 1, sum.y * top_scale));
+                        destination.store(row_b, token0 + 1,
+                                          epilogue.apply(row_b, token0 + 1, sum.w * bottom_scale));
+                    }
                 }
             }
         }
+    }
+    // An epilogue may finish per-token work once per token tile, in the tile's first row CTA.
+    if constexpr (requires(const Epilogue& e) { e.finish_cta(0, 0, 0); }) {
+        if (blockIdx.x == 0) epilogue.finish_cta(token_begin, live_columns, tid);
     }
 }
 

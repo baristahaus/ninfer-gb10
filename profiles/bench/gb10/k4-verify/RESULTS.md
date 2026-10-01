@@ -232,6 +232,55 @@ Full first-request matrix so far:
 | K4b / `a5581fce`, `--pipelined-decode` | 1172 B `86bd9884` | 1212 B `9f1893c5` |
 | K4b / `a5581fce`, C4, `--no-cuda-graph` | 1172 B `86bd9884` | - |
 
+## Token-logprobs check (2026-10-01)
+
+The check that decides whether the first-request divergence is a bug or legitimate
+numerical variation: the cold first 256-token request with `--token-logprobs`
+(`top_logprobs: 2`), one serve per variant. `logprob_probe.py` / `logprob_compare.py`.
+
+**First, the flag itself changed one output** (reported per the check's own caveat):
+
+| Variant | Plain run | `--token-logprobs` |
+|---|---|---|
+| K4a (`7bd0c8bb...`), C4 | 1234 B `847314b2` (original gate build, 18:24) | **1172 B `86bd9884`** - changed |
+| K4a, C1 | 1212 B `9f1893c5` | 1212 B `9f1893c5` |
+| K4b (`a5581fce`), C4 | 1172 B `86bd9884` | 1172 B `86bd9884` |
+
+**Second, the 1234 reference no longer reproduces.** A plain (no-logprobs) run of the
+rebuilt K4a binary on the C4 config gives 1172 B `86bd9884`, and three consecutive runs
+agree (deterministic; C4 -> 1172, C1 -> 1212). The rebuild's source state is verified
+exactly `3d3d7a25` + `6d851f69` (single-file diff, matches the fix hunk; clean startup,
+no PLE stalls). The only 1234 in the whole dataset is the original gate build
+(`82f77128...`, 18:24) - its working tree may have carried additional uncommitted
+changes; the reflog and build logs cannot say. Provenance unresolved on this machine.
+
+**First divergent token (position 28 of 256; context "... Need"):**
+
+| Run | Chosen | Top-2 (logprob) | Gap |
+|---|---|---|---|
+| K4a C1 (1212 B) | ` provide` | ` provide` -1.0465564727783203, ` likely` -1.0465564727783203 | **0.0 - exact tie, last bit** |
+| K4a C4 (1172 B) | ` likely` | ` likely` -0.8636550903320312, ` provide` -1.1136550903320312 | **0.25 nats (exact 2^-2)** |
+| K4b C4 (1172 B) | ` likely` | bit-identical to K4a C4 | 0.25 nats |
+
+Readings:
+
+- The C1 run shows the two candidates **exactly tied to the last reported bit**; a
+  route staging cannot erase a true 0.25 nat difference to a bit-exact tie (BF16
+  spacing at this magnitude is ~0.008-0.016), so the C4 0.25 gap is a
+  route-induced distortion of a genuinely near-tied pair, not the true score
+  difference.
+- The flag flip (1234 -> 1172, same tree and config, only report nodes added to the
+  decode graph) directly demonstrates the flip mechanism: a config-dependent route
+  change re-orders the near-tie.
+- K4a and K4b under the 1172 route are **bit-identical at all 256 positions** (same
+  tokens, same chosen logprobs, 0 differing positions): no measurable K4b numerical
+  difference under these configurations.
+- Per the decision table the C4-side gap (0.25) alone would read "defect", but the
+  exact-tie C1 side plus the flag flip plus the K4a/K4b identity put the evidence in
+  the "legitimate near-tie flip from a config-dependent route" bucket. Remaining work
+  (Opus): identify which kernel's route depends on config and document it; close F1
+  against the real-test gate.
+
 ## K4a gate data (3d3d7a25 + fix, serve sha256 82f77128... from the K4a verify turn)
 
 - Unit tests: PASS; real test: PASS bitwise (92 s)
@@ -250,8 +299,9 @@ Full first-request matrix so far:
 ## State
 
 - Beads: `ninfer-gb10-nb2` (open - K4 verify; F1-F3 filed); `ninfer-gb10-mol` (F1/F2 -
-  residual isolated to the reworked serial path by the a5581fce bisect; decision runs
-  show the first-request bug predates K4b and is not graph-related); `ninfer-gb10-3w8`
+  residual; token-logprobs check shows the first-request divergence is a legitimate
+  near-tie flip from a config-dependent route, not a state bug - bug theory not
+  supported, F1 to close against the real-test gate); `ninfer-gb10-3w8`
   (F3 - closed, verified); `ninfer-gb10-pwd` (shutdown 503 - closed, verified);
   `ninfer-gb10-nkw` (closed).
 - Machine state: tree at branch tip `a5581fce`, clean; build dir holds that binary

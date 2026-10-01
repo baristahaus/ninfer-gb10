@@ -1,5 +1,34 @@
 # Qwen3.8 Flash-Next 125B-A6B performance
 
+## Swift versus original and prefill chunks — 2026-10-01
+
+Matched public Engine benchmarks show no meaningful warm-prefill penalty for Swift. Both
+v3 NVFP4 artifacts use the first 16,384 tokens of `bench/fixtures/bench_corpus.ids`, BF16 KV,
+full MTP3, maximum context 32,768, greedy sampling and one output token, on RTX PRO 6000
+Blackwell with CUDA 13.4.92. Each case has three repetitions without prefix reuse; the first
+starts with PLE file-cache ranges evicted, and the table averages the two warm repetitions.
+
+| Artifact | Chunk 1,024, tokens/s | Chunk 8,192, tokens/s |
+|---|---:|---:|
+| Swift 1.5 | 7,986 | 11,177 |
+| Original Flash-Next | 7,932 | 11,141 |
+
+The selected artifacts are `out/v3/swift_1_5_qwen3_8_flash_next_nvfp4.ninfer` and
+`out/v3/qwen3_8_flash_next_125b_a6b_nvfp4.ninfer`. Commands use `ninfer_bench --weights
+<artifact> -p 16384 --max-ctx 32768 --prefill-chunk <chunk> --kv-dtype bf16 --spec mtp
+--draft-tokens 3 --warmup 0 -r 3 -o json`. Local reports are under
+`profiles/bench/swift_prefill_opt/`. Swift gains 40% warm PP from the larger chunk.
+Historical results with 8,192-token chunks and warm PLE pages are not a matched comparison
+against a default-chunk service processing cold file-backed rows.
+
+The local Swift service now selects `--prefill-chunk 8192`. Qualification with Vision, MTP3,
+262,144 maximum context and two active requests succeeded. Automatic shared BF16 KV capacity
+falls from 436,736 to 324,800 tokens because the larger chunk needs more workspace; the
+maximum context remains 262,144, but less spare device KV remains for concurrent long contexts.
+The same HTTP probe used below, with distinct leading text and no prefix hits, reached
+9,790 tokens/s warm. This shorter prompt gains about 19% over the earlier 8,220 tokens/s;
+the 40% improvement applies to the matched 16K workload rather than every prompt length.
+
 ## Swift 1.5 cold PLE prefill — 2026-10-01
 
 The Swift NVFP4 variant retains a 102.4 GB BF16 PLE table. On the local Btrfs volume with

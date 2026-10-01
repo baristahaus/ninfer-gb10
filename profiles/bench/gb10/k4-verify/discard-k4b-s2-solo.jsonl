@@ -1,0 +1,4 @@
+{"name": "maxtok10", "mode": "solo", "text": "We need to respond to user: \"Write a\u0000", "finish": "length", "tokens": 10, "prompt_sha": "04ece7ce6b0b1909", "max_tokens": 10, "stop": null}
+{"name": "stopword", "mode": "solo", "text": "We need to respond to user: \"Reply with exactly: \u0000", "finish": "stop", "tokens": 14, "prompt_sha": "e3d1ca0d05b73cc8", "max_tokens": 128, "stop": ["STOPWORD"]}
+{"name": "maxtok16", "mode": "solo", "text": "We need answer user: \"Write a Python function that merges two sorted lists into\u0000", "finish": "length", "tokens": 16, "prompt_sha": "c3bed79b06c589e5", "max_tokens": 16, "stop": null}
+{"name": "survivor", "mode": "solo", "error": "{\"error\": {\"code\": null, \"message\": \"KV materialization exceeds active entitlement\", \"param\": null, \"type\": \"internal_error\"}}"}

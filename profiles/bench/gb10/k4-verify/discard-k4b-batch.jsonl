@@ -1,0 +1,4 @@
+{"name": "maxtok10", "mode": "batch", "text": "", "finish": "length", "tokens": 10, "prompt_sha": "04ece7ce6b0b1909", "max_tokens": 10, "stop": null}
+{"name": "stopword", "mode": "batch", "text": "", "finish": "stop", "tokens": 14, "prompt_sha": "e3d1ca0d05b73cc8", "max_tokens": 128, "stop": ["STOPWORD"]}
+{"name": "maxtok16", "mode": "batch", "text": "", "finish": "length", "tokens": 16, "prompt_sha": "c3bed79b06c589e5", "max_tokens": 16, "stop": null}
+{"name": "survivor", "mode": "batch", "text": "", "finish": "length", "tokens": 256, "prompt_sha": "19196b37f47033c5", "max_tokens": 256, "stop": null}

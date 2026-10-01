@@ -1,0 +1,3 @@
+2026-10-01 18:24:22.972  INFO  starting engine
+2026-10-01 18:24:23.190  ERROR startup failed | starting engine | 218 ms
+2026-10-01 18:24:23.190  FATAL server failed during startup | Flash-Next weights exceed free GPU memory

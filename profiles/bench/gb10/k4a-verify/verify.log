@@ -1,0 +1,28 @@
+=== sha256 serve
+82f77128516227dbabc25f94e1939325b9324d14382a068341bc0cfd3a0624cd
+=== unit tests
+    sample top-k/top-p/min-p FP64 distribution match (max z=1.42365)
+    sample top-k public cap FP64 distribution match (max z=1.77583)
+    sample real token-domain B=8 FP64 distribution match (max z=0.863831)
+OK sample public contract
+OK Flash-Next PLE stage
+mtp_round: PASS
+OK gdn_replay_fold
+OK Flash-Next PLE
+unit tests OK
+=== real test (bitwise goldens)
+ninfer: persistent grids sized for 48 SMs
+OK Qwen3.8 Flash Next real Engine
+real test OK
+=== nsys serve trace (C4 K=1, prose, warm cache)
+server healthy
+server stopped
+=== capacity (startup memory) from serve log
+2026-10-01 17:50:53.288  INFO  capacity | KV 73,728 tokens, fp8, explicit | pages 1,152/4,608 | runtime 4.13 GiB | free 14.8 GiB
+=== nvtx stats
+Traceback (most recent call last):
+  File "<stdin>", line 4, in <module>
+sqlite3.OperationalError: no such table: NVTX_EVENTS
+=== request log totals
+Totals: 3136 tokens, decode 157.8 s (19.9 tok/s), prefill 1.7 s, rounds 1910, 1.64 tok/round, device wait 80.5 ms/round, queue wait mean 319 ms, host exposed 2.15 ms/round
+K4 VERIFY DONE (k4a-verify)

@@ -1,0 +1,27 @@
+model qwen3.8-flash-next-125b-a6b
+warm 0: status 200 tokens 64
+== prose concurrency 4: 17:50:55.212 .. 17:51:11.654  wall 16.4 s
+   req 0: status 200 finish=length tokens 256 chunks 155 ttft 1020 ms  client update pace 98.89 ms/update
+   req 1: status 200 finish=length tokens 256 chunks 156 ttft 1395 ms  client update pace 97.07 ms/update
+   req 2: status 200 finish=length tokens 256 chunks 159 ttft 586 ms  client update pace 99.13 ms/update
+   req 3: status 200 finish=length tokens 256 chunks 158 ttft 236 ms  client update pace 100.08 ms/update
+   aggregate wall: 1024 tokens in 16.44 s = 62.28 tok/s (prefill included)
+   legacy output-span aggregate: 63.1911561827128 tok/s (initial TTFT excluded; later admissions included)
+== prose concurrency 4: 17:51:11.654 .. 17:51:24.597  wall 12.9 s
+   req 0: status 200 finish=length tokens 256 chunks 154 ttft 497 ms  client update pace 79.29 ms/update
+   req 1: status 200 finish=length tokens 256 chunks 155 ttft 100 ms  client update pace 79.34 ms/update
+   req 2: status 200 finish=length tokens 256 chunks 159 ttft 701 ms  client update pace 77.47 ms/update
+   req 3: status 200 finish=length tokens 256 chunks 157 ttft 263 ms  client update pace 79.27 ms/update
+   aggregate wall: 1024 tokens in 12.94 s = 79.12 tok/s (prefill included)
+   legacy output-span aggregate: 79.74104989264103 tok/s (initial TTFT excluded; later admissions included)
+== prose concurrency 4: 17:51:24.597 .. 17:51:37.252  wall 12.7 s
+   req 0: status 200 finish=length tokens 256 chunks 156 ttft 18 ms  client update pace 76.92 ms/update
+   req 1: status 200 finish=length tokens 256 chunks 157 ttft 538 ms  client update pace 76.63 ms/update
+   req 2: status 200 finish=length tokens 256 chunks 159 ttft 183 ms  client update pace 77.42 ms/update
+   req 3: status 200 finish=length tokens 256 chunks 162 ttft 324 ms  client update pace 76.58 ms/update
+   aggregate wall: 1024 tokens in 12.65 s = 80.92 tok/s (prefill included)
+   legacy output-span aggregate: 81.03754905208574 tok/s (initial TTFT excluded; later admissions included)
+== per-class wall aggregate tokens/s (prefill included), greedy, max_tokens 256
+| class | c=4 |
+|---|---|
+| prose | 79.1 |

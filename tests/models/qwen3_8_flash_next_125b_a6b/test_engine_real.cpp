@@ -275,11 +275,13 @@ int exercise_concurrent_state(ninfer::Engine& engine,
 // Concurrent response replays must be admitted together. Each replay forks its cached
 // StateImage, which settles in the replay's first round; a queued request inspected while that
 // fork is open is blocked, and admission must be re-armed when the fork settles instead of when
-// a running request completes. Four distinct prompts are served once, then resubmitted at once
-// with reuse (the GB10 C4 repro: 2 of 4 were held for the others' whole lifetime). A held
-// request queues at least as long as the shortest request lives; co-admitted replays queue
-// only through the staggered admissions ahead of them (under 1 s against about 3 s of
-// generation on GB10), so the check is relative and needs no absolute time bound.
+// a running request completes. Four distinct chat prompts are served once, then resubmitted at
+// once with reuse (the GB10 C4 repro: 2 of 4 were held for the others' whole lifetime). The
+// prompts go through the message frontend: raw-token prompts carry no context-cache
+// opportunities, so they never replay a retained response. A held request queues at least as
+// long as the shortest request lives; co-admitted replays queue only through the staggered
+// admissions ahead of them (under 1 s against about 3 s of generation on GB10), so the check
+// is relative and needs no absolute time bound.
 int exercise_replay_admission(const char* artifact) {
     constexpr std::uint32_t kRequests               = 4;
     constexpr std::uint32_t kOutputs                = 64;
@@ -291,20 +293,35 @@ int exercise_replay_admission(const char* artifact) {
     options.context_cache.max_private_continuations = 2 * kRequests;
     ninfer::Engine engine(std::move(options));
 
-    // Distinct user text: one prompt token takes a value from elsewhere in the same prompt.
-    std::array<std::vector<ninfer::TokenId>, kRequests> prompts;
-    const std::array<ninfer::TokenId, kRequests> substitutes{20139, 2716, 3069, 12515};
+    const std::array<const char*, kRequests> questions{
+        "Why is the sky blue? Answer in one short sentence.",
+        "Why is the sea salty? Answer in one short sentence.",
+        "Why do leaves change color in autumn? Answer in one short sentence.",
+        "Why does ice float on water? Answer in one short sentence.",
+    };
+    const auto prompt = [&](std::uint32_t index) {
+        const auto message = [](ninfer::ChatRole role, std::string text) {
+            ninfer::ChatMessage out;
+            out.role = role;
+            out.parts.push_back(ninfer::MessagePart{
+                .kind = ninfer::MessagePartKind::Text, .text = std::move(text), .media = {}});
+            return out;
+        };
+        ninfer::PromptInput input;
+        input.messages.push_back(
+            message(ninfer::ChatRole::System, "You are a concise science tutor."));
+        input.messages.push_back(message(ninfer::ChatRole::User, questions[index]));
+        input.options.enable_thinking = false;
+        return engine.prepare(std::move(input));
+    };
     for (std::uint32_t i = 0; i < kRequests; ++i) {
-        prompts[i]    = canonical_prompt();
-        prompts[i][5] = substitutes[i];
-        (void)engine.generate(engine.prepare_tokens(prompts[i]), greedy_options(kOutputs, true));
+        (void)engine.generate(prompt(i), greedy_options(kOutputs, true));
     }
 
     std::vector<ninfer::GenerationHandle> handles;
     handles.reserve(kRequests);
-    for (const auto& prompt : prompts) {
-        handles.push_back(
-            engine.submit(engine.prepare_tokens(prompt), greedy_options(kOutputs, true)));
+    for (std::uint32_t i = 0; i < kRequests; ++i) {
+        handles.push_back(engine.submit(prompt(i), greedy_options(kOutputs, true)));
     }
     double longest_queue  = 0.0;
     double shortest_total = std::numeric_limits<double>::infinity();

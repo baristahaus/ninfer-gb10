@@ -102,6 +102,7 @@ struct RuntimeModelView {
     std::optional<EmptyDFlashWeights> dflash;
     std::optional<qwen3_8_flash_next::VisionWeights> vision;
     const artifact::MappedRange* ple_table = nullptr;
+    DType ple_table_dtype = DType::FP8_E4M3FN;
 };
 
 class LoadedModelData {

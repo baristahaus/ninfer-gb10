@@ -1,6 +1,7 @@
 #pragma once
 
 #include "artifact/reader.h"
+#include "core/tensor.h"
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -19,8 +20,8 @@ using PleIds = std::array<std::uint32_t, kPleHeads>;
 /** Compute the exact bigram/trigram row IDs for one complete token sequence. */
 void compute_ple_ids(std::span<const std::int32_t> tokens, std::span<PleIds> output);
 
-/** Gather the 16 FP8 head rows for each token into token-major contiguous storage. */
-void gather_ple_fp8(const artifact::MappedRange& table, std::span<const PleIds> ids,
-                    std::span<std::byte> output);
+/** Gather the 16 FP8 or BF16 head rows for each token into token-major storage. */
+void gather_ple(const artifact::MappedRange& table, DType dtype,
+                std::span<const PleIds> ids, std::span<std::byte> output);
 
 } // namespace ninfer::models::qwen3_8_flash_next

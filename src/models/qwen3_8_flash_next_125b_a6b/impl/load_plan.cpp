@@ -156,11 +156,12 @@ Reference bind_ple_table(artifact::Binder& binder, const std::string& name) {
     const auto& binding = binder.reader().directory().bindings.at(name);
     const artifact::Shape shape{320001536, 160};
     if (!binding.whole_object || binding.parts.size() != 1) {
-        throw artifact::ArtifactError("PLE requires a complete raw FP8 table");
+        throw artifact::ArtifactError("PLE requires a complete raw table");
     }
     const auto& object = binder.reader().directory().tensor(binding.parts.front().object);
     binder.reader().validate_object(binding.parts.front().object);
-    if (object.shape != shape || object.format != "fp8_e4m3fn" ||
+    if (object.shape != shape ||
+        (object.format != "fp8_e4m3fn" && object.format != "bf16") ||
         object.layout != "contiguous_le_v1") {
         throw artifact::ArtifactError("PLE table representation is invalid");
     }
@@ -168,6 +169,9 @@ Reference bind_ple_table(artifact::Binder& binder, const std::string& name) {
 }
 
 PlePlan bind_ple(artifact::Binder& binder, const std::string& prefix) {
+    const auto& binding = binder.reader().directory().bindings.at(
+        prefix + "ple_embedding.ngram_embedding.weight");
+    const auto& table = binder.reader().directory().tensor(binding.parts.front().object);
     PlePlan out{
         .convolution      = device(binder, prefix + "conv1d.weight", QType::BF16, {4, 10240}),
         .key_projection   = device(binder, prefix + "key_proj.weight", QType::BF16, {10240, 2560}),
@@ -175,8 +179,10 @@ PlePlan bind_ple(artifact::Binder& binder, const std::string& prefix) {
         .key_norm         = device(binder, prefix + "norm_key.weight", QType::BF16, {10240}),
         .query_norm       = device(binder, prefix + "norm_query.weight", QType::BF16, {10240}),
         .value_projection = device(binder, prefix + "value_proj.weight", QType::BF16, {2560, 2560}),
-        .embedding_scale =
-            device(binder, prefix + "ple_embedding.ngram_embedding.weight_scale", QType::BF16, {1}),
+        .embedding_scale = table.format == "fp8_e4m3fn"
+            ? std::make_optional(device(binder, prefix +
+                "ple_embedding.ngram_embedding.weight_scale", QType::BF16, {1}))
+            : std::nullopt,
     };
     out.embedding_table = bind_ple_table(binder, prefix + "ple_embedding.ngram_embedding.weight");
     return out;

@@ -156,7 +156,8 @@ ops::FlashNextPleWeights ple(const PlePlan& plan, const artifact::MaterializedAr
         .query_norm       = tensor(artifact, plan.query_norm, {10240}),
         .convolution_norm = tensor(artifact, plan.convolution_norm, {10240}),
         .convolution      = tensor(artifact, plan.convolution, {10240, 4}),
-        .embedding_scale  = tensor(artifact, plan.embedding_scale, {1}),
+        .embedding_scale  = plan.embedding_scale
+            ? tensor(artifact, *plan.embedding_scale, {1}) : Tensor{},
     };
 }
 
@@ -274,6 +275,8 @@ LoadedModelData::LoadedModelData(BindingPlan plan, artifact::MaterializedArtifac
     }
     if (plan.features.vision) { runtime.vision = vision(plan.vision, backing); }
     runtime.ple_table = &ple_mapping;
+    runtime.ple_table_dtype = plan.text_layers[1].ple.embedding_scale
+        ? DType::FP8_E4M3FN : DType::BF16;
 }
 
 } // namespace ninfer::models::qwen3_8_flash_next_125b_a6b

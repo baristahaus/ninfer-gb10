@@ -203,23 +203,20 @@ void validate_registered_processor(const fi::ProcessorOptions& options) {
 void validate_tokenizer_config(const FrontendResources& resources) {
     const Json tokenizer_config =
         parse_resource_json(resources.tokenizer_config_json, "tokenizer_config.json");
-    if (tokenizer_config.value("add_bos_token", true) ||
-        tokenizer_config.value("add_prefix_space", true)) {
+    if (tokenizer_config.value("add_bos_token", false) ||
+        tokenizer_config.value("add_prefix_space", false)) {
         throw std::invalid_argument(
-            "tokenizer_config.json does not match Qwen3.6 tokenizer prefix semantics");
+            "tokenizer_config.json does not match Flash-Next tokenizer prefix semantics");
     }
     if (!tokenizer_config.contains("pad_token") || !tokenizer_config.at("pad_token").is_string() ||
         tokenizer_config.at("pad_token").get<std::string>() != "<|endoftext|>") {
         throw std::invalid_argument(
             "tokenizer_config.json does not use the official <|endoftext|> pad token");
     }
-    if (!tokenizer_config.contains("chat_template") ||
-        !tokenizer_config.at("chat_template").is_string()) {
-        throw std::invalid_argument(
-            "tokenizer_config.json.chat_template must contain the loaded chat template");
-    }
-    if (tokenizer_config.at("chat_template").get_ref<const std::string&>() !=
-        resources.chat_template_jinja) {
+    if (tokenizer_config.contains("chat_template") &&
+        (!tokenizer_config.at("chat_template").is_string() ||
+         tokenizer_config.at("chat_template").get_ref<const std::string&>() !=
+             resources.chat_template_jinja)) {
         throw std::invalid_argument(
             "tokenizer_config.json.chat_template does not match frontend/chat_template.jinja");
     }
@@ -264,7 +261,7 @@ void validate_registered_tokenizer(const fi::Tokenizer& tokenizer) {
         if (encoded.size() != 1 || encoded.front() != expected ||
             !tokenizer.is_special_token(expected)) {
             throw std::invalid_argument(
-                "artifact tokenizer does not merge official tokenizer_config.json tokens");
+                "artifact tokenizer does not expose registered special tokens");
         }
     }
 }

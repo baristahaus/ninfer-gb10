@@ -12,7 +12,7 @@ import struct
 
 import torch
 
-from tools.artifact.file_io import discard_cached_pages
+from tools.artifact.file_io import IO_CHUNK_BYTES, discard_cached_pages
 from .logical import LogicalSource
 
 _DTYPES = {
@@ -146,12 +146,19 @@ class SafetensorsSource:
         count = (end - begin) * word_bytes
         fd = self._file(info.file)
         offset = info.offset + begin * word_bytes
-        raw = os.pread(fd, count, offset)
-        if len(raw) != count:
-            raise ValueError(f"{name}: short source read")
+        raw = bytearray(count)
+        view = memoryview(raw)
+        cursor = 0
+        while cursor < count:
+            read = os.preadv(
+                fd, [view[cursor : cursor + IO_CHUNK_BYTES]], offset + cursor
+            )
+            if read == 0:
+                raise ValueError(f"{name}: short source read")
+            cursor += read
         self.bytes_read += count
         discard_cached_pages(fd, offset, count)
-        return torch.frombuffer(bytearray(raw), dtype=dtype)
+        return torch.frombuffer(raw, dtype=dtype)
 
     def close(self) -> None:
         while self._fds:

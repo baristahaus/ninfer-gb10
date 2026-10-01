@@ -16,6 +16,7 @@ struct DeviceContext;
 
 namespace artifact {
 class Binder;
+class Reader;
 class MaterializedArtifact;
 struct MaterializationPlan;
 } // namespace artifact
@@ -26,7 +27,7 @@ struct Package;
 
 namespace detail {
 struct Variant;
-enum class WeightsProfile : std::uint8_t { Nvfp4 };
+enum class WeightsProfile : std::uint8_t { Nvfp4, Nvfp4Bf16Ple };
 using Frontend        = qwen3_8_flash_next::Frontend;
 using PreparedPrompt  = qwen3_8_flash_next::PreparedPrompt;
 using OutputSession   = qwen3_8_flash_next::OutputSession;
@@ -103,6 +104,7 @@ struct Package {
     using Program             = qwen3_8_flash_next::Program<detail::Variant>;
 
     [[nodiscard]] static ModelSamplingDefaults sampling_defaults(std::string_view model);
+    [[nodiscard]] static WeightsProfile weights_profile(const artifact::Reader&);
     [[nodiscard]] static LoadPlan plan_load(artifact::Binder&, const EngineOptions&,
                                             WeightsProfile);
     [[nodiscard]] static std::unique_ptr<LoadedModel>

@@ -232,6 +232,21 @@ TENSOR_SPECS = TEXT_TENSOR_SPECS + MTP_TENSOR_SPECS + VISION_TENSOR_SPECS
 OBJECT_SPECS: tuple[str | TensorSpec, ...] = RESOURCE_SPECS + TENSOR_SPECS
 
 
+def object_specs(ple_format: str = FP8) -> tuple[str | TensorSpec, ...]:
+    if ple_format == FP8:
+        return OBJECT_SPECS
+    if ple_format != BF16:
+        raise ValueError(f"unsupported PLE format: {ple_format}")
+    prefix = "model.language_model.layers.1.ple.ple_embedding.ngram_embedding."
+    return tuple(
+        direct(spec.id, spec.shape, BF16)
+        if isinstance(spec, TensorSpec) and spec.id == prefix + "weight"
+        else spec
+        for spec in OBJECT_SPECS
+        if not isinstance(spec, TensorSpec) or spec.id != prefix + "weight_scale"
+    )
+
+
 __all__ = [
     "EXPERTS",
     "FULL_ATTENTION_LAYERS",
@@ -240,6 +255,7 @@ __all__ = [
     "MODEL_ID",
     "MTP_TENSOR_SPECS",
     "OBJECT_SPECS",
+    "object_specs",
     "RESOURCE_SPECS",
     "TARGET_KEY",
     "TENSOR_SPECS",

@@ -169,8 +169,9 @@ ConstructedModel construct_flash_next(const EngineOptions& options, DeviceContex
                                     "--chat-template is unsupported");
     }
     artifact::Binder binder(reader);
-    auto plan        = Model::plan_load(binder, options, Model::WeightsProfile::Nvfp4);
-    auto planner     = Model::make_sequence_planner(device, options, Model::WeightsProfile::Nvfp4);
+    const auto profile = Model::weights_profile(reader);
+    auto plan        = Model::plan_load(binder, options, profile);
+    auto planner     = Model::make_sequence_planner(device, options, profile);
     const auto curve = planner.capacity_curve();
     const auto free  = current_free_device_bytes();
     if (plan.materialization().device_capacity_bytes > free) {
@@ -178,7 +179,8 @@ ConstructedModel construct_flash_next(const EngineOptions& options, DeviceContex
     }
     (void)resolve_kv_capacity(options.kv_capacity, curve,
                               free - plan.materialization().device_capacity_bytes);
-    std::set<std::string> formats{"fp8_e4m3fn"};
+    std::set<std::string> formats{
+        profile == Model::WeightsProfile::Nvfp4Bf16Ple ? "bf16" : "fp8_e4m3fn"};
     for (const auto& placement : plan.materialization().device_objects) {
         formats.insert(reader.directory().tensor(placement.object).format);
     }

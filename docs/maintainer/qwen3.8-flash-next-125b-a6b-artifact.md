@@ -1,6 +1,6 @@
 # Qwen3.8 Flash-Next 125B-A6B artifact reference
 
-This reference defines the sole registered storage profile for Qwen3.8 Flash-Next 125B-A6B. Generic
+This reference defines the registered NVFP4 storage profiles for Qwen3.8 Flash-Next 125B-A6B. Generic
 framing, layouts, and numeric formats remain governed by `artifact-container.md`,
 `storage-layouts.md`, and `tensor-formats.md`; model mathematics are defined in
 [`qwen3.8-flash-next-125b-a6b-model.md`](qwen3.8-flash-next-125b-a6b-model.md).
@@ -16,13 +16,16 @@ Only enabled components and their dependencies are bound and materialized.
 
 ## Inventory and formats
 
-The closed inventory contains 1,627 tensors and six raw resources. Main routed expert banks use
+The FP8-PLE inventory contains 1,627 tensors and six raw resources. Main routed expert banks use
 `nvfp4` with `expert_block_scale_k16_m128x4_v1`; their FP32 input divisors are per-expert `activation_divisor` auxiliaries on the
 `AllowA4` Use. Other projections consume A16 and require a declared activation policy. MTP expert banks, projections, HyperConnection weights, norms, embeddings, output head,
 and shared experts retain BF16. GDN control vectors and NVFP4 divisors use FP32. Vision retains the
 existing Q4/Q5/Q6 groupwise and W8 merger profiles.
 
-The 320,001,536-by-160 PLE embedding is one contiguous FP8 E4M3FN tensor plus a BF16 multiplier.
+The 320,001,536-by-160 PLE embedding is one contiguous FP8 E4M3FN tensor plus a BF16 multiplier
+for the RadixArk checkpoint. Swift 1.5 retains the same table as unscaled BF16 and has no multiplier;
+its artifact contains 1,626 tensors. The format determines the PLE gather stride, decode staging,
+and whether the Op dequantizes or consumes the gathered BF16 words directly.
 It is the artifact's only file-mapped tensor. The reader validates its descriptor and payload
 extent, then exposes read-only mappings spanning the v3 payload shards. A gathered row may cross a shard boundary. Demand paging and the operating-system file
 cache own residency; the generic materializer does not allocate host or device storage for the
@@ -36,7 +39,8 @@ the `frontend/` namespace.
 
 ## Conversion
 
-The converter accepts only the closed `RadixArk/Qwen3.8-Flash-Next-NVFP4` checkpoint allocation.
+The converter accepts the closed `RadixArk/Qwen3.8-Flash-Next-NVFP4` and
+`ukisai/Swift-1.5-Qwen3.8-Flash-Next-NVFP4` checkpoint allocations.
 It preserves BF16 and FP8 words, transposes channel-wise convolution kernels into the target layout,
 and rearranges ModelOpt expert-major NVFP4 codes and scales into NInfer's bank layout without
 dequantizing or requantizing them. It concatenates the 128 PLE shards directly into the one table
@@ -49,9 +53,23 @@ python3 -m tools.convert.qwen3_8_flash_next_125b_a6b.convert \
   --device cuda
 ```
 
-The output basename is fixed. Conversion rejects missing, unexpected, incorrectly shaped, or
+The output basename is fixed for each source profile. Conversion rejects missing, unexpected, incorrectly shaped, or
 incorrectly typed source tensors, mismatched paired gate/up scales, invalid divisors, incompatible
 model configuration, and incomplete frontend resources.
+
+Swift 1.5's source is an experts-only ModelOpt NVFP4 checkpoint with BF16 PLE shards. Convert it
+with the explicit source profile; the BF16 PLE words are concatenated without quantization:
+
+```bash
+python3 -m tools.convert.qwen3_8_flash_next_125b_a6b.convert \
+  --model /storage/ai/huggingface/main/ukisai/Swift-1.5-Qwen3.8-Flash-Next-NVFP4 \
+  --source-profile swift \
+  --out out/v3/swift_1_5_qwen3_8_flash_next_nvfp4.ninfer \
+  --device cpu
+```
+
+Keep the entry file and all `.part-NNNN` companions together. The runtime selects PLE storage
+from the artifact's table descriptor, not the checkpoint name.
 
 ## Upgrade an existing v2 artifact
 
@@ -68,7 +86,8 @@ the v3 Engine accepts only v3 artifacts.
 
 ## Runtime binding
 
-Text alone selects 1,260 device objects. MTP adds 31, Vision adds 333, and the optimized proposal
+Text alone selects 1,260 device objects for FP8 PLE or 1,259 for BF16 PLE because the latter has
+no scale tensor. MTP adds 31, Vision adds 333, and the optimized proposal
 adds two. Frontend resources are owned host bytes; PLE is a read-only mapped range whose lifetime
 is owned by the loaded model. PLE mappings are not counted as GPU uploads or materializer staging.
 The C++ loader checks logical shapes, formats, expert layout, activation permissions, selected

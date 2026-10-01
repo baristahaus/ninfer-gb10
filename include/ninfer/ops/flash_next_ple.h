@@ -26,10 +26,10 @@ struct FlashNextPleWeights {
 
 [[nodiscard]] std::size_t flash_next_ple_workspace_capacity_bytes(std::int32_t tokens);
 
-// Exact Qwen3.8 Flash-Next PLE transform. `gathered_fp8` contains the 16 selected
-// 160-element table rows flattened to [2560,T]. The table itself remains file-backed.
+// Exact Qwen3.8 Flash-Next PLE transform. `gathered` contains the 16 selected
+// 160-element FP8 or BF16 table rows flattened to [2560,T]. The table stays file-backed.
 // `conv_state` is BF16 [10240,9], oldest to newest, and is updated in place.
-void flash_next_ple(const Tensor& hyper, const Tensor& gathered_fp8,
+void flash_next_ple(const Tensor& hyper, const Tensor& gathered,
                     const FlashNextPleWeights& weights, Tensor& conv_state,
                     Tensor& destination, WorkspaceArena& workspace, cudaStream_t stream,
                     Bf16GemmContext* bf16_gemm = nullptr);
@@ -37,7 +37,7 @@ void flash_next_ple(const Tensor& hyper, const Tensor& gathered_fp8,
 // Exact-B selected-slot transition. Inputs and output are flattened [rows,W,B]; state is
 // [10240,9,Slots]. Each row reads source_slots[b] and publishes its final valid state to
 // destination_slots[b].
-void flash_next_ple_batch_update(const Tensor& hyper, const Tensor& gathered_fp8,
+void flash_next_ple_batch_update(const Tensor& hyper, const Tensor& gathered,
                                  const FlashNextPleWeights& weights, Tensor& states,
                                  const Tensor& valid_columns, const Tensor& source_slots,
                                  const Tensor& destination_slots, std::int32_t width,
@@ -45,7 +45,7 @@ void flash_next_ple_batch_update(const Tensor& hyper, const Tensor& gathered_fp8
                                  WorkspaceArena& workspace, cudaStream_t stream,
                                  Bf16GemmContext* bf16_gemm = nullptr);
 
-void flash_next_ple_replay_record(const Tensor& hyper, const Tensor& gathered_fp8,
+void flash_next_ple_replay_record(const Tensor& hyper, const Tensor& gathered,
                                   const FlashNextPleWeights& weights, const Tensor& states,
                                   const Tensor& valid_columns, const Tensor& source_slots,
                                   std::int32_t width, std::int32_t batch, Tensor& records,

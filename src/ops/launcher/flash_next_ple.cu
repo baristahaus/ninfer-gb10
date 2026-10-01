@@ -275,7 +275,8 @@ void validate(const Tensor& hyper, const Tensor& gathered, const FlashNextPleWei
               const Tensor& state, const Tensor& destination) {
     const int tokens = hyper.ne[1];
     if (tokens <= 0 || hyper.dtype != DType::BF16 || !hyper.is_contiguous() ||
-        hyper.ne[0] != kHyper || gathered.dtype != DType::FP8_E4M3FN ||
+        hyper.ne[0] != kHyper ||
+        (gathered.dtype != DType::FP8_E4M3FN && gathered.dtype != DType::BF16) ||
         !gathered.is_contiguous() || gathered.ne[0] != kHidden || gathered.ne[1] != tokens ||
         destination.dtype != DType::BF16 || !destination.is_contiguous() ||
         destination.ne[0] != kHyper || destination.ne[1] != tokens || state.dtype != DType::BF16 ||
@@ -287,10 +288,22 @@ void validate(const Tensor& hyper, const Tensor& gathered, const FlashNextPleWei
         weights.convolution_norm.dtype != DType::BF16 || weights.convolution_norm.ne[0] != kHyper ||
         weights.convolution.dtype != DType::BF16 || weights.convolution.ne[0] != kHyper ||
         weights.convolution.ne[1] != 4 || weights.convolution.ne[2] != 1 ||
-        weights.embedding_scale.dtype != DType::BF16 ||
-        weights.embedding_scale.numel() != 1) {
+        (gathered.dtype == DType::FP8_E4M3FN &&
+         (weights.embedding_scale.dtype != DType::BF16 ||
+          weights.embedding_scale.numel() != 1))) {
         throw std::invalid_argument("flash_next_ple: invalid exact geometry");
     }
+}
+
+Tensor embedding_from_table(const Tensor& gathered, const FlashNextPleWeights& weights,
+                            WorkspaceArena& workspace, cudaStream_t stream) {
+    if (gathered.dtype == DType::BF16) { return gathered; }
+    Tensor embedding = workspace.alloc(DType::BF16, {kHidden, gathered.ne[1]});
+    dequantize_embedding_kernel<<<grid_for(embedding.numel()), 256, 0, stream>>>(
+        static_cast<const std::uint8_t*>(gathered.data),
+        static_cast<const __nv_bfloat16*>(weights.embedding_scale.data),
+        static_cast<__nv_bfloat16*>(embedding.data), embedding.numel());
+    return embedding;
 }
 
 } // namespace
@@ -305,20 +318,16 @@ std::size_t flash_next_ple_workspace_capacity_bytes(std::int32_t tokens) {
     return static_cast<std::size_t>(elements * sizeof(__nv_bfloat16)) + 5 * 256;
 }
 
-void flash_next_ple(const Tensor& hyper, const Tensor& gathered_fp8,
+void flash_next_ple(const Tensor& hyper, const Tensor& gathered,
                     const FlashNextPleWeights& weights, Tensor& conv_state,
                     Tensor& destination, WorkspaceArena& workspace, cudaStream_t stream,
                     Bf16GemmContext* bf16_gemm) {
     NINFER_PERF_SCOPE("ple.prefill", hyper.ne[1], 1, 0, flash_next_work::ple(hyper.ne[1]));
 
-    validate(hyper, gathered_fp8, weights, conv_state, destination);
+    validate(hyper, gathered, weights, conv_state, destination);
     const int tokens = hyper.ne[1];
     auto scope = workspace.scope();
-    Tensor embedding = workspace.alloc(DType::BF16, {kHidden, tokens});
-    dequantize_embedding_kernel<<<grid_for(embedding.numel()), 256, 0, stream>>>(
-        static_cast<const std::uint8_t*>(gathered_fp8.data),
-        static_cast<const __nv_bfloat16*>(weights.embedding_scale.data),
-        static_cast<__nv_bfloat16*>(embedding.data), embedding.numel());
+    Tensor embedding = embedding_from_table(gathered, weights, workspace, stream);
     Tensor key = workspace.alloc(DType::BF16, {kHyper, tokens});
     Tensor value = workspace.alloc(DType::BF16, {kHidden, tokens});
     linear(embedding, weights.key_projection, key, stream, bf16_gemm);
@@ -344,7 +353,7 @@ void flash_next_ple(const Tensor& hyper, const Tensor& gathered_fp8,
     CUDA_CHECK(cudaGetLastError());
 }
 
-void flash_next_ple_batch_update(const Tensor& hyper, const Tensor& gathered_fp8,
+void flash_next_ple_batch_update(const Tensor& hyper, const Tensor& gathered,
                                  const FlashNextPleWeights& weights, Tensor& states,
                                  const Tensor& valid_columns, const Tensor& source_slots,
                                  const Tensor& destination_slots, std::int32_t width,
@@ -362,15 +371,11 @@ void flash_next_ple_batch_update(const Tensor& hyper, const Tensor& gathered_fp8
          (valid_columns.dtype != DType::I32 || valid_columns.ne[0] != batch))) {
         throw std::invalid_argument("flash_next_ple_batch_update: invalid state geometry");
     }
-    validate(hyper, gathered_fp8, weights,
+    validate(hyper, gathered, weights,
              states.slice(2, 0, 1).view({kHyper, kState}), destination);
     const int tokens = width * batch;
     auto scope = workspace.scope();
-    Tensor embedding = workspace.alloc(DType::BF16, {kHidden, tokens});
-    dequantize_embedding_kernel<<<grid_for(embedding.numel()), 256, 0, stream>>>(
-        static_cast<const std::uint8_t*>(gathered_fp8.data),
-        static_cast<const __nv_bfloat16*>(weights.embedding_scale.data),
-        static_cast<__nv_bfloat16*>(embedding.data), embedding.numel());
+    Tensor embedding = embedding_from_table(gathered, weights, workspace, stream);
     Tensor key = workspace.alloc(DType::BF16, {kHyper, tokens});
     Tensor value = workspace.alloc(DType::BF16, {kHidden, tokens});
     linear(embedding, weights.key_projection, key, stream, bf16_gemm);
@@ -401,7 +406,7 @@ void flash_next_ple_batch_update(const Tensor& hyper, const Tensor& gathered_fp8
     CUDA_CHECK(cudaGetLastError());
 }
 
-void flash_next_ple_replay_record(const Tensor& hyper, const Tensor& gathered_fp8,
+void flash_next_ple_replay_record(const Tensor& hyper, const Tensor& gathered,
                                   const FlashNextPleWeights& weights, const Tensor& states,
                                   const Tensor& valid_columns, const Tensor& source_slots,
                                   std::int32_t width, std::int32_t batch, Tensor& records,
@@ -418,15 +423,11 @@ void flash_next_ple_replay_record(const Tensor& hyper, const Tensor& gathered_fp
         records.ne[1] != width || records.ne[2] != batch) {
         throw std::invalid_argument("flash_next_ple_replay_record: invalid state geometry");
     }
-    validate(hyper, gathered_fp8, weights,
+    validate(hyper, gathered, weights,
              states.slice(2, 0, 1).view({kHyper, kState}), destination);
     const int tokens = width * batch;
     auto scope = workspace.scope();
-    Tensor embedding = workspace.alloc(DType::BF16, {kHidden, tokens});
-    dequantize_embedding_kernel<<<grid_for(embedding.numel()), 256, 0, stream>>>(
-        static_cast<const std::uint8_t*>(gathered_fp8.data),
-        static_cast<const __nv_bfloat16*>(weights.embedding_scale.data),
-        static_cast<__nv_bfloat16*>(embedding.data), embedding.numel());
+    Tensor embedding = embedding_from_table(gathered, weights, workspace, stream);
     Tensor key = workspace.alloc(DType::BF16, {kHyper, tokens});
     Tensor value = workspace.alloc(DType::BF16, {kHidden, tokens});
     // Replay must produce the same represented transition as sequential ordinary decode.

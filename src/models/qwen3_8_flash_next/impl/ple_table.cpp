@@ -71,15 +71,20 @@ void compute_ple_ids(std::span<const std::int32_t> tokens, std::span<PleIds> out
     }
 }
 
-void gather_ple_fp8(const artifact::MappedRange& table, std::span<const PleIds> ids,
-                    std::span<std::byte> output) {
+void gather_ple(const artifact::MappedRange& table, DType dtype,
+                std::span<const PleIds> ids, std::span<std::byte> output) {
     NINFER_PERF_SCOPE("ninfer.host/1|ple.gather");
 
-    constexpr std::uint64_t table_bytes = kPleRows * kPleHeadWidth;
+    if (dtype != DType::FP8_E4M3FN && dtype != DType::BF16) {
+        throw std::invalid_argument("PLE table must be FP8 or BF16");
+    }
+    const std::uint64_t element_bytes = dtype == DType::BF16 ? 2U : 1U;
+    const std::uint64_t table_bytes = kPleRows * kPleHeadWidth * element_bytes;
     if (table.size() != table_bytes) {
         throw std::invalid_argument("PLE table has the wrong byte length");
     }
-    const std::uint64_t required = static_cast<std::uint64_t>(ids.size()) * kPleEmbeddingDim;
+    const std::uint64_t required =
+        static_cast<std::uint64_t>(ids.size()) * kPleEmbeddingDim * element_bytes;
     if (output.size() != required) {
         throw std::invalid_argument("PLE gathered output has the wrong byte length");
     }
@@ -87,10 +92,11 @@ void gather_ple_fp8(const artifact::MappedRange& table, std::span<const PleIds> 
         for (std::size_t head = 0; head < kPleHeads; ++head) {
             const std::uint64_t row = ids[token][head];
             if (row >= kPleRows) { throw std::out_of_range("PLE row ID is outside the table"); }
-            const std::uint64_t source = row * kPleHeadWidth;
+            const std::uint64_t source = row * kPleHeadWidth * element_bytes;
             const std::uint64_t destination =
-                static_cast<std::uint64_t>(token) * kPleEmbeddingDim + head * kPleHeadWidth;
-            table.copy(source, output.subspan(destination, kPleHeadWidth));
+                (static_cast<std::uint64_t>(token) * kPleEmbeddingDim + head * kPleHeadWidth) *
+                element_bytes;
+            table.copy(source, output.subspan(destination, kPleHeadWidth * element_bytes));
         }
     }
 }

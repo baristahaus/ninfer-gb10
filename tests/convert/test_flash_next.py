@@ -21,6 +21,21 @@ def test_raw_fp8_words():
     assert decode_direct(words, "fp8_e4m3fn", (256,)).view(torch.uint8).tolist() == list(range(256))
 
 
+def test_swift_bf16_ple_inventory():
+    specs = inventory.object_specs(inventory.BF16)
+    names = {spec if isinstance(spec, str) else spec.id for spec in specs}
+    table = next(spec for spec in specs if isinstance(spec, TensorSpec)
+                 and spec.id == convert._PLE_TABLE)
+    assert table.format == inventory.BF16
+    directory = descriptor.describe([o.to_json() for o in plan_objects([
+        spec for spec in specs if isinstance(spec, TensorSpec)])])
+    assert all(use["parameter"] != table.id for use in directory["uses"])
+    assert convert._PLE_PREFIX + "weight_scale" not in names
+    signatures = convert._expected_source_signatures(inventory.BF16)
+    assert signatures[convert._PLE_SHARDS[0]] == ((2_500_012, 160), "BF16")
+    assert convert._PLE_PREFIX + "weight_scale" not in signatures
+
+
 @pytest.mark.parametrize("role,n,k", [("gate_up", 1280, 2560), ("down", 2560, 640)])
 def test_expert_bank_exact_source_words(tmp_path, monkeypatch, role, n, k):
     # Two experts at real projection dimensions expose bank offsets and gate/up concatenation.

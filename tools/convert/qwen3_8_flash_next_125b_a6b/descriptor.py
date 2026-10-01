@@ -26,6 +26,7 @@ def describe(objects):
                 raise ValueError(f"{name}: missing activation divisors")
             uses.append({"parameter": name, "input": name + "/input", "activation_policy": "AllowA4",
                          "auxiliaries": {"activation_divisor": {"object": auxiliary}}})
-        elif len(obj["shape"]) >= 2 and obj["format"] != "fp8_e4m3fn":
+        elif (len(obj["shape"]) >= 2 and obj["format"] != "fp8_e4m3fn"
+              and name != "model.language_model.layers.1.ple.ple_embedding.ngram_embedding.weight"):
             uses.append({"parameter": name, "input": name + "/input", "activation_policy": "A16Only"})
     return {"components": components, "bindings": bindings, "uses": uses}

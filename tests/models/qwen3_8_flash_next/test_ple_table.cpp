@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
+#include <memory>
 #include <stdexcept>
 #include <vector>
 
@@ -35,6 +36,36 @@ int main() {
              280586077, 317339594},
         }};
         if (ids != expected) { throw std::runtime_error("PLE n-gram IDs differ from oracle"); }
+        for (const ninfer::DType dtype : {ninfer::DType::FP8_E4M3FN, ninfer::DType::BF16}) {
+            const std::size_t row_bytes = 160U * ninfer::dtype_size(dtype);
+            const std::uint64_t table_bytes = q38::kPleRows * row_bytes;
+            auto first = std::make_shared<std::vector<std::byte>>(2 * row_bytes);
+            auto last = std::make_shared<std::vector<std::byte>>(2 * row_bytes);
+            for (std::size_t offset = 0; offset < row_bytes; ++offset) {
+                (*first)[offset] = std::byte(offset & 255U);
+                (*last)[row_bytes + offset] = std::byte((offset * 3U + 1U) & 255U);
+            }
+            ninfer::artifact::MappedRange table;
+            table.segments = {
+                {std::shared_ptr<const std::byte>(first, first->data()), 0, 2 * row_bytes},
+                {std::shared_ptr<const std::byte>(last, last->data()),
+                 table_bytes - 2 * row_bytes, 2 * row_bytes},
+            };
+            std::array<q38::PleIds, 2> selected{};
+            selected[1].fill(static_cast<std::uint32_t>(q38::kPleRows - 1));
+            std::vector<std::byte> result(2 * q38::kPleEmbeddingDim *
+                                          ninfer::dtype_size(dtype));
+            q38::gather_ple(table, dtype, selected, result);
+            for (std::size_t head = 0; head < q38::kPleHeads; ++head) {
+                for (std::size_t offset = 0; offset < row_bytes; ++offset) {
+                    if (result[head * row_bytes + offset] != (*first)[offset] ||
+                        result[(q38::kPleHeads + head) * row_bytes + offset] !=
+                            (*last)[row_bytes + offset]) {
+                        throw std::runtime_error("PLE gathered row differs from source bytes");
+                    }
+                }
+            }
+        }
         return 0;
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';

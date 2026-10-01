@@ -49,9 +49,22 @@ ModelSamplingDefaults Package::sampling_defaults(std::string_view model) {
     return kDefaults;
 }
 
+Package::WeightsProfile Package::weights_profile(const artifact::Reader& reader) {
+    const auto& binding = reader.directory().bindings.at(kPleTableName);
+    if (!binding.whole_object || binding.parts.size() != 1) {
+        throw artifact::ArtifactError("PLE requires a complete raw table");
+    }
+    const auto& table = reader.directory().tensor(binding.parts.front().object);
+    if (table.format == "fp8_e4m3fn") { return WeightsProfile::Nvfp4; }
+    if (table.format == "bf16") { return WeightsProfile::Nvfp4Bf16Ple; }
+    throw artifact::ArtifactError("unsupported PLE table format");
+}
+
 Package::LoadPlan Package::plan_load(artifact::Binder& binder, const EngineOptions& options,
                                      WeightsProfile profile) {
-    if (profile != WeightsProfile::Nvfp4) { throw std::logic_error("invalid Flash-Next profile"); }
+    if (profile != weights_profile(binder.reader())) {
+        throw std::logic_error("invalid Flash-Next profile");
+    }
     return LoadPlan(std::make_unique<LoadPlan::Impl>(
         profile, plan_artifact(binder, qwen3_8_flash_next::startup_features(options))));
 }

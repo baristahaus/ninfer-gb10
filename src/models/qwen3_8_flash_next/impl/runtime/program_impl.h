@@ -11997,18 +11997,21 @@ ProgramImplCore::decode_ordinary_batch(std::span<const std::uint32_t> lanes,
                       sequence.ledger.end(), suffix.begin());
             std::vector<qwen3_8_flash_next::PleIds> ids(suffix_size);
             qwen3_8_flash_next::compute_ple_ids(suffix, ids);
-            auto* ple_bytes = static_cast<std::byte*>(flash_ple_host->data()) + row * 2560U;
-            qwen3_8_flash_next::gather_ple_fp8(
-                *model.ple_table,
+            const std::size_t ple_bytes_per_token = 2560U * dtype_size(model.ple_table_dtype);
+            auto* ple_bytes = static_cast<std::byte*>(flash_ple_host->data()) +
+                              row * ple_bytes_per_token;
+            qwen3_8_flash_next::gather_ple(
+                *model.ple_table, model.ple_table_dtype,
                 std::span<const qwen3_8_flash_next::PleIds>(ids).subspan(suffix_size - 1U, 1U),
-                std::span<std::byte>(ple_bytes, 2560U));
+                std::span<std::byte>(ple_bytes, ple_bytes_per_token));
 #endif
             materialize_sequence_kv(sequence, frontier + 1, 0);
         }
 
 #ifdef NINFER_QWEN38_FLASH_NEXT
         CUDA_CHECK(cudaMemcpyAsync(flash_decode_ple->data, flash_ple_host->data(),
-                                   lanes.size() * 2560U, cudaMemcpyHostToDevice, device.stream));
+                                   lanes.size() * 2560U * dtype_size(model.ple_table_dtype),
+                                   cudaMemcpyHostToDevice, device.stream));
 #endif
 
         schedule::OrdinaryBatchContext schedule_state{
@@ -12184,12 +12187,14 @@ ProgramImplCore::decode_mtp_batch(std::span<const std::uint32_t> lanes,
             }
             std::vector<qwen3_8_flash_next::PleIds> ple_ids(ple_tokens.size());
             qwen3_8_flash_next::compute_ple_ids(ple_tokens, ple_ids);
-            auto* ple_bytes = static_cast<std::byte*>(flash_ple_host->data()) + row * width * 2560U;
-            qwen3_8_flash_next::gather_ple_fp8(
-                *model.ple_table,
+            const std::size_t ple_bytes_per_token = 2560U * dtype_size(model.ple_table_dtype);
+            auto* ple_bytes = static_cast<std::byte*>(flash_ple_host->data()) +
+                              row * width * ple_bytes_per_token;
+            qwen3_8_flash_next::gather_ple(
+                *model.ple_table, model.ple_table_dtype,
                 std::span<const qwen3_8_flash_next::PleIds>(ple_ids).subspan(history_size - 1U,
                                                                              width),
-                std::span<std::byte>(ple_bytes, width * 2560U));
+                std::span<std::byte>(ple_bytes, width * ple_bytes_per_token));
 #endif
             materialize_sequence_kv(sequence, frontier + extent + 1,
                                     std::min(capacity, frontier + extent + draft_window));
@@ -12197,7 +12202,8 @@ ProgramImplCore::decode_mtp_batch(std::span<const std::uint32_t> lanes,
 
 #ifdef NINFER_QWEN38_FLASH_NEXT
         CUDA_CHECK(cudaMemcpyAsync(flash_decode_ple->data, flash_ple_host->data(),
-                                   lanes.size() * width * 2560U, cudaMemcpyHostToDevice,
+                                   lanes.size() * width * 2560U * dtype_size(model.ple_table_dtype),
+                                   cudaMemcpyHostToDevice,
                                    device.stream));
 #endif
 

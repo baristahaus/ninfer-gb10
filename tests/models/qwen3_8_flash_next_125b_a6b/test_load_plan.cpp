@@ -14,16 +14,23 @@ int main() {
         ninfer::artifact::Reader reader{std::filesystem::path(path)};
         ninfer::artifact::Binder binder(reader);
         const auto plan = ninfer::models::qwen3_8_flash_next_125b_a6b::plan_artifact(binder);
-        if (plan.bindings.ple_mapping.size() != 320001536ULL * 160) {
+        const auto& table_binding = reader.directory().bindings.at(
+            ninfer::models::qwen3_8_flash_next_125b_a6b::kPleTableName);
+        const auto& table = reader.directory().tensor(table_binding.parts.front().object);
+        const std::uint64_t ple_bytes = 320001536ULL * 160 *
+            (table.format == "bf16" ? 2ULL : 1ULL);
+        if (plan.bindings.ple_mapping.size() != ple_bytes) {
             throw std::runtime_error("PLE table mapping has the wrong extent");
         }
-        if (plan.materialization.device_objects.size() != 1260) {
+        const std::size_t expected_text_objects = table.format == "bf16" ? 1259 : 1260;
+        if (plan.materialization.device_objects.size() != expected_text_objects) {
             throw std::runtime_error("MTP0/Vision-off load plan uploaded optional tensors");
         }
         ninfer::artifact::Binder mtp_binder(reader);
         const auto mtp_plan = ninfer::models::qwen3_8_flash_next_125b_a6b::plan_artifact(
             mtp_binder, {.speculative = ninfer::SpeculativeBackend::Mtp});
-        if (mtp_plan.materialization.device_objects.size() != 1291 ||
+        const std::size_t expected_mtp_objects = expected_text_objects + 31;
+        if (mtp_plan.materialization.device_objects.size() != expected_mtp_objects ||
             mtp_plan.materialization.device_capacity_bytes <=
                 plan.materialization.device_capacity_bytes) {
             throw std::runtime_error("MTP3 load plan did not upload exactly the draft tensors");
@@ -31,7 +38,7 @@ int main() {
         ninfer::artifact::Binder full_binder(reader);
         const auto full_plan = ninfer::models::qwen3_8_flash_next_125b_a6b::plan_artifact(
             full_binder, {.vision = true, .speculative = ninfer::SpeculativeBackend::Mtp});
-        if (full_plan.materialization.device_objects.size() != 1624 ||
+        if (full_plan.materialization.device_objects.size() != expected_mtp_objects + 333 ||
             full_plan.materialization.device_capacity_bytes <=
                 mtp_plan.materialization.device_capacity_bytes) {
             throw std::runtime_error("Vision load plan did not upload exactly the Vision tensors");

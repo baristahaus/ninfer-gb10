@@ -258,7 +258,8 @@ PersistentLayout persistent_layout(const SequencePlanImpl& plan) {
                            "Flash-Next prefill predictor hidden");
         }
         out.flash_decode_ple = add_tensor(
-            builder, DType::FP8_E4M3FN,
+            builder, plan.weights_profile == WeightsProfile::Nvfp4Bf16Ple
+                         ? DType::BF16 : DType::FP8_E4M3FN,
             {TextConfig::hidden,
              static_cast<std::int32_t>(std::max<std::uint32_t>(1U, plan.draft_window + 1U)),
              static_cast<std::int32_t>(plan.max_concurrency)},
@@ -320,7 +321,10 @@ WorkspacePlan build_workspace_plan(const SequencePlanImpl& plan) {
         (void)workspace_recipe::text_prefill_roots<TextConfig>(
             layout, tokens, plan.features.vision ? 3 : 0, plan.features.vision ? tokens : 0);
         if constexpr (Variant::flash_next) {
-            matrix(layout, DType::FP8_E4M3FN, TextConfig::hidden, tokens);
+            matrix(layout,
+                   plan.weights_profile == WeightsProfile::Nvfp4Bf16Ple
+                       ? DType::BF16 : DType::FP8_E4M3FN,
+                   TextConfig::hidden, tokens);
         }
     };
     const auto attention_stage = [&](WorkspaceLayoutBuilder& layout, std::int32_t first,

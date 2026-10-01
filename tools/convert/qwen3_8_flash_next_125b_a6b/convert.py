@@ -46,9 +46,13 @@ def check_members(label, values, expected):
             raise ValueError(f"{label}.{key}: expected {value!r}, got {values.get(key)!r}")
 
 
-OUTPUT_BASENAME = "qwen3_8_flash_next_125b_a6b_nvfp4.ninfer"
+SOURCE_PROFILES = {
+    "radixark": ("RadixArk/Qwen3.8-Flash-Next-NVFP4",
+                  "qwen3_8_flash_next_125b_a6b_nvfp4.ninfer", inventory.FP8),
+    "swift": ("ukisai/Swift-1.5-Qwen3.8-Flash-Next-NVFP4",
+              "swift_1_5_qwen3_8_flash_next_nvfp4.ninfer", inventory.BF16),
+}
 RECIPE_ID = "qwen3_8_flash_next_125b_a6b_nvfp4-v3"
-SOURCE_REPOSITORY = "RadixArk/Qwen3.8-Flash-Next-NVFP4"
 
 _PLE_PREFIX = (
     "model.language_model.layers.1.ple.ple_embedding.ngram_embedding."
@@ -85,7 +89,7 @@ def _bank_name(layer: int, role: str) -> str:
     return f"model.language_model.layers.{layer}.mlp.experts.{role}"
 
 
-def _direct_source_specs() -> tuple[inventory.TensorSpec, ...]:
+def _direct_source_specs(ple_format: str = inventory.FP8) -> tuple[inventory.TensorSpec, ...]:
     special = {
         _bank_name(layer, role)
         for layer in inventory.LAYERS
@@ -98,7 +102,8 @@ def _direct_source_specs() -> tuple[inventory.TensorSpec, ...]:
     }
     return tuple(
         spec
-        for spec in inventory.TENSOR_SPECS
+        for spec in inventory.object_specs(ple_format)
+        if isinstance(spec, inventory.TensorSpec)
         if spec.id not in special
         and spec.id != _PLE_TABLE
         and spec.id not in (_DRAFT_HEAD, _DRAFT_HEAD_IDS)
@@ -106,9 +111,11 @@ def _direct_source_specs() -> tuple[inventory.TensorSpec, ...]:
     )
 
 
-def _expected_source_signatures() -> dict[str, tuple[tuple[int, ...], str]]:
+def _expected_source_signatures(
+    ple_format: str = inventory.FP8,
+) -> dict[str, tuple[tuple[int, ...], str]]:
     expected = {
-        spec.id: (spec.shape, "BF16") for spec in _direct_source_specs()
+        spec.id: (spec.shape, "BF16") for spec in _direct_source_specs(ple_format)
     }
     expected.update(
         vision.signatures()
@@ -116,7 +123,8 @@ def _expected_source_signatures() -> dict[str, tuple[tuple[int, ...], str]]:
     for name in _CONVOLUTION_NAMES:
         expected[name] = ((10240, 1, 4), "BF16")
     for name in _PLE_SHARDS:
-        expected[name] = ((2_500_012, 160), "F8_E4M3")
+        expected[name] = ((2_500_012, 160),
+                          "BF16" if ple_format == inventory.BF16 else "F8_E4M3")
     for layer in inventory.LAYERS:
         for expert in range(inventory.EXPERTS):
             for projection, n, k in (
@@ -143,7 +151,7 @@ def _expected_source_signatures() -> dict[str, tuple[tuple[int, ...], str]]:
     return expected
 
 
-def _validate_config(model_dir: Path) -> dict[str, object]:
+def _validate_config(model_dir: Path, ple_format: str = inventory.FP8) -> dict[str, object]:
     config = json.loads((model_dir / "config.json").read_text())
     text = config.get("text_config")
     vision = config.get("vision_config")
@@ -179,10 +187,16 @@ def _validate_config(model_dir: Path) -> dict[str, object]:
             "ngram_size": 3,
             "heads_per_ngram": 8,
             "split_ngram_parts": 128,
-            "ple_embedding_dtype": "float8_e4m3fn",
             "mtp_num_hidden_layers": 1,
         },
     )
+    if ple_format == inventory.FP8:
+        check_members("text_config", text, {"ple_embedding_dtype": "float8_e4m3fn"})
+    elif ple_format == inventory.BF16:
+        if text.get("ple_embedding_dtype") not in (None, "bfloat16"):
+            raise ValueError("Swift PLE must be BF16")
+    else:
+        raise ValueError(f"unsupported PLE format: {ple_format}")
     check_members(
         "vision_config",
         vision,
@@ -211,8 +225,9 @@ def _validate_config(model_dir: Path) -> dict[str, object]:
 
 def _validate_source(
     reader: SafetensorsSource,
+    ple_format: str = inventory.FP8,
 ) -> tuple[dict[str, TensorInfo], dict[str, int]]:
-    expected = _expected_source_signatures()
+    expected = _expected_source_signatures(ple_format)
     actual_names = frozenset(reader.weight_map)
     expected_names = frozenset(expected)
     unexpected = actual_names - expected_names - _PLE_METADATA
@@ -319,12 +334,13 @@ def _input_divisors(reader: SafetensorsSource, layer: int, role: str) -> bytes:
     return encode_direct(values, inventory.FP32)
 
 
-def _ple_payload(reader: SafetensorsSource) -> Iterator[bytes]:
+def _ple_payload(reader: SafetensorsSource, ple_format: str) -> Iterator[bytes]:
     for name in _PLE_SHARDS:
         tensor = read_tensor(reader, name)
-        if tensor.dtype != torch.float8_e4m3fn or tuple(tensor.shape) != (2_500_012, 160):
+        dtype = torch.bfloat16 if ple_format == inventory.BF16 else torch.float8_e4m3fn
+        if tensor.dtype != dtype or tuple(tensor.shape) != (2_500_012, 160):
             raise ValueError(f"{name}: PLE shard signature mismatch")
-        yield encode_direct(tensor, inventory.FP8)
+        yield encode_direct(tensor, ple_format)
 
 
 def _payload(
@@ -332,6 +348,7 @@ def _payload(
     reader: SafetensorsSource,
     device: torch.device,
     draft: draft_head.DraftHeadContext,
+    ple_format: str = inventory.FP8,
 ) -> bytes | Iterable[bytes]:
     if spec.id == _DRAFT_HEAD_IDS:
         return encode_direct(draft_head.materialize_draft_head_token_ids(draft), inventory.I32)
@@ -340,7 +357,7 @@ def _payload(
         selected = draft_head.materialize_draft_head(full_head, draft)
         return encode_tensor_payload(selected, spec, device)
     if spec.id == _PLE_TABLE:
-        return _ple_payload(reader)
+        return _ple_payload(reader, ple_format)
     for layer in inventory.LAYERS:
         prefix = _bank_name(layer, "")
         if spec.id == prefix + "gate_up":
@@ -370,22 +387,26 @@ def convert(
     out_path: str | Path,
     *,
     device: str | torch.device = "cuda",
+    source_profile: str = "radixark",
 ) -> Path:
     source = Path(model_dir)
     output = Path(out_path)
-    if output.name != OUTPUT_BASENAME:
-        raise ValueError(f"output basename must be {OUTPUT_BASENAME!r}")
+    source_repository, output_basename, ple_format = SOURCE_PROFILES[source_profile]
+    if output.name != output_basename:
+        raise ValueError(f"output basename must be {output_basename!r}")
     started = time.perf_counter()
     resolved_device = pick_device(device)
-    config_summary = _validate_config(source)
+    config_summary = _validate_config(source, ple_format)
     resource_map = {name: (source / name.removeprefix("frontend/")).read_bytes()
                     for name in inventory.RESOURCE_SPECS}
-    specs = [ResourceSpec(name, len(data)) for name, data in resource_map.items()] + list(inventory.TENSOR_SPECS)
+    object_specs = inventory.object_specs(ple_format)
+    specs = [ResourceSpec(name, len(data)) for name, data in resource_map.items()] + [
+        spec for spec in object_specs if isinstance(spec, inventory.TensorSpec)]
     objects = plan_objects(specs)
     description = descriptor.describe([o.to_json() for o in objects])
 
     with SafetensorsSource(source) as reader:
-        _, dtype_counts = _validate_source(reader)
+        _, dtype_counts = _validate_source(reader, ple_format)
         draft = draft_head.compute_shortlist(
             Path(__file__).resolve().parents[3] / draft_head.DEFAULT_RANKING,
             source,
@@ -395,17 +416,18 @@ def convert(
         output.parent.mkdir(parents=True, exist_ok=True)
         with ArtifactWriter(
             output,
-            specs, **description, metadata={"name": inventory.MODEL_ID},
-            provenance={"source": SOURCE_REPOSITORY, "recipe": RECIPE_ID},
+            specs, **description,
+            metadata={"name": source_repository if source_profile == "swift" else inventory.MODEL_ID},
+            provenance={"source": source_repository, "recipe": RECIPE_ID + "-" + source_profile},
         ) as writer:
-            for index, spec in enumerate(inventory.OBJECT_SPECS, start=1):
+            for index, spec in enumerate(object_specs, start=1):
                 payload = (
                     resource_map[spec]
                     if isinstance(spec, str)
-                    else _payload(spec, reader, resolved_device, draft)
+                    else _payload(spec, reader, resolved_device, draft, ple_format)
                 )
                 writer.write_object(spec if isinstance(spec, str) else spec.id, payload)
-                print(f"[{index}/{len(inventory.OBJECT_SPECS)}] {spec if isinstance(spec, str) else spec.id}", flush=True)
+                print(f"[{index}/{len(object_specs)}] {spec if isinstance(spec, str) else spec.id}", flush=True)
 
     with Artifact(output) as artifact:
         file_bytes = artifact.file_bytes
@@ -414,7 +436,7 @@ def convert(
         "identity": {"model_id": inventory.MODEL_ID, "weights_id": inventory.WEIGHTS_ID},
         "target_key": inventory.TARGET_KEY,
         "recipe_id": RECIPE_ID,
-        "source": {"repository": SOURCE_REPOSITORY, "path": str(source.resolve())},
+        "source": {"repository": source_repository, "path": str(source.resolve())},
         "output": str(output.resolve()),
         "config_summary": config_summary,
         "source_dtype_counts": dtype_counts,
@@ -423,6 +445,7 @@ def convert(
         "elapsed_seconds": elapsed,
         "conversion_device": str(resolved_device),
         "ple_materialization": "file-backed-read-only",
+        "ple_format": ple_format,
         "proposal_shortlist": "frequency-rank-plus-lm-head-norm-rank",
     }
     report_path = Path(str(output) + ".conversion.json")
@@ -436,8 +459,9 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--model", required=True, type=Path)
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--device", default="cuda")
+    parser.add_argument("--source-profile", choices=SOURCE_PROFILES, default="radixark")
     args = parser.parse_args(argv)
-    convert(args.model, args.out, device=args.device)
+    convert(args.model, args.out, device=args.device, source_profile=args.source_profile)
 
 
 if __name__ == "__main__":

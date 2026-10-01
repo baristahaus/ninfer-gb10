@@ -5,6 +5,7 @@
 
 #include <array>
 #include <cstddef>
+#include <optional>
 
 namespace ninfer::models::qwen3_8_flash_next_125b_a6b {
 
@@ -66,7 +67,7 @@ struct PlePlan {
     artifact::ParameterReference key_norm;
     artifact::ParameterReference query_norm;
     artifact::ParameterReference value_projection;
-    artifact::ParameterReference embedding_scale;
+    std::optional<artifact::ParameterReference> embedding_scale;
     artifact::ParameterReference embedding_table;
 };
 

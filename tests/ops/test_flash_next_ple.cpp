@@ -56,7 +56,7 @@ double represented_bf16(double value) {
     return bf16_to_f32(f32_to_bf16(static_cast<float>(value)));
 }
 
-int run() {
+int run(DType ple_dtype) {
     std::vector<float> hyper(kHyper * kTokens), key_norm(kHyper), query_norm(kHyper), conv_norm(kHyper), state(kHyper * kState);
     fill_uniform(hyper, 1701, -0.5F, 0.5F);
     fill_uniform(key_norm, 1702, -0.08F, 0.08F);
@@ -74,7 +74,16 @@ int run() {
     for (std::size_t i = 0; i < gathered.size(); ++i) { gathered[i] = fp8_values[i % 6]; }
     constexpr float embedding_scale = 0.25F;
     std::vector<double> embedding(gathered.size());
-    for (std::size_t i = 0; i < gathered.size(); ++i) { embedding[i] = fp8_e4m3(gathered[i]) * embedding_scale; }
+    std::vector<std::uint16_t> gathered_bf16(gathered.size());
+    for (std::size_t i = 0; i < gathered.size(); ++i) {
+        if (ple_dtype == DType::BF16) {
+            const double value = (static_cast<int>(i % 13) - 6) * 0.03125 + 0.00390625;
+            gathered_bf16[i] = f32_to_bf16(static_cast<float>(value));
+            embedding[i] = bf16_to_f32(gathered_bf16[i]);
+        } else {
+            embedding[i] = fp8_e4m3(gathered[i]) * embedding_scale;
+        }
+    }
 
     std::vector<float> key_weight(static_cast<std::size_t>(kHyper) * kHidden, 0.0F);
     std::vector<float> value_weight(static_cast<std::size_t>(kHidden) * kHidden, 0.0F);
@@ -146,7 +155,8 @@ int run() {
     }
 
     DeviceBuffer d_hyper = to_device(encode(hyper));
-    DeviceBuffer d_gathered = to_device(gathered);
+    DeviceBuffer d_gathered = ple_dtype == DType::BF16
+        ? to_device(gathered_bf16) : to_device(gathered);
     DeviceBuffer d_key_weight = to_device(encode(key_weight));
     DeviceBuffer d_value_weight = to_device(encode(value_weight));
     DeviceBuffer d_key_norm = to_device(encode(key_norm));
@@ -157,7 +167,7 @@ int run() {
     DeviceBuffer d_state = to_device(encode(state));
     GuardedDeviceBuffer d_output(expected.size() * sizeof(std::uint16_t));
     Tensor hyper_tensor(d_hyper.p, DType::BF16, {kHyper, kTokens});
-    Tensor gathered_tensor(d_gathered.p, DType::FP8_E4M3FN, {kHidden, kTokens});
+    Tensor gathered_tensor(d_gathered.p, ple_dtype, {kHidden, kTokens});
     Tensor state_tensor(d_state.p, DType::BF16, {kHyper, kState});
     Tensor output_tensor(d_output.data(), DType::BF16, {kHyper, kTokens});
     ops::FlashNextPleWeights weights{
@@ -167,7 +177,8 @@ int run() {
         .query_norm = Tensor(d_query_norm.p, DType::BF16, {kHyper}),
         .convolution_norm = Tensor(d_conv_norm.p, DType::BF16, {kHyper}),
         .convolution = Tensor(d_conv_weight.p, DType::BF16, {kHyper, 4}),
-        .embedding_scale = Tensor(d_scale.p, DType::BF16, {1}),
+        .embedding_scale = ple_dtype == DType::BF16
+            ? Tensor{} : Tensor(d_scale.p, DType::BF16, {1}),
     };
     WorkspaceArena workspace(ops::flash_next_ple_workspace_capacity_bytes(kTokens));
     ops::flash_next_ple(hyper_tensor, gathered_tensor, weights, state_tensor, output_tensor, workspace, nullptr);
@@ -183,7 +194,7 @@ int run() {
 int main() {
     if (ninfer::test::cuda_unavailable()) { return 77; }
     try {
-        const int failures = run();
+        const int failures = run(ninfer::DType::FP8_E4M3FN) + run(ninfer::DType::BF16);
         std::cout << (failures == 0 ? "OK" : "FAIL") << " Flash-Next PLE\n";
         return failures == 0 ? 0 : 1;
     } catch (const std::exception& error) {

@@ -16,7 +16,6 @@
 #include <array>
 #include <atomic>
 #include <chrono>
-#include <concepts>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
@@ -63,20 +62,12 @@ public:
     using ResourceManagement = ResourceManager<ModelContract>;
     using ResourceInspection = typename ResourceManagement::Inspection;
     using Clock              = std::chrono::steady_clock;
-    // A Program that launches the next decode round before the current one commits (Flash-Next
-    // MTP round pipelining). The Engine then keeps at most one successor in flight and drains it
-    // before any boundary work.
-    static constexpr bool kPipelinedRounds = requires(Program& program) {
-        { program.has_successor() } -> std::same_as<bool>;
-        { program.submit_successor(nullptr) } -> std::same_as<bool>;
-    };
 
     EngineCore(Instance& instance, DeviceContext& device, const EngineOptions& options,
                ContextMachineCostModel context_cost)
         : instance_(instance), device_(device), max_context_(options.max_context),
           max_concurrency_(options.max_concurrency),
           reports_token_logprobs_(options.token_logprobs),
-          pipelined_decode_(options.pipelined_decode),
           max_outstanding_(static_cast<std::size_t>(options.max_concurrency) +
                            options.max_pending_requests),
           pending_timeout_(std::chrono::milliseconds(options.pending_timeout_ms)),
@@ -1937,88 +1928,11 @@ private:
                           const std::array<bool, kMaximumConcurrency>& cancelled_at_unit_start) {
         nvtx::ScopedRange decode_range(nvtx::Name::Decode, nvtx::Category::Decode,
                                        static_cast<std::uint64_t>(membership.size));
-        std::optional<PendingBatch> pending;
-        if constexpr (kPipelinedRounds) {
-            // A successor launched for exactly this membership is this round; the Program
-            // discards it whole when the rows changed, and the round then decodes serially.
-            if (instance_.program->has_successor()) {
-                ProgramCallScope collect_call(*this);
-                auto collected = instance_.program->collect_successor(
-                    membership.sequence_span(), membership.budget_span(),
-                    &collect_call.failed_timing());
-                collect_call.finish(collect_call.failed_timing());
-                if (collected.pending) { pending.emplace(std::move(*collected.pending)); }
-            }
-        }
-        if (!pending) {
-            ProgramCallScope program_call(*this);
-            pending.emplace(instance_.program->decode(membership.sequence_span(),
-                                                      membership.budget_span(),
-                                                      &program_call.failed_timing()));
-            program_call.finish(pending->execution_timing());
-        }
-        if constexpr (kPipelinedRounds) {
-            // Launch the next round now, so it runs while this round's outputs are previewed,
-            // published and committed. A cancelled row would only discard it.
-            bool any_cancelled = false;
-            for (const std::uint32_t lane : membership.lane_span()) {
-                any_cancelled = any_cancelled || cancelled_at_unit_start[lane];
-            }
-            if (pipelined_decode_ && !any_cancelled) {
-                ProgramCallScope submit_call(*this);
-                (void)instance_.program->submit_successor(&submit_call.failed_timing());
-                submit_call.finish(submit_call.failed_timing());
-            }
-        }
-        commit_pending(std::move(*pending), membership.lane_span(), true, cancelled_at_unit_start);
-        publish_runtime_stats();
-    }
-
-    // True when nothing but the in-flight successor's own rows could run at this boundary: no
-    // waiting or materializing request, no pending admission check or context transaction, and
-    // every occupied lane decode-ready, uncancelled and without a capture.
-    [[nodiscard]] bool successor_continues() {
-        {
-            std::lock_guard lock(queue_mutex_);
-            if (stopping_ || !pending_.empty()) { return false; }
-        }
-        if (materializing_ || admission_check_pending_.load(std::memory_order_acquire) ||
-            admission_waits_on_state_fork_ || oom_backoff_ != 0 ||
-            instance_.program->has_context_transaction() || scheduler_.prefill_lane()) {
-            return false;
-        }
-        for (std::uint32_t lane = 0; lane < max_concurrency_; ++lane) {
-            const auto& request = slots_[lane];
-            if (request == nullptr) { continue; }
-            if (!request->is_decode_ready() || request->capture_pending ||
-                request->cancelled.load(std::memory_order_acquire)) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    // Collects the in-flight successor before boundary work: its rows' outputs commit when it is
-    // kept whole; otherwise the Program has discarded it and the rows decode again later.
-    void drain_successor() {
-        nvtx::ScopedRange decode_range(nvtx::Name::Decode, nvtx::Category::Decode);
-        const auto cancelled       = snapshot_cancellations();
-        RoundMembership membership = scheduler_.build_round_membership(slots_, max_concurrency_);
-        RoundMembership keep;
-        for (std::size_t row = 0; row < membership.size; ++row) {
-            if (cancelled[membership.lanes[row]]) { continue; }
-            keep.lanes[keep.size]     = membership.lanes[row];
-            keep.sequences[keep.size] = membership.sequences[row];
-            keep.budgets[keep.size]   = membership.budgets[row];
-            ++keep.size;
-        }
-        ProgramCallScope collect_call(*this);
-        auto collected = instance_.program->collect_successor(
-            keep.sequence_span(), keep.budget_span(), &collect_call.failed_timing());
-        collect_call.finish(collect_call.failed_timing());
-        if (!collected.pending) { return; }
-        set_host_work_class(HostWorkClass::Decode, keep.lane_span());
-        commit_pending(std::move(*collected.pending), keep.lane_span(), true, cancelled);
+        ProgramCallScope program_call(*this);
+        auto pending = instance_.program->decode(
+            membership.sequence_span(), membership.budget_span(), &program_call.failed_timing());
+        program_call.finish(pending.execution_timing());
+        commit_pending(std::move(pending), membership.lane_span(), true, cancelled_at_unit_start);
         publish_runtime_stats();
     }
 
@@ -2245,23 +2159,6 @@ private:
                     if (armed != nullptr) { std::rethrow_exception(armed); }
                 }
 #endif
-                if constexpr (kPipelinedRounds) {
-                    if (instance_.program->has_successor()) {
-                        if (successor_continues()) {
-                            HostPhaseMeasurement boundary = begin_host_phase();
-                            const RoundMembership membership =
-                                scheduler_.build_round_membership(slots_, max_concurrency_);
-                            const auto cancelled_at_unit_start = snapshot_cancellations();
-                            set_host_work_class(HostWorkClass::Decode, membership.lane_span());
-                            finish_engine_phase(boundary, EngineHostPhase::Boundary);
-                            run_decode_round(membership, cancelled_at_unit_start);
-                            previous_unit_was_decode = true;
-                            oom_recovery_count_      = 0;
-                            continue;
-                        }
-                        drain_successor();
-                    }
-                }
                 set_host_work_class(HostWorkClass::Control);
                 HostPhaseMeasurement boundary = begin_host_phase();
                 const bool have_pending       = expire_pending_requests();
@@ -2421,7 +2318,6 @@ private:
     const std::uint32_t max_context_;
     const std::uint32_t max_concurrency_;
     const bool reports_token_logprobs_;
-    const bool pipelined_decode_;
     const std::size_t max_outstanding_;
     const std::chrono::milliseconds pending_timeout_;
     ResourceManagement resources_;

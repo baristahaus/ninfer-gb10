@@ -93,20 +93,13 @@ TensorLayout add_tensor(LayoutBuilder& builder, DType dtype,
     return builder.add_tensor(dtype, shape, kArenaAlign, label);
 }
 
-std::uint32_t mtp_lane_spare_slots(const SequencePlanImpl& plan) noexcept {
-    return plan.speculative_backend == SpeculativeBackend::Mtp ? plan.max_concurrency : 0U;
-}
-
 PersistentLayout persistent_layout(const SequencePlanImpl& plan) {
     if (!plan.context_cache.device_state_slots) {
         throw std::logic_error("Qwen3.8 context cache options are not normalized");
     }
-    // MTP rounds fold out of place, so every MTP lane also owns one spare Device slot outside
-    // the StateImage store (mtp_lane_spare_slots).
-    const std::int32_t state_image_slots =
-        checked_i32(static_cast<std::uint64_t>(plan.max_concurrency) +
-                        *plan.context_cache.device_state_slots + mtp_lane_spare_slots(plan),
-                    "Qwen3.8 StateImage slot count exceeds int32");
+    const std::int32_t state_image_slots = checked_i32(
+        static_cast<std::uint64_t>(plan.max_concurrency) + *plan.context_cache.device_state_slots,
+        "Qwen3.8 StateImage slot count exceeds int32");
     const auto effective_prefill_chunk =
         static_cast<std::int32_t>(std::min(plan.prefill_chunk, plan.capacity));
     const std::uint32_t logical_pages  = page_count(plan.capacity);
@@ -184,30 +177,17 @@ PersistentLayout persistent_layout(const SequencePlanImpl& plan) {
     }
     out.state_images = qwen3_8_flash_next::plan_state_image_device_pool(builder, state_image_spec);
     if (plan.speculative_backend != SpeculativeBackend::None) {
-        const GdnReplayRecordSpec record_spec{
-            .layers          = TextConfig::gdn_layers(),
-            .record_capacity = static_cast<std::int32_t>(plan.max_concurrency),
-            .width           = static_cast<std::int32_t>(plan.draft_window + 1U),
-            .conv_channels   = TextConfig::convolution_dim,
-            .qk_heads        = TextConfig::gdn_key_heads,
-            .value_heads     = TextConfig::gdn_value_heads,
-            .key_dim         = TextConfig::gdn_key_head_dim,
-            .value_dim       = TextConfig::gdn_value_head_dim,
-        };
-        out.replay_records = plan_gdn_replay_records(builder, record_spec);
-        if (plan.speculative_backend == SpeculativeBackend::Mtp) {
-            out.replay_records_backup = plan_gdn_replay_records(builder, record_spec);
-            const auto width          = static_cast<std::int32_t>(plan.draft_window + 1U);
-            const auto batch          = static_cast<std::int32_t>(plan.max_concurrency);
-            out.mtp_target_hidden_backup =
-                add_tensor(builder, DType::BF16, {TextConfig::hidden, width, batch},
-                           "MTP target hidden backup");
-            if constexpr (Variant::flash_next) {
-                out.mtp_target_mtp_hidden_backup =
-                    add_tensor(builder, DType::BF16, {4 * TextConfig::hidden, width, batch},
-                               "MTP target predictor hidden backup");
-            }
-        }
+        out.replay_records = plan_gdn_replay_records(
+            builder, GdnReplayRecordSpec{
+                         .layers          = TextConfig::gdn_layers(),
+                         .record_capacity = static_cast<std::int32_t>(plan.max_concurrency),
+                         .width           = static_cast<std::int32_t>(plan.draft_window + 1U),
+                         .conv_channels   = TextConfig::convolution_dim,
+                         .qk_heads        = TextConfig::gdn_key_heads,
+                         .value_heads     = TextConfig::gdn_value_heads,
+                         .key_dim         = TextConfig::gdn_key_head_dim,
+                         .value_dim       = TextConfig::gdn_value_head_dim,
+                     });
     }
     if constexpr (Variant::supports_dflash) {
         if (plan.features.dflash()) {
@@ -289,13 +269,6 @@ PersistentLayout persistent_layout(const SequencePlanImpl& plan) {
                                                 static_cast<std::int32_t>(plan.draft_window + 1U),
                                                 static_cast<std::int32_t>(plan.max_concurrency)},
                                                "Flash-Next PLE replay records");
-            if (plan.speculative_backend == SpeculativeBackend::Mtp) {
-                out.flash_ple_records_backup = add_tensor(
-                    builder, DType::BF16,
-                    {4 * TextConfig::hidden, static_cast<std::int32_t>(plan.draft_window + 1U),
-                     static_cast<std::int32_t>(plan.max_concurrency)},
-                    "Flash-Next PLE replay records backup");
-            }
         }
     }
     if (plan.causal_scoring) {

@@ -35,13 +35,6 @@ struct PersistentLayout {
     qwen3_8_flash_next::DecoderStateLayout decoder;
     qwen3_8_flash_next::StateImageDeviceLayout state_images;
     std::optional<GdnReplayRecordLayout> replay_records;
-    // MTP round pipelining: a launch of the round after a pending one first copies that round's
-    // replay records and target hiddens here, so its commit can still refold a shortened row
-    // and correct its hidden after the successor overwrote the originals.
-    std::optional<GdnReplayRecordLayout> replay_records_backup;
-    std::optional<TensorLayout> flash_ple_records_backup;
-    std::optional<TensorLayout> mtp_target_hidden_backup;
-    std::optional<TensorLayout> mtp_target_mtp_hidden_backup;
     std::optional<DFlashPersistentLayout> dflash;
     qwen3_8_flash_next::RoundStateLayout round;
     TensorLayout prefill_hidden;

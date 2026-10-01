@@ -41,15 +41,16 @@ __global__ void mtp_prepare_next_round_kernel(
     }
 }
 
-__global__ void mtp_advance_round_kernel(
-    const std::int32_t* anchors, const std::int32_t* frontiers, const std::int32_t* licensed_counts,
-    const std::int32_t* next_extents, const std::int32_t* next_drafts,
-    const std::int32_t* rope_deltas, std::int32_t* state_source_slots,
-    std::int32_t* state_destination_slots, std::int32_t* remaining_budgets,
-    std::int32_t* current_extents, std::int32_t* target_valid_columns, std::int32_t* current_drafts,
-    std::int32_t* target_rope_positions, std::int32_t* pending_folds,
-    const std::int32_t* verify_ids, const std::int32_t* licensed_tokens, std::int32_t* ple_history,
-    std::int32_t batch, std::int32_t k, std::int32_t draft_step_stride) {
+__global__ void
+mtp_advance_round_kernel(const std::int32_t* anchors, const std::int32_t* frontiers,
+                         const std::int32_t* licensed_counts, const std::int32_t* next_extents,
+                         const std::int32_t* next_drafts, const std::int32_t* rope_deltas,
+                         const std::int32_t* state_slots, std::int32_t* remaining_budgets,
+                         std::int32_t* current_extents, std::int32_t* target_valid_columns,
+                         std::int32_t* current_drafts, std::int32_t* target_rope_positions,
+                         std::int32_t* pending_folds, const std::int32_t* verify_ids,
+                         const std::int32_t* licensed_tokens, std::int32_t* ple_history,
+                         std::int32_t batch, std::int32_t k, std::int32_t draft_step_stride) {
     const int row = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
     if (row >= batch) { return; }
     const int licensed        = licensed_counts[row];
@@ -68,13 +69,10 @@ __global__ void mtp_advance_round_kernel(
     for (int j = 0; j <= k; ++j) {
         target_rope_positions[row * (k + 1) + j] = rope_base + (j < extent ? j : extent);
     }
-    const int source             = state_source_slots[row];
-    const int destination        = state_destination_slots[row];
-    pending_folds[row * 4]       = source;
-    pending_folds[row * 4 + 1]   = destination;
-    pending_folds[row * 4 + 2]   = licensed;
-    state_source_slots[row]      = destination;
-    state_destination_slots[row] = source;
+    const int slot             = state_slots[row];
+    pending_folds[row * 4]     = slot;
+    pending_folds[row * 4 + 1] = slot;
+    pending_folds[row * 4 + 2] = licensed;
     pending_folds[row * 4 + 3] = 0;
     // The row's sequence ends h2, h1, previous anchor, licensed tokens; the new anchor is its
     // last licensed token.

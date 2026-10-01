@@ -134,8 +134,7 @@ int run_advance_case(int k, int batch, int capacity) {
     std::vector<std::int32_t> next_extents(static_cast<std::size_t>(batch));
     std::vector<std::int32_t> next_drafts(static_cast<std::size_t>(capacity * k));
     std::vector<std::int32_t> rope_deltas(static_cast<std::size_t>(batch));
-    std::vector<std::int32_t> sources(static_cast<std::size_t>(batch));
-    std::vector<std::int32_t> destinations(static_cast<std::size_t>(batch));
+    std::vector<std::int32_t> slots(static_cast<std::size_t>(batch));
     std::vector<std::int32_t> budgets(static_cast<std::size_t>(batch));
     std::vector<std::int32_t> expected_budgets(static_cast<std::size_t>(batch));
     std::vector<std::int32_t> expected_extents(static_cast<std::size_t>(batch));
@@ -158,8 +157,7 @@ int run_advance_case(int k, int batch, int capacity) {
         licensed[i]    = 1 + b % T;
         frontiers[i]   = 40 + 23 * b;
         rope_deltas[i] = 5 * b - 7;
-        sources[i]      = 3 + 2 * b;
-        destinations[i] = 40 + b;
+        slots[i]       = 3 + 2 * b;
         // Cover an exhausted budget, a zero extent and the full extent.
         budgets[i]      = b == 0 ? licensed[i] - 1 : 20 + b;
         next_extents[i] = b % (k + 1);
@@ -177,8 +175,8 @@ int run_advance_case(int k, int batch, int capacity) {
             expected_rope[static_cast<std::size_t>(b * T + j)] =
                 frontiers[i] + std::min(j, extent) + rope_deltas[i];
         }
-        expected_folds[static_cast<std::size_t>(4 * b)]     = sources[i];
-        expected_folds[static_cast<std::size_t>(4 * b + 1)] = destinations[i];
+        expected_folds[static_cast<std::size_t>(4 * b)]     = slots[i];
+        expected_folds[static_cast<std::size_t>(4 * b + 1)] = slots[i];
         expected_folds[static_cast<std::size_t>(4 * b + 2)] = licensed[i];
         expected_folds[static_cast<std::size_t>(4 * b + 3)] = 0;
 
@@ -205,8 +203,7 @@ int run_advance_case(int k, int batch, int capacity) {
     DeviceBuffer d_next_extents = to_device(next_extents);
     DeviceBuffer d_next_drafts  = to_device(next_drafts);
     DeviceBuffer d_rope_deltas  = to_device(rope_deltas);
-    DeviceBuffer d_sources      = to_device(sources);
-    DeviceBuffer d_destinations = to_device(destinations);
+    DeviceBuffer d_slots        = to_device(slots);
     DeviceBuffer d_budgets      = to_device(budgets);
     DeviceBuffer d_verify       = to_device(verify);
     DeviceBuffer d_licensed_tok = to_device(licensed_tokens);
@@ -228,8 +225,7 @@ int run_advance_case(int k, int batch, int capacity) {
     Tensor t_next_extents(d_next_extents.p, DType::I32, {batch});
     Tensor t_next_drafts = Tensor(d_next_drafts.p, DType::I32, {capacity, k}).slice(0, 0, batch);
     Tensor t_rope_deltas(d_rope_deltas.p, DType::I32, {batch});
-    Tensor t_sources(d_sources.p, DType::I32, {batch});
-    Tensor t_destinations(d_destinations.p, DType::I32, {batch});
+    Tensor t_slots(d_slots.p, DType::I32, {batch});
     Tensor t_budgets(d_budgets.p, DType::I32, {batch});
     Tensor t_extents(d_extents.data(), DType::I32, {batch});
     Tensor t_valid(d_valid.data(), DType::I32, {batch});
@@ -240,9 +236,8 @@ int run_advance_case(int k, int batch, int capacity) {
     Tensor t_licensed_tokens(d_licensed_tok.p, DType::I32, {T, batch});
     Tensor t_history(d_history.p, DType::I32, {2, batch});
     ops::mtp_advance_round(t_anchors, t_frontiers, t_licensed, t_next_extents, t_next_drafts,
-                           t_rope_deltas, t_sources, t_destinations, t_budgets, t_extents, t_valid,
-                           t_drafts, t_rope, t_folds, t_verify, t_licensed_tokens, t_history,
-                           nullptr);
+                           t_rope_deltas, t_slots, t_budgets, t_extents, t_valid, t_drafts, t_rope,
+                           t_folds, t_verify, t_licensed_tokens, t_history, nullptr);
     cuda_synchronize();
 
     const std::string label =
@@ -265,12 +260,6 @@ int run_advance_case(int k, int batch, int capacity) {
     failures += verify_exact((label + " pending folds").c_str(),
                              from_device<std::int32_t>(d_folds.data(), expected_folds.size()),
                              expected_folds);
-    // The next round reads the slot this one committed into and commits into the one it read.
-    failures +=
-        verify_exact((label + " next sources").c_str(),
-                     from_device<std::int32_t>(d_sources.p, destinations.size()), destinations);
-    failures += verify_exact((label + " next destinations").c_str(),
-                             from_device<std::int32_t>(d_destinations.p, sources.size()), sources);
     failures += verify_exact((label + " PLE history").c_str(),
                              from_device<std::int32_t>(d_history.p, expected_history.size()),
                              expected_history);

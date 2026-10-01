@@ -43,7 +43,6 @@ using CaptureAssessment       = qwen3_8_flash_next::CaptureAssessment;
 using ActiveCaptureResult     = qwen3_8_flash_next::ActiveCaptureResult<Variant>;
 using MaterializationResult   = qwen3_8_flash_next::MaterializationResult<Variant>;
 using PendingBatch            = qwen3_8_flash_next::PendingBatch<Variant>;
-using SuccessorCollection     = qwen3_8_flash_next::SuccessorCollection<Variant>;
 using PrefillProgress         = qwen3_8_flash_next::PrefillProgress<Variant>;
 using StartResult             = qwen3_8_flash_next::StartResult<Variant>;
 using CommitResult            = qwen3_8_flash_next::CommitResult<Variant>;

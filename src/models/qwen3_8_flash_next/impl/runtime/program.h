@@ -26,7 +26,6 @@
 #include <algorithm>
 #include <cstdint>
 #include <array>
-#include <chrono>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -409,14 +408,11 @@ struct DecodeGraphFamily {
 // request which produced it has finished, so it is deliberately separate from request lifecycle,
 // output, sampling, and round-control state.
 // A continuing MTP round's commit fold, deferred to the head of the next MTP round's graph:
-// the round's record row, the slot the round read, the slot its commit lands in (the other of
-// the lane's two slots) and the accepted column count. MTP rounds fold out of place, so the
-// read slot stays intact until the next round has folded the commit.
+// the round's record row, the in-place state slot and the accepted column count.
 struct DeferredStateFold {
-    std::int32_t record_row       = 0;
-    std::int32_t source_slot      = 0;
-    std::int32_t destination_slot = 0;
-    std::int32_t columns          = 0;
+    std::int32_t record_row = 0;
+    std::int32_t state_slot = 0;
+    std::int32_t columns    = 0;
 };
 
 struct SequenceState {
@@ -585,13 +581,6 @@ public:
     // or replaces a sequence's state or the replay records, other than the next MTP round,
     // calls it first.
     void settle_deferred_folds();
-    // The slots an MTP round of this sequence reads and commits into: the store's fork for a
-    // pending fork; otherwise the slot holding the committed state (after the deferred fold, if
-    // any) and the lane's other slot.
-    [[nodiscard]] StateImageSelectors mtp_round_slots(const SequenceState& sequence) const;
-    // The sequence's committed state now lives in `slot`, the lane's spare: the active image
-    // takes that slot and the lane keeps the image's previous slot as its spare.
-    void adopt_mtp_state_slot(SequenceState& sequence, std::int32_t slot);
     [[nodiscard]] PrefillProgress advance_prefill(SequenceHandle sequence,
                                                   runtime::ExecutionTiming* failed_timing);
     [[nodiscard]] CaptureAssessment
@@ -632,19 +621,6 @@ public:
                                       runtime::CommitObservation observation,
                                       runtime::ExecutionTiming* failed_timing);
     [[nodiscard]] DiscardResult abort_pending(PendingBatch&& pending) noexcept;
-    // MTP round pipelining. submit_successor launches, before the pending MTP round's commit,
-    // the next round for the same rows on the frame that round advanced; false when the rows
-    // or KV budget do not allow it. collect_successor waits for it after that commit and keeps
-    // it only whole: every row of `keep` still decodes in the same order on the frame the host
-    // now builds. Otherwise every row is discarded and repaired to its committed state.
-    [[nodiscard]] bool submit_successor(runtime::ExecutionTiming* failed_timing);
-
-    [[nodiscard]] bool has_successor() const noexcept { return mtp_successor.has_value(); }
-
-    [[nodiscard]] SuccessorCollection
-    collect_successor(std::span<const SequenceHandle> keep,
-                      std::span<const runtime::RoundBudget> budgets,
-                      runtime::ExecutionTiming* failed_timing);
     [[nodiscard]] FinishResult finish(SequenceHandle sequence) noexcept;
     [[nodiscard]] AbortResult abort(SequenceHandle sequence) noexcept;
     [[nodiscard]] ReleaseResult release_continuation(ContinuationHandle&& continuation) noexcept;
@@ -702,16 +678,8 @@ public:
     std::unique_ptr<qwen3_8_flash_next::StateImageDevicePool> state_images;
     std::unique_ptr<qwen3_8_flash_next::HostStatePool> host_state_images;
     std::unique_ptr<StateImageStore> state_store;
-    // Per lane, the Device slot outside the store that MTP rounds commit into when the active
-    // image's own slot is the one the round reads (-1 without MTP).
-    std::array<std::int32_t, kMaximumConcurrency> mtp_lane_spare{};
     std::optional<GdnReplayRecords> replay_records;
     std::optional<ops::GdnReplayFoldPlan> replay_fold;
-    std::optional<GdnReplayRecords> replay_records_backup;
-    std::optional<ops::GdnReplayFoldPlan> replay_fold_backup;
-    std::optional<Tensor> flash_ple_records_backup;
-    std::optional<Tensor> mtp_target_hidden_backup;
-    std::optional<Tensor> mtp_target_mtp_hidden_backup;
     std::optional<DFlashPersistentState> dflash;
     qwen3_8_flash_next::RoundState io;
     Tensor prefill_hidden;
@@ -750,25 +718,6 @@ public:
     // round's row count; zero rows means the device frame is not current.
     qwen3_8_flash_next::MtpDecodeIngress* mtp_host_frame = nullptr;
     std::uint32_t mtp_frame_rows                         = 0;
-    // Two pinned egress/echo buffers by round parity: a launched successor writes the buffer the
-    // pending round's commit is not reading. mtp_host_egress/mtp_host_frame point at the buffers
-    // of the last collected round (index mtp_host_parity).
-    std::array<qwen3_8_flash_next::MtpDecodeEgress*, 2> mtp_host_egress_buffers{};
-    std::array<qwen3_8_flash_next::MtpDecodeIngress*, 2> mtp_host_frame_buffers{};
-    std::uint32_t mtp_host_parity = 0;
-
-    // The MTP round launched, before the pending round's commit, for the same rows on the frame
-    // that round advanced (round pipelining). Only that commit may run while it is in flight.
-    struct MtpSuccessor {
-        std::array<std::uint32_t, kMaximumConcurrency> lanes{};
-        std::size_t row_count = 0;
-        std::uint32_t parity  = 0;
-        std::chrono::steady_clock::time_point started;
-        // The pending round's commit rewrote frame fields (a partial-terminal correction).
-        bool frame_clobbered = false;
-    };
-
-    std::optional<MtpSuccessor> mtp_successor;
     // Flash-Next MTP rounds gather their PLE rows through this stage, inside the round.
     std::optional<qwen3_8_flash_next::PleGatherStage> ple_gather_stage;
     std::optional<PinnedHostBuffer> dflash_host;
@@ -1312,21 +1261,6 @@ private:
     decode_mtp_batch(std::span<const std::uint32_t> lanes,
                      std::span<const runtime::RoundBudget> budgets,
                      runtime::ExecutionTiming* failed_timing);
-    [[nodiscard]] std::uint32_t validate_mtp_rows(std::span<const std::uint32_t> lanes,
-                                                  std::span<const runtime::RoundBudget> budgets);
-    [[nodiscard]] bool stage_mtp_deferred_folds(std::span<const std::uint32_t> lanes);
-    void build_mtp_ingress_rows(std::span<const std::uint32_t> lanes,
-                                std::span<const runtime::RoundBudget> budgets);
-    void launch_mtp_round(std::span<const std::uint32_t> lanes, std::uint32_t maximum_frontier,
-                          bool any_deferred, std::uint32_t parity);
-    void adopt_mtp_round_buffers(std::uint32_t parity) noexcept;
-    [[nodiscard]] runtime::BatchedGeneratedRound
-    publish_mtp_round(std::span<const std::uint32_t> lanes,
-                      std::span<const runtime::RoundBudget> budgets, double seconds);
-    [[nodiscard]] bool successor_frame_matches(std::span<const std::uint32_t> lanes,
-                                               std::span<const runtime::RoundBudget> budgets);
-    void discard_successor_rows(std::span<const std::uint32_t> lanes, std::uint32_t parity);
-    void abandon_successor() noexcept;
     [[nodiscard]] runtime::BatchedGeneratedRound
     decode_dflash_batch(std::span<const std::uint32_t> lanes,
                         std::span<const runtime::RoundBudget> budgets,

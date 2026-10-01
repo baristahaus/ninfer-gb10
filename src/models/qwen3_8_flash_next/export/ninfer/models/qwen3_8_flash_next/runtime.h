@@ -724,14 +724,6 @@ private:
     friend struct detail::RuntimeContractAccess<Variant>;
 };
 
-// A collected MTP successor round (Program::collect_successor): its pending batch when it was
-// kept whole, or empty when every row was discarded and the rows must decode again.
-template <class Variant>
-struct SuccessorCollection {
-    std::optional<PendingBatch<Variant>> pending;
-    std::array<bool, kMaximumConcurrency> kept{};
-};
-
 template <class Variant>
 struct PrefillProgress {
     runtime::BeginSummary summary;
@@ -977,14 +969,6 @@ public:
            runtime::CommitObservation observation  = runtime::CommitObservation::AllRows,
            runtime::ExecutionTiming* failed_timing = nullptr);
     [[nodiscard]] DiscardResult<Variant> abort_pending(PendingBatch<Variant>&& pending) noexcept;
-    // MTP round pipelining: launch the next round for the pending round's rows before that
-    // round commits, and collect it after the commit (kept whole or discarded whole).
-    [[nodiscard]] bool submit_successor(runtime::ExecutionTiming* failed_timing = nullptr);
-    [[nodiscard]] bool has_successor() const noexcept;
-    [[nodiscard]] SuccessorCollection<Variant>
-    collect_successor(std::span<const SequenceHandle<Variant>> keep,
-                      std::span<const runtime::RoundBudget> budgets,
-                      runtime::ExecutionTiming* failed_timing = nullptr);
     [[nodiscard]] FinishResult<Variant> finish(SequenceHandle<Variant> sequence) noexcept;
     [[nodiscard]] AbortResult<Variant> abort(SequenceHandle<Variant> sequence) noexcept;
     [[nodiscard]] ReleaseResult<Variant>

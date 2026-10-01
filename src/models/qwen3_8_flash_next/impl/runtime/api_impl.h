@@ -549,24 +549,6 @@ DiscardResult<Variant> Program<Variant>::abort_pending(PendingBatch<Variant>&& p
 }
 
 template <>
-bool Program<Variant>::submit_successor(runtime::ExecutionTiming* failed_timing) {
-    return impl_->submit_successor(failed_timing);
-}
-
-template <>
-bool Program<Variant>::has_successor() const noexcept {
-    return impl_->has_successor();
-}
-
-template <>
-SuccessorCollection<Variant>
-Program<Variant>::collect_successor(std::span<const SequenceHandle<Variant>> keep,
-                                    std::span<const runtime::RoundBudget> budgets,
-                                    runtime::ExecutionTiming* failed_timing) {
-    return impl_->collect_successor(keep, budgets, failed_timing);
-}
-
-template <>
 FinishResult<Variant> Program<Variant>::finish(SequenceHandle<Variant> sequence) noexcept {
     return impl_->finish(sequence);
 }

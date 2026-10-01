@@ -83,7 +83,7 @@ std::string serve_usage_text(const char* argv0) {
            "[--default-max-tokens N] [--default-thinking-budget N] "
            "[--vision] [--no-cuda-graph] [--no-prefix-reuse] "
            "[--chat-template FILE] [--lm-head-draft] [--no-thinking] [--preserve-thinking] "
-           "[--token-logprobs] [--pipelined-decode] "
+           "[--token-logprobs] "
            "[--cors] "
            "[--temperature F] [--top-p F] [--top-k N] [--min-p F] [--presence-penalty F] "
            "[--frequency-penalty F] [--seed N] [--greedy]\n"
@@ -295,8 +295,6 @@ ServeOptions parse_serve_options(int argc, char** argv) {
             options.enable_vision = true;
         } else if (arg == "--no-cuda-graph") {
             options.use_cuda_graph = false;
-        } else if (arg == "--pipelined-decode") {
-            options.pipelined_decode = true;
         } else if (arg == "--token-logprobs") {
             options.token_logprobs = true;
         } else if (arg == "--no-prefix-reuse") {

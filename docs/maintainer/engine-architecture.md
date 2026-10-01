@@ -28,8 +28,7 @@ Top-level sections:
 10. Implementation locations and neighboring authorities (实现位置与相邻权威).
 
 §7.4 (Engine-wide failure) is translated into English and maintained in English
-(2026-09-28). §6.4 (pipelined decode rounds) was written in English (2026-10-01) and is
-normative in English. All other sections remain normative Chinese.
+(2026-09-28). All other sections remain normative Chinese.
 
 本文定义 NInfer 的模型实例、执行所有权与顶层控制面，说明权重如何进入固定模型实现，以及请求、
 资源和输出如何共同提交。它是全局架构、请求生命周期和跨模块提交关系的维护者权威。
@@ -482,33 +481,6 @@ terminal    -> accepted_tokens may be a produced prefix
 
 取消行使用零 accepted token 并进入 terminal。Engine 不允许逐行遗弃一个仍未消费的
 `PendingBatch`。
-
-### 6.4 Pipelined decode rounds
-
-A Program may launch the next decode round before the current one commits. Flash-Next MTP
-does this; its Program exposes `submit_successor`, `has_successor` and `collect_successor`.
-
-- **Submit.** After a decode round's `PendingBatch` is produced and before its preview and commit,
-  the Engine calls `submit_successor` when it was started with `EngineOptions::pipelined_decode`
-  (off by default) and no row of the round was cancelled at the unit start.
-  The Program launches the next round for the same rows on the device state that round advanced,
-  as if every row continued with its whole produced extent. It returns false when the rows or
-  resources do not allow it.
-- **Only the commit may overlap.** While a successor is in flight, the only Program mutation is
-  the commit of the round it follows.
-- **Next boundary, fast path.** If nothing but the successor's own rows could run, the Engine skips
-  the boundary work and makes the successor the next decode unit. Nothing could run when there is
-  no waiting or materializing request, no admission check or context transaction, no prefill, and
-  every occupied lane is decode-ready, uncancelled and without a capture.
-- **Next boundary, drain.** Otherwise the Engine drains the successor before any boundary work. It
-  calls `collect_successor` with the still-decodable rows and commits the result like any decode
-  unit.
-- **Kept whole or discarded whole.** The Program keeps a successor only when every row still
-  decodes, in the same order, on exactly the inputs the host would build after the commit.
-  Otherwise it discards every row: the committed state, KV reservation and penalty occurrences
-  return to what the commit left, and the rows decode again. A shortened (terminal) commit
-  therefore always discards its successor. The outputs are those of the serial loop.
-- **Failure.** Abort, failed commit and fail-all cleanup wait for and drop an in-flight successor.
 
 ### 6.3 输出发布顺序
 

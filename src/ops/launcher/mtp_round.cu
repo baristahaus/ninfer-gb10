@@ -42,12 +42,12 @@ void mtp_prepare_next_round_launch(const Tensor& verify_ids, const Tensor& next_
 void mtp_advance_round_launch(const Tensor& anchors, const Tensor& frontiers,
                               const Tensor& licensed_counts, const Tensor& next_extents,
                               const Tensor& next_drafts, const Tensor& rope_deltas,
-                              Tensor& state_source_slots, Tensor& state_destination_slots,
-                              Tensor& remaining_budgets, Tensor& current_extents,
-                              Tensor& target_valid_columns, Tensor& current_drafts,
-                              Tensor& target_rope_positions, Tensor& pending_folds,
-                              const Tensor& verify_ids, const Tensor& licensed_tokens,
-                              Tensor& ple_history, cudaStream_t stream) {
+                              const Tensor& state_slots, Tensor& remaining_budgets,
+                              Tensor& current_extents, Tensor& target_valid_columns,
+                              Tensor& current_drafts, Tensor& target_rope_positions,
+                              Tensor& pending_folds, const Tensor& verify_ids,
+                              const Tensor& licensed_tokens, Tensor& ple_history,
+                              cudaStream_t stream) {
     constexpr int kBlock = 32;
     const int batch      = anchors.ne[0];
     const int k          = current_drafts.ne[0];
@@ -61,8 +61,7 @@ void mtp_advance_round_launch(const Tensor& anchors, const Tensor& frontiers,
         static_cast<const std::int32_t*>(next_extents.data),
         static_cast<const std::int32_t*>(next_drafts.data),
         static_cast<const std::int32_t*>(rope_deltas.data),
-        static_cast<std::int32_t*>(state_source_slots.data),
-        static_cast<std::int32_t*>(state_destination_slots.data),
+        static_cast<const std::int32_t*>(state_slots.data),
         static_cast<std::int32_t*>(remaining_budgets.data),
         static_cast<std::int32_t*>(current_extents.data),
         static_cast<std::int32_t*>(target_valid_columns.data),

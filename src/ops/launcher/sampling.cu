@@ -10,10 +10,10 @@
 
 namespace ninfer::ops::detail {
 
-__global__ void add_token_counts_kernel(const std::int32_t* token_ids, std::int32_t count,
-                                        std::int32_t* token_counts, std::int32_t delta) {
+__global__ void increment_token_counts_kernel(const std::int32_t* token_ids, std::int32_t count,
+                                              std::int32_t* token_counts) {
     const int index = blockIdx.x * blockDim.x + threadIdx.x;
-    if (index < count) { atomicAdd(&token_counts[token_ids[index]], delta); }
+    if (index < count) { atomicAdd(&token_counts[token_ids[index]], 1); }
 }
 
 std::size_t sampling_workspace_exact_bytes(std::int32_t token_domain, std::int32_t columns) {
@@ -50,13 +50,13 @@ void sample_batch_launch(const Tensor& logits, Tensor& out, std::int32_t token_d
     CUDA_CHECK(cudaGetLastError());
 }
 
-void add_token_counts_launch(const Tensor& token_ids, Tensor& token_counts, std::int32_t delta,
-                             cudaStream_t stream) {
+void increment_token_counts_launch(const Tensor& token_ids, Tensor& token_counts,
+                                   cudaStream_t stream) {
     constexpr int kBlock = 256;
     const int count      = token_ids.ne[0];
-    add_token_counts_kernel<<<div_up(count, kBlock), kBlock, 0, stream>>>(
+    increment_token_counts_kernel<<<div_up(count, kBlock), kBlock, 0, stream>>>(
         static_cast<const std::int32_t*>(token_ids.data), count,
-        static_cast<std::int32_t*>(token_counts.data), delta);
+        static_cast<std::int32_t*>(token_counts.data));
     CUDA_CHECK(cudaGetLastError());
 }
 

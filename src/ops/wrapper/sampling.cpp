@@ -6,7 +6,6 @@
 
 #include <algorithm>
 #include <stdexcept>
-#include <string>
 
 namespace ninfer::ops {
 
@@ -60,33 +59,20 @@ void sample(const Tensor& logits, Tensor& out, std::int32_t token_domain,
                                 scratch, stream);
 }
 
-namespace {
-
-void add_token_counts(const Tensor& token_ids, Tensor& token_counts, std::int32_t delta,
-                      const char* op, cudaStream_t stream) {
+void increment_token_counts(const Tensor& token_ids, Tensor& token_counts, cudaStream_t stream) {
     if (token_ids.dtype != DType::I32 || token_ids.ne[0] <= 0 || token_ids.ne[1] != 1 ||
         token_ids.ne[2] != 1 || token_ids.ne[3] != 1 || !token_ids.is_contiguous() ||
         token_ids.data == nullptr) {
-        throw std::invalid_argument(std::string(op) +
-                                    ": token_ids must be a contiguous non-empty I32 vector");
+        throw std::invalid_argument(
+            "increment_token_counts: token_ids must be a contiguous non-empty I32 vector");
     }
     if (token_counts.dtype != DType::I32 || token_counts.ne[0] <= 0 || token_counts.ne[1] != 1 ||
         token_counts.ne[2] != 1 || token_counts.ne[3] != 1 || !token_counts.is_contiguous() ||
         token_counts.data == nullptr) {
-        throw std::invalid_argument(std::string(op) +
-                                    ": token_counts must be a contiguous non-empty I32 vector");
+        throw std::invalid_argument(
+            "increment_token_counts: token_counts must be a contiguous non-empty I32 vector");
     }
-    detail::add_token_counts_launch(token_ids, token_counts, delta, stream);
-}
-
-} // namespace
-
-void increment_token_counts(const Tensor& token_ids, Tensor& token_counts, cudaStream_t stream) {
-    add_token_counts(token_ids, token_counts, 1, "increment_token_counts", stream);
-}
-
-void decrement_token_counts(const Tensor& token_ids, Tensor& token_counts, cudaStream_t stream) {
-    add_token_counts(token_ids, token_counts, -1, "decrement_token_counts", stream);
+    detail::increment_token_counts_launch(token_ids, token_counts, stream);
 }
 
 } // namespace ninfer::ops

@@ -609,14 +609,6 @@ int increment_counts_contract() {
     failures += verify_exact("increment token counts read-only ids",
                              from_device<std::int32_t>(device_ids, ids.size()), ids);
     failures += device_counts.verify_guards("increment token counts guards");
-
-    // A discarded round removes exactly the occurrences it added.
-    ops::decrement_token_counts(token_ids, counts, nullptr);
-    cuda_synchronize();
-    failures +=
-        verify_exact("decrement token counts",
-                     from_device<std::int32_t>(device_counts.data(), initial.size()), initial);
-    failures += device_counts.verify_guards("decrement token counts guards");
     return failures;
 }
 

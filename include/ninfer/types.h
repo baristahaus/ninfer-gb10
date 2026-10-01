@@ -173,9 +173,6 @@ struct EngineOptions {
     std::uint32_t media_preprocess_threads = 0;
     bool enable_vision                     = false;
     bool use_cuda_graph                    = true;
-    // Launch the next decode round before the current one commits, where the model supports it
-    // (Flash-Next MTP). Off by default until its serve-level exactness is verified.
-    bool pipelined_decode = false;
     ContextCacheOptions context_cache;
     ContextCostOptions context_cost;
     StartupObserver startup_observer;

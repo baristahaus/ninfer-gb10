@@ -8,6 +8,7 @@
 #include "core/gdn_replay_records.h"
 #include "core/tensor.h"
 #include "core/weight.h"
+#include "ninfer/ops/flash_next_ple_stage.h"
 #include "ninfer/ops/sampling.h"
 #include "ninfer/ops/softmax_attention.h"
 #include <ninfer/models/qwen3_8_flash_next/decoder_state.h>
@@ -199,6 +200,13 @@ public:
         active_ple_embeddings_ = embeddings;
     }
 
+    // The PLE rows arrive through the host gather stage: the first PLE consumer waits for the
+    // stage's acknowledgement and copies its staging into the PLE embeddings first.
+    void set_ple_stage(ops::FlashNextPleStageMailbox* mailbox, const void* staging) noexcept {
+        active_ple_stage_mailbox_ = mailbox;
+        active_ple_stage_staging_ = staging;
+    }
+
     void set_mtp_prefill_hidden(Tensor* hidden) noexcept { mtp_prefill_hidden_ = hidden; }
 
     void set_flash_predictor_hidden_output(Tensor* hidden) noexcept {
@@ -345,6 +353,8 @@ private:
     const Tensor* active_linear_state_destination_slots_                           = nullptr;
     const Tensor* active_valid_columns_                                            = nullptr;
     const Tensor* active_ple_embeddings_                                           = nullptr;
+    ops::FlashNextPleStageMailbox* active_ple_stage_mailbox_                       = nullptr;
+    const void* active_ple_stage_staging_                                          = nullptr;
     const Tensor* active_backend_kv_table_rows_                                    = nullptr;
     const ops::CausalAttentionExecutionEnvelope* active_causal_attention_envelope_ = nullptr;
     std::int32_t active_sequence_batch_                                            = 0;

@@ -48,8 +48,9 @@ mtp_advance_round_kernel(const std::int32_t* anchors, const std::int32_t* fronti
                          const std::int32_t* state_slots, std::int32_t* remaining_budgets,
                          std::int32_t* current_extents, std::int32_t* target_valid_columns,
                          std::int32_t* current_drafts, std::int32_t* target_rope_positions,
-                         std::int32_t* pending_folds, std::int32_t batch, std::int32_t k,
-                         std::int32_t draft_step_stride) {
+                         std::int32_t* pending_folds, const std::int32_t* verify_ids,
+                         const std::int32_t* licensed_tokens, std::int32_t* ple_history,
+                         std::int32_t batch, std::int32_t k, std::int32_t draft_step_stride) {
     const int row = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
     if (row >= batch) { return; }
     const int licensed        = licensed_counts[row];
@@ -73,6 +74,20 @@ mtp_advance_round_kernel(const std::int32_t* anchors, const std::int32_t* fronti
     pending_folds[row * 4 + 1] = slot;
     pending_folds[row * 4 + 2] = licensed;
     pending_folds[row * 4 + 3] = 0;
+    // The row's sequence ends h2, h1, previous anchor, licensed tokens; the new anchor is its
+    // last licensed token.
+    const int width        = k + 1;
+    const int history1     = ple_history[row * 2];
+    const int history2     = ple_history[row * 2 + 1];
+    const int previous     = verify_ids[row * width];
+    const auto sequence_at = [&](int i) {
+        return i == 0   ? history2
+               : i == 1 ? history1
+               : i == 2 ? previous
+                        : licensed_tokens[row * width + i - 3];
+    };
+    ple_history[row * 2]     = sequence_at(licensed + 1);
+    ple_history[row * 2 + 1] = sequence_at(licensed);
 }
 
 } // namespace ninfer::ops

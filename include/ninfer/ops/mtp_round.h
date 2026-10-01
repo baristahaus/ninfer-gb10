@@ -51,7 +51,11 @@ void mtp_prepare_next_round(const Tensor& verify_ids, const Tensor& next_anchors
  *     target_valid_columns[b]    = P+1;
  *     current_drafts[j,b]        = next_drafts[b,j] for 0<=j<P, anchor for P<=j<K;
  *     target_rope_positions[j,b] = frontier+min(j,P)+rope_deltas[b] for 0<=j<=K;
- *     pending_folds[:,b]         = {state_slots[b], state_slots[b], L, 0}.
+ *     pending_folds[:,b]         = {state_slots[b], state_slots[b], L, 0};
+ *     ple_history[:,b]           = the two tokens before the new anchor: with the row's
+ *       sequence S = (ple_history[1,b], ple_history[0,b], verify_ids[0,b] (the previous anchor),
+ *       licensed_tokens[0..L-1,b]), ple_history[0,b] = S[L+1] and ple_history[1,b] = S[L]
+ *       (a negative history value, meaning no token, shifts through unchanged).
  *
  * Logical shapes / effects:
  *   anchors, frontiers, licensed_counts, next_extents, rope_deltas, state_slots,
@@ -59,8 +63,10 @@ void mtp_prepare_next_round(const Tensor& verify_ids, const Tensor& next_anchors
  *   next_drafts is I32 [B,K] with contiguous rows and a step stride of at least B (an exact-B
  *   prefix of a fixed-capacity frame). current_drafts is contiguous I32 [K,B],
  *   target_rope_positions contiguous I32 [K+1,B], and pending_folds contiguous I32 [4,B].
- *   B>=1 and 1<=K<=5. remaining_budgets is updated in place; the other outputs are written for
- *   every slot and are distinct from the inputs. No workspace or other state is used.
+ *   verify_ids and licensed_tokens are contiguous I32 [K+1,B] with 1<=licensed_counts[b]<=K+1;
+ *   ple_history is contiguous I32 [2,B]. B>=1 and 1<=K<=5. remaining_budgets and ple_history
+ *   are updated in place; the other outputs are written for every slot and are distinct from
+ *   the inputs. No workspace or other state is used.
  */
 void mtp_advance_round(const Tensor& anchors, const Tensor& frontiers,
                        const Tensor& licensed_counts, const Tensor& next_extents,
@@ -68,6 +74,7 @@ void mtp_advance_round(const Tensor& anchors, const Tensor& frontiers,
                        const Tensor& state_slots, Tensor& remaining_budgets,
                        Tensor& current_extents, Tensor& target_valid_columns,
                        Tensor& current_drafts, Tensor& target_rope_positions, Tensor& pending_folds,
+                       const Tensor& verify_ids, const Tensor& licensed_tokens, Tensor& ple_history,
                        cudaStream_t stream);
 
 } // namespace ninfer::ops

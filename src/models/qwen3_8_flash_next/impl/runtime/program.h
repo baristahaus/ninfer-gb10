@@ -11,6 +11,7 @@
 #include "core/decode_graph.h"
 #include <ninfer/models/qwen3_8_flash_next/prepared_prompt.h>
 
+#include "models/qwen3_8_flash_next/impl/ple_stage.h"
 #include "models/qwen3_8_flash_next/impl/runtime/layouts.h"
 #include "models/qwen3_8_flash_next/impl/runtime/dflash_context.h"
 #include "models/qwen3_8_flash_next/impl/runtime/host_kv_extent_store.h"
@@ -717,6 +718,8 @@ public:
     // round's row count; zero rows means the device frame is not current.
     qwen3_8_flash_next::MtpDecodeIngress* mtp_host_frame = nullptr;
     std::uint32_t mtp_frame_rows                         = 0;
+    // Flash-Next MTP rounds gather their PLE rows through this stage, inside the round.
+    std::optional<qwen3_8_flash_next::PleGatherStage> ple_gather_stage;
     std::optional<PinnedHostBuffer> dflash_host;
     qwen3_8_flash_next::DFlashDecodeIngress* dflash_host_ingress = nullptr;
     qwen3_8_flash_next::DFlashDecodeEgress* dflash_host_egress   = nullptr;

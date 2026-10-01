@@ -142,6 +142,10 @@ int run_advance_case(int k, int batch, int capacity) {
     std::vector<std::int32_t> expected_drafts(static_cast<std::size_t>(k * batch));
     std::vector<std::int32_t> expected_rope(static_cast<std::size_t>(T * batch));
     std::vector<std::int32_t> expected_folds(static_cast<std::size_t>(4 * batch));
+    std::vector<std::int32_t> verify(static_cast<std::size_t>(T * batch));
+    std::vector<std::int32_t> licensed_tokens(static_cast<std::size_t>(T * batch));
+    std::vector<std::int32_t> history(static_cast<std::size_t>(2 * batch));
+    std::vector<std::int32_t> expected_history(static_cast<std::size_t>(2 * batch));
     for (int s = 0; s < k; ++s) {
         for (int b = 0; b < capacity; ++b) {
             next_drafts[static_cast<std::size_t>(s * capacity + b)] = 50000 + 100 * b + s;
@@ -175,6 +179,22 @@ int run_advance_case(int k, int batch, int capacity) {
         expected_folds[static_cast<std::size_t>(4 * b + 1)] = slots[i];
         expected_folds[static_cast<std::size_t>(4 * b + 2)] = licensed[i];
         expected_folds[static_cast<std::size_t>(4 * b + 3)] = 0;
+
+        // Row 0 starts at the sequence start (no history); the others carry two tokens.
+        history[static_cast<std::size_t>(2 * b)]     = b == 0 ? -1 : 70000 + b;
+        history[static_cast<std::size_t>(2 * b + 1)] = b == 0 ? -1 : 71000 + b;
+        for (int j = 0; j < T; ++j) {
+            verify[static_cast<std::size_t>(b * T + j)]          = 80000 + 10 * b + j;
+            licensed_tokens[static_cast<std::size_t>(b * T + j)] = 60000 + 10 * b + j;
+        }
+        std::vector<std::int32_t> sequence = {history[static_cast<std::size_t>(2 * b + 1)],
+                                              history[static_cast<std::size_t>(2 * b)],
+                                              verify[static_cast<std::size_t>(b * T)]};
+        for (int j = 0; j < licensed[i]; ++j) {
+            sequence.push_back(licensed_tokens[static_cast<std::size_t>(b * T + j)]);
+        }
+        expected_history[static_cast<std::size_t>(2 * b)]     = sequence[sequence.size() - 2];
+        expected_history[static_cast<std::size_t>(2 * b + 1)] = sequence[sequence.size() - 3];
     }
 
     DeviceBuffer d_anchors      = to_device(anchors);
@@ -185,6 +205,9 @@ int run_advance_case(int k, int batch, int capacity) {
     DeviceBuffer d_rope_deltas  = to_device(rope_deltas);
     DeviceBuffer d_slots        = to_device(slots);
     DeviceBuffer d_budgets      = to_device(budgets);
+    DeviceBuffer d_verify       = to_device(verify);
+    DeviceBuffer d_licensed_tok = to_device(licensed_tokens);
+    DeviceBuffer d_history      = to_device(history);
     GuardedDeviceBuffer d_extents(expected_extents.size() * sizeof(std::int32_t));
     GuardedDeviceBuffer d_valid(expected_valid.size() * sizeof(std::int32_t));
     GuardedDeviceBuffer d_drafts(expected_drafts.size() * sizeof(std::int32_t));
@@ -209,9 +232,12 @@ int run_advance_case(int k, int batch, int capacity) {
     Tensor t_drafts(d_drafts.data(), DType::I32, {k, batch});
     Tensor t_rope(d_rope.data(), DType::I32, {T, batch});
     Tensor t_folds(d_folds.data(), DType::I32, {4, batch});
+    Tensor t_verify(d_verify.p, DType::I32, {T, batch});
+    Tensor t_licensed_tokens(d_licensed_tok.p, DType::I32, {T, batch});
+    Tensor t_history(d_history.p, DType::I32, {2, batch});
     ops::mtp_advance_round(t_anchors, t_frontiers, t_licensed, t_next_extents, t_next_drafts,
                            t_rope_deltas, t_slots, t_budgets, t_extents, t_valid, t_drafts, t_rope,
-                           t_folds, nullptr);
+                           t_folds, t_verify, t_licensed_tokens, t_history, nullptr);
     cuda_synchronize();
 
     const std::string label =
@@ -234,6 +260,9 @@ int run_advance_case(int k, int batch, int capacity) {
     failures += verify_exact((label + " pending folds").c_str(),
                              from_device<std::int32_t>(d_folds.data(), expected_folds.size()),
                              expected_folds);
+    failures += verify_exact((label + " PLE history").c_str(),
+                             from_device<std::int32_t>(d_history.p, expected_history.size()),
+                             expected_history);
     failures += d_extents.verify_guards((label + " extent guards").c_str());
     failures += d_valid.verify_guards((label + " valid guards").c_str());
     failures += d_drafts.verify_guards((label + " draft guards").c_str());

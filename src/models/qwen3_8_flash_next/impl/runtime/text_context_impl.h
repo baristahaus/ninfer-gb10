@@ -1342,6 +1342,18 @@ void TextContext::run_flash_next_layers(Tensor& x, Phase ph) {
             if (ple_state_ == nullptr) {
                 throw std::logic_error("Flash-Next PLE state is unavailable");
             }
+            if (active_ple_stage_mailbox_ != nullptr) {
+                // A stalled stage raises the mailbox's late flag after this deadline, which the
+                // Program reports; it never hangs the device.
+                constexpr std::uint64_t kPleStageDeadlineNs = 5'000'000'000ULL;
+                ops::flash_next_ple_wait_staged(active_ple_stage_mailbox_, kPleStageDeadlineNs,
+                                                stream);
+                CUDA_CHECK(cudaMemcpyAsync(active_ple_embeddings_->data, active_ple_stage_staging_,
+                                           active_ple_embeddings_->bytes(), cudaMemcpyHostToDevice,
+                                           stream));
+                active_ple_stage_mailbox_ = nullptr;
+                active_ple_stage_staging_ = nullptr;
+            }
             Tensor gathered = active_ple_embeddings_->view({2560, tokens});
             if (ph == Phase::Verify) {
                 if (gdn_state_action_ == GdnStateAction::RecordForReplay) {

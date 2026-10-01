@@ -90,6 +90,10 @@ struct MtpBatchContext {
     // pending_fold_rows record rows at the head of the round; null or zero rows folds nothing.
     const ops::GdnReplayFoldPlan* pending_fold = nullptr;
     std::int32_t pending_fold_rows             = 0;
+    // The host PLE gather stage (Flash-Next): the round publishes its verify columns' row IDs
+    // at its head and waits for the staged rows before its first PLE consumer.
+    ops::FlashNextPleStageMailbox* ple_stage_mailbox = nullptr;
+    const void* ple_stage_staging                    = nullptr;
 };
 
 struct DFlashBatchContext {

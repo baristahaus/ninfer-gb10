@@ -6,6 +6,7 @@ target_sources(ninfer_model_runtime PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/impl/frontend/processor.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/impl/frontend/tokenizer.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/impl/frontend/tool_call_parser.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/impl/ple_stage.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/impl/ple_table.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/impl/runtime/prefix_identity.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/impl/state/decoder_state.cpp

@@ -3,6 +3,7 @@
 
 #include "core/nvtx.h"
 #include "ninfer/ops/flash_next_ple.h"
+#include "ninfer/ops/flash_next_ple_stage.h"
 #include "ninfer/ops/mtp_round.h"
 #include "ninfer/ops/scatter.h"
 #include "ninfer/ops/scalar.h"
@@ -183,6 +184,14 @@ auto mtp_decode_batch_body(MtpBatchContext& state, std::int32_t batch_size, std:
         ops::speculative_prepare_verify_inputs(anchors, current_drafts, frontiers, current_extents,
                                                verify_ids, target_positions,
                                                state.execution.device.stream);
+        Tensor ple_history = frame.ple_history.slice(1, 0, batch_size);
+        if (state.ple_stage_mailbox != nullptr) {
+            // Publish the verify columns' PLE row IDs now; the host gathers them while the layers
+            // before the first PLE consumer run.
+            ops::flash_next_ple_publish_ids(verify_ids, ple_history, state.ple_stage_mailbox,
+                                            state.execution.device.stream);
+            card.set_ple_stage(state.ple_stage_mailbox, state.ple_stage_staging);
+        }
         {
             nvtx::ScopedRange target_range(nvtx::Name::DecodeMtpTarget, nvtx::Category::Mtp,
                                            static_cast<std::uint64_t>(width) * batch_size);
@@ -307,8 +316,8 @@ auto mtp_decode_batch_body(MtpBatchContext& state, std::int32_t batch_size, std:
         Tensor pending_folds = frame.pending_folds.slice(1, 0, batch_size);
         ops::mtp_advance_round(anchors, frontiers, licensed_counts, next_extents, next_drafts,
                                rope_deltas, state_destinations, budgets, current_extents,
-                               target_valid, current_drafts, target_rope, pending_folds,
-                               state.execution.device.stream);
+                               target_valid, current_drafts, target_rope, pending_folds, verify_ids,
+                               licensed_tokens, ple_history, state.execution.device.stream);
 
         CUDA_CHECK(cudaMemcpyAsync(&state.host_egress, frame.egress.data,
                                    sizeof(qwen3_8_flash_next::MtpDecodeEgress),

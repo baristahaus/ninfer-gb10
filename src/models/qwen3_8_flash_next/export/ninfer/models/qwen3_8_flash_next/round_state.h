@@ -80,6 +80,9 @@ struct MtpDecodeIngress {
     std::array<std::int32_t, kMaximumConcurrency> state_destination_slots{};
     std::array<std::int32_t, kMaximumConcurrency> rope_deltas{};
     std::array<ops::SamplingConfig, kMaximumConcurrency> sampling{};
+    // Per row b, the two tokens before the anchor, nearest first: {t_-1, t_-2}; negative where
+    // the sequence has no token. The PLE n-gram hash of the verify columns reads them.
+    std::array<TokenId, 2 * kMaximumConcurrency> ple_history{};
 };
 
 struct MtpDecodeEgress {
@@ -264,6 +267,7 @@ struct MtpDecodeState {
     Tensor state_source_slots;
     Tensor state_destination_slots;
     Tensor rope_deltas;
+    Tensor ple_history;
     const ops::SamplingConfig* sampling = nullptr;
     Tensor licensed_tokens;
     Tensor licensed_counts;

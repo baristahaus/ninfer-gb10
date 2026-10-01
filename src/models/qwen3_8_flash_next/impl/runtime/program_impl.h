@@ -83,7 +83,15 @@ bool mtp_frame_matches(const qwen3_8_flash_next::MtpDecodeIngress& host,
            same(host.state_source_slots, device.state_source_slots, rows) &&
            same(host.state_destination_slots, device.state_destination_slots, rows) &&
            same(host.rope_deltas, device.rope_deltas, rows) &&
-           same(host.sampling, device.sampling, rows);
+           same(host.sampling, device.sampling, rows) &&
+           same(host.ple_history, device.ple_history, 2U * rows);
+}
+
+void bind_ple_stage(const std::optional<qwen3_8_flash_next::PleGatherStage>& stage,
+                    schedule::MtpBatchContext& state) noexcept {
+    if (!stage) { return; }
+    state.ple_stage_mailbox = stage->mailbox();
+    state.ple_stage_staging = stage->staging();
 }
 
 std::uint32_t kv_pages_for_frontier(std::uint32_t frontier) noexcept {
@@ -1008,6 +1016,14 @@ ProgramImplCore::ProgramImplCore(const LoadedModelData& model_in, const Sequence
     if (plan.persistent.flash_decode_ple) {
         flash_decode_ple.emplace(plan.persistent.flash_decode_ple->bind(backing));
     }
+#ifdef NINFER_QWEN38_FLASH_NEXT
+    if (speculative_backend == SpeculativeBackend::Mtp) {
+        if (model.ple_table == nullptr) {
+            throw std::logic_error("Flash-Next MTP rounds require the PLE table");
+        }
+        ple_gather_stage.emplace(*model.ple_table);
+    }
+#endif
     if (plan.persistent.flash_ple_records) {
         flash_ple_records.emplace(plan.persistent.flash_ple_records->bind(backing));
     }
@@ -11526,13 +11542,19 @@ void ProgramImplCore::prepare_graphs() {
                                             *mtp_host_egress,
                                             state_images->continuation_hidden_store(),
                                             flash_decode_ple ? &*flash_decode_ple : nullptr};
+        bind_ple_stage(ple_gather_stage, mtp_state);
         const GraphExecutionProfile code_warm = planned_profiles.front();
         prepare_representative(code_warm.min, 1);
         device.synchronize();
+        if (ple_gather_stage) { ple_gather_stage->begin_round(); }
         schedule::mtp_decode_batch(
             mtp_state, 1, draft_window,
             mtp_causal_attention_envelopes(code_warm.max, draft_window, capacity), nullptr);
         device.synchronize();
+        if (ple_gather_stage) {
+            ple_gather_stage->end_round();
+            ple_gather_stage->check();
+        }
 
         mtp_graphs.profiles.reserve(planned_profiles.size() * max_concurrency);
         for (std::uint32_t batch_size = 1; batch_size <= max_concurrency; ++batch_size) {
@@ -12419,36 +12441,14 @@ ProgramImplCore::decode_mtp_batch(std::span<const std::uint32_t> lanes,
             mtp_host_ingress->state_destination_slots[row] = selectors.destination;
             mtp_host_ingress->rope_deltas[row]             = sequence.rope_delta;
             mtp_host_ingress->sampling[row]                = request.sampling_host;
-#ifdef NINFER_QWEN38_FLASH_NEXT
-            if (!flash_ple_host || !flash_decode_ple) {
-                throw std::logic_error("Flash-Next MTP PLE staging is unavailable");
-            }
-            const std::size_t history_size = std::min<std::size_t>(3, sequence.ledger.size());
-            std::vector<std::int32_t> ple_tokens(history_size + draft_window);
-            std::copy(sequence.ledger.end() - static_cast<std::ptrdiff_t>(history_size),
-                      sequence.ledger.end(), ple_tokens.begin());
-            for (std::uint32_t column = 1; column < width; ++column) {
-                ple_tokens[history_size + column - 1U] =
-                    mtp_host_ingress->current_drafts[row * draft_window + column - 1U];
-            }
-            std::vector<qwen3_8_flash_next::PleIds> ple_ids(ple_tokens.size());
-            qwen3_8_flash_next::compute_ple_ids(ple_tokens, ple_ids);
-            auto* ple_bytes = static_cast<std::byte*>(flash_ple_host->data()) + row * width * 2560U;
-            qwen3_8_flash_next::gather_ple_fp8(
-                *model.ple_table,
-                std::span<const qwen3_8_flash_next::PleIds>(ple_ids).subspan(history_size - 1U,
-                                                                             width),
-                std::span<std::byte>(ple_bytes, width * 2560U));
-#endif
+            const std::size_t ledger_size                  = sequence.ledger.size();
+            mtp_host_ingress->ple_history[row * 2] =
+                ledger_size >= 2 ? sequence.ledger[ledger_size - 2] : -1;
+            mtp_host_ingress->ple_history[row * 2 + 1] =
+                ledger_size >= 3 ? sequence.ledger[ledger_size - 3] : -1;
             materialize_sequence_kv(sequence, frontier + extent + 1,
                                     std::min(capacity, frontier + extent + draft_window));
         }
-
-#ifdef NINFER_QWEN38_FLASH_NEXT
-        CUDA_CHECK(cudaMemcpyAsync(flash_decode_ple->data, flash_ple_host->data(),
-                                   lanes.size() * width * 2560U, cudaMemcpyHostToDevice,
-                                   device.stream));
-#endif
         // Rows that all continued with their whole output, in the same order, find the frame
         // already advanced on the device. A membership or order change, a terminal, cancelled or
         // forked row, an eager fold, or any other host change uploads the host's frame.
@@ -12483,7 +12483,9 @@ ProgramImplCore::decode_mtp_batch(std::span<const std::uint32_t> lanes,
         schedule_state.pending_fold = replay_fold ? &*replay_fold : nullptr;
         schedule_state.pending_fold_rows =
             any_deferred ? static_cast<std::int32_t>(lanes.size()) : 0;
+        bind_ple_stage(ple_gather_stage, schedule_state);
         mark_workspace_usage(workspace_plan.mtp_round);
+        if (ple_gather_stage) { ple_gather_stage->begin_round(); }
         schedule::mtp_decode_batch(schedule_state, static_cast<std::int32_t>(lanes.size()),
                                    draft_window, envelopes, executable);
         for (SequenceState& sequence : continuation_states) { sequence.deferred_fold.reset(); }
@@ -12495,6 +12497,10 @@ ProgramImplCore::decode_mtp_batch(std::span<const std::uint32_t> lanes,
             device.synchronize();
         }
         timing.end_wait();
+        if (ple_gather_stage) {
+            ple_gather_stage->end_round();
+            ple_gather_stage->check();
+        }
         mtp_frame_rows = static_cast<std::uint32_t>(lanes.size());
 
         std::optional<nvtx::ScopedRange> egress_range;
@@ -12576,6 +12582,7 @@ ProgramImplCore::decode_mtp_batch(std::span<const std::uint32_t> lanes,
             device.synchronize();
         } catch (...) {}
         timing.end_wait();
+        if (ple_gather_stage) { ple_gather_stage->end_round(); }
         clear_execution_failure_lanes(lanes);
         throw;
     }

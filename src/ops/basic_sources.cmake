@@ -58,3 +58,4 @@ target_sources(ninfer_ops PRIVATE
 target_sources(ninfer_ops PRIVATE "${CMAKE_CURRENT_LIST_DIR}/launcher/hyperconnection.cu")
 
 target_sources(ninfer_ops PRIVATE "${CMAKE_CURRENT_LIST_DIR}/launcher/flash_next_ple.cu")
+target_sources(ninfer_ops PRIVATE "${CMAKE_CURRENT_LIST_DIR}/launcher/flash_next_ple_stage.cu")

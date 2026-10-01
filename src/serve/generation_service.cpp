@@ -292,11 +292,25 @@ GenerationService::acquire_request_lifetime(DeadlinePolicy deadline_policy) cons
     }
 }
 
+namespace {
+
+[[noreturn]] void throw_shutting_down() {
+    ApiError error;
+    error.status  = 503;
+    error.type    = "server_error";
+    error.code    = "service_unavailable";
+    error.message = "server is shutting down";
+    throw ApiException(error);
+}
+
+} // namespace
+
 PreparedRequest GenerationService::prepare(const GenerationRequest& request,
                                            GenerationConsumerMode consumer_mode,
                                            ninfer::GenerationObservationOptions observation,
                                            std::function<bool()> is_cancelled,
                                            ContextCacheHints context_cache) const {
+    if (draining_.load(std::memory_order_acquire)) { throw_shutting_down(); }
     return prepare_impl(
         request, consumer_mode, observation, std::move(is_cancelled), std::move(context_cache),
         options_.allow_prefix_reuse ? CacheParticipation::ReadWrite : CacheParticipation::Disabled,
@@ -418,18 +432,22 @@ GenerationOutcome GenerationService::run(PreparedRequest& prepared, const Stream
         output_sink = std::make_unique<ServiceOutputSink>(*sink, json_format);
     }
     ninfer::OutputSink* public_sink = output_sink.get();
-    ninfer::CancellationView cancellation;
-    if (is_cancelled || (sink != nullptr && sink->is_cancelled)) {
-        cancellation = ninfer::CancellationView([external = std::move(is_cancelled), sink]() {
-            return (external && external()) ||
-                   (sink != nullptr && sink->is_cancelled && sink->is_cancelled());
-        });
-    }
+    // Every running request also observes the shutdown cancellation.
+    const ninfer::CancellationView cancellation([this, external = std::move(is_cancelled), sink]() {
+        return cancelling_.load(std::memory_order_acquire) || (external && external()) ||
+               (sink != nullptr && sink->is_cancelled && sink->is_cancelled());
+    });
 
     ninfer::GenerationResult result;
     try {
         result = prepared.generation.wait(public_sink, cancellation);
-    } catch (const ninfer::RequestError& exception) { throw_request_error(exception); }
+    } catch (const ninfer::RequestError& exception) {
+        if (exception.kind() == ninfer::RequestErrorKind::Cancelled &&
+            cancelling_.load(std::memory_order_acquire)) {
+            throw_shutting_down();
+        }
+        throw_request_error(exception);
+    }
     GenerationOutcome outcome;
     outcome.text                = std::move(result.content);
     outcome.reasoning           = std::move(result.reasoning);

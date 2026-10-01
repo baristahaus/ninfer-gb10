@@ -69,8 +69,9 @@ selected for this process.
 | `POST /v1/messages/count_tokens` | checkpoint-native expanded input-token count |
 
 `GET /health` returns HTTP 200 with `{"status":"ok"}` while the Engine can accept work. After an
-Engine-wide failure it returns HTTP 503 with `{"status":"unavailable"}`. Temporary queue
-saturation does not make the Engine unavailable. The endpoint remains unauthenticated.
+Engine-wide failure it returns HTTP 503 with `{"status":"unavailable"}`, and during a shutdown
+drain HTTP 503 with `{"status":"draining"}`. Temporary queue saturation does not make the Engine
+unavailable. The endpoint remains unauthenticated.
 
 Every OpenAI-compatible response carries a unique `x-request-id` header, including streaming and
 error responses. Anthropic endpoints use their separate `request-id` contract.
@@ -824,6 +825,7 @@ The table lists executable defaults. The startup example selects a long-context 
 | `--pending-timeout-ms N` | maximum preparation-plus-admission wait | `30000` |
 | `--prefill-chunk N` | text-prefill chunk | `1024` |
 | `--log-stats-interval-ms N` | aggregate throughput report interval; `0` disables it | `5000` |
+| `--shutdown-timeout-seconds N` | how long admitted requests may finish after SIGINT/SIGTERM before they are cancelled; `0` cancels at once | `30` |
 | `--log-level trace\|debug\|info\|warning\|error\|critical\|off` | pretty stderr verbosity | `info` |
 | `--device N` | CUDA device index | `0` |
 | `--context-cost-presets FILE` | optional runtime context-cost preset registry | generic + compiled defaults |
@@ -883,6 +885,24 @@ mode and cannot be combined with any of the seven explicit context-cache capacit
 zero-valued flags.
 
 Run `./build/apps/ninfer-serve --help` for the exact option contract.
+
+### Shutdown
+
+SIGINT or SIGTERM starts a drain:
+1. Every new POST is answered HTTP 503 with error code `service_unavailable` ("server is shutting
+   down") in the endpoint's error shape, with `Connection: close`. `GET /health` reports
+   `draining`. GET endpoints still answer.
+2. Requests already admitted run to completion for up to `--shutdown-timeout-seconds`.
+3. Requests still running then, or at once after a second signal, are cancelled at their next
+   Engine round and fail with the same 503 error; a stream ends with that error event.
+4. The HTTP server stops, the Engine releases its device memory, and the process exits 0.
+
+A third signal exits immediately with status 130.
+
+On an integrated device (GB10), device memory is host memory. At startup the Engine waits, up to
+60 s, for available host memory to stop rising, so a server restarted right after another one
+exited sizes its weights and KV cache from the memory that process returned. It logs the wait when
+memory was still being released.
 
 Serve writes human-readable operational records to stderr using
 `YYYY-MM-DD HH:MM:SS.mmm  LEVEL  message`. Normal output covers material startup milestones,

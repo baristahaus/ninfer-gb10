@@ -36,6 +36,9 @@ struct ServeOptions {
     std::uint32_t prefill_chunk        = 1024;
     std::filesystem::path context_cost_presets;
     std::uint32_t log_stats_interval_ms    = 5000; // 0 disables periodic Engine throughput logs
+    // On SIGINT/SIGTERM, how long admitted requests may run before they are cancelled; 0 cancels
+    // them at once. A second signal cancels them immediately.
+    std::uint32_t shutdown_timeout_seconds = 30;
     std::size_t max_request_bytes          = kDefaultMaxRequestBytes;
     std::size_t media_cache_bytes          = kDefaultMediaCacheBytes;
     std::size_t media_live_bytes           = kDefaultMediaLiveBytes;

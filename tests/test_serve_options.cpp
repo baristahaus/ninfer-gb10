@@ -37,6 +37,8 @@ int main() {
                       "request JSONL logging is not disabled by default");
     failures += check(defaults.context_cost_presets.empty(),
                       "external context-cost presets are unexpectedly configured by default");
+    failures += check(defaults.shutdown_timeout_seconds == 30,
+                      "the default shutdown drain timeout is not 30 s");
     failures += check(defaults.log_stats_interval_ms == 5000,
                       "periodic throughput interval default mismatch");
     failures += check(defaults.media_cache_bytes == ninfer::kDefaultMediaCacheBytes &&
@@ -156,6 +158,8 @@ int main() {
                                            "8192",
                                            "--log-stats-interval-ms",
                                            "0",
+                                           "--shutdown-timeout-seconds",
+                                           "5",
                                            "--preserve-thinking",
                                            "--media-cache-mib",
                                            "256",
@@ -183,6 +187,8 @@ int main() {
                       "--pending-timeout-ms did not reach serving options");
     failures += check(configured.log_stats_interval_ms == 0,
                       "--log-stats-interval-ms did not disable periodic reporting");
+    failures += check(configured.shutdown_timeout_seconds == 5,
+                      "--shutdown-timeout-seconds did not reach serving options");
     failures += check(configured.media_cache_bytes == (256ULL << 20) &&
                           configured.media_live_bytes == (512ULL << 20) &&
                           configured.media_preprocess_threads == 6,

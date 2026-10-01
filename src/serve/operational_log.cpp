@@ -530,6 +530,29 @@ void OperationalLog::server_ready(std::string_view host, int port, std::string_v
                   auth_enabled ? "bearer" : "disabled");
 }
 
+void OperationalLog::drain_started(std::uint32_t in_flight, std::uint32_t timeout_seconds) const {
+    logger_->info("shutdown requested | draining {} in-flight request(s) | timeout {} s", in_flight,
+                  timeout_seconds);
+}
+
+void OperationalLog::drain_cancelling(std::uint32_t in_flight, bool forced) const {
+    logger_->warn("shutdown {} | cancelling {} in-flight request(s)",
+                  forced ? "forced by a second signal" : "timeout reached", in_flight);
+}
+
+void OperationalLog::drain_finished(double seconds, std::uint32_t remaining) const {
+    if (remaining == 0) {
+        logger_->info("drain complete in {:.1f} s", seconds);
+    } else {
+        logger_->warn("drain ended after {:.1f} s with {} request(s) still open", seconds,
+                      remaining);
+    }
+}
+
+void OperationalLog::engine_released(double seconds) const {
+    logger_->info("engine released in {:.1f} s", seconds);
+}
+
 void OperationalLog::server_stopped() const { logger_->info("server stopped"); }
 
 void OperationalLog::server_failure(bool serving, std::string_view detail) const {

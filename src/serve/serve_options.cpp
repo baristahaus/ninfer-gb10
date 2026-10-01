@@ -69,7 +69,8 @@ std::string serve_usage_text(const char* argv0) {
            " <model.ninfer> [--host H] [--port N] [--api-key KEY] "
            "[--model-id ID] [--max-context N] [--kv-capacity N|auto] [--max-concurrency N] "
            "[--max-pending-requests N] [--pending-timeout-ms N] "
-           "[--prefill-chunk N] [--log-stats-interval-ms N] [--device N] "
+           "[--prefill-chunk N] [--log-stats-interval-ms N] [--shutdown-timeout-seconds N] "
+           "[--device N] "
            "[--context-cost-presets FILE] "
            "[--max-request-mib N] [--media-cache-mib N] [--media-live-mib N] "
            "[--media-preprocess-threads N] "
@@ -89,7 +90,8 @@ std::string serve_usage_text(const char* argv0) {
            "       [--log-level trace|debug|info|warning|error|critical|off]\n"
            "       serves OpenAI Responses/Chat Completions and Anthropic Messages endpoints\n"
            "       --token-logprobs lets Chat Completions answer logprobs=true; it captures the\n"
-           "       probability output inside each decode graph, so a server without it rejects that\n"
+           "       probability output inside each decode graph, so a server without it rejects "
+           "that\n"
            "       request rather than answering with placeholders\n"
            "       --default-max-tokens defaults to " +
            std::to_string(kDefaultMaxTokens) +
@@ -103,6 +105,9 @@ std::string serve_usage_text(const char* argv0) {
            "       Responses state is process-local and bounded to 1024 records / 256 MiB by "
            "default\n"
            "       --log-stats-interval-ms defaults to 5000; 0 disables periodic throughput logs\n"
+           "       --shutdown-timeout-seconds defaults to 30: on SIGINT/SIGTERM, admitted "
+           "requests\n"
+           "       finish for up to this long before they are cancelled (0 cancels at once)\n"
            "       --vision enables media and loads the fixed Vision GPU allocations\n"
            "       --kv-capacity auto leaves " +
            std::to_string(kDefaultKvCapacityHeadroomBytes / (1024ULL * 1024ULL)) +
@@ -182,6 +187,9 @@ ServeOptions parse_serve_options(int argc, char** argv) {
             if (options.context_cost_presets.empty()) {
                 throw std::invalid_argument("--context-cost-presets must not be empty");
             }
+        } else if (arg == "--shutdown-timeout-seconds") {
+            options.shutdown_timeout_seconds = static_cast<std::uint32_t>(parse_nonnegative_int(
+                require_value("--shutdown-timeout-seconds"), "shutdown-timeout-seconds"));
         } else if (arg == "--log-stats-interval-ms") {
             options.log_stats_interval_ms = static_cast<std::uint32_t>(parse_nonnegative_int(
                 require_value("--log-stats-interval-ms"), "log-stats-interval-ms"));

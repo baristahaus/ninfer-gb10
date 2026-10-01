@@ -231,7 +231,15 @@ HttpServer::HttpServer(ServeOptions options, std::shared_ptr<spdlog::logger> log
 
 HttpServer::RequestLifecycle::RequestLifecycle(HttpServer& owner, RequestLogContext context)
     : owner_(&owner), context_(std::move(context)) {
+    owner_->in_flight_.fetch_add(1, std::memory_order_acq_rel);
     owner_->record_request_start(context_);
+}
+
+HttpServer::RequestLifecycle::~RequestLifecycle() {
+    if (owner_->in_flight_.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+        std::lock_guard lock(owner_->idle_mutex_);
+        owner_->idle_cv_.notify_all();
+    }
 }
 
 bool HttpServer::RequestLifecycle::claim(State terminal) noexcept {
@@ -352,6 +360,20 @@ void HttpServer::register_routes() {
 
     server_.set_pre_routing_handler([this](const httplib::Request& req, httplib::Response& res) {
         ensure_openai_request_id(req, res);
+        if (req.method == "POST" && draining_.load(std::memory_order_acquire)) {
+            ApiError error;
+            error.status  = 503;
+            error.type    = "server_error";
+            error.code    = "service_unavailable";
+            error.message = "server is shutting down";
+            res.set_header("Connection", "close");
+            if (req.path.rfind("/v1/messages", 0) == 0) {
+                write_anthropic_error(res, error, new_anthropic_request_id());
+            } else {
+                write_openai_error(res, error);
+            }
+            return httplib::Server::HandlerResponse::Handled;
+        }
         if (options_.api_key.empty() || req.path == "/health" || req.method == "OPTIONS") {
             return httplib::Server::HandlerResponse::Unhandled;
         }
@@ -426,10 +448,13 @@ void HttpServer::register_routes() {
         });
 
     server_.Get("/health", [this](const httplib::Request&, httplib::Response& res) {
-        const bool available = service_ != nullptr && service_->is_available();
+        const bool draining  = draining_.load(std::memory_order_acquire);
+        const bool available = !draining && service_ != nullptr && service_->is_available();
         res.status           = available ? 200 : 503;
-        res.set_content(nlohmann::json{{"status", available ? "ok" : "unavailable"}}.dump(),
-                        "application/json");
+        res.set_content(
+            nlohmann::json{{"status", available ? "ok" : (draining ? "draining" : "unavailable")}}
+                .dump(),
+            "application/json");
     });
     server_.Get("/v1/models", [this](const httplib::Request& req, httplib::Response& res) {
         handle_models(req, res);
@@ -531,5 +556,16 @@ bool HttpServer::listen() {
 }
 
 void HttpServer::stop() { server_.stop(); }
+
+void HttpServer::begin_drain() noexcept {
+    draining_.store(true, std::memory_order_release);
+    if (service_ != nullptr) { service_->begin_drain(); }
+}
+
+std::uint32_t HttpServer::wait_for_idle(std::chrono::steady_clock::time_point deadline) {
+    std::unique_lock lock(idle_mutex_);
+    (void)idle_cv_.wait_until(lock, deadline, [this] { return in_flight() == 0; });
+    return in_flight();
+}
 
 } // namespace ninfer::serve

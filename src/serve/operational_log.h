@@ -57,6 +57,10 @@ public:
     void listen_failure(std::string_view host, int port) const;
     void server_ready(std::string_view host, int port, std::string_view model_id,
                       bool auth_enabled) const;
+    void drain_started(std::uint32_t in_flight, std::uint32_t timeout_seconds) const;
+    void drain_cancelling(std::uint32_t in_flight, bool forced) const;
+    void drain_finished(double seconds, std::uint32_t remaining) const;
+    void engine_released(double seconds) const;
     void server_stopped() const;
     void server_failure(bool serving, std::string_view detail) const;
 

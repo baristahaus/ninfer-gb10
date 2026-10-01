@@ -45,12 +45,26 @@ public:
     bool listen();
     void stop();
 
+    // Shutdown drain: /health reports "draining" and every new POST is answered 503 while the
+    // requests already admitted run to completion. wait_for_idle returns the requests still in
+    // flight when `deadline` passes (0 when idle).
+    void begin_drain() noexcept;
+
+    [[nodiscard]] std::uint32_t in_flight() const noexcept {
+        return in_flight_.load(std::memory_order_acquire);
+    }
+
+    [[nodiscard]] std::uint32_t wait_for_idle(std::chrono::steady_clock::time_point deadline);
+
     [[nodiscard]] const std::string& public_model_id() const noexcept { return public_model_id_; }
 
 private:
     class RequestLifecycle {
     public:
         RequestLifecycle(HttpServer& owner, RequestLogContext context);
+        ~RequestLifecycle();
+        RequestLifecycle(const RequestLifecycle&)            = delete;
+        RequestLifecycle& operator=(const RequestLifecycle&) = delete;
 
         void done(const GenerationOutcome& outcome);
         void failure(const RequestFailure& failure);
@@ -109,6 +123,11 @@ private:
     std::condition_variable stats_cv_;
     std::thread stats_thread_;
     bool stats_stopping_ = false;
+    // Live request lifecycles: a lifecycle ends when its response, streamed or not, is finished.
+    std::atomic<bool> draining_{false};
+    std::atomic<std::uint32_t> in_flight_{0};
+    std::mutex idle_mutex_;
+    std::condition_variable idle_cv_;
 };
 
 } // namespace ninfer::serve

@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <atomic>
 #include <memory>
 #include <optional>
 #include <string>
@@ -142,6 +143,13 @@ public:
 
     void warmup();
 
+    // Shutdown drain. After begin_drain, new requests fail with 503 service_unavailable while
+    // running ones continue; after cancel_running, every running request is cancelled at its next
+    // Engine boundary and also fails with 503 ("server is shutting down").
+    void begin_drain() noexcept { draining_.store(true, std::memory_order_release); }
+
+    void cancel_running() noexcept { cancelling_.store(true, std::memory_order_release); }
+
 private:
     enum class CacheParticipation : std::uint8_t {
         Disabled,
@@ -164,6 +172,8 @@ private:
     ServeOptions options_;
     std::unique_ptr<ninfer::Engine> engine_;
     std::shared_ptr<RequestCapacity> request_capacity_;
+    std::atomic<bool> draining_{false};
+    std::atomic<bool> cancelling_{false};
 };
 
 } // namespace ninfer::serve

@@ -9,10 +9,12 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
 #include <fstream>
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <utility>
 
 namespace ninfer::runtime {
@@ -103,6 +105,40 @@ std::size_t obtainable_device_bytes(const DeviceContext& device, const EngineOpt
         (host_kv_pending ? options.context_cache.host_kv_capacity_bytes : 0);
     const std::size_t available = host_available_bytes();
     return available > reserve ? available - reserve : 0;
+}
+
+// An integrated device shares host memory with every process. A process that just exited (a
+// restarted server) returns its tens of GiB over several seconds, so sizing from MemAvailable at
+// that moment fails the weights check or silently plans a smaller KV cache. Wait until
+// MemAvailable stops rising before any sizing: stable means under 256 MiB of growth across one
+// 500 ms window. Bounded so a busy host never blocks startup indefinitely.
+void wait_for_integrated_memory_release(const DeviceContext& device) {
+    if (!device.props.integrated) { return; }
+    constexpr auto kWindow           = std::chrono::milliseconds(500);
+    constexpr auto kLimit            = std::chrono::seconds(60);
+    constexpr std::size_t kStableGap = 256ULL << 20;
+    const auto started               = Clock::now();
+    const std::size_t initial        = host_available_bytes();
+    std::size_t previous             = initial;
+    for (;;) {
+        std::this_thread::sleep_for(kWindow);
+        const std::size_t current = host_available_bytes();
+        const bool stable         = current < previous + kStableGap;
+        const bool expired        = Clock::now() - started >= kLimit;
+        if (stable || expired) {
+            if (current > initial + kStableGap) {
+                std::fprintf(stderr,
+                             "ninfer: waited %.1f s for host memory release (%.1f -> %.1f GiB "
+                             "available)%s\n",
+                             std::chrono::duration<double>(Clock::now() - started).count(),
+                             static_cast<double>(initial) / (1ULL << 30),
+                             static_cast<double>(current) / (1ULL << 30),
+                             stable ? "" : "; still rising at the limit");
+            }
+            return;
+        }
+        previous = current;
+    }
 }
 
 } // namespace
@@ -261,6 +297,7 @@ ConstructedModel construct_flash_next(const EngineOptions& options, DeviceContex
 ConstructedModel construct_model(const EngineOptions& options, DeviceContext& device) {
     validate_options(options);
     const auto start = Clock::now();
+    wait_for_integrated_memory_release(device);
     StartupPhaseScope inspect(options.startup_observer, StartupPhase::ArtifactInspect);
     artifact::Reader reader(options.artifact_path);
     inspect.complete();

@@ -84,4 +84,35 @@ void mtp_prepare_next_round(const Tensor& verify_ids, const Tensor& next_anchors
                                           ar_rope_positions, ar_valid_columns, max_context, stream);
 }
 
+void mtp_advance_round(const Tensor& anchors, const Tensor& frontiers,
+                       const Tensor& licensed_counts, const Tensor& next_extents,
+                       const Tensor& next_drafts, const Tensor& rope_deltas,
+                       const Tensor& state_slots, Tensor& remaining_budgets,
+                       Tensor& current_extents, Tensor& target_valid_columns,
+                       Tensor& current_drafts, Tensor& target_rope_positions, Tensor& pending_folds,
+                       cudaStream_t stream) {
+    constexpr const char* op = "mtp_advance_round";
+    const std::int32_t batch = anchors.ne[0];
+    const std::int32_t k     = current_drafts.ne[0];
+    if (batch < 1) { throw std::invalid_argument("mtp_advance_round: B must be positive"); }
+    if (k < 1 || k > 5) { throw std::invalid_argument("mtp_advance_round: K must be in [1,5]"); }
+    require_vector(anchors, DType::I32, batch, op, "anchors");
+    require_vector(frontiers, DType::I32, batch, op, "frontiers");
+    require_vector(licensed_counts, DType::I32, batch, op, "licensed_counts");
+    require_vector(next_extents, DType::I32, batch, op, "next_extents");
+    require_row_pitched_matrix(next_drafts, batch, k, op, "next_drafts");
+    require_vector(rope_deltas, DType::I32, batch, op, "rope_deltas");
+    require_vector(state_slots, DType::I32, batch, op, "state_slots");
+    require_vector(remaining_budgets, DType::I32, batch, op, "remaining_budgets");
+    require_vector(current_extents, DType::I32, batch, op, "current_extents");
+    require_vector(target_valid_columns, DType::I32, batch, op, "target_valid_columns");
+    require_matrix(current_drafts, DType::I32, k, batch, op, "current_drafts");
+    require_matrix(target_rope_positions, DType::I32, k + 1, batch, op, "target_rope_positions");
+    require_matrix(pending_folds, DType::I32, 4, batch, op, "pending_folds");
+    detail::mtp_advance_round_launch(anchors, frontiers, licensed_counts, next_extents, next_drafts,
+                                     rope_deltas, state_slots, remaining_budgets, current_extents,
+                                     target_valid_columns, current_drafts, target_rope_positions,
+                                     pending_folds, stream);
+}
+
 } // namespace ninfer::ops

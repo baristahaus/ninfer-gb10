@@ -102,9 +102,6 @@ auto mtp_decode_batch_body(MtpBatchContext& state, std::int32_t batch_size, std:
 
         qwen3_8_flash_next::MtpDecodeState& frame = state.frame;
         const std::int32_t width                  = static_cast<std::int32_t>(k) + 1;
-        CUDA_CHECK(cudaMemcpyAsync(frame.ingress.data, &state.host_ingress,
-                                   sizeof(qwen3_8_flash_next::MtpDecodeIngress),
-                                   cudaMemcpyHostToDevice, state.execution.device.stream));
         // The previous round's deferred commit: its accepted columns fold into the state slots
         // before this round's verify reads them and overwrites the records they come from.
         if (state.pending_fold != nullptr && state.pending_fold_rows > 0) {
@@ -305,8 +302,19 @@ auto mtp_decode_batch_body(MtpBatchContext& state, std::int32_t batch_size, std:
             }
         }
 
+        // Every input frame field is consumed; advance the frame to the next round of rows that
+        // continue with their whole licensed output.
+        Tensor pending_folds = frame.pending_folds.slice(1, 0, batch_size);
+        ops::mtp_advance_round(anchors, frontiers, licensed_counts, next_extents, next_drafts,
+                               rope_deltas, state_destinations, budgets, current_extents,
+                               target_valid, current_drafts, target_rope, pending_folds,
+                               state.execution.device.stream);
+
         CUDA_CHECK(cudaMemcpyAsync(&state.host_egress, frame.egress.data,
                                    sizeof(qwen3_8_flash_next::MtpDecodeEgress),
+                                   cudaMemcpyDeviceToHost, state.execution.device.stream));
+        CUDA_CHECK(cudaMemcpyAsync(&state.host_frame, frame.ingress.data,
+                                   sizeof(qwen3_8_flash_next::MtpDecodeIngress),
                                    cudaMemcpyDeviceToHost, state.execution.device.stream));
     };
 }

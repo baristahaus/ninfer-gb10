@@ -38,4 +38,36 @@ void mtp_prepare_next_round(const Tensor& verify_ids, const Tensor& next_anchors
                             Tensor& ar_valid_columns, std::int32_t max_context,
                             cudaStream_t stream);
 
+/**
+ * Op: mtp_advance_round
+ *
+ * Math / indexing:
+ *   The device-resident MTP round frame for the round after this one, assuming every row
+ *   continues and commits its whole licensed output. For each row b with L=licensed_counts[b],
+ *   P=clamp(next_extents[b],0,K), anchor=anchors[b] (the round's correction/bonus token) and
+ *   frontier=frontiers[b] (the frontier after the round):
+ *     remaining_budgets[b]       = max(remaining_budgets[b]-L,0);
+ *     current_extents[b]         = P;
+ *     target_valid_columns[b]    = P+1;
+ *     current_drafts[j,b]        = next_drafts[b,j] for 0<=j<P, anchor for P<=j<K;
+ *     target_rope_positions[j,b] = frontier+min(j,P)+rope_deltas[b] for 0<=j<=K;
+ *     pending_folds[:,b]         = {state_slots[b], state_slots[b], L, 0}.
+ *
+ * Logical shapes / effects:
+ *   anchors, frontiers, licensed_counts, next_extents, rope_deltas, state_slots,
+ *   remaining_budgets, current_extents and target_valid_columns are contiguous I32 [B].
+ *   next_drafts is I32 [B,K] with contiguous rows and a step stride of at least B (an exact-B
+ *   prefix of a fixed-capacity frame). current_drafts is contiguous I32 [K,B],
+ *   target_rope_positions contiguous I32 [K+1,B], and pending_folds contiguous I32 [4,B].
+ *   B>=1 and 1<=K<=5. remaining_budgets is updated in place; the other outputs are written for
+ *   every slot and are distinct from the inputs. No workspace or other state is used.
+ */
+void mtp_advance_round(const Tensor& anchors, const Tensor& frontiers,
+                       const Tensor& licensed_counts, const Tensor& next_extents,
+                       const Tensor& next_drafts, const Tensor& rope_deltas,
+                       const Tensor& state_slots, Tensor& remaining_budgets,
+                       Tensor& current_extents, Tensor& target_valid_columns,
+                       Tensor& current_drafts, Tensor& target_rope_positions, Tensor& pending_folds,
+                       cudaStream_t stream);
+
 } // namespace ninfer::ops

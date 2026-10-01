@@ -24,6 +24,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <exception>
 #include <iterator>
 #include <limits>
@@ -57,6 +58,32 @@ std::int32_t checked_i32(std::uint32_t value, const char* label) {
         throw std::overflow_error(label);
     }
     return static_cast<std::int32_t>(value);
+}
+
+// True when the device MTP frame, as the previous round advanced it, equals the ingress the host
+// built for this round over the first `rows` rows, so the round runs without an upload. The
+// graph reads no ingress field beyond those rows.
+bool mtp_frame_matches(const qwen3_8_flash_next::MtpDecodeIngress& host,
+                       const qwen3_8_flash_next::MtpDecodeIngress& device, std::size_t rows,
+                       std::uint32_t drafts) noexcept {
+    const auto same = [](const auto& a, const auto& b, std::size_t count) {
+        return std::memcmp(a.data(), b.data(), count * sizeof(a[0])) == 0;
+    };
+    const std::size_t width = static_cast<std::size_t>(drafts) + 1U;
+    return same(host.pending_folds, device.pending_folds, 4U * rows) &&
+           same(host.anchors, device.anchors, rows) &&
+           same(host.base_frontiers, device.base_frontiers, rows) &&
+           same(host.remaining_budgets, device.remaining_budgets, rows) &&
+           same(host.current_extents, device.current_extents, rows) &&
+           same(host.target_valid_columns, device.target_valid_columns, rows) &&
+           same(host.current_drafts, device.current_drafts, drafts * rows) &&
+           same(host.target_rope_positions, device.target_rope_positions, width * rows) &&
+           same(host.text_kv_table_rows, device.text_kv_table_rows, rows) &&
+           same(host.mtp_kv_table_rows, device.mtp_kv_table_rows, rows) &&
+           same(host.state_source_slots, device.state_source_slots, rows) &&
+           same(host.state_destination_slots, device.state_destination_slots, rows) &&
+           same(host.rope_deltas, device.rope_deltas, rows) &&
+           same(host.sampling, device.sampling, rows);
 }
 
 std::uint32_t kv_pages_for_frontier(std::uint32_t frontier) noexcept {
@@ -781,11 +808,11 @@ ProgramImplCore::ProgramImplCore(const LoadedModelData& model_in, const Sequence
           Variant::flash_next && plan.persistent.flash_decode_ple
               ? std::make_optional<PinnedHostBuffer>(plan.persistent.flash_decode_ple->region.bytes)
               : std::nullopt),
-      mtp_host(
-          plan.speculative_backend == SpeculativeBackend::Mtp
-              ? std::make_optional<PinnedHostBuffer>(sizeof(qwen3_8_flash_next::MtpDecodeIngress) +
-                                                     sizeof(qwen3_8_flash_next::MtpDecodeEgress))
-              : std::nullopt),
+      mtp_host(plan.speculative_backend == SpeculativeBackend::Mtp
+                   ? std::make_optional<PinnedHostBuffer>(
+                         2 * sizeof(qwen3_8_flash_next::MtpDecodeIngress) +
+                         sizeof(qwen3_8_flash_next::MtpDecodeEgress))
+                   : std::nullopt),
       dflash_host(plan.speculative_backend == SpeculativeBackend::DFlash
                       ? std::make_optional<PinnedHostBuffer>(
                             sizeof(qwen3_8_flash_next::DFlashDecodeIngress) +
@@ -1024,8 +1051,13 @@ ProgramImplCore::ProgramImplCore(const LoadedModelData& model_in, const Sequence
         mtp_host_egress  = reinterpret_cast<qwen3_8_flash_next::MtpDecodeEgress*>(
             static_cast<unsigned char*>(mtp_host->data()) +
             sizeof(qwen3_8_flash_next::MtpDecodeIngress));
+        mtp_host_frame = reinterpret_cast<qwen3_8_flash_next::MtpDecodeIngress*>(
+            static_cast<unsigned char*>(mtp_host->data()) +
+            sizeof(qwen3_8_flash_next::MtpDecodeIngress) +
+            sizeof(qwen3_8_flash_next::MtpDecodeEgress));
         *mtp_host_ingress = {};
         *mtp_host_egress  = {};
+        *mtp_host_frame   = {};
     }
     if (dflash_host) {
         dflash_host_ingress =
@@ -10302,6 +10334,8 @@ runtime::ExecutionTiming ProgramImplCore::resolve_pending_raw(
             Tensor destinations;
             if (speculative_backend == SpeculativeBackend::Mtp && io.mtp_decode) {
                 qwen3_8_flash_next::MtpDecodeState& frame = *io.mtp_decode;
+                // The selectors overwrite the advanced frame's extents.
+                mtp_frame_rows  = 0;
                 selector_tensor = frame.current_extents.slice(0, 0, batch);
                 hidden          = frame.target_hidden.slice(2, 0, batch);
                 selected        = frame.target_continuation_hidden.slice(1, 0, batch);
@@ -11405,6 +11439,10 @@ void ProgramImplCore::prepare_graphs() {
                 mtp_host_ingress->rope_deltas[row]             = 0;
                 mtp_host_ingress->sampling[row]                = {};
             }
+            CUDA_CHECK(cudaMemcpyAsync(io.mtp_decode->ingress.data, mtp_host_ingress,
+                                       sizeof(qwen3_8_flash_next::MtpDecodeIngress),
+                                       cudaMemcpyHostToDevice, device.stream));
+            mtp_frame_rows = 0;
         }
         if (io.ordinary) {
             *ordinary_host_ingress = {};
@@ -11484,7 +11522,7 @@ void ProgramImplCore::prepare_graphs() {
                                             decoder->text_kv,
                                             *decoder->mtp_cache(),
                                             *io.mtp_decode,
-                                            *mtp_host_ingress,
+                                            *mtp_host_frame,
                                             *mtp_host_egress,
                                             state_images->continuation_hidden_store(),
                                             flash_decode_ple ? &*flash_decode_ple : nullptr};
@@ -11516,6 +11554,7 @@ void ProgramImplCore::prepare_graphs() {
                     profile.definition);
             }
         }
+        mtp_frame_rows = 0;
     }
     if (speculative_backend == SpeculativeBackend::DFlash) {
         const auto batch_one_profiles = dflash_graph_profiles(capacity, draft_window, 1);
@@ -12410,6 +12449,21 @@ ProgramImplCore::decode_mtp_batch(std::span<const std::uint32_t> lanes,
                                    lanes.size() * width * 2560U, cudaMemcpyHostToDevice,
                                    device.stream));
 #endif
+        // Rows that all continued with their whole output, in the same order, find the frame
+        // already advanced on the device. A membership or order change, a terminal, cancelled or
+        // forked row, an eager fold, or any other host change uploads the host's frame.
+        const bool frame_current =
+            mtp_frame_rows == lanes.size() &&
+            mtp_frame_matches(*mtp_host_ingress, *mtp_host_frame, lanes.size(), draft_window);
+        mtp_frame_rows = 0;
+        if (!frame_current) {
+            nvtx::ScopedRange upload_range(nvtx::Name::DecodeMtpSubmitFrameUpload,
+                                           nvtx::Category::Mtp,
+                                           static_cast<std::uint64_t>(lanes.size()));
+            CUDA_CHECK(cudaMemcpyAsync(io.mtp_decode->ingress.data, mtp_host_ingress,
+                                       sizeof(qwen3_8_flash_next::MtpDecodeIngress),
+                                       cudaMemcpyHostToDevice, device.stream));
+        }
         ingress_range.reset();
 
         schedule::MtpBatchContext schedule_state{
@@ -12421,7 +12475,7 @@ ProgramImplCore::decode_mtp_batch(std::span<const std::uint32_t> lanes,
             decoder->text_kv,
             *decoder->mtp_cache(),
             *io.mtp_decode,
-            *mtp_host_ingress,
+            *mtp_host_frame,
             *mtp_host_egress,
             state_images->continuation_hidden_store(),
             flash_decode_ple ? &*flash_decode_ple : nullptr};
@@ -12441,6 +12495,7 @@ ProgramImplCore::decode_mtp_batch(std::span<const std::uint32_t> lanes,
             device.synchronize();
         }
         timing.end_wait();
+        mtp_frame_rows = static_cast<std::uint32_t>(lanes.size());
 
         std::optional<nvtx::ScopedRange> egress_range;
         egress_range.emplace(nvtx::Name::DecodeMtpEgress, nvtx::Category::Mtp,

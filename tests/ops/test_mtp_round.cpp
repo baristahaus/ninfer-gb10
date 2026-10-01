@@ -124,6 +124,124 @@ int run_case(int k, const std::vector<std::int32_t>& accepted) {
     return failures;
 }
 
+// The frame for the next round, from the committed round's outputs. next_drafts is the exact-B
+// prefix of a fixed-capacity [capacity,K] frame, so its step stride exceeds B.
+int run_advance_case(int k, int batch, int capacity) {
+    const int T = k + 1;
+    std::vector<std::int32_t> anchors(static_cast<std::size_t>(batch));
+    std::vector<std::int32_t> frontiers(static_cast<std::size_t>(batch));
+    std::vector<std::int32_t> licensed(static_cast<std::size_t>(batch));
+    std::vector<std::int32_t> next_extents(static_cast<std::size_t>(batch));
+    std::vector<std::int32_t> next_drafts(static_cast<std::size_t>(capacity * k));
+    std::vector<std::int32_t> rope_deltas(static_cast<std::size_t>(batch));
+    std::vector<std::int32_t> slots(static_cast<std::size_t>(batch));
+    std::vector<std::int32_t> budgets(static_cast<std::size_t>(batch));
+    std::vector<std::int32_t> expected_budgets(static_cast<std::size_t>(batch));
+    std::vector<std::int32_t> expected_extents(static_cast<std::size_t>(batch));
+    std::vector<std::int32_t> expected_valid(static_cast<std::size_t>(batch));
+    std::vector<std::int32_t> expected_drafts(static_cast<std::size_t>(k * batch));
+    std::vector<std::int32_t> expected_rope(static_cast<std::size_t>(T * batch));
+    std::vector<std::int32_t> expected_folds(static_cast<std::size_t>(4 * batch));
+    for (int s = 0; s < k; ++s) {
+        for (int b = 0; b < capacity; ++b) {
+            next_drafts[static_cast<std::size_t>(s * capacity + b)] = 50000 + 100 * b + s;
+        }
+    }
+    for (int b = 0; b < batch; ++b) {
+        const auto i   = static_cast<std::size_t>(b);
+        anchors[i]     = 90000 + 31 * b;
+        licensed[i]    = 1 + b % T;
+        frontiers[i]   = 40 + 23 * b;
+        rope_deltas[i] = 5 * b - 7;
+        slots[i]       = 3 + 2 * b;
+        // Cover an exhausted budget, a zero extent and the full extent.
+        budgets[i]      = b == 0 ? licensed[i] - 1 : 20 + b;
+        next_extents[i] = b % (k + 1);
+        if (b == batch - 1) { next_extents[i] = k; }
+
+        const int extent    = std::clamp(next_extents[i], 0, k);
+        expected_budgets[i] = std::max(budgets[i] - licensed[i], 0);
+        expected_extents[i] = extent;
+        expected_valid[i]   = extent + 1;
+        for (int j = 0; j < k; ++j) {
+            expected_drafts[static_cast<std::size_t>(b * k + j)] =
+                j < extent ? next_drafts[static_cast<std::size_t>(j * capacity + b)] : anchors[i];
+        }
+        for (int j = 0; j < T; ++j) {
+            expected_rope[static_cast<std::size_t>(b * T + j)] =
+                frontiers[i] + std::min(j, extent) + rope_deltas[i];
+        }
+        expected_folds[static_cast<std::size_t>(4 * b)]     = slots[i];
+        expected_folds[static_cast<std::size_t>(4 * b + 1)] = slots[i];
+        expected_folds[static_cast<std::size_t>(4 * b + 2)] = licensed[i];
+        expected_folds[static_cast<std::size_t>(4 * b + 3)] = 0;
+    }
+
+    DeviceBuffer d_anchors      = to_device(anchors);
+    DeviceBuffer d_frontiers    = to_device(frontiers);
+    DeviceBuffer d_licensed     = to_device(licensed);
+    DeviceBuffer d_next_extents = to_device(next_extents);
+    DeviceBuffer d_next_drafts  = to_device(next_drafts);
+    DeviceBuffer d_rope_deltas  = to_device(rope_deltas);
+    DeviceBuffer d_slots        = to_device(slots);
+    DeviceBuffer d_budgets      = to_device(budgets);
+    GuardedDeviceBuffer d_extents(expected_extents.size() * sizeof(std::int32_t));
+    GuardedDeviceBuffer d_valid(expected_valid.size() * sizeof(std::int32_t));
+    GuardedDeviceBuffer d_drafts(expected_drafts.size() * sizeof(std::int32_t));
+    GuardedDeviceBuffer d_rope(expected_rope.size() * sizeof(std::int32_t));
+    GuardedDeviceBuffer d_folds(expected_folds.size() * sizeof(std::int32_t));
+    d_extents.fill(0xcd);
+    d_valid.fill(0xcd);
+    d_drafts.fill(0xcd);
+    d_rope.fill(0xcd);
+    d_folds.fill(0xcd);
+
+    Tensor t_anchors(d_anchors.p, DType::I32, {batch});
+    Tensor t_frontiers(d_frontiers.p, DType::I32, {batch});
+    Tensor t_licensed(d_licensed.p, DType::I32, {batch});
+    Tensor t_next_extents(d_next_extents.p, DType::I32, {batch});
+    Tensor t_next_drafts = Tensor(d_next_drafts.p, DType::I32, {capacity, k}).slice(0, 0, batch);
+    Tensor t_rope_deltas(d_rope_deltas.p, DType::I32, {batch});
+    Tensor t_slots(d_slots.p, DType::I32, {batch});
+    Tensor t_budgets(d_budgets.p, DType::I32, {batch});
+    Tensor t_extents(d_extents.data(), DType::I32, {batch});
+    Tensor t_valid(d_valid.data(), DType::I32, {batch});
+    Tensor t_drafts(d_drafts.data(), DType::I32, {k, batch});
+    Tensor t_rope(d_rope.data(), DType::I32, {T, batch});
+    Tensor t_folds(d_folds.data(), DType::I32, {4, batch});
+    ops::mtp_advance_round(t_anchors, t_frontiers, t_licensed, t_next_extents, t_next_drafts,
+                           t_rope_deltas, t_slots, t_budgets, t_extents, t_valid, t_drafts, t_rope,
+                           t_folds, nullptr);
+    cuda_synchronize();
+
+    const std::string label =
+        "mtp advance round K=" + std::to_string(k) + " B=" + std::to_string(batch);
+    int failures = verify_exact((label + " budgets").c_str(),
+                                from_device<std::int32_t>(d_budgets.p, expected_budgets.size()),
+                                expected_budgets);
+    failures += verify_exact((label + " extents").c_str(),
+                             from_device<std::int32_t>(d_extents.data(), expected_extents.size()),
+                             expected_extents);
+    failures += verify_exact((label + " valid columns").c_str(),
+                             from_device<std::int32_t>(d_valid.data(), expected_valid.size()),
+                             expected_valid);
+    failures += verify_exact((label + " drafts").c_str(),
+                             from_device<std::int32_t>(d_drafts.data(), expected_drafts.size()),
+                             expected_drafts);
+    failures +=
+        verify_exact((label + " rope positions").c_str(),
+                     from_device<std::int32_t>(d_rope.data(), expected_rope.size()), expected_rope);
+    failures += verify_exact((label + " pending folds").c_str(),
+                             from_device<std::int32_t>(d_folds.data(), expected_folds.size()),
+                             expected_folds);
+    failures += d_extents.verify_guards((label + " extent guards").c_str());
+    failures += d_valid.verify_guards((label + " valid guards").c_str());
+    failures += d_drafts.verify_guards((label + " draft guards").c_str());
+    failures += d_rope.verify_guards((label + " rope guards").c_str());
+    failures += d_folds.verify_guards((label + " fold guards").c_str());
+    return failures;
+}
+
 } // namespace
 
 int main() {
@@ -135,6 +253,9 @@ int main() {
     int failures = 0;
     failures += run_case(1, {0});
     failures += run_case(5, {0, 2, 5});
+    failures += run_advance_case(1, 1, 1);
+    failures += run_advance_case(3, 4, 8);
+    failures += run_advance_case(5, 8, 8);
 
     if (failures != 0) {
         std::cerr << "mtp_round failures=" << failures << '\n';

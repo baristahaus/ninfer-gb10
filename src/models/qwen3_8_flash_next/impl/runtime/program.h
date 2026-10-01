@@ -713,6 +713,10 @@ public:
     std::optional<PinnedHostBuffer> mtp_host;
     qwen3_8_flash_next::MtpDecodeIngress* mtp_host_ingress = nullptr;
     qwen3_8_flash_next::MtpDecodeEgress* mtp_host_egress   = nullptr;
+    // The device frame as the last MTP round left it (advanced for its successor), and that
+    // round's row count; zero rows means the device frame is not current.
+    qwen3_8_flash_next::MtpDecodeIngress* mtp_host_frame = nullptr;
+    std::uint32_t mtp_frame_rows                         = 0;
     std::optional<PinnedHostBuffer> dflash_host;
     qwen3_8_flash_next::DFlashDecodeIngress* dflash_host_ingress = nullptr;
     qwen3_8_flash_next::DFlashDecodeEgress* dflash_host_egress   = nullptr;

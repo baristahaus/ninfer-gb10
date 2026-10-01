@@ -90,6 +90,7 @@ enum class Name : std::size_t {
     DecodeDFlashTarget,
     DecodeMtpSubmitGraph,
     DecodeMtpSubmitIngress,
+    DecodeMtpSubmitFrameUpload,
     DecodeMtpEgress,
     Count,
 };
@@ -214,6 +215,7 @@ enum class Name : std::size_t {
         "decode.dflash.target",
         "decode.mtp.submit.graph",
         "decode.mtp.submit.ingress",
+        "decode.mtp.submit.frame_upload",
         "decode.mtp.egress",
     });
     static_assert(names.size() == static_cast<std::size_t>(Name::Count));

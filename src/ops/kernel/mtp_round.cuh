@@ -41,4 +41,38 @@ __global__ void mtp_prepare_next_round_kernel(
     }
 }
 
+__global__ void
+mtp_advance_round_kernel(const std::int32_t* anchors, const std::int32_t* frontiers,
+                         const std::int32_t* licensed_counts, const std::int32_t* next_extents,
+                         const std::int32_t* next_drafts, const std::int32_t* rope_deltas,
+                         const std::int32_t* state_slots, std::int32_t* remaining_budgets,
+                         std::int32_t* current_extents, std::int32_t* target_valid_columns,
+                         std::int32_t* current_drafts, std::int32_t* target_rope_positions,
+                         std::int32_t* pending_folds, std::int32_t batch, std::int32_t k,
+                         std::int32_t draft_step_stride) {
+    const int row = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
+    if (row >= batch) { return; }
+    const int licensed        = licensed_counts[row];
+    int extent                = next_extents[row];
+    extent                    = extent < 0 ? 0 : (extent > k ? k : extent);
+    const int budget          = remaining_budgets[row] - licensed;
+    remaining_budgets[row]    = budget > 0 ? budget : 0;
+    current_extents[row]      = extent;
+    target_valid_columns[row] = extent + 1;
+    const int anchor          = anchors[row];
+    for (int j = 0; j < k; ++j) {
+        current_drafts[row * k + j] =
+            j < extent ? next_drafts[j * draft_step_stride + row] : anchor;
+    }
+    const int rope_base = frontiers[row] + rope_deltas[row];
+    for (int j = 0; j <= k; ++j) {
+        target_rope_positions[row * (k + 1) + j] = rope_base + (j < extent ? j : extent);
+    }
+    const int slot             = state_slots[row];
+    pending_folds[row * 4]     = slot;
+    pending_folds[row * 4 + 1] = slot;
+    pending_folds[row * 4 + 2] = licensed;
+    pending_folds[row * 4 + 3] = 0;
+}
+
 } // namespace ninfer::ops

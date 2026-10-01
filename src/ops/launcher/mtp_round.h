@@ -14,4 +14,12 @@ void mtp_prepare_next_round_launch(const Tensor& verify_ids, const Tensor& next_
                                    Tensor& ar_rope_positions, Tensor& ar_valid_columns,
                                    std::int32_t max_context, cudaStream_t stream);
 
+void mtp_advance_round_launch(const Tensor& anchors, const Tensor& frontiers,
+                              const Tensor& licensed_counts, const Tensor& next_extents,
+                              const Tensor& next_drafts, const Tensor& rope_deltas,
+                              const Tensor& state_slots, Tensor& remaining_budgets,
+                              Tensor& current_extents, Tensor& target_valid_columns,
+                              Tensor& current_drafts, Tensor& target_rope_positions,
+                              Tensor& pending_folds, cudaStream_t stream);
+
 } // namespace ninfer::ops::detail

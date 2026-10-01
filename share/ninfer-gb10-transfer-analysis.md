@@ -1,6 +1,7 @@
 # What the GB10 Flash-Next work could offer upstream NInfer
 
-**Status:** analysis for discussion, 2026-10-01. Nothing here has run on an RTX 5090.
+**Status:** analysis for discussion, 2026-10-01; K4 outcome added after GB10 verification.
+Nothing here has run on an RTX 5090.
 **Source:** fork `baristahaus/ninfer-gb10`, branch `claude/peaceful-cori-e9myku`, diverged from
 upstream at `e31bc99b`.
 **Audience:** NInfer maintainers, and a peer with an RTX 5090 who can validate before anything is
@@ -17,6 +18,20 @@ Whether it is worth porting depends on one number nobody has measured on an RTX 
 **decode host time per round**. The published 5090 rounds are short (about 4.7 ms for 35B C1).
 Even a ~1 ms host gap would be a large share there. That gap can be read from existing serve logs.
 
+## Outcome on GB10 (read this first)
+
+The pipelining was built and verified exact, and it **did not pay**:
+- **Where the host gap was:** with K3 in place the serial loop exposes 0.05 ms of host time per
+  ~72 ms round at C4 K=1. Almost all of the 8–9 ms measured earlier was Flash-Next's per-round
+  PLE gather from the file-backed table, which K3 moved inside the round.
+- **What pipelining did:** two rounds in flight then had nothing to hide. The backup copies it
+  needs added ~2 ms of device time per round, a ~2% decode regression (ABBA, untraced).
+- **Status:** it stays in the fork as an opt-in flag (`--pipelined-decode`, off).
+
+**Consequence for Qwen3.5.** Qwen3.5 has no PLE, so its host gap may already be small, and the
+case for porting K1–K4 is weaker than §3 below suggests. The step-0 measurement in §7 decides it.
+Port only if decode host time is still a material share of the round.
+
 ## 1. What was built in the fork
 
 | Stage | Commit | What it does |
@@ -27,9 +42,10 @@ Even a ~1 ms host gap would be a large share there. That gap can be read from ex
 | K4a | `3d3d7a25` | Each MTP lane gets one spare state slot. A round reads one of the lane's two slots and commits into the other, so the pre-round state survives until the commit is final. |
 | K4b | `f86d582a` | Two rounds in flight. The Engine launches round N+1 before round N's preview and commit, and the Program keeps the early round whole or discards it whole, so outputs equal the serial loop. Engine contract: `engine-architecture.md` §6.4. |
 
-Measured on GB10, C4 K=1, Flash-Next 125B: the decode host gap is 8–9 ms of a ~79 ms round with a
-warm page cache. K1 and K2 are verified bitwise identical to the serial loop, with no measurable
-speed change, as expected. K3 and K4 are not yet verified.
+Measured on GB10, C4 K=1, Flash-Next 125B: before K3 the decode host gap was 8–9 ms of a ~79 ms
+round with a warm page cache; after K3 it is 0.05 ms. K1–K4 are verified bitwise identical to the
+serial loop on the real test and at serve level on the same configuration. K4b pipelining
+measured ~2% slower and is off by default.
 
 ## 2. Why Qwen3.5 has the same structure
 

@@ -299,8 +299,10 @@ binary `4d35a292...` (a5581fce), no nsys trace. `k4-speed/run_speed_abba.sh`.
   not free.
 - Verdict: pipelined decode does not pay on this workload; off stays the default.
 - K4b (off) against the K4a gate: decode 22.6-23.3 vs 19.9 tok/s, host exposed
-  about 0.05 vs 2.15 ms/round (K4a under nsys, K4b untraced) - the serial rework
-  is the win; the pipelining layer adds nothing on top of it.
+  about 0.05 vs 2.15 ms/round (K4a under nsys, K4b untraced) - the rework gain is
+  **unmeasured**: no untraced pre-rework baseline exists. Only the on-versus-off
+  comparison on the same binary is measured, and it shows on is slightly slower.
+  (Corrected 2026-10-01 per Opus.)
 
 ### Route-naming run (same binary)
 
@@ -312,6 +314,41 @@ request is ~356 tokens, far below the cap). Cold first request:
 (1212 B `9f1893c5...`). **The split does not track KV page-pool size; it
 tracks `max_concurrency`** (state-slot count). Caveat: the PLE file page cache
 was warm from the speed run; the KV pool was cold.
+
+## Route diagnostics: the `max_concurrency`-dependent route is in prefill (2026-10-01)
+
+`k4-speed/run_routediag.sh` (four cold serves, `--no-cuda-graph`, binary
+`4d35a292...`), `route_probe.py` (cold 256-token probe; `prompt_tokens`=73),
+`compare_routediag.py`. Taps: `NINFER_FLASH_NEXT_LOGITS_DIR` (every
+decode/verify round) and `NINFER_FLASH_NEXT_STATE_DIR` +
+`NINFER_FLASH_NEXT_STATE_FRONTIER=73` (GDN state at the end of prefill). The
+split reproduces exactly under `--no-cuda-graph`: C1 1212 B `9f1893c5...`,
+C4 1172 B `86bd9884...`.
+
+- GDN state at the prefill frontier (73 tokens): **layer 0 bitwise identical;
+  layers 1-35 differ - all 70 conv/recurrent files**. Route (`mtp`), lane (0),
+  and ledger identical on both configs; only the physical slot differs (1 vs 2,
+  a pool-indexing artifact of the different pool sizes).
+- First MTP verify round (serial 0): **identical metadata on both configs**
+  (route `verify`, positions [53,54], batch 1, width 2, `kv_table_rows` [0],
+  same draft tokens [1596,1144]) but the logit vectors differ at
+  247,786/248,320 (position 53) and 247,841/248,320 (position 54), max |delta|
+  17.0 / 15.6 against a logit range of about -11 to +25 - a real divergence,
+  not a precision-floor difference. All 148/148 common rounds differ
+  downstream (capture counts 151 vs 148).
+
+Layer 0's GDN input and committed state are identical, and layer 1's GDN input
+is not, so the divergence is introduced inside **layer 0's attention / PLE /
+MLP / hyperconnection stage** - the first decode round takes the same route
+with the same shapes and input tokens; it inherits a different state.
+Concrete candidate (inference, to confirm): the KV page shape differs by
+config (C1 1,152 pages x 64 tokens, C4 4,608 pages x 16 tokens, same
+73,728-token capacity), so the attention tiling/reduction over the paged KV
+differs from the first attention layer on.
+
+Raw per-round logit captures for rounds 1-150 stay on this machine
+(`k4-speed/routediag/`); round 0 and the state captures are committed as
+the supporting evidence.
 
 ## K4a gate data (3d3d7a25 + fix, serve sha256 82f77128... from the K4a verify turn)
 
@@ -330,12 +367,15 @@ was warm from the speed run; the KV pool was cold.
 
 ## State
 
-- Beads: `ninfer-gb10-nb2` (closed - K4 verify complete: F1 passes the bitwise
-  gate, F2 closed (original trigger path unreachable), F3 closed, speed gate:
-  pipelining off stays the default); `ninfer-gb10-mol` (closed - F1 passes,
-  F2 closed); `ninfer-gb10-3w8` (F3 - closed, verified); `ninfer-gb10-pwd`
-  (shutdown 503 - closed, verified); `ninfer-gb10-nkw` (closed).
-- Machine state: code at `a5581fce` (the K4 record commit lands on top); build
-  dir holds that binary (`4d35a292...`); worktree `~/ninfer-gb10-k4a` holds the
-  K4a gate tree (`3d3d7a25` + `6d851f69`) with a built binary
-  (`7bd0c8bb...`); GPU free.
+- Beads: `ninfer-gb10-04m` (open, P1 - agreed removal of the pipelined-decode
+  machinery + K4a spare state slots, and documentation of the prefill route
+  found by the diagnostics below; removal by Opus, reruns by twoFour);
+  `ninfer-gb10-nb2` (closed - K4 verify complete); `ninfer-gb10-mol` (closed);
+  `ninfer-gb10-3w8` (closed, verified); `ninfer-gb10-pwd` (closed, verified);
+  `ninfer-gb10-nkw` (closed).
+- Open work for Opus: identify which op inside layer 0's attention/PLE/MLP/HC
+  stage takes the config-dependent route (leading candidate: KV page shape),
+  and document it; then the agreed removal.
+- Machine state: code at `a5581fce` + the K4 record commits; build dir holds
+  `4d35a292...`; worktree `~/ninfer-gb10-k4a` holds the K4a gate tree
+  (`3d3d7a25` + `6d851f69`, binary `7bd0c8bb...`); GPU free.

@@ -284,6 +284,8 @@ MtpDecodeState::MtpDecodeState(DeviceSpan backing, const MtpDecodeStateLayout& l
                                    std::initializer_list<std::int32_t> shape) {
         return Tensor(static_cast<unsigned char*>(egress.data) + offset, dtype, shape);
     };
+    pending_folds = ingress_tensor(offsetof(MtpDecodeIngress, pending_folds), DType::I32,
+                                   {4, static_cast<std::int32_t>(kMaximumConcurrency)});
     anchors = ingress_tensor(offsetof(MtpDecodeIngress, anchors), DType::I32, {batch});
     base_frontiers =
         ingress_tensor(offsetof(MtpDecodeIngress, base_frontiers), DType::I32, {batch});

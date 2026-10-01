@@ -5,6 +5,7 @@
 #include "core/arena.h"
 #include "core/decode_graph.h"
 #include "core/device.h"
+#include "ninfer/ops/gdn_replay.h"
 #include "ninfer/ops/kv_cache_append.h"
 #include "ninfer/ops/sampling.h"
 #include "ninfer/ops/sliding_window_attention.h"
@@ -82,6 +83,10 @@ struct MtpBatchContext {
     qwen3_8_flash_next::MtpDecodeEgress& host_egress;
     Tensor& continuation_hidden_store;
     const Tensor* ple_embeddings = nullptr;
+    // Folds the previous round's deferred GDN/PLE commits (frame.pending_folds) over the first
+    // pending_fold_rows record rows at the head of the round; null or zero rows folds nothing.
+    const ops::GdnReplayFoldPlan* pending_fold = nullptr;
+    std::int32_t pending_fold_rows             = 0;
 };
 
 struct DFlashBatchContext {

@@ -318,8 +318,25 @@ GdnReplayFoldPlan::GdnReplayFoldPlan(const GdnReplayRecords& records,
 void GdnReplayFoldPlan::execute(std::span<const GdnReplayFoldRow> rows, cudaStream_t stream) const {
     const detail::gated_delta_net::GdnReplayFoldKernelRows packed =
         validate_fold_rows(records_, states_, rows);
-    detail::gated_delta_net::launch_replay_fold(records_, states_, packed,
+    detail::gated_delta_net::launch_replay_fold(records_, states_, packed, nullptr,
                                                 static_cast<std::int32_t>(rows.size()), stream);
+}
+
+void GdnReplayFoldPlan::execute_device(const Tensor& device_rows, std::int32_t row_count,
+                                       cudaStream_t stream) const {
+    static_assert(sizeof(detail::gated_delta_net::GdnReplayFoldKernelRow) ==
+                  kGdnReplayFoldDeviceRowWords * sizeof(std::int32_t));
+    if (row_count <= 0 || row_count > records_.spec.record_capacity ||
+        device_rows.data == nullptr || device_rows.dtype != DType::I32 ||
+        !device_rows.is_contiguous() ||
+        device_rows.numel() < static_cast<std::int64_t>(kGdnReplayFoldDeviceRowWords) * row_count ||
+        !aligned_to(device_rows.data, 16)) {
+        throw std::invalid_argument("gdn_replay_fold: invalid device row descriptors");
+    }
+    detail::gated_delta_net::launch_replay_fold(
+        records_, states_, detail::gated_delta_net::GdnReplayFoldKernelRows{},
+        static_cast<const detail::gated_delta_net::GdnReplayFoldKernelRow*>(device_rows.data),
+        row_count, stream);
 }
 
 } // namespace ninfer::ops

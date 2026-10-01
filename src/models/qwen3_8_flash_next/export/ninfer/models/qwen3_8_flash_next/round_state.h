@@ -62,6 +62,11 @@ struct OrdinaryDecodeEgress {
 // Stable pinned/device transfer formats for concurrent MTP decode. The arrays use the maximum
 // product domain; RoundState binds only the configured [K,C] and [K+1,C] prefixes.
 struct MtpDecodeIngress {
+    // The previous MTP round's deferred commit folds, by that round's record row b: four I32
+    // words {state slot, state slot, commit columns, 0} (the in-place GDN and PLE fold
+    // descriptor). The round folds them at its head, before its own verify overwrites the
+    // records; a zero column count is no fold.
+    alignas(16) std::array<std::int32_t, 4 * kMaximumConcurrency> pending_folds{};
     std::array<TokenId, kMaximumConcurrency> anchors{};
     std::array<std::int32_t, kMaximumConcurrency> base_frontiers{};
     std::array<std::int32_t, kMaximumConcurrency> remaining_budgets{};
@@ -246,6 +251,7 @@ struct DFlashPrefillState {
 struct MtpDecodeState {
     DeviceSpan ingress;
     DeviceSpan egress;
+    Tensor pending_folds;
     Tensor anchors;
     Tensor base_frontiers;
     Tensor remaining_budgets;

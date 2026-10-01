@@ -4276,6 +4276,7 @@ runtime::ContextTransactionReserveStatus
 ProgramImplCore::reserve_materialization(AdmissionCandidate&& plan, PreparedPromptData&& prompt,
                                          runtime::CancellationFlagView cancellation) {
     if (cancellation.requested()) { return runtime::ContextTransactionReserveStatus::Aborted; }
+    settle_deferred_folds();
     const runtime::PreflightStatus preflight = revalidate_materialization(plan, prompt);
     if (preflight != runtime::PreflightStatus::Ready) {
         throw std::logic_error("materialization changed after successful preflight");
@@ -6436,6 +6437,7 @@ ProgramImplCore::progress_materialization_transaction(runtime::CancellationFlagV
 
 ContextTransactionProgress<Variant>
 ProgramImplCore::progress_context_transaction(runtime::CancellationFlagView cancellation) {
+    if (has_context_transaction()) { settle_deferred_folds(); }
     const auto terminal_or_pending =
         []<class Result>(Result&& result) -> ContextTransactionProgress<Variant> {
         if (result.status == runtime::ContextTransactionStatus::InProgress) {
@@ -7464,6 +7466,7 @@ PrefillProgress ProgramImplCore::advance_prefill(SequenceHandle sequence,
     if (pending_transaction_ || !valid_sequence(sequence)) {
         throw std::logic_error("prefill sequence capability is invalid");
     }
+    settle_deferred_folds();
     const std::uint32_t lane = ContractAccess::lane(sequence).value;
     if (requests[lane].lifecycle != Lifecycle::Prefilling) {
         throw std::logic_error("prefill advance requires a prefilling sequence");
@@ -7908,6 +7911,7 @@ runtime::ContextTransactionReserveStatus ProgramImplCore::reserve_active_capture
     if (has_context_transaction() || has_unsettled_state_fork() || !valid_capture_offer(offer)) {
         throw std::logic_error("capture transaction is not reservable");
     }
+    settle_deferred_folds();
     if (cancellation.requested()) {
         skip_capture(std::move(offer));
         return runtime::ContextTransactionReserveStatus::Aborted;
@@ -8882,6 +8886,8 @@ PendingBatch ProgramImplCore::decode(std::span<const SequenceHandle> members,
         budgets.size() != members.size()) {
         throw std::invalid_argument("decode membership is invalid");
     }
+    // An MTP round consumes the deferred folds at its graph head (decode_mtp_batch).
+    if (speculative_backend != SpeculativeBackend::Mtp) { settle_deferred_folds(); }
     std::array<std::uint32_t, kMaximumConcurrency> lanes{};
     for (std::size_t row = 0; row < members.size(); ++row) {
         if (!valid_sequence(members[row])) {
@@ -8958,6 +8964,7 @@ runtime::ExecutionTiming ProgramImplCore::append_forced_tokens(
         row_major_tokens.size() != static_cast<std::size_t>(row_stride) * members.size()) {
         throw std::invalid_argument("forced-token membership is invalid");
     }
+    settle_deferred_folds();
 
     std::array<std::uint32_t, kMaximumConcurrency> lanes{};
     for (std::size_t row = 0; row < members.size(); ++row) {
@@ -9334,6 +9341,9 @@ FinishResult ProgramImplCore::finish(SequenceHandle sequence) noexcept {
     SequenceState& state                   = active_sequence(lane);
     const std::uint32_t continuation_index = active_continuations[lane];
     if (request.lifecycle != Lifecycle::Finishable) { return out; }
+    // Terminal rows fold eagerly; a Finishable sequence with a deferral would publish a state
+    // without its last commit.
+    if (state.deferred_fold) { settle_deferred_folds(); }
     if (!request.publish_continuation) {
         if (!clear_lane_strict(state, request)) { return out; }
         out.disposition = runtime::FinishDisposition::Released;
@@ -9412,6 +9422,7 @@ AbortResult ProgramImplCore::abort(SequenceHandle sequence) noexcept {
     }
     SequenceState& state = active_sequence(lane);
     if (!clear_lane_strict(state, request)) { return out; }
+    state.deferred_fold.reset();
     out.timings     = request.timings;
     out.speculative = std::move(request.speculative_stats);
     invalidate_lane(lane);
@@ -9508,6 +9519,7 @@ void ProgramImplCore::fail_all_cleanup() noexcept {
     // cleanup below releases.
     if (device.stream != nullptr) { (void)cudaStreamSynchronize(device.stream); }
     pending_transaction_.reset();
+    for (SequenceState& sequence : continuation_states) { sequence.deferred_fold.reset(); }
     if (auto* transaction = std::get_if<ActiveCaptureTransaction>(&context_transaction_)) {
         if (transaction->transfer_submitted && device.transfer_stream != nullptr) {
             (void)cudaStreamSynchronize(device.transfer_stream);
@@ -10203,7 +10215,12 @@ runtime::ExecutionTiming ProgramImplCore::resolve_pending_raw(
 
     std::array<ops::GdnReplayFoldRow, kMaximumConcurrency> fold_rows{};
     std::array<std::int32_t, kMaximumConcurrency> hidden_selectors{};
+    // A continuing MTP row folds in place, so its commit is deferred to the head of the next MTP
+    // round's graph (decode_mtp_batch); every other consumer of the state settles it first.
+    // Terminal, cancelled and forked rows, and DFlash, fold here.
+    std::array<std::int32_t, kMaximumConcurrency> deferred_columns{};
     bool needs_hidden_correction = false;
+    bool eager_fold              = false;
     for (std::size_t row = 0; row < lanes.size(); ++row) {
         const std::uint32_t lane = lanes[row];
         if (lane >= max_concurrency || requests[lane].lifecycle != Lifecycle::Pending ||
@@ -10231,10 +10248,15 @@ runtime::ExecutionTiming ProgramImplCore::resolve_pending_raw(
             throw std::logic_error("speculative pending row has an invalid committed prefix");
         }
         const StateImageSelectors selectors = state_selectors(sequence);
-        fold_rows[row] =
-            ops::GdnReplayFoldRow{.source_state_slot      = selectors.source,
-                                  .destination_state_slot = selectors.destination,
-                                  .commit_columns         = static_cast<std::int32_t>(committed)};
+        const bool defer = speculative_backend == SpeculativeBackend::Mtp && !cancelled[row] &&
+                           !terminal[row] && committed != 0 &&
+                           selectors.source == selectors.destination;
+        deferred_columns[row] = defer ? static_cast<std::int32_t>(committed) : 0;
+        eager_fold            = eager_fold || (!defer && committed != 0);
+        fold_rows[row]        = ops::GdnReplayFoldRow{
+                   .source_state_slot      = selectors.source,
+                   .destination_state_slot = selectors.destination,
+                   .commit_columns         = defer ? 0 : static_cast<std::int32_t>(committed)};
         const bool partial_terminal =
             !cancelled[row] && terminal[row] && committed < pending.produced;
         hidden_selectors[row] =
@@ -10243,27 +10265,34 @@ runtime::ExecutionTiming ProgramImplCore::resolve_pending_raw(
     }
 
     const auto tail_started = Clock::now();
+    // Without eager GPU work the tail has nothing to wait for: the round's graph already
+    // completed, and the deferred folds run on the stream ahead of the next round.
+    const bool tail_device_work =
+        eager_fold || needs_hidden_correction || speculative_backend == SpeculativeBackend::DFlash;
     try {
         timing.resume_submit();
-        replay_fold->execute(std::span<const ops::GdnReplayFoldRow>(fold_rows.data(), lanes.size()),
-                             device.stream);
+        if (eager_fold) {
+            replay_fold->execute(
+                std::span<const ops::GdnReplayFoldRow>(fold_rows.data(), lanes.size()),
+                device.stream);
 #ifdef NINFER_QWEN38_FLASH_NEXT
-        if (!flash_ple_records || state_images->ple_store() == nullptr) {
-            throw std::logic_error("Flash-Next speculative PLE fold storage is unavailable");
-        }
-        std::array<ops::FlashNextPleFoldRow, kMaximumConcurrency> ple_rows{};
-        for (std::size_t row = 0; row < lanes.size(); ++row) {
-            ple_rows[row] = ops::FlashNextPleFoldRow{
-                .source_state_slot      = fold_rows[row].source_state_slot,
-                .destination_state_slot = fold_rows[row].destination_state_slot,
-                .commit_columns         = fold_rows[row].commit_columns,
-            };
-        }
-        ops::flash_next_ple_replay_fold(
-            *flash_ple_records, *state_images->ple_store(),
-            std::span<const ops::FlashNextPleFoldRow>(ple_rows.data(), lanes.size()),
-            device.stream);
+            if (!flash_ple_records || state_images->ple_store() == nullptr) {
+                throw std::logic_error("Flash-Next speculative PLE fold storage is unavailable");
+            }
+            std::array<ops::FlashNextPleFoldRow, kMaximumConcurrency> ple_rows{};
+            for (std::size_t row = 0; row < lanes.size(); ++row) {
+                ple_rows[row] = ops::FlashNextPleFoldRow{
+                    .source_state_slot      = fold_rows[row].source_state_slot,
+                    .destination_state_slot = fold_rows[row].destination_state_slot,
+                    .commit_columns         = fold_rows[row].commit_columns,
+                };
+            }
+            ops::flash_next_ple_replay_fold(
+                *flash_ple_records, *state_images->ple_store(),
+                std::span<const ops::FlashNextPleFoldRow>(ple_rows.data(), lanes.size()),
+                device.stream);
 #endif
+        }
 
         if (needs_hidden_correction) {
             const auto batch = static_cast<std::int32_t>(lanes.size());
@@ -10333,9 +10362,11 @@ runtime::ExecutionTiming ProgramImplCore::resolve_pending_raw(
             }
         }
 
-        timing.begin_wait();
-        device.synchronize();
-        timing.end_wait();
+        if (tail_device_work) {
+            timing.begin_wait();
+            device.synchronize();
+            timing.end_wait();
+        }
         work.reset();
     } catch (...) {
         try {
@@ -10376,6 +10407,13 @@ runtime::ExecutionTiming ProgramImplCore::resolve_pending_raw(
             sequence.text_kv_valid      = sequence.execution_frontier;
             sequence.tail_hidden_valid  = true;
 
+            if (deferred_columns[row] != 0) {
+                sequence.deferred_fold = DeferredStateFold{
+                    .record_row = static_cast<std::int32_t>(row),
+                    .state_slot = fold_rows[row].destination_state_slot,
+                    .columns    = deferred_columns[row],
+                };
+            }
             if (speculative_backend == SpeculativeBackend::Mtp) {
                 sequence.mtp_kv_valid = sequence.execution_frontier;
                 if (terminal[row]) {
@@ -10688,6 +10726,69 @@ void ProgramImplCore::settle_state_fork(SequenceState& sequence) {
     }
     sequence.state_source_retained = false;
     refresh_state_views(sequence);
+}
+
+void ProgramImplCore::settle_deferred_folds() {
+    std::array<ops::GdnReplayFoldRow, kMaximumConcurrency> rows{};
+    std::array<bool, kMaximumConcurrency> deferred_row{};
+    std::int32_t row_count = 0;
+    for (SequenceState& sequence : continuation_states) {
+        if (!sequence.deferred_fold) { continue; }
+        const DeferredStateFold fold = *sequence.deferred_fold;
+        if (fold.record_row < 0 || fold.record_row >= static_cast<std::int32_t>(max_concurrency) ||
+            deferred_row[static_cast<std::size_t>(fold.record_row)]) {
+            throw std::logic_error("deferred commit folds share a record row");
+        }
+        rows[static_cast<std::size_t>(fold.record_row)] = ops::GdnReplayFoldRow{
+            .source_state_slot      = fold.state_slot,
+            .destination_state_slot = fold.state_slot,
+            .commit_columns         = fold.columns,
+        };
+        deferred_row[static_cast<std::size_t>(fold.record_row)] = true;
+        row_count = std::max(row_count, fold.record_row + 1);
+    }
+    if (row_count == 0) { return; }
+    if (!replay_fold) { throw std::logic_error("deferred commit folds have no fold plan"); }
+    // Record rows between deferred ones fold nothing; their bindings only have to be distinct
+    // from every other row's slots.
+    const std::int32_t slot_count = state_images->linear().all_layers_view().spec.slot_count;
+    std::int32_t spare            = 0;
+    const auto slot_in_use        = [&](std::int32_t slot) {
+        for (std::int32_t row = 0; row < row_count; ++row) {
+            if (deferred_row[static_cast<std::size_t>(row)] &&
+                rows[static_cast<std::size_t>(row)].destination_state_slot == slot) {
+                return true;
+            }
+        }
+        return false;
+    };
+    for (std::int32_t row = 0; row < row_count; ++row) {
+        if (deferred_row[static_cast<std::size_t>(row)]) { continue; }
+        while (spare < slot_count && slot_in_use(spare)) { ++spare; }
+        if (spare >= slot_count) { throw std::logic_error("no spare slot for an empty fold row"); }
+        rows[static_cast<std::size_t>(row)] = ops::GdnReplayFoldRow{
+            .source_state_slot = spare, .destination_state_slot = spare, .commit_columns = 0};
+        ++spare;
+    }
+    const auto count = static_cast<std::size_t>(row_count);
+    replay_fold->execute(std::span<const ops::GdnReplayFoldRow>(rows.data(), count), device.stream);
+#ifdef NINFER_QWEN38_FLASH_NEXT
+    if (!flash_ple_records || state_images->ple_store() == nullptr) {
+        throw std::logic_error("Flash-Next deferred PLE fold storage is unavailable");
+    }
+    std::array<ops::FlashNextPleFoldRow, kMaximumConcurrency> ple_rows{};
+    for (std::size_t row = 0; row < count; ++row) {
+        ple_rows[row] = ops::FlashNextPleFoldRow{
+            .source_state_slot      = rows[row].source_state_slot,
+            .destination_state_slot = rows[row].destination_state_slot,
+            .commit_columns         = rows[row].commit_columns,
+        };
+    }
+    ops::flash_next_ple_replay_fold(
+        *flash_ple_records, *state_images->ple_store(),
+        std::span<const ops::FlashNextPleFoldRow>(ple_rows.data(), count), device.stream);
+#endif
+    for (SequenceState& sequence : continuation_states) { sequence.deferred_fold.reset(); }
 }
 
 bool ProgramImplCore::has_unsettled_state_fork() const noexcept {
@@ -11405,6 +11506,10 @@ void ProgramImplCore::prepare_graphs() {
                 profile.max_execution_frontier = planned.max;
                 profile.topology_class =
                     planned.topology_class * max_concurrency + (batch_size - 1U);
+                // Every MTP executable carries the deferred-fold node; rows with zero columns
+                // fold nothing at replay.
+                mtp_state.pending_fold      = replay_fold ? &*replay_fold : nullptr;
+                mtp_state.pending_fold_rows = static_cast<std::int32_t>(batch_size);
                 schedule::capture_mtp_decode_batch(
                     mtp_state, static_cast<std::int32_t>(batch_size), draft_window,
                     mtp_causal_attention_envelopes(planned.max, draft_window, capacity),
@@ -12212,6 +12317,35 @@ ProgramImplCore::decode_mtp_batch(std::span<const std::uint32_t> lanes,
         std::optional<nvtx::ScopedRange> ingress_range;
         ingress_range.emplace(nvtx::Name::DecodeMtpSubmitIngress, nvtx::Category::Mtp,
                               static_cast<std::uint64_t>(lanes.size()));
+        // The previous round's deferred commit folds run at this round's graph head when every
+        // deferred lane is a member and its record row lies inside this round's batch;
+        // otherwise they settle on the stream first.
+        bool deferred_in_graph = true;
+        bool any_deferred      = false;
+        for (const SequenceState& sequence : continuation_states) {
+            if (!sequence.deferred_fold) { continue; }
+            any_deferred = true;
+            deferred_in_graph =
+                deferred_in_graph &&
+                std::find(lanes.begin(), lanes.end(), sequence.lane) != lanes.end() &&
+                sequence.deferred_fold->record_row < static_cast<std::int32_t>(lanes.size());
+        }
+        if (any_deferred && !deferred_in_graph) {
+            settle_deferred_folds();
+            any_deferred = false;
+        }
+        mtp_host_ingress->pending_folds.fill(0);
+        for (const SequenceState& sequence : continuation_states) {
+            if (!sequence.deferred_fold) { continue; }
+            const DeferredStateFold fold = *sequence.deferred_fold;
+            if (fold.state_slot != state_selectors(sequence).source) {
+                throw std::logic_error("deferred commit fold no longer matches its state slot");
+            }
+            const auto base                       = static_cast<std::size_t>(fold.record_row) * 4U;
+            mtp_host_ingress->pending_folds[base] = fold.state_slot;
+            mtp_host_ingress->pending_folds[base + 1] = fold.state_slot;
+            mtp_host_ingress->pending_folds[base + 2] = fold.columns;
+        }
         for (std::size_t row = 0; row < lanes.size(); ++row) {
             SequenceState& sequence           = active_sequence(lanes[row]);
             const RequestControl& request     = requests[lanes[row]];
@@ -12292,9 +12426,13 @@ ProgramImplCore::decode_mtp_batch(std::span<const std::uint32_t> lanes,
             state_images->continuation_hidden_store(),
             flash_decode_ple ? &*flash_decode_ple : nullptr};
 
+        schedule_state.pending_fold = replay_fold ? &*replay_fold : nullptr;
+        schedule_state.pending_fold_rows =
+            any_deferred ? static_cast<std::int32_t>(lanes.size()) : 0;
         mark_workspace_usage(workspace_plan.mtp_round);
         schedule::mtp_decode_batch(schedule_state, static_cast<std::int32_t>(lanes.size()),
                                    draft_window, envelopes, executable);
+        for (SequenceState& sequence : continuation_states) { sequence.deferred_fold.reset(); }
         submit_range.reset();
         timing.begin_wait();
         {

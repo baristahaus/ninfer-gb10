@@ -130,7 +130,8 @@ void launch_recurrent_record_fixed(const Tensor& q, const Tensor& k, const Tenso
 template <class Geometry>
 void launch_replay_fold_fixed(const GdnReplayRecords& records,
                               LinearAttentionStateAllLayersView states,
-                              const GdnReplayFoldKernelRows& rows, std::int32_t active_rows,
+                              const GdnReplayFoldKernelRows& rows,
+                              const GdnReplayFoldKernelRow* device_rows, std::int32_t active_rows,
                               cudaStream_t stream) {
     const FoldAccess<Geometry> access{
         static_cast<const __nv_bfloat16*>(records.key.data),
@@ -144,6 +145,7 @@ void launch_replay_fold_fixed(const GdnReplayRecords& records,
         records.spec.record_capacity,
         records.spec.width,
         rows,
+        device_rows,
     };
     const dim3 grid(static_cast<unsigned>(Geometry::kValueHeads),
                     static_cast<unsigned>(active_rows),
@@ -228,27 +230,31 @@ void launch_recurrent_record(const Tensor& q, const Tensor& k, const Tensor& v, 
 }
 
 void launch_replay_fold(const GdnReplayRecords& records, LinearAttentionStateAllLayersView states,
-                        const GdnReplayFoldKernelRows& rows, std::int32_t active_rows,
+                        const GdnReplayFoldKernelRows& rows,
+                        const GdnReplayFoldKernelRow* device_rows, std::int32_t active_rows,
                         cudaStream_t stream) {
     if (records.spec.layers == FoldGeometry48x48::kLayers &&
         records.spec.qk_heads == FoldGeometry48x48::kQkHeads &&
         records.spec.value_heads == FoldGeometry48x48::kValueHeads &&
         records.spec.conv_channels == FoldGeometry48x48::kConvChannels) {
-        launch_replay_fold_fixed<FoldGeometry48x48>(records, states, rows, active_rows, stream);
+        launch_replay_fold_fixed<FoldGeometry48x48>(records, states, rows, device_rows, active_rows,
+                                                    stream);
         return;
     }
     if (records.spec.layers == FoldGeometry30x32::kLayers &&
         records.spec.qk_heads == FoldGeometry30x32::kQkHeads &&
         records.spec.value_heads == FoldGeometry30x32::kValueHeads &&
         records.spec.conv_channels == FoldGeometry30x32::kConvChannels) {
-        launch_replay_fold_fixed<FoldGeometry30x32>(records, states, rows, active_rows, stream);
+        launch_replay_fold_fixed<FoldGeometry30x32>(records, states, rows, device_rows, active_rows,
+                                                    stream);
         return;
     }
     if (records.spec.layers == FoldGeometry36x48::kLayers &&
         records.spec.qk_heads == FoldGeometry36x48::kQkHeads &&
         records.spec.value_heads == FoldGeometry36x48::kValueHeads &&
         records.spec.conv_channels == FoldGeometry36x48::kConvChannels) {
-        launch_replay_fold_fixed<FoldGeometry36x48>(records, states, rows, active_rows, stream);
+        launch_replay_fold_fixed<FoldGeometry36x48>(records, states, rows, device_rows, active_rows,
+                                                    stream);
         return;
     }
     throw std::invalid_argument("GDN replay fold launcher received an unregistered geometry");

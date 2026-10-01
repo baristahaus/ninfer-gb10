@@ -1,4 +1,6 @@
 #include "ninfer/ops/flash_next_ple.h"
+#include "core/decode_graph.h"
+#include "core/device.h"
 #include "ops/op_tester.h"
 
 #include <cmath>
@@ -178,12 +180,107 @@ int run() {
     return failures;
 }
 
+// The replay fold shifts each committed record column into the row's state history: an exact
+// data movement, checked bitwise for host row descriptors and for device descriptors read when a
+// captured graph runs (one zero-column replay that must not write, then the committed rows).
+int run_replay_fold() {
+    constexpr int kWidth = 4;
+    constexpr int kRows  = 2;
+    constexpr int kSlots = 4;
+
+    struct Row {
+        int source, destination, columns;
+    };
+
+    constexpr Row rows[kRows]{{0, 0, 3}, {2, 3, 1}};
+    std::vector<float> states(static_cast<std::size_t>(kHyper) * kState * kSlots);
+    std::vector<float> records(static_cast<std::size_t>(kHyper) * kWidth * kRows);
+    fill_uniform(states, 1711, -1.0F, 1.0F);
+    fill_uniform(records, 1712, -1.0F, 1.0F);
+    const std::vector<std::uint16_t> state_bits  = encode(states);
+    const std::vector<std::uint16_t> record_bits = encode(records);
+
+    std::vector<std::uint16_t> expected = state_bits;
+    for (int row = 0; row < kRows; ++row) {
+        for (int channel = 0; channel < kHyper; ++channel) {
+            std::uint16_t history[kState];
+            for (int i = 0; i < kState; ++i) {
+                history[i] =
+                    state_bits[static_cast<std::size_t>(rows[row].source) * kHyper * kState +
+                               static_cast<std::size_t>(i) * kHyper + channel];
+            }
+            for (int column = 0; column < rows[row].columns; ++column) {
+                for (int i = 0; i < kState - 1; ++i) { history[i] = history[i + 1]; }
+                history[kState - 1] = record_bits[channel + static_cast<std::size_t>(kHyper) *
+                                                                (row * kWidth + column)];
+            }
+            for (int i = 0; i < kState; ++i) {
+                expected[static_cast<std::size_t>(rows[row].destination) * kHyper * kState +
+                         static_cast<std::size_t>(i) * kHyper + channel] = history[i];
+            }
+        }
+    }
+
+    DeviceBuffer d_records = to_device(record_bits);
+    Tensor records_tensor(d_records.p, DType::BF16, {kHyper, kWidth, kRows});
+    int failures     = 0;
+    const auto check = [&](const DeviceBuffer& d_states, const char* label) {
+        const std::vector<std::uint16_t> actual =
+            from_device<std::uint16_t>(d_states, state_bits.size());
+        if (actual != expected) {
+            std::cerr << "Flash-Next PLE replay fold (" << label << ") differs from its oracle\n";
+            ++failures;
+        }
+    };
+
+    DeviceBuffer d_host_states = to_device(state_bits);
+    Tensor host_states(d_host_states.p, DType::BF16, {kHyper, kState, kSlots});
+    const std::vector<ops::FlashNextPleFoldRow> host_rows{
+        {rows[0].source, rows[0].destination, rows[0].columns},
+        {rows[1].source, rows[1].destination, rows[1].columns}};
+    ops::flash_next_ple_replay_fold(records_tensor, host_states, host_rows, nullptr);
+    cuda_synchronize();
+    check(d_host_states, "host rows");
+
+    DeviceBuffer d_device_states = to_device(state_bits);
+    Tensor device_states(d_device_states.p, DType::BF16, {kHyper, kState, kSlots});
+    std::vector<std::int32_t> words(4 * kRows, 0);
+    DeviceBuffer d_words = to_device(words);
+    Tensor words_tensor(d_words.p, DType::I32, {4, kRows});
+    DeviceContext context;
+    DecodeGraphDefinition definition;
+    DecodeGraphExecutable graph;
+    definition.capture(context.stream, [&] {
+        ops::flash_next_ple_replay_fold_device(records_tensor, device_states, words_tensor, kRows,
+                                               context.stream);
+    });
+    graph.instantiate(definition);
+    graph.launch(context.stream);
+    context.synchronize();
+    if (from_device<std::uint16_t>(d_device_states, state_bits.size()) != state_bits) {
+        std::cerr << "Flash-Next PLE replay fold wrote state for zero-column device rows\n";
+        ++failures;
+    }
+    for (int row = 0; row < kRows; ++row) {
+        words[4 * row]     = rows[row].source;
+        words[4 * row + 1] = rows[row].destination;
+        words[4 * row + 2] = rows[row].columns;
+    }
+    cuda_check(cudaMemcpy(d_words.p, words.data(), words.size() * sizeof(std::int32_t),
+                          cudaMemcpyHostToDevice),
+               "write device fold rows");
+    graph.launch(context.stream);
+    context.synchronize();
+    check(d_device_states, "device rows");
+    return failures;
+}
+
 } // namespace
 
 int main() {
     if (ninfer::test::cuda_unavailable()) { return 77; }
     try {
-        const int failures = run();
+        const int failures = run() + run_replay_fold();
         std::cout << (failures == 0 ? "OK" : "FAIL") << " Flash-Next PLE\n";
         return failures == 0 ? 0 : 1;
     } catch (const std::exception& error) {

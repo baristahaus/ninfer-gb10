@@ -370,6 +370,43 @@ int run_case(const FoldProfile profile, std::int32_t width, std::int32_t rows,
             graph.launch(context.stream);
             context.synchronize();
         }
+
+        // Device row descriptors are read when the graph runs: one capture first replays
+        // zero-column rows, which must not write, then the committed rows, which the checks
+        // below compare with the Nth snapshots.
+        std::vector<std::int32_t> words(
+            static_cast<std::size_t>(ops::kGdnReplayFoldDeviceRowWords) * rows, 0);
+        DeviceBuffer device_rows = to_device(words);
+        const Tensor device_rows_tensor(device_rows.p, DType::I32,
+                                        {ops::kGdnReplayFoldDeviceRowWords, rows});
+        DecodeGraphDefinition device_definition;
+        DecodeGraphExecutable device_graph;
+        device_definition.capture(context.stream, [&] {
+            fold_plan.execute_device(device_rows_tensor, rows, context.stream);
+        });
+        device_graph.instantiate(device_definition);
+        cuda_check(cudaMemcpyAsync(state_base, original.p, state_bytes, cudaMemcpyDeviceToDevice,
+                                   context.stream),
+                   "restore device-row graph state");
+        device_graph.launch(context.stream);
+        context.synchronize();
+        if (from_device<std::uint8_t>(state_base, state_bytes) !=
+            from_device<std::uint8_t>(original.p, state_bytes)) {
+            std::cerr << "fold wrote state for zero-column device rows\n";
+            return 1;
+        }
+        for (std::int32_t row = 0; row < rows; ++row) {
+            const auto base = static_cast<std::size_t>(ops::kGdnReplayFoldDeviceRowWords) *
+                              static_cast<std::size_t>(row);
+            words[base]     = fold_rows[static_cast<std::size_t>(row)].source_state_slot;
+            words[base + 1] = fold_rows[static_cast<std::size_t>(row)].destination_state_slot;
+            words[base + 2] = fold_rows[static_cast<std::size_t>(row)].commit_columns;
+        }
+        cuda_check(cudaMemcpy(device_rows.p, words.data(), words.size() * sizeof(std::int32_t),
+                              cudaMemcpyHostToDevice),
+                   "write device fold rows");
+        device_graph.launch(context.stream);
+        context.synchronize();
     } else {
         fold_plan.execute(fold_rows, nullptr);
         cuda_synchronize();

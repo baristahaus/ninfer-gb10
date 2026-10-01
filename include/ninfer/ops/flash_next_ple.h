@@ -63,4 +63,12 @@ void flash_next_ple_replay_fold(const Tensor& records, Tensor& states,
                                 std::span<const FlashNextPleFoldRow> rows,
                                 cudaStream_t stream);
 
+// The same fold with row descriptors read from device memory when the work runs (CUDA Graph
+// nodes whose rows change per replay): device_rows is I32 with four words per row b in
+// [0,row_count), {source_state_slot, destination_state_slot, commit_columns, 0}, the layout of
+// ops::kGdnReplayFoldDeviceRowWords. A zero commit_columns row is a no-op.
+void flash_next_ple_replay_fold_device(const Tensor& records, Tensor& states,
+                                       const Tensor& device_rows, std::int32_t row_count,
+                                       cudaStream_t stream);
+
 } // namespace ninfer::ops

@@ -10,6 +10,8 @@
 
 namespace ninfer::ops {
 
+inline constexpr std::int32_t kGdnReplayFoldDeviceRowWords = 4;
+
 struct GdnReplayFoldRow {
     std::int32_t source_state_slot;
     std::int32_t destination_state_slot;
@@ -50,6 +52,14 @@ public:
     GdnReplayFoldPlan(const GdnReplayRecords& records, LinearAttentionStateAllLayersView states);
 
     void execute(std::span<const GdnReplayFoldRow> rows, cudaStream_t stream) const;
+
+    // The same fold with each row's descriptor read from device memory when the work runs, for
+    // CUDA Graph nodes whose rows change per replay. device_rows is I32, 16-byte aligned, with
+    // kGdnReplayFoldDeviceRowWords words per row b in [0,row_count):
+    // {source_state_slot, destination_state_slot, commit_columns, 0}. A zero commit_columns
+    // row is a no-op. The caller guarantees the per-row conditions execute() validates.
+    void execute_device(const Tensor& device_rows, std::int32_t row_count,
+                        cudaStream_t stream) const;
 
 private:
     GdnReplayRecords records_;

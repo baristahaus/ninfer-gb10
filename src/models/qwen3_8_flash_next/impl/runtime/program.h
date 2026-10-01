@@ -406,8 +406,17 @@ struct DecodeGraphFamily {
 // Target model continuation for one logical sequence. This state remains meaningful after the
 // request which produced it has finished, so it is deliberately separate from request lifecycle,
 // output, sampling, and round-control state.
+// A continuing MTP round's commit fold, deferred to the head of the next MTP round's graph:
+// the round's record row, the in-place state slot and the accepted column count.
+struct DeferredStateFold {
+    std::int32_t record_row = 0;
+    std::int32_t state_slot = 0;
+    std::int32_t columns    = 0;
+};
+
 struct SequenceState {
     std::optional<SequenceKVBundle> kv;
+    std::optional<DeferredStateFold> deferred_fold;
     ActiveStateBinding state;
     std::optional<StateImageHandle> rewrite_state;
     std::optional<StateImageHandle> reserved_state;
@@ -567,6 +576,10 @@ public:
     void finalize_context_transaction() noexcept;
     [[nodiscard]] bool has_context_transaction() const noexcept;
     [[nodiscard]] bool has_unsettled_state_fork() const noexcept;
+    // Runs every deferred commit fold on the stream (no synchronize). Every operation that reads
+    // or replaces a sequence's state or the replay records, other than the next MTP round,
+    // calls it first.
+    void settle_deferred_folds();
     [[nodiscard]] PrefillProgress advance_prefill(SequenceHandle sequence,
                                                   runtime::ExecutionTiming* failed_timing);
     [[nodiscard]] CaptureAssessment

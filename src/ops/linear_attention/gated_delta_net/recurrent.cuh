@@ -536,6 +536,13 @@ struct FoldAccess {
     std::int32_t record_capacity;
     std::int32_t width;
     GdnReplayFoldKernelRows rows;
+    // When set, the row descriptors are read from device memory instead of `rows`, so a
+    // captured graph folds whatever rows the round's ingress names.
+    const GdnReplayFoldKernelRow* device_rows;
+
+    __device__ __forceinline__ GdnReplayFoldKernelRow row_of(std::int32_t batch) const {
+        return device_rows != nullptr ? device_rows[batch] : rows.row[batch];
+    }
 
     __device__ __forceinline__ RecurrentCoordinates coordinates() const {
         const std::int32_t batch       = static_cast<std::int32_t>(blockIdx.y);
@@ -561,7 +568,7 @@ struct FoldAccess {
 
     __device__ __forceinline__ std::int32_t
     active_columns(const RecurrentCoordinates& coord) const {
-        return rows.row[coord.batch].commit_columns;
+        return row_of(coord.batch).commit_columns;
     }
 
     __device__ __forceinline__ std::int64_t record_outer(const RecurrentCoordinates& coord) const {
@@ -573,7 +580,7 @@ struct FoldAccess {
         const std::int64_t slot_stride =
             static_cast<std::int64_t>(Geometry::kValueHeads) * kStateDim * kStateDim;
         return recurrent_layer0 + static_cast<std::int64_t>(coord.layer) * recurrent_layer_stride +
-               static_cast<std::int64_t>(rows.row[coord.batch].source_state_slot) * slot_stride +
+               static_cast<std::int64_t>(row_of(coord.batch).source_state_slot) * slot_stride +
                static_cast<std::int64_t>(coord.value_head) * kStateDim * kStateDim;
     }
 
@@ -581,8 +588,7 @@ struct FoldAccess {
         const std::int64_t slot_stride =
             static_cast<std::int64_t>(Geometry::kValueHeads) * kStateDim * kStateDim;
         return recurrent_layer0 + static_cast<std::int64_t>(coord.layer) * recurrent_layer_stride +
-               static_cast<std::int64_t>(rows.row[coord.batch].destination_state_slot) *
-                   slot_stride +
+               static_cast<std::int64_t>(row_of(coord.batch).destination_state_slot) * slot_stride +
                static_cast<std::int64_t>(coord.value_head) * kStateDim * kStateDim;
     }
 
@@ -626,12 +632,12 @@ struct FoldAccess {
         const std::int32_t channel = tile_block * 128 + tid;
         const __nv_bfloat16* source_history =
             conv_layer0 + static_cast<std::int64_t>(coord.layer) * conv_layer_stride +
-            static_cast<std::int64_t>(rows.row[coord.batch].source_state_slot) *
+            static_cast<std::int64_t>(row_of(coord.batch).source_state_slot) *
                 (3LL * Geometry::kConvChannels) +
             channel;
         __nv_bfloat16* destination_history =
             conv_layer0 + static_cast<std::int64_t>(coord.layer) * conv_layer_stride +
-            static_cast<std::int64_t>(rows.row[coord.batch].destination_state_slot) *
+            static_cast<std::int64_t>(row_of(coord.batch).destination_state_slot) *
                 (3LL * Geometry::kConvChannels) +
             channel;
         const __nv_bfloat16* record =

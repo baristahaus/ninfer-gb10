@@ -236,13 +236,19 @@ struct PleFoldKernelRows {
     FlashNextPleFoldRow rows[8];
 };
 
+// device_rows, when non-null, replaces rows: four I32 words per row
+// {source_state_slot, destination_state_slot, commit_columns, 0} read when the work runs.
 __global__ void ple_fold_kernel(const __nv_bfloat16* records, __nv_bfloat16* states,
-                                PleFoldKernelRows rows, int row_count, int width,
-                                std::int64_t slot_stride) {
+                                PleFoldKernelRows rows, const std::int32_t* device_rows,
+                                int row_count, int width, std::int64_t slot_stride) {
     const int lane = static_cast<int>(blockIdx.y);
-    for (int channel = static_cast<int>(blockIdx.x) * blockDim.x + threadIdx.x;
-         channel < kHyper; channel += static_cast<int>(blockDim.x) * gridDim.x) {
-        const FlashNextPleFoldRow row = rows.rows[lane];
+    const FlashNextPleFoldRow row =
+        device_rows != nullptr
+            ? FlashNextPleFoldRow{device_rows[4 * lane], device_rows[4 * lane + 1],
+                                  device_rows[4 * lane + 2]}
+            : rows.rows[lane];
+    for (int channel = static_cast<int>(blockIdx.x) * blockDim.x + threadIdx.x; channel < kHyper;
+         channel += static_cast<int>(blockDim.x) * gridDim.x) {
         if (lane >= row_count || row.commit_columns == 0) { continue; }
         const __nv_bfloat16* source =
             states + static_cast<std::int64_t>(row.source_state_slot) * slot_stride;
@@ -486,10 +492,30 @@ void flash_next_ple_replay_fold(const Tensor& records, Tensor& states,
         packed.rows[i] = rows[i];
     }
     const dim3 grid(40, static_cast<unsigned int>(rows.size()));
+    ple_fold_kernel<<<grid, 256, 0, stream>>>(static_cast<const __nv_bfloat16*>(records.data),
+                                              static_cast<__nv_bfloat16*>(states.data), packed,
+                                              nullptr, static_cast<int>(rows.size()), width,
+                                              static_cast<std::int64_t>(kHyper) * kState);
+    CUDA_CHECK(cudaGetLastError());
+}
+
+void flash_next_ple_replay_fold_device(const Tensor& records, Tensor& states,
+                                       const Tensor& device_rows, std::int32_t row_count,
+                                       cudaStream_t stream) {
+    const int width = records.ne[1];
+    if (row_count <= 0 || row_count > 8 || width <= 0 || records.dtype != DType::BF16 ||
+        !records.is_contiguous() || records.ne[0] != kHyper || records.ne[2] < row_count ||
+        states.dtype != DType::BF16 || !states.is_contiguous() || states.ne[0] != kHyper ||
+        states.ne[1] != kState || device_rows.data == nullptr || device_rows.dtype != DType::I32 ||
+        !device_rows.is_contiguous() ||
+        device_rows.numel() < static_cast<std::int64_t>(4) * row_count) {
+        throw std::invalid_argument("flash_next_ple_replay_fold: invalid device geometry");
+    }
+    const dim3 grid(40, static_cast<unsigned int>(row_count));
     ple_fold_kernel<<<grid, 256, 0, stream>>>(
-        static_cast<const __nv_bfloat16*>(records.data),
-        static_cast<__nv_bfloat16*>(states.data), packed,
-        static_cast<int>(rows.size()), width, static_cast<std::int64_t>(kHyper) * kState);
+        static_cast<const __nv_bfloat16*>(records.data), static_cast<__nv_bfloat16*>(states.data),
+        PleFoldKernelRows{}, static_cast<const std::int32_t*>(device_rows.data), row_count, width,
+        static_cast<std::int64_t>(kHyper) * kState);
     CUDA_CHECK(cudaGetLastError());
 }
 

@@ -63,7 +63,13 @@ Each GDN layer retains three previous BF16 convolution columns and 48 FP32 recur
 shape `[128,128]`. PLE retains nine previous BF16 convolution columns. QSA KV/index state, GDN
 state, PLE state, HyperConnection state, and MTP state participate together in prefix snapshots,
 speculative replay/fold, commit, rollback, and restore. A generated token is public only after the
-target transaction commits it.
+target transaction commits it. When an MTP round's row continues in place (not terminal, not
+cancelled, no unsettled fork), its GDN and PLE fold is deferred: the next MTP round folds it at the
+head of its graph from device-resident row descriptors, before its verify reads the state or
+overwrites the records. Until then, the sequence's committed state is its slot plus that pending
+fold. Every other operation that reads or replaces the state or the records runs the fold on the
+stream first: admission, a context transaction, prefill, an active capture, forced tokens, a
+non-MTP decode, and finishing.
 
 ## MTP and Vision
 

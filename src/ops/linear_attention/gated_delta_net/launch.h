@@ -49,8 +49,11 @@ void launch_recurrent_record(const Tensor& q, const Tensor& k, const Tensor& v, 
                              Tensor& key_record, Tensor& value_record, Tensor& gate_record,
                              Tensor& out, cudaStream_t stream);
 
+// device_rows, when non-null, replaces rows: the kernel reads each row's descriptor from device
+// memory at execution time.
 void launch_replay_fold(const GdnReplayRecords& records, LinearAttentionStateAllLayersView states,
-                        const GdnReplayFoldKernelRows& rows, std::int32_t active_rows,
+                        const GdnReplayFoldKernelRows& rows,
+                        const GdnReplayFoldKernelRow* device_rows, std::int32_t active_rows,
                         cudaStream_t stream);
 
 } // namespace ninfer::ops::detail::gated_delta_net

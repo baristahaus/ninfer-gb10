@@ -2,6 +2,7 @@
 #include "models/qwen3_8_flash_next/impl/runtime/schedule.h"
 
 #include "core/nvtx.h"
+#include "ninfer/ops/flash_next_ple.h"
 #include "ninfer/ops/mtp_round.h"
 #include "ninfer/ops/scatter.h"
 #include "ninfer/ops/scalar.h"
@@ -104,6 +105,21 @@ auto mtp_decode_batch_body(MtpBatchContext& state, std::int32_t batch_size, std:
         CUDA_CHECK(cudaMemcpyAsync(frame.ingress.data, &state.host_ingress,
                                    sizeof(qwen3_8_flash_next::MtpDecodeIngress),
                                    cudaMemcpyHostToDevice, state.execution.device.stream));
+        // The previous round's deferred commit: its accepted columns fold into the state slots
+        // before this round's verify reads them and overwrites the records they come from.
+        if (state.pending_fold != nullptr && state.pending_fold_rows > 0) {
+            state.pending_fold->execute_device(frame.pending_folds, state.pending_fold_rows,
+                                               state.execution.device.stream);
+            if constexpr (Variant::flash_next) {
+                if (state.execution.ple_records == nullptr ||
+                    state.execution.ple_state == nullptr) {
+                    throw std::logic_error("Flash-Next deferred PLE fold storage is unavailable");
+                }
+                ops::flash_next_ple_replay_fold_device(
+                    *state.execution.ple_records, *state.execution.ple_state, frame.pending_folds,
+                    state.pending_fold_rows, state.execution.device.stream);
+            }
+        }
 
         TextContext card(state.execution.device, state.execution.model, state.execution.work, {},
                          state.execution.linear_attention, state.execution.io,

@@ -272,10 +272,13 @@ Readings:
 - K4a and K4b under the 1172 route are **bit-identical at all 256 positions** (same
   tokens, same chosen logprobs, 0 differing positions): no measurable K4b numerical
   difference under these configurations.
-- **F1 passes for K4b**: the gate that matters is K4b against K4a on the same config,
-  and that holds with pipelining on or off. The C1-versus-C4 difference also exists
-  without K4 - a legitimate config-dependent route on a tied token - and the real
-  test, the bitwise contract, passes.
+- **[RETRACTED 2026-10-02] "F1 passes for K4b"**: the near-tie analysis above holds
+  at the reported-logprob level of the observed branch point (position 28), but the
+  route diagnostics (below) show the C1/C4 prefill state differs by 5-15% L2 per
+  layer and the first verify round's logit vectors are essentially uncorrelated
+  (cosine 0.615). The divergence is a real config-dependent prefill defect, not a
+  tie on one correct shared computation. F1 is reopened as a real defect (see
+  "F1 reopened" below).
 
 ## K4 speed gate: `--pipelined-decode` off vs on (2026-10-01)
 
@@ -350,6 +353,96 @@ Raw per-round logit captures for rounds 1-150 stay on this machine
 (`k4-speed/routediag/`); round 0 and the state captures are committed as
 the supporting evidence.
 
+## F1 reopened: the config-dependent prefill route is a real defect (2026-10-02)
+
+Opus read the route diagnostics and reopened F1: the divergence is a real bug, not
+a near-tie. Error metrics computed from the committed dumps
+(`k4-speed/route_metrics.py`, pure CPU):
+
+- **GDN state, per-layer L2 relative error (C4 vs C1)**: layer 0 exactly 0.0
+  (bitwise); layers 1-35: conv (bf16) 5.0e-2 .. 1.5e-1, recurrent (fp32)
+  2.2e-2 .. 2.3e-1. Two to twenty-three percent error on an FP32 recurrent state
+  is a different (or corrupted) value, not reduction noise (reduction noise is
+  ~1e-6 or less). The profile is roughly flat with a mild upward drift - no
+  per-layer amplification, consistent with a single injection near the
+  layer 0/1 boundary followed by stable dynamics.
+- **First verify round logits (positions 53/54)**: relative L2 8.97e-1 /
+  8.99e-1, cosine 0.616 / 0.615, top-1 differs (31867 vs 25205; 20159 vs 39922),
+  top-50 overlap 6/50 and 2/50, top-100 8/100 and 7/100. The vectors share
+  structure (same input through the same lm-head) but the pre-state divergence
+  is order-unity, matching the ~10% state error propagating through.
+
+Opus's read: the defect is in the prefill post-mixer stage (HyperConnection ->
+MoE -> HyperConnection). Layer 0 is a GDN layer and the first full-attention
+layer is layer 3 (Opus's layer map), so the earlier KV-page-shape and PLE
+candidates are out; his current candidate is a stale/uninitialized workspace
+read in that stage. The observed pattern - cold first request only, then
+stable - fits a first-request read of uninitialized memory that subsequent
+requests overwrite.
+
+Verification in progress (2026-10-02):
+
+- `compute-sanitizer --tool initcheck` on a C4 `--no-cuda-graph` serve, 73-token
+  probe prompt, max_tokens 1 (ctx 512 shape: under the sanitizer the engine's
+  free-memory probe sees ~768 MiB instead of ~51 GiB, so the 2.8 GiB
+  ctx-73728 reservation does not fit; the 73-token prefill is identical at
+  ctx 512).
+- Oracle check: the real test's canonical prompt + committed golden
+  (`29108 4009 27891 8964 579 16078 321 1100 9872 303 660 17425`) through the
+  public Engine API at five pool shapes (`k4-speed/oracle_shapes.cpp`: the C1/C4
+  probe shapes at ctx 73728; conc 2/4/8 at ctx 512 with the real test's kv 1024).
+  The shape(s) reproducing the golden are the oracle-consistent route(s); the
+  real test itself (conc 2, page 32, pool 32) has been bitwise-exact against the
+  golden on every build, so the conc-2 shape is the continuously verified side.
+- Post-removal reruns on `1749c466` (build `80951608...`): real test bitwise,
+  ctest subset, one C4 decode run (memory + speed), and a C1/C4 cold split check
+  on the new tree.
+
+Results recorded here (twoFour, 2026-10-01 23:4xZ UTC, build 80951608...):
+
+- **initcheck (the C4 run above): 100 errors, all on one egress DtoH; the
+  tool's tracking is unreliable on this platform - conclusion: inconclusive.**
+  The first 3,200 B of the MTP decode egress (all structural fields:
+  licensed_tokens/counts, accepted_drafts, next_drafts, next_extents +
+  token_logprobs + top_ids prefix) was reported never-written on the round
+  egress DtoH (mtp_impl.h:322), while the tail [3200, 8320) was reported
+  written even though, without --token-logprobs, no op in the body writes that
+  region (target_logprobs is gated, mtp_impl.h:226). The engine's strict host
+  validation of exactly that copy (program_impl.h:12522-12536) passed - random
+  uninitialized bytes cannot pass it (~1e-30) - so the bytes were genuinely
+  written and the sanitizer missed the write; the "written" tail has no writer.
+  A rerun with --token-logprobs reports 0 errors for the same DtoH. Full
+  analysis: `k4-speed/routediag-initcheck/FINDINGS.md`. Consequence for F1: the
+  run's absence of prefill errors is non-informative - the prefill
+  post-mixer stale/uninitialized-read hypothesis is neither supported nor
+  refuted by initcheck on this machine.
+- **Post-removal C4 decode rerun (off-a3, post-removal binary, serial-loop
+  config):** runtime **3.70 GiB** (back to the K2 level; K4a measured 4.13
+  GiB at C4 - the removed 113 MB x 4 spare slots are gone), decode 22.7 tok/s,
+  device wait 72.1 ms/round, host exposed 0.05 ms/round; wall 80.7-85.7 tok/s
+  per 1024-token wave. Inside the A-arm band of the ABBA campaign (70.9-72.1
+  ms/round, 22.6-23.3 tok/s, host 0.05) - the removal did not change
+  steady-state speed (the A arm was already the serial loop). The "8.93
+  ms/round" figure is the K2 host-exposed baseline (below); the current tree
+  measures 0.05 ms/round.
+- **Unit tests on the post-removal tree: 5/5 PASS** (sampling,
+  flash_next_ple_stage, mtp_round, gdn_replay_fold, flash_next_ple).
+- The oracle probe had a config bug (hardcoded
+  max_private_continuations=2 < conc for the conc 4/8 shapes -> "must cover
+  every active request"); fixed in `k4-speed/oracle_shapes.cpp`
+  (max_private_continuations = conc). First run: C1 and T2 (real-test shape)
+  PASS the golden; the conc 4/8 shapes errored on the (now-fixed) limit.
+- **Oracle rerun (fixed probe): 5/5 PASS the golden** - C1/C4 at ctx 73728 and
+  T2/C4s/C8s at ctx 512 kv 1024 (conc 2/4/8), plain greedy decode, graphs on.
+  The prefill + plain decode route is oracle-consistent at conc 4 and 8 - the
+  F1 split (MTP path) is not in the plain prefill computation.
+- **Real test on the post-removal binary: PASS bitwise.**
+- **C1/C4 cold split on the new tree: SPLIT, identical to pre-removal**
+  (C1 text_sha 9f1893c5..., C4 86bd9884...; same 73-token prompt, 256 tokens,
+  MTP draft 1, no-graph, same as the routediag probe). The defect persists on
+  1749c466 and is deterministic (same output text on both sides of the
+  removal).
+
 ## K4a gate data (3d3d7a25 + fix, serve sha256 82f77128... from the K4a verify turn)
 
 - Unit tests: PASS; real test: PASS bitwise (92 s)
@@ -368,14 +461,22 @@ the supporting evidence.
 ## State
 
 - Beads: `ninfer-gb10-04m` (open, P1 - agreed removal of the pipelined-decode
-  machinery + K4a spare state slots, and documentation of the prefill route
-  found by the diagnostics below; removal by Opus, reruns by twoFour);
-  `ninfer-gb10-nb2` (closed - K4 verify complete); `ninfer-gb10-mol` (closed);
+  machinery + K4a spare state slots + documentation; removal landed as
+  `1749c466`, twoFour's reruns pending);
+  `ninfer-gb10-mol` (reopened 2026-10-02 - F1 is a real config-dependent
+  prefill defect, root cause open, candidate: stale/uninitialized workspace
+  read in the prefill post-mixer);
+  `ninfer-gb10-nb2` (closed - K4 verify complete);
   `ninfer-gb10-3w8` (closed, verified); `ninfer-gb10-pwd` (closed, verified);
   `ninfer-gb10-nkw` (closed).
-- Open work for Opus: identify which op inside layer 0's attention/PLE/MLP/HC
-  stage takes the config-dependent route (leading candidate: KV page shape),
-  and document it; then the agreed removal.
-- Machine state: code at `a5581fce` + the K4 record commits; build dir holds
-  `4d35a292...`; worktree `~/ninfer-gb10-k4a` holds the K4a gate tree
-  (`3d3d7a25` + `6d851f69`, binary `7bd0c8bb...`); GPU free.
+- Open work: F1 root cause (Opus tracing; initcheck evidence inconclusive by
+  proven tracking artifact, oracle 5/5 PASS plain decode at all shapes, so the
+  defect is in the MTP path; the next discriminating probe is the oracle
+  prompt through the MTP schedule at conc 1/2/4).
+- Machine state: code at `1749c466` (pipelined-decode + K4a spare-slot removal,
+  F1/F2 records); build dir holds `80951608...`; worktree `~/ninfer-gb10-k4a`
+  holds the K4a gate tree (`3d3d7a25` + `6d851f69`, binary `7bd0c8bb...`);
+  GPU free; twoFour's post-removal reruns all done (2026-10-01 23:58Z):
+  unit tests 5/5, real test bitwise, oracle 5/5, C4 decode 3.70 GiB /
+  72.1 ms/round / 0.05 ms/round host, C1/C4 cold split reproduces
+  (9f1893c5... vs 86bd9884...).

@@ -165,6 +165,40 @@ F2 stays open.
   there was nothing to wait for. The line is only printed when a wait actually grew
   MemAvailable by >256 MiB.
 
+## Reruns after a5581fce (2026-10-01, serve sha256 `4d35a292...`; build ~3.3 min, zero new
+warnings; gates: unit tests PASS, `test_serve_options` PASS, real test PASS bitwise 80 s)
+
+Opus landed `a5581fce`: a cancelled generation that ends normally with a Cancelled finish
+during shutdown now throws the shutdown error (503), and pipelined decode is opt-in
+(`--pipelined-decode`, default off; off = the Engine never launches the early round).
+
+### Shutdown 503 (pwd) - PASS
+
+Double SIGTERM during a 512-token stream: the client now sees the error event
+`{"code": "service_unavailable", "message": "server is shutting down", "type":
+"server_error"}` (107 tokens delivered, stream ends 2.0 s after the second signal,
+`finish=null`); engine log: `shutdown forced by a second signal | cancelling 1 in-flight
+request(s)`, drain complete in 2.0 s. Verified on the OpenAI route; the Anthropic and
+Responses routes share the same service call and were not exercised separately.
+
+### F1 bisect: the reworked serial path carries the residual
+
+Cold first 256-token request on a fresh serve, original shape config (C4 serve,
+`pages 1,152/4,608`, `runtime 4.14 GiB`), with and without `--pipelined-decode`:
+
+| Flag off (serial loop) | Flag on (pipelined) |
+|---|---|
+| **1172 B `86bd9884`** - the residual value | **1172 B `86bd9884`** - identical |
+
+Pipelining off reproduces the residual, so the cause is in K4b's rework of the serial
+path itself (the alternating host output buffers and the output copies moved out of the
+graph), not the early-launched round; pipelining adds no further divergence on this
+shape. The first-request x fresh-serve condition also proved serve-config-dependent:
+the same request on a C1-config serve (`pages 1,152/1,152`, `runtime 2.15 GiB`) decodes
+to 1212 B `9f1893c5` in both modes - a third value (K4a reference: 1234 B `847314b2`).
+Three serve configs/trees, three first-request values; a correct engine returns 1234 in
+all of them.
+
 ## K4a gate data (3d3d7a25 + fix, serve sha256 82f77128... from the K4a verify turn)
 
 - Unit tests: PASS; real test: PASS bitwise (92 s)

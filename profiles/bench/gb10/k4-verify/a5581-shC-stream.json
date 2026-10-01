@@ -1,0 +1,14 @@
+{
+ "status_line": "200 OK",
+ "t_first_token": 0.42618894577026367,
+ "t_done": 4.628751516342163,
+ "tokens": 107,
+ "finish": null,
+ "error_event": {
+  "code": "service_unavailable",
+  "message": "server is shutting down",
+  "param": null,
+  "type": "server_error"
+ },
+ "elapsed": 4.628753423690796
+}

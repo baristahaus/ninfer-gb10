@@ -238,21 +238,21 @@ The check that decides whether the first-request divergence is a bug or legitima
 numerical variation: the cold first 256-token request with `--token-logprobs`
 (`top_logprobs: 2`), one serve per variant. `logprob_probe.py` / `logprob_compare.py`.
 
-**First, the flag itself changed one output** (reported per the check's own caveat):
-
-| Variant | Plain run | `--token-logprobs` |
+| Run | Binary | Output |
 |---|---|---|
-| K4a (`7bd0c8bb...`), C4 | 1234 B `847314b2` (original gate build, 18:24) | **1172 B `86bd9884`** - changed |
-| K4a, C1 | 1212 B `9f1893c5` | 1212 B `9f1893c5` |
-| K4b (`a5581fce`), C4 | 1172 B `86bd9884` | 1172 B `86bd9884` |
+| K4a C4, original gate build, plain (18:24) | `82f77128...` (no longer exists) | 1234 B `847314b2` |
+| K4a C4, rebuilt, plain x3 | `7bd0c8bb...` | 1172 B `86bd9884` (deterministic) |
+| K4a C4, rebuilt, `--token-logprobs` | `7bd0c8bb...` | 1172 B `86bd9884` (flag changed nothing) |
+| K4a C1, rebuilt, plain and `--token-logprobs` | `7bd0c8bb...` | 1212 B `9f1893c5` (flag changed nothing) |
+| K4b C4, plain and `--token-logprobs` | `4d35a292...` | 1172 B `86bd9884` (flag changed nothing) |
 
-**Second, the 1234 reference no longer reproduces.** A plain (no-logprobs) run of the
-rebuilt K4a binary on the C4 config gives 1172 B `86bd9884`, and three consecutive runs
-agree (deterministic; C4 -> 1172, C1 -> 1212). The rebuild's source state is verified
-exactly `3d3d7a25` + `6d851f69` (single-file diff, matches the fix hunk; clean startup,
-no PLE stalls). The only 1234 in the whole dataset is the original gate build
-(`82f77128...`, 18:24) - its working tree may have carried additional uncommitted
-changes; the reflog and build logs cannot say. Provenance unresolved on this machine.
+The flag changed nothing on any existing binary. The 1234 came only from the original
+gate binary (`82f77128...`, 18:24), which no longer exists; the rebuild's source state
+is verified exactly `3d3d7a25` + `6d851f69` (single-file diff, matches the fix hunk;
+clean startup, no PLE stalls), and its plain C4 output is 1172 in three consecutive
+runs (deterministic; C1 -> 1212). The original binary's provenance is unresolvable
+from this machine, and it no longer matters: that output is one more side of the same
+tie.
 
 **First divergent token (position 28 of 256; context "... Need"):**
 
@@ -264,22 +264,54 @@ changes; the reflog and build logs cannot say. Provenance unresolved on this mac
 
 Readings:
 
-- The C1 run shows the two candidates **exactly tied to the last reported bit**; a
-  route staging cannot erase a true 0.25 nat difference to a bit-exact tie (BF16
-  spacing at this magnitude is ~0.008-0.016), so the C4 0.25 gap is a
-  route-induced distortion of a genuinely near-tied pair, not the true score
-  difference.
-- The flag flip (1234 -> 1172, same tree and config, only report nodes added to the
-  decode graph) directly demonstrates the flip mechanism: a config-dependent route
-  change re-orders the near-tie.
+- The 0.25 gap is a near-tie, not a distortion: the rounding that matters happens on
+  the BF16 logits before the log-softmax. Logits in the tens are spaced 0.125 (16-32)
+  or 0.25 (32-64) apart in BF16, so the C4 gap of exactly 2^-2 is one or two logit
+  steps - a pair tied up to rounding. The C1 exact tie (gap 0.0) and the C4
+  one-to-two step gap describe the same near-tie.
 - K4a and K4b under the 1172 route are **bit-identical at all 256 positions** (same
   tokens, same chosen logprobs, 0 differing positions): no measurable K4b numerical
   difference under these configurations.
-- Per the decision table the C4-side gap (0.25) alone would read "defect", but the
-  exact-tie C1 side plus the flag flip plus the K4a/K4b identity put the evidence in
-  the "legitimate near-tie flip from a config-dependent route" bucket. Remaining work
-  (Opus): identify which kernel's route depends on config and document it; close F1
-  against the real-test gate.
+- **F1 passes for K4b**: the gate that matters is K4b against K4a on the same config,
+  and that holds with pipelining on or off. The C1-versus-C4 difference also exists
+  without K4 - a legitimate config-dependent route on a tied token - and the real
+  test, the bitwise contract, passes.
+
+## K4 speed gate: `--pipelined-decode` off vs on (2026-10-01)
+
+ABBA, C4 K=1 warm serve (prose 256x3+1, same load as the K4a gate data), current
+binary `4d35a292...` (a5581fce), no nsys trace. `k4-speed/run_speed_abba.sh`.
+
+| Arm | Flag | decode tok/s | host exposed ms/round | device wait ms/round | rounds |
+|---|---|---:|---:|---:|---:|
+| A1 | off | 22.6 | 0.05 | 71.5 | 1939 |
+| B1 | on | 22.5 | 0.06 | 73.8 | 1891 |
+| B2 | on | 22.4 | 0.07 | 73.7 | 1901 |
+| A2 | off | 23.3 | 0.05 | 70.9 | 1901 |
+
+- decode tok/s: A mean 22.95, B mean 22.45. Both B arms sit below both A arms
+  (B1 22.5 < A1 22.6, B2 22.4 < A1 22.6), so this is a slight regression, not
+  drift; the last arm (A2) is the fastest.
+- host exposed ms/round: 0.05-0.07 under both flags. The a5581fce serial rework
+  has already removed the host work (K4a gate: 2.15 ms/round under nsys), so
+  pipelining has almost nothing left to hide.
+- device wait is about 2.5 ms/round higher under B - the second round's launch is
+  not free.
+- Verdict: pipelined decode does not pay on this workload; off stays the default.
+- K4b (off) against the K4a gate: decode 22.6-23.3 vs 19.9 tok/s, host exposed
+  about 0.05 vs 2.15 ms/round (K4a under nsys, K4b untraced) - the serial rework
+  is the win; the pipelining layer adds nothing on top of it.
+
+### Route-naming run (same binary)
+
+`k4-speed/run_routename.sh`. C4 config with the KV page pool shrunk to C1's
+pool: serve enforces `--kv-capacity >= --max-context`, so both are set to
+18432 -> `pages 288/1,152` (pool 1,152 = the C1 config's pool; the probe
+request is ~356 tokens, far below the cap). Cold first request:
+**1172 B `86bd9884...`** - the C4 output, not the C1 output
+(1212 B `9f1893c5...`). **The split does not track KV page-pool size; it
+tracks `max_concurrency`** (state-slot count). Caveat: the PLE file page cache
+was warm from the speed run; the KV pool was cold.
 
 ## K4a gate data (3d3d7a25 + fix, serve sha256 82f77128... from the K4a verify turn)
 
@@ -298,12 +330,12 @@ Readings:
 
 ## State
 
-- Beads: `ninfer-gb10-nb2` (open - K4 verify; F1-F3 filed); `ninfer-gb10-mol` (F1/F2 -
-  residual; token-logprobs check shows the first-request divergence is a legitimate
-  near-tie flip from a config-dependent route, not a state bug - bug theory not
-  supported, F1 to close against the real-test gate); `ninfer-gb10-3w8`
-  (F3 - closed, verified); `ninfer-gb10-pwd` (shutdown 503 - closed, verified);
-  `ninfer-gb10-nkw` (closed).
-- Machine state: tree at branch tip `a5581fce`, clean; build dir holds that binary
-  (`4d35a292...`); worktree `~/ninfer-gb10-k4a` holds the K4a gate tree
-  (`3d3d7a25` + `6d851f69`) with a built binary (`7bd0c8bb...`); GPU free.
+- Beads: `ninfer-gb10-nb2` (closed - K4 verify complete: F1 passes the bitwise
+  gate, F2 closed (original trigger path unreachable), F3 closed, speed gate:
+  pipelining off stays the default); `ninfer-gb10-mol` (closed - F1 passes,
+  F2 closed); `ninfer-gb10-3w8` (F3 - closed, verified); `ninfer-gb10-pwd`
+  (shutdown 503 - closed, verified); `ninfer-gb10-nkw` (closed).
+- Machine state: code at `a5581fce` (the K4 record commit lands on top); build
+  dir holds that binary (`4d35a292...`); worktree `~/ninfer-gb10-k4a` holds the
+  K4a gate tree (`3d3d7a25` + `6d851f69`) with a built binary
+  (`7bd0c8bb...`); GPU free.

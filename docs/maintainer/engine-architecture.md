@@ -489,7 +489,8 @@ A Program may launch the next decode round before the current one commits. Flash
 does this; its Program exposes `submit_successor`, `has_successor` and `collect_successor`.
 
 - **Submit.** After a decode round's `PendingBatch` is produced and before its preview and commit,
-  the Engine calls `submit_successor` unless a row of the round was cancelled at the unit start.
+  the Engine calls `submit_successor` when it was started with `EngineOptions::pipelined_decode`
+  (off by default) and no row of the round was cancelled at the unit start.
   The Program launches the next round for the same rows on the device state that round advanced,
   as if every row continued with its whole produced extent. It returns false when the rows or
   resources do not allow it.

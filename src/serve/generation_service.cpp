@@ -255,6 +255,7 @@ GenerationService::GenerationService(ServeOptions options, StartupObserver start
     engine_options.kv_cache                 = options_.kv_cache;
     engine_options.enable_vision            = options_.enable_vision;
     engine_options.use_cuda_graph           = options_.use_cuda_graph;
+    engine_options.pipelined_decode         = options_.pipelined_decode;
     engine_options.token_logprobs         = options_.token_logprobs;
     engine_options.speculative              = options_.speculative;
     engine_options.context_cache            = options_.context_cache;
@@ -447,6 +448,12 @@ GenerationOutcome GenerationService::run(PreparedRequest& prepared, const Stream
             throw_shutting_down();
         }
         throw_request_error(exception);
+    }
+    // A shutdown cancellation can also end the generation normally with a Cancelled finish; it
+    // must still reach the client as the shutdown error, not as an ordinary stop.
+    if (result.finish_reason == ninfer::FinishReason::Cancelled &&
+        cancelling_.load(std::memory_order_acquire)) {
+        throw_shutting_down();
     }
     GenerationOutcome outcome;
     outcome.text                = std::move(result.content);

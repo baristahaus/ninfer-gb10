@@ -76,6 +76,7 @@ public:
         : instance_(instance), device_(device), max_context_(options.max_context),
           max_concurrency_(options.max_concurrency),
           reports_token_logprobs_(options.token_logprobs),
+          pipelined_decode_(options.pipelined_decode),
           max_outstanding_(static_cast<std::size_t>(options.max_concurrency) +
                            options.max_pending_requests),
           pending_timeout_(std::chrono::milliseconds(options.pending_timeout_ms)),
@@ -1963,7 +1964,7 @@ private:
             for (const std::uint32_t lane : membership.lane_span()) {
                 any_cancelled = any_cancelled || cancelled_at_unit_start[lane];
             }
-            if (!any_cancelled) {
+            if (pipelined_decode_ && !any_cancelled) {
                 ProgramCallScope submit_call(*this);
                 (void)instance_.program->submit_successor(&submit_call.failed_timing());
                 submit_call.finish(submit_call.failed_timing());
@@ -2420,6 +2421,7 @@ private:
     const std::uint32_t max_context_;
     const std::uint32_t max_concurrency_;
     const bool reports_token_logprobs_;
+    const bool pipelined_decode_;
     const std::size_t max_outstanding_;
     const std::chrono::milliseconds pending_timeout_;
     ResourceManagement resources_;

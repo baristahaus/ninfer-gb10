@@ -79,11 +79,9 @@ struct MtpBatchContext {
     const qwen3_8_flash_next::PagedKVCache& text_cache;
     const qwen3_8_flash_next::PagedKVCache& mtp_cache;
     // The device ingress frame persists across rounds: each round advances it for the next
-    // round (mtp_advance_round) and echoes it to host_frame; the host uploads a frame only when
-    // its own differs from that echo.
+    // round (mtp_advance_round). The launcher copies the egress and the advanced frame to the
+    // pinned buffers of the round's parity after the round.
     qwen3_8_flash_next::MtpDecodeState& frame;
-    qwen3_8_flash_next::MtpDecodeIngress& host_frame;
-    qwen3_8_flash_next::MtpDecodeEgress& host_egress;
     Tensor& continuation_hidden_store;
     const Tensor* ple_embeddings = nullptr;
     // Folds the previous round's deferred GDN/PLE commits (frame.pending_folds) over the first

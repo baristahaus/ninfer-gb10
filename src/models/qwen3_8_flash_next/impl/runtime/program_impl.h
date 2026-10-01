@@ -87,6 +87,28 @@ bool mtp_frame_matches(const qwen3_8_flash_next::MtpDecodeIngress& host,
            same(host.ple_history, device.ple_history, 2U * rows);
 }
 
+// Pinned MTP host buffers: the host-built ingress, then the egress and frame echo of each round
+// parity, each on a 64-byte boundary.
+struct MtpHostLayout {
+    std::array<std::size_t, 2> egress{};
+    std::array<std::size_t, 2> frame{};
+    std::size_t bytes = 0;
+};
+
+MtpHostLayout mtp_host_layout() noexcept {
+    const auto align = [](std::size_t bytes) { return (bytes + 63U) & ~std::size_t{63U}; };
+    MtpHostLayout out;
+    std::size_t offset = align(sizeof(qwen3_8_flash_next::MtpDecodeIngress));
+    for (std::size_t parity = 0; parity < 2; ++parity) {
+        out.egress[parity] = offset;
+        offset             = align(offset + sizeof(qwen3_8_flash_next::MtpDecodeEgress));
+        out.frame[parity]  = offset;
+        offset             = align(offset + sizeof(qwen3_8_flash_next::MtpDecodeIngress));
+    }
+    out.bytes = offset;
+    return out;
+}
+
 void bind_ple_stage(const std::optional<qwen3_8_flash_next::PleGatherStage>& stage,
                     schedule::MtpBatchContext& state) noexcept {
     if (!stage) { return; }
@@ -817,9 +839,7 @@ ProgramImplCore::ProgramImplCore(const LoadedModelData& model_in, const Sequence
               ? std::make_optional<PinnedHostBuffer>(plan.persistent.flash_decode_ple->region.bytes)
               : std::nullopt),
       mtp_host(plan.speculative_backend == SpeculativeBackend::Mtp
-                   ? std::make_optional<PinnedHostBuffer>(
-                         2 * sizeof(qwen3_8_flash_next::MtpDecodeIngress) +
-                         sizeof(qwen3_8_flash_next::MtpDecodeEgress))
+                   ? std::make_optional<PinnedHostBuffer>(mtp_host_layout().bytes)
                    : std::nullopt),
       dflash_host(plan.speculative_backend == SpeculativeBackend::DFlash
                       ? std::make_optional<PinnedHostBuffer>(
@@ -934,6 +954,18 @@ ProgramImplCore::ProgramImplCore(const LoadedModelData& model_in, const Sequence
         replay_records.emplace(backing, *plan.persistent.replay_records);
         replay_fold.emplace(*replay_records, state_images->linear().all_layers_view());
     }
+    if (plan.persistent.replay_records_backup) {
+        replay_records_backup.emplace(backing, *plan.persistent.replay_records_backup);
+        replay_fold_backup.emplace(*replay_records_backup,
+                                   state_images->linear().all_layers_view());
+    }
+    if (plan.persistent.mtp_target_hidden_backup) {
+        mtp_target_hidden_backup.emplace(plan.persistent.mtp_target_hidden_backup->bind(backing));
+    }
+    if (plan.persistent.mtp_target_mtp_hidden_backup) {
+        mtp_target_mtp_hidden_backup.emplace(
+            plan.persistent.mtp_target_mtp_hidden_backup->bind(backing));
+    }
     if (replay_records.has_value() != (speculative_backend != SpeculativeBackend::None) ||
         replay_fold.has_value() != replay_records.has_value()) {
         throw std::logic_error("ReplaySSM records do not match the sequence plan");
@@ -1037,6 +1069,9 @@ ProgramImplCore::ProgramImplCore(const LoadedModelData& model_in, const Sequence
     if (plan.persistent.flash_ple_records) {
         flash_ple_records.emplace(plan.persistent.flash_ple_records->bind(backing));
     }
+    if (plan.persistent.flash_ple_records_backup) {
+        flash_ple_records_backup.emplace(plan.persistent.flash_ple_records_backup->bind(backing));
+    }
     if (plan.persistent.score_hidden) {
         score_hidden = plan.persistent.score_hidden->bind(backing);
     }
@@ -1073,17 +1108,23 @@ ProgramImplCore::ProgramImplCore(const LoadedModelData& model_in, const Sequence
         *ordinary_host_egress  = {};
     }
     if (mtp_host) {
-        mtp_host_ingress = static_cast<qwen3_8_flash_next::MtpDecodeIngress*>(mtp_host->data());
-        mtp_host_egress  = reinterpret_cast<qwen3_8_flash_next::MtpDecodeEgress*>(
-            static_cast<unsigned char*>(mtp_host->data()) +
-            sizeof(qwen3_8_flash_next::MtpDecodeIngress));
-        mtp_host_frame = reinterpret_cast<qwen3_8_flash_next::MtpDecodeIngress*>(
-            static_cast<unsigned char*>(mtp_host->data()) +
-            sizeof(qwen3_8_flash_next::MtpDecodeIngress) +
-            sizeof(qwen3_8_flash_next::MtpDecodeEgress));
+        const MtpHostLayout layout = mtp_host_layout();
+        auto* base                 = static_cast<unsigned char*>(mtp_host->data());
+        mtp_host_ingress           = reinterpret_cast<qwen3_8_flash_next::MtpDecodeIngress*>(base);
         *mtp_host_ingress = {};
-        *mtp_host_egress  = {};
-        *mtp_host_frame   = {};
+        for (std::size_t parity = 0; parity < 2; ++parity) {
+            mtp_host_egress_buffers[parity] =
+                reinterpret_cast<qwen3_8_flash_next::MtpDecodeEgress*>(base +
+                                                                       layout.egress[parity]);
+            mtp_host_frame_buffers[parity] =
+                reinterpret_cast<qwen3_8_flash_next::MtpDecodeIngress*>(base +
+                                                                        layout.frame[parity]);
+            *mtp_host_egress_buffers[parity] = {};
+            *mtp_host_frame_buffers[parity]  = {};
+        }
+        mtp_host_parity = 0;
+        mtp_host_egress = mtp_host_egress_buffers[0];
+        mtp_host_frame  = mtp_host_frame_buffers[0];
     }
     if (dflash_host) {
         dflash_host_ingress =
@@ -9239,6 +9280,7 @@ CommitResult ProgramImplCore::commit(PendingBatch&& pending,
     std::array<SpeculativeStats, kMaximumConcurrency> speculative{};
     std::array<PendingKind, kMaximumConcurrency> pending_kinds{};
     const auto release_members = [&]() noexcept {
+        abandon_successor();
         std::array<std::uint32_t, kMaximumConcurrency> failed_lanes{};
         std::size_t failed_count = 0;
         for (std::size_t row = 0; row < row_count; ++row) {
@@ -9375,6 +9417,7 @@ DiscardResult ProgramImplCore::abort_pending(PendingBatch&& pending) noexcept {
     for (std::size_t row = 0; row < out.row_count; ++row) { members[row] = rows[row]; }
     ContractAccess::consume(pending);
     if (!valid) { return out; }
+    abandon_successor();
     std::array<std::uint32_t, kMaximumConcurrency> failed_lanes{};
     for (std::size_t row = 0; row < out.row_count; ++row) {
         failed_lanes[row] = ContractAccess::lane(members[row]).value;
@@ -9576,6 +9619,7 @@ void ProgramImplCore::fail_all_cleanup() noexcept {
     // kernels (or the previous unit's) may still be in flight, writing the very pages the
     // cleanup below releases.
     if (device.stream != nullptr) { (void)cudaStreamSynchronize(device.stream); }
+    abandon_successor();
     pending_transaction_.reset();
     for (SequenceState& sequence : continuation_states) { sequence.deferred_fold.reset(); }
     if (auto* transaction = std::get_if<ActiveCaptureTransaction>(&context_transaction_)) {
@@ -10332,14 +10376,20 @@ runtime::ExecutionTiming ProgramImplCore::resolve_pending_raw(
     // completed, and the deferred folds run on the stream ahead of the next round.
     const bool tail_device_work =
         eager_fold || needs_hidden_correction || speculative_backend == SpeculativeBackend::DFlash;
+    // With a successor in flight, this round's records and target hiddens live in the backups
+    // its launch took; the eager work below runs after the successor in stream order.
+    const bool from_backup = mtp_successor.has_value();
     try {
         timing.resume_submit();
         if (eager_fold) {
-            replay_fold->execute(
+            const ops::GdnReplayFoldPlan& fold_plan =
+                from_backup ? *replay_fold_backup : *replay_fold;
+            fold_plan.execute(
                 std::span<const ops::GdnReplayFoldRow>(fold_rows.data(), lanes.size()),
                 device.stream);
 #ifdef NINFER_QWEN38_FLASH_NEXT
-            if (!flash_ple_records || state_images->ple_store() == nullptr) {
+            if (!flash_ple_records || state_images->ple_store() == nullptr ||
+                (from_backup && !flash_ple_records_backup)) {
                 throw std::logic_error("Flash-Next speculative PLE fold storage is unavailable");
             }
             std::array<ops::FlashNextPleFoldRow, kMaximumConcurrency> ple_rows{};
@@ -10351,7 +10401,8 @@ runtime::ExecutionTiming ProgramImplCore::resolve_pending_raw(
                 };
             }
             ops::flash_next_ple_replay_fold(
-                *flash_ple_records, *state_images->ple_store(),
+                from_backup ? *flash_ple_records_backup : *flash_ple_records,
+                *state_images->ple_store(),
                 std::span<const ops::FlashNextPleFoldRow>(ple_rows.data(), lanes.size()),
                 device.stream);
 #endif
@@ -10368,8 +10419,10 @@ runtime::ExecutionTiming ProgramImplCore::resolve_pending_raw(
                 // The selectors overwrite the advanced frame's extents, and the advanced frame's
                 // slots already belong to the next round: restore the round's destinations.
                 mtp_frame_rows  = 0;
+                if (mtp_successor) { mtp_successor->frame_clobbered = true; }
                 selector_tensor = frame.current_extents.slice(0, 0, batch);
-                hidden          = frame.target_hidden.slice(2, 0, batch);
+                hidden          = from_backup ? mtp_target_hidden_backup->slice(2, 0, batch)
+                                              : frame.target_hidden.slice(2, 0, batch);
                 selected        = frame.target_continuation_hidden.slice(1, 0, batch);
                 destinations    = frame.state_destination_slots.slice(0, 0, batch);
                 CUDA_CHECK(cudaMemcpyAsync(
@@ -10399,7 +10452,9 @@ runtime::ExecutionTiming ProgramImplCore::resolve_pending_raw(
                         throw std::logic_error(
                             "partial Flash-Next MTP commit has no predictor hidden storage");
                     }
-                    Tensor mtp_hidden = io.mtp_decode->target_mtp_hidden->slice(2, 0, batch);
+                    Tensor mtp_hidden = from_backup && mtp_target_mtp_hidden_backup
+                                            ? mtp_target_mtp_hidden_backup->slice(2, 0, batch)
+                                            : io.mtp_decode->target_mtp_hidden->slice(2, 0, batch);
                     Tensor mtp_selected =
                         io.mtp_decode->target_continuation_mtp_hidden->slice(1, 0, batch);
                     ops::speculative_select_accepted_hidden(mtp_hidden, selector_tensor,
@@ -10505,7 +10560,10 @@ runtime::ExecutionTiming ProgramImplCore::resolve_pending_raw(
             }
 
             commit_sequence_kv(sequence, sequence.text_kv_valid, backend_kv_valid(sequence));
-            trim_sequence_kv(sequence, sequence.text_kv_valid, backend_kv_valid(sequence));
+            // A successor in flight still writes this row's next positions; its collection trims.
+            if (!from_backup) {
+                trim_sequence_kv(sequence, sequence.text_kv_valid, backend_kv_valid(sequence));
+            }
             if (terminal[row]) {
                 request.lifecycle = Lifecycle::Finishable;
             } else {
@@ -10824,6 +10882,9 @@ void ProgramImplCore::settle_state_fork(SequenceState& sequence) {
 }
 
 void ProgramImplCore::settle_deferred_folds() {
+    if (mtp_successor) {
+        throw std::logic_error("deferred folds cannot settle while an MTP successor is in flight");
+    }
     std::array<ops::GdnReplayFoldRow, kMaximumConcurrency> rows{};
     std::array<bool, kMaximumConcurrency> deferred_row{};
     std::int32_t row_count = 0;
@@ -11589,8 +11650,6 @@ void ProgramImplCore::prepare_graphs() {
                                             decoder->text_kv,
                                             *decoder->mtp_cache(),
                                             *io.mtp_decode,
-                                            *mtp_host_frame,
-                                            *mtp_host_egress,
                                             state_images->continuation_hidden_store(),
                                             flash_decode_ple ? &*flash_decode_ple : nullptr};
         bind_ple_stage(ple_gather_stage, mtp_state);
@@ -12365,13 +12424,8 @@ ProgramImplCore::decode_ordinary_batch(std::span<const std::uint32_t> lanes,
     }
 }
 
-runtime::BatchedGeneratedRound
-ProgramImplCore::decode_mtp_batch(std::span<const std::uint32_t> lanes,
-                                  std::span<const runtime::RoundBudget> budgets,
-                                  runtime::ExecutionTiming* failed_timing) {
-    nvtx::ScopedRange round_range(nvtx::Name::DecodeMtpRound, nvtx::Category::Mtp,
-                                  static_cast<std::uint64_t>(lanes.size()));
-    runtime::ExecutionTimingRecorder timing(runtime::ExecutionTimingPhase::Submit, failed_timing);
+std::uint32_t ProgramImplCore::validate_mtp_rows(std::span<const std::uint32_t> lanes,
+                                                 std::span<const runtime::RoundBudget> budgets) {
     if (speculative_backend != SpeculativeBackend::Mtp || !io.mtp_decode ||
         decoder->mtp_cache() == nullptr) {
         throw std::logic_error("MTP batch execution requires the MTP backend");
@@ -12379,8 +12433,6 @@ ProgramImplCore::decode_mtp_batch(std::span<const std::uint32_t> lanes,
     if (lanes.empty() || lanes.size() > max_concurrency || budgets.size() != lanes.size()) {
         throw std::invalid_argument("MTP batch membership is invalid");
     }
-
-    const std::uint32_t width      = draft_window + 1;
     std::uint32_t maximum_frontier = 0;
     for (std::size_t row = 0; row < lanes.size(); ++row) {
         const std::uint32_t lane = lanes[row];
@@ -12406,97 +12458,228 @@ ProgramImplCore::decode_mtp_batch(std::span<const std::uint32_t> lanes,
         }
         maximum_frontier = std::max(maximum_frontier, sequence.execution_frontier);
     }
+    return maximum_frontier;
+}
+
+bool ProgramImplCore::stage_mtp_deferred_folds(std::span<const std::uint32_t> lanes) {
+    // The previous round's deferred commit folds run at this round's graph head when every
+    // deferred lane is a member and its record row lies inside this round's batch; otherwise
+    // they settle on the stream first.
+    bool deferred_in_graph = true;
+    bool any_deferred      = false;
+    for (const SequenceState& sequence : continuation_states) {
+        if (!sequence.deferred_fold) { continue; }
+        any_deferred = true;
+        deferred_in_graph =
+            deferred_in_graph &&
+            std::find(lanes.begin(), lanes.end(), sequence.lane) != lanes.end() &&
+            sequence.deferred_fold->record_row < static_cast<std::int32_t>(lanes.size());
+    }
+    if (any_deferred && !deferred_in_graph) {
+        settle_deferred_folds();
+        any_deferred = false;
+    }
+    mtp_host_ingress->pending_folds.fill(0);
+    for (const SequenceState& sequence : continuation_states) {
+        if (!sequence.deferred_fold) { continue; }
+        const DeferredStateFold fold              = *sequence.deferred_fold;
+        const auto base                           = static_cast<std::size_t>(fold.record_row) * 4U;
+        mtp_host_ingress->pending_folds[base]     = fold.source_slot;
+        mtp_host_ingress->pending_folds[base + 1] = fold.destination_slot;
+        mtp_host_ingress->pending_folds[base + 2] = fold.columns;
+    }
+    return any_deferred;
+}
+
+void ProgramImplCore::build_mtp_ingress_rows(std::span<const std::uint32_t> lanes,
+                                             std::span<const runtime::RoundBudget> budgets) {
+    const std::uint32_t width = draft_window + 1;
+    for (std::size_t row = 0; row < lanes.size(); ++row) {
+        SequenceState& sequence           = active_sequence(lanes[row]);
+        const RequestControl& request     = requests[lanes[row]];
+        const std::uint32_t frontier      = sequence.execution_frontier;
+        const std::uint32_t max_by_budget = budgets[row].generated_tokens_remaining > 1
+                                                ? budgets[row].generated_tokens_remaining - 1
+                                                : 0;
+        const std::uint32_t extent =
+            std::min({sequence.mtp_draft_count, draft_window, max_by_budget,
+                      capacity - sequence.execution_frontier - 1});
+        mtp_host_ingress->anchors[row]        = sequence.ledger.back();
+        mtp_host_ingress->base_frontiers[row] = checked_i32(frontier, "MTP batch frontier");
+        mtp_host_ingress->remaining_budgets[row] =
+            checked_i32(budgets[row].generated_tokens_remaining, "MTP batch remaining budget");
+        mtp_host_ingress->current_extents[row]      = static_cast<std::int32_t>(extent);
+        mtp_host_ingress->target_valid_columns[row] = static_cast<std::int32_t>(extent + 1);
+        for (std::uint32_t j = 0; j < draft_window; ++j) {
+            mtp_host_ingress->current_drafts[row * draft_window + j] =
+                j < extent ? sequence.mtp_drafts[j] : sequence.ledger.back();
+        }
+        for (std::uint32_t j = 0; j < width; ++j) {
+            const std::uint32_t position = frontier + std::min(j, extent);
+            mtp_host_ingress->target_rope_positions[row * width + j] =
+                checked_i32(position, "MTP batch RoPE position") + sequence.rope_delta;
+        }
+        mtp_host_ingress->text_kv_table_rows[row] = text_kv_addresses->bound_row(sequence.kv->text);
+        mtp_host_ingress->mtp_kv_table_rows[row] =
+            backend_kv_addresses->bound_row(*sequence.kv->backend);
+        const StateImageSelectors selectors            = mtp_round_slots(sequence);
+        mtp_host_ingress->state_source_slots[row]      = selectors.source;
+        mtp_host_ingress->state_destination_slots[row] = selectors.destination;
+        mtp_host_ingress->rope_deltas[row]             = sequence.rope_delta;
+        mtp_host_ingress->sampling[row]                = request.sampling_host;
+        const std::size_t ledger_size                  = sequence.ledger.size();
+        mtp_host_ingress->ple_history[row * 2] =
+            ledger_size >= 2 ? sequence.ledger[ledger_size - 2] : -1;
+        mtp_host_ingress->ple_history[row * 2 + 1] =
+            ledger_size >= 3 ? sequence.ledger[ledger_size - 3] : -1;
+        materialize_sequence_kv(sequence, frontier + extent + 1,
+                                std::min(capacity, frontier + extent + draft_window));
+    }
+}
+
+void ProgramImplCore::launch_mtp_round(std::span<const std::uint32_t> lanes,
+                                       std::uint32_t maximum_frontier, bool any_deferred,
+                                       std::uint32_t parity) {
+    DecodeGraphExecutable* executable = nullptr;
+    schedule::MtpCausalAttentionEnvelopes envelopes =
+        mtp_causal_attention_envelopes(maximum_frontier, draft_window, capacity);
+    if (use_cuda_graph) {
+        nvtx::ScopedRange graph_range(nvtx::Name::DecodeMtpSubmitGraph, nvtx::Category::Mtp,
+                                      static_cast<std::uint64_t>(lanes.size()));
+        DecodeGraphProfile& profile = select_graph_profile(
+            mtp_graphs, static_cast<std::uint32_t>(lanes.size()), maximum_frontier, "MTP batch");
+        executable = &install_graph_profile(mtp_graphs, profile, "MTP batch");
+        envelopes =
+            mtp_causal_attention_envelopes(profile.max_execution_frontier, draft_window, capacity);
+    }
+    schedule::MtpBatchContext schedule_state{
+        {device, model, work, state_images->linear(), state_images->ple_store(),
+         flash_ple_records ? &*flash_ple_records : nullptr,
+         replay_records ? &*replay_records : nullptr, io, prefill_hidden, prefill_chunk,
+         proposal_head, mtp_prefill_hidden ? &*mtp_prefill_hidden : nullptr,
+         state_images->mtp_hidden_store()},
+        decoder->text_kv,
+        *decoder->mtp_cache(),
+        *io.mtp_decode,
+        state_images->continuation_hidden_store(),
+        flash_decode_ple ? &*flash_decode_ple : nullptr};
+    schedule_state.pending_fold      = replay_fold ? &*replay_fold : nullptr;
+    schedule_state.pending_fold_rows = any_deferred ? static_cast<std::int32_t>(lanes.size()) : 0;
+    bind_ple_stage(ple_gather_stage, schedule_state);
+    mark_workspace_usage(workspace_plan.mtp_round);
+    if (ple_gather_stage) { ple_gather_stage->begin_round(); }
+    schedule::mtp_decode_batch(schedule_state, static_cast<std::int32_t>(lanes.size()),
+                               draft_window, envelopes, executable);
+    // The round's outputs and its advanced frame go to the pinned buffers of its parity, so a
+    // successor launched before this round's commit leaves them intact.
+    CUDA_CHECK(cudaMemcpyAsync(mtp_host_egress_buffers[parity], io.mtp_decode->egress.data,
+                               sizeof(qwen3_8_flash_next::MtpDecodeEgress), cudaMemcpyDeviceToHost,
+                               device.stream));
+    CUDA_CHECK(cudaMemcpyAsync(mtp_host_frame_buffers[parity], io.mtp_decode->ingress.data,
+                               sizeof(qwen3_8_flash_next::MtpDecodeIngress), cudaMemcpyDeviceToHost,
+                               device.stream));
+}
+
+void ProgramImplCore::adopt_mtp_round_buffers(std::uint32_t parity) noexcept {
+    mtp_host_parity = parity;
+    mtp_host_egress = mtp_host_egress_buffers[parity];
+    mtp_host_frame  = mtp_host_frame_buffers[parity];
+}
+
+runtime::BatchedGeneratedRound
+ProgramImplCore::publish_mtp_round(std::span<const std::uint32_t> lanes,
+                                   std::span<const runtime::RoundBudget> budgets, double seconds) {
+    nvtx::ScopedRange egress_range(nvtx::Name::DecodeMtpEgress, nvtx::Category::Mtp,
+                                   static_cast<std::uint64_t>(lanes.size()));
+    const std::uint32_t width = draft_window + 1;
+    for (std::size_t row = 0; row < lanes.size(); ++row) {
+        SequenceState& sequence       = active_sequence(lanes[row]);
+        RequestControl& request       = requests[lanes[row]];
+        const std::uint32_t base_E    = sequence.execution_frontier;
+        const std::uint32_t base_S    = sequence.ledger_frontier;
+        const std::int32_t count_i    = mtp_host_egress->licensed_counts[row];
+        const std::int32_t accepted_i = mtp_host_egress->accepted_drafts[row];
+        const std::int32_t next_i     = mtp_host_egress->next_extents[row];
+        if (count_i <= 0 || count_i > static_cast<std::int32_t>(width) || accepted_i < 0 ||
+            accepted_i + 1 != count_i || next_i < 0 ||
+            next_i > static_cast<std::int32_t>(draft_window) ||
+            static_cast<std::uint32_t>(count_i) > budgets[row].generated_tokens_remaining ||
+            static_cast<std::uint64_t>(base_E) + static_cast<std::uint32_t>(count_i) > capacity) {
+            throw std::runtime_error("MTP batch returned invalid row metadata");
+        }
+        const std::span<const TokenId> row_tokens(mtp_host_egress->licensed_tokens.data() +
+                                                      row * width,
+                                                  static_cast<std::size_t>(count_i));
+        validate_licensed_tokens(row_tokens);
+        const std::uint32_t pcur =
+            static_cast<std::uint32_t>(mtp_host_ingress->current_extents[row]);
+        if (pcur == 0) {
+            request.speculative_stats.fallback_steps += 1;
+        } else {
+            request.speculative_stats.rounds += 1;
+            request.speculative_stats.drafted_tokens += pcur;
+            request.speculative_stats.accepted_tokens += static_cast<std::uint32_t>(accepted_i);
+            for (std::int32_t i = 0; i < accepted_i; ++i) {
+                request.speculative_stats.accepted_per_position[static_cast<std::size_t>(i)] += 1;
+            }
+        }
+        request.pending = PendingCandidate{
+            .kind          = PendingKind::Speculative,
+            .base_E        = base_E,
+            .base_S        = base_S,
+            .prompt_tokens = 0,
+            .produced      = static_cast<std::uint32_t>(count_i),
+        };
+        request.lifecycle = Lifecycle::Pending;
+        request.timings.decode_seconds += seconds;
+    }
+    return runtime::BatchedGeneratedRound{
+        .tokens =
+            std::span<const TokenId>(mtp_host_egress->licensed_tokens.data(), lanes.size() * width),
+        .row_counts =
+            std::span<const std::int32_t>(mtp_host_egress->licensed_counts.data(), lanes.size()),
+        .row_stride = width,
+        // Same lane-major column order as licensed_tokens. A row publishes only its first
+        // licensed_counts entries; the reports after that column are never read.
+        .scores = io.report_token_logprobs
+                      ? runtime::RoundTokenScores{std::span<const float>(
+                                                      mtp_host_egress->token_logprobs.data(),
+                                                      lanes.size() * width),
+                                                  std::span<const std::int32_t>(
+                                                      mtp_host_egress->top_ids.data(),
+                                                      lanes.size() * width *
+                                                          ops::kMaxReportedLogprobRanks),
+                                                  std::span<const float>(
+                                                      mtp_host_egress->top_logprobs.data(),
+                                                      lanes.size() * width *
+                                                          ops::kMaxReportedLogprobRanks),
+                                                  ops::kMaxReportedLogprobRanks}
+                      : runtime::RoundTokenScores{},
+    };
+}
+
+runtime::BatchedGeneratedRound
+ProgramImplCore::decode_mtp_batch(std::span<const std::uint32_t> lanes,
+                                  std::span<const runtime::RoundBudget> budgets,
+                                  runtime::ExecutionTiming* failed_timing) {
+    nvtx::ScopedRange round_range(nvtx::Name::DecodeMtpRound, nvtx::Category::Mtp,
+                                  static_cast<std::uint64_t>(lanes.size()));
+    runtime::ExecutionTimingRecorder timing(runtime::ExecutionTimingPhase::Submit, failed_timing);
+    if (mtp_successor) {
+        throw std::logic_error("an MTP round cannot launch while a successor is in flight");
+    }
+    const std::uint32_t maximum_frontier = validate_mtp_rows(lanes, budgets);
 
     const auto started = Clock::now();
     try {
         std::optional<nvtx::ScopedRange> submit_range;
         submit_range.emplace(nvtx::Name::DecodeMtpSubmit, nvtx::Category::Mtp,
                              static_cast<std::uint64_t>(lanes.size()));
-        DecodeGraphExecutable* executable = nullptr;
-        schedule::MtpCausalAttentionEnvelopes envelopes =
-            mtp_causal_attention_envelopes(maximum_frontier, draft_window, capacity);
-        if (use_cuda_graph) {
-            nvtx::ScopedRange graph_range(nvtx::Name::DecodeMtpSubmitGraph, nvtx::Category::Mtp,
-                                          static_cast<std::uint64_t>(lanes.size()));
-            DecodeGraphProfile& profile =
-                select_graph_profile(mtp_graphs, static_cast<std::uint32_t>(lanes.size()),
-                                     maximum_frontier, "MTP batch");
-            executable = &install_graph_profile(mtp_graphs, profile, "MTP batch");
-            envelopes = mtp_causal_attention_envelopes(profile.max_execution_frontier, draft_window,
-                                                       capacity);
-        }
-
         std::optional<nvtx::ScopedRange> ingress_range;
         ingress_range.emplace(nvtx::Name::DecodeMtpSubmitIngress, nvtx::Category::Mtp,
                               static_cast<std::uint64_t>(lanes.size()));
-        // The previous round's deferred commit folds run at this round's graph head when every
-        // deferred lane is a member and its record row lies inside this round's batch;
-        // otherwise they settle on the stream first.
-        bool deferred_in_graph = true;
-        bool any_deferred      = false;
-        for (const SequenceState& sequence : continuation_states) {
-            if (!sequence.deferred_fold) { continue; }
-            any_deferred = true;
-            deferred_in_graph =
-                deferred_in_graph &&
-                std::find(lanes.begin(), lanes.end(), sequence.lane) != lanes.end() &&
-                sequence.deferred_fold->record_row < static_cast<std::int32_t>(lanes.size());
-        }
-        if (any_deferred && !deferred_in_graph) {
-            settle_deferred_folds();
-            any_deferred = false;
-        }
-        mtp_host_ingress->pending_folds.fill(0);
-        for (const SequenceState& sequence : continuation_states) {
-            if (!sequence.deferred_fold) { continue; }
-            const DeferredStateFold fold              = *sequence.deferred_fold;
-            const auto base                       = static_cast<std::size_t>(fold.record_row) * 4U;
-            mtp_host_ingress->pending_folds[base]     = fold.source_slot;
-            mtp_host_ingress->pending_folds[base + 1] = fold.destination_slot;
-            mtp_host_ingress->pending_folds[base + 2] = fold.columns;
-        }
-        for (std::size_t row = 0; row < lanes.size(); ++row) {
-            SequenceState& sequence           = active_sequence(lanes[row]);
-            const RequestControl& request     = requests[lanes[row]];
-            const std::uint32_t frontier      = sequence.execution_frontier;
-            const std::uint32_t max_by_budget = budgets[row].generated_tokens_remaining > 1
-                                                    ? budgets[row].generated_tokens_remaining - 1
-                                                    : 0;
-            const std::uint32_t extent =
-                std::min({sequence.mtp_draft_count, draft_window, max_by_budget,
-                          capacity - sequence.execution_frontier - 1});
-            mtp_host_ingress->anchors[row]        = sequence.ledger.back();
-            mtp_host_ingress->base_frontiers[row] = checked_i32(frontier, "MTP batch frontier");
-            mtp_host_ingress->remaining_budgets[row] =
-                checked_i32(budgets[row].generated_tokens_remaining, "MTP batch remaining budget");
-            mtp_host_ingress->current_extents[row]      = static_cast<std::int32_t>(extent);
-            mtp_host_ingress->target_valid_columns[row] = static_cast<std::int32_t>(extent + 1);
-            for (std::uint32_t j = 0; j < draft_window; ++j) {
-                mtp_host_ingress->current_drafts[row * draft_window + j] =
-                    j < extent ? sequence.mtp_drafts[j] : sequence.ledger.back();
-            }
-            for (std::uint32_t j = 0; j < width; ++j) {
-                const std::uint32_t position = frontier + std::min(j, extent);
-                mtp_host_ingress->target_rope_positions[row * width + j] =
-                    checked_i32(position, "MTP batch RoPE position") + sequence.rope_delta;
-            }
-            mtp_host_ingress->text_kv_table_rows[row] =
-                text_kv_addresses->bound_row(sequence.kv->text);
-            mtp_host_ingress->mtp_kv_table_rows[row] =
-                backend_kv_addresses->bound_row(*sequence.kv->backend);
-            const StateImageSelectors selectors            = mtp_round_slots(sequence);
-            mtp_host_ingress->state_source_slots[row]      = selectors.source;
-            mtp_host_ingress->state_destination_slots[row] = selectors.destination;
-            mtp_host_ingress->rope_deltas[row]             = sequence.rope_delta;
-            mtp_host_ingress->sampling[row]                = request.sampling_host;
-            const std::size_t ledger_size                  = sequence.ledger.size();
-            mtp_host_ingress->ple_history[row * 2] =
-                ledger_size >= 2 ? sequence.ledger[ledger_size - 2] : -1;
-            mtp_host_ingress->ple_history[row * 2 + 1] =
-                ledger_size >= 3 ? sequence.ledger[ledger_size - 3] : -1;
-            materialize_sequence_kv(sequence, frontier + extent + 1,
-                                    std::min(capacity, frontier + extent + draft_window));
-        }
+        const bool any_deferred = stage_mtp_deferred_folds(lanes);
+        build_mtp_ingress_rows(lanes, budgets);
         // Rows that all continued with their whole output, in the same order, find the frame
         // already advanced on the device. A membership or order change, a terminal, cancelled or
         // forked row, an eager fold, or any other host change uploads the host's frame.
@@ -12514,28 +12697,8 @@ ProgramImplCore::decode_mtp_batch(std::span<const std::uint32_t> lanes,
         }
         ingress_range.reset();
 
-        schedule::MtpBatchContext schedule_state{
-            {device, model, work, state_images->linear(), state_images->ple_store(),
-             flash_ple_records ? &*flash_ple_records : nullptr,
-             replay_records ? &*replay_records : nullptr, io, prefill_hidden, prefill_chunk,
-             proposal_head, mtp_prefill_hidden ? &*mtp_prefill_hidden : nullptr,
-             state_images->mtp_hidden_store()},
-            decoder->text_kv,
-            *decoder->mtp_cache(),
-            *io.mtp_decode,
-            *mtp_host_frame,
-            *mtp_host_egress,
-            state_images->continuation_hidden_store(),
-            flash_decode_ple ? &*flash_decode_ple : nullptr};
-
-        schedule_state.pending_fold = replay_fold ? &*replay_fold : nullptr;
-        schedule_state.pending_fold_rows =
-            any_deferred ? static_cast<std::int32_t>(lanes.size()) : 0;
-        bind_ple_stage(ple_gather_stage, schedule_state);
-        mark_workspace_usage(workspace_plan.mtp_round);
-        if (ple_gather_stage) { ple_gather_stage->begin_round(); }
-        schedule::mtp_decode_batch(schedule_state, static_cast<std::int32_t>(lanes.size()),
-                                   draft_window, envelopes, executable);
+        const std::uint32_t parity = mtp_host_parity ^ 1U;
+        launch_mtp_round(lanes, maximum_frontier, any_deferred, parity);
         for (SequenceState& sequence : continuation_states) { sequence.deferred_fold.reset(); }
         submit_range.reset();
         timing.begin_wait();
@@ -12549,79 +12712,13 @@ ProgramImplCore::decode_mtp_batch(std::span<const std::uint32_t> lanes,
             ple_gather_stage->end_round();
             ple_gather_stage->check();
         }
+        adopt_mtp_round_buffers(parity);
         mtp_frame_rows = static_cast<std::uint32_t>(lanes.size());
 
-        std::optional<nvtx::ScopedRange> egress_range;
-        egress_range.emplace(nvtx::Name::DecodeMtpEgress, nvtx::Category::Mtp,
-                             static_cast<std::uint64_t>(lanes.size()));
-        const double seconds = std::chrono::duration<double>(Clock::now() - started).count();
-        for (std::size_t row = 0; row < lanes.size(); ++row) {
-            SequenceState& sequence       = active_sequence(lanes[row]);
-            RequestControl& request       = requests[lanes[row]];
-            const std::uint32_t base_E    = sequence.execution_frontier;
-            const std::uint32_t base_S    = sequence.ledger_frontier;
-            const std::int32_t count_i    = mtp_host_egress->licensed_counts[row];
-            const std::int32_t accepted_i = mtp_host_egress->accepted_drafts[row];
-            const std::int32_t next_i     = mtp_host_egress->next_extents[row];
-            if (count_i <= 0 || count_i > static_cast<std::int32_t>(width) || accepted_i < 0 ||
-                accepted_i + 1 != count_i || next_i < 0 ||
-                next_i > static_cast<std::int32_t>(draft_window) ||
-                static_cast<std::uint32_t>(count_i) > budgets[row].generated_tokens_remaining ||
-                static_cast<std::uint64_t>(base_E) + static_cast<std::uint32_t>(count_i) >
-                    capacity) {
-                throw std::runtime_error("MTP batch returned invalid row metadata");
-            }
-            const std::span<const TokenId> row_tokens(mtp_host_egress->licensed_tokens.data() +
-                                                          row * width,
-                                                      static_cast<std::size_t>(count_i));
-            validate_licensed_tokens(row_tokens);
-            const std::uint32_t pcur =
-                static_cast<std::uint32_t>(mtp_host_ingress->current_extents[row]);
-            if (pcur == 0) {
-                request.speculative_stats.fallback_steps += 1;
-            } else {
-                request.speculative_stats.rounds += 1;
-                request.speculative_stats.drafted_tokens += pcur;
-                request.speculative_stats.accepted_tokens += static_cast<std::uint32_t>(accepted_i);
-                for (std::int32_t i = 0; i < accepted_i; ++i) {
-                    request.speculative_stats.accepted_per_position[static_cast<std::size_t>(i)] +=
-                        1;
-                }
-            }
-            request.pending = PendingCandidate{
-                .kind          = PendingKind::Speculative,
-                .base_E        = base_E,
-                .base_S        = base_S,
-                .prompt_tokens = 0,
-                .produced      = static_cast<std::uint32_t>(count_i),
-            };
-            request.lifecycle = Lifecycle::Pending;
-            request.timings.decode_seconds += seconds;
-        }
-        egress_range.reset();
-        return runtime::BatchedGeneratedRound{
-            .tokens     = std::span<const TokenId>(mtp_host_egress->licensed_tokens.data(),
-                                                   lanes.size() * width),
-            .row_counts = std::span<const std::int32_t>(mtp_host_egress->licensed_counts.data(),
-                                                        lanes.size()),
-            .row_stride = width,
-            // Same lane-major column order as licensed_tokens. A row publishes only its first
-            // licensed_counts entries; the reports after that column are never read.
-            .scores =
-                io.report_token_logprobs
-                    ? runtime::RoundTokenScores{
-                          std::span<const float>(mtp_host_egress->token_logprobs.data(),
-                                                 lanes.size() * width),
-                          std::span<const std::int32_t>(
-                              mtp_host_egress->top_ids.data(),
-                              lanes.size() * width * ops::kMaxReportedLogprobRanks),
-                          std::span<const float>(
-                              mtp_host_egress->top_logprobs.data(),
-                              lanes.size() * width * ops::kMaxReportedLogprobRanks),
-                          ops::kMaxReportedLogprobRanks}
-                    : runtime::RoundTokenScores{},
-            .timing     = timing.finish(),
-        };
+        runtime::BatchedGeneratedRound round = publish_mtp_round(
+            lanes, budgets, std::chrono::duration<double>(Clock::now() - started).count());
+        round.timing = timing.finish();
+        return round;
     } catch (...) {
         timing.begin_wait();
         try {
@@ -12634,6 +12731,212 @@ ProgramImplCore::decode_mtp_batch(std::span<const std::uint32_t> lanes,
         clear_execution_failure_lanes(lanes);
         throw;
     }
+}
+
+bool ProgramImplCore::submit_successor(runtime::ExecutionTiming* failed_timing) {
+    if (speculative_backend != SpeculativeBackend::Mtp || mtp_successor || !pending_transaction_ ||
+        !replay_records_backup || !replay_fold_backup || !mtp_target_hidden_backup ||
+        has_context_transaction()) {
+        return false;
+    }
+    const PendingTransaction& transaction = *pending_transaction_;
+    const std::size_t rows                = transaction.size;
+    const std::uint32_t width             = draft_window + 1U;
+    // The successor runs on the frame the pending round advanced, which holds only when that
+    // round was a full MTP round over exactly these rows.
+    if (rows == 0 || mtp_frame_rows != rows) { return false; }
+    std::uint32_t maximum_bound = 0;
+    for (std::size_t row = 0; row < rows; ++row) {
+        const std::uint32_t lane      = transaction.lanes[row];
+        const RequestControl& request = requests[lane];
+        const SequenceState& sequence = active_sequence(lane);
+        if (request.lifecycle != Lifecycle::Pending ||
+            request.pending.kind != PendingKind::Speculative || sequence.state.fork_pending ||
+            sequence.execution_frontier != request.pending.base_E) {
+            return false;
+        }
+        // The successor's frontier is at most base + width, and it writes up to width further
+        // positions; both rounds' KV must fit and stay reserved until the successor is collected.
+        const std::uint64_t reach = static_cast<std::uint64_t>(request.pending.base_E) + 2U * width;
+        if (reach > capacity) { return false; }
+        maximum_bound = std::max(maximum_bound, request.pending.base_E + width);
+    }
+    runtime::ExecutionTimingRecorder timing(runtime::ExecutionTimingPhase::Submit, failed_timing);
+    nvtx::ScopedRange submit_range(nvtx::Name::DecodeMtpSubmit, nvtx::Category::Mtp,
+                                   static_cast<std::uint64_t>(rows));
+    std::array<std::uint32_t, kMaximumConcurrency> lanes{};
+    std::copy_n(transaction.lanes.begin(), rows, lanes.begin());
+    const auto lane_span = std::span<const std::uint32_t>(lanes.data(), rows);
+    try {
+        for (const std::uint32_t lane : lane_span) {
+            SequenceState& sequence    = active_sequence(lane);
+            const std::uint32_t base_E = requests[lane].pending.base_E;
+            materialize_sequence_kv(sequence, base_E + 2U * width,
+                                    std::min(capacity, base_E + width + 2U * draft_window));
+        }
+    } catch (const std::bad_alloc&) {
+        // Not enough KV pages for two rounds in flight; the pending round's commit trims the
+        // extra reservation and the loop stays serial.
+        return false;
+    }
+    try {
+        // The successor overwrites the pending round's replay records and target hiddens, which
+        // that round's commit needs to refold or correct a shortened row.
+        const auto backup = [&](const Tensor& from, const Tensor& to) {
+            if (from.bytes() != to.bytes()) {
+                throw std::logic_error("MTP round backup does not match its source");
+            }
+            CUDA_CHECK(cudaMemcpyAsync(to.data, from.data, from.bytes(), cudaMemcpyDeviceToDevice,
+                                       device.stream));
+        };
+        backup(replay_records->conv, replay_records_backup->conv);
+        backup(replay_records->key, replay_records_backup->key);
+        backup(replay_records->value, replay_records_backup->value);
+        backup(replay_records->gate, replay_records_backup->gate);
+        backup(io.mtp_decode->target_hidden, *mtp_target_hidden_backup);
+        if (mtp_target_mtp_hidden_backup) {
+            if (!io.mtp_decode->target_mtp_hidden) {
+                throw std::logic_error("Flash-Next MTP frame has no predictor hidden storage");
+            }
+            backup(*io.mtp_decode->target_mtp_hidden, *mtp_target_mtp_hidden_backup);
+        }
+        if (flash_ple_records_backup) {
+            if (!flash_ple_records) {
+                throw std::logic_error("Flash-Next PLE replay records are unavailable");
+            }
+            backup(*flash_ple_records, *flash_ple_records_backup);
+        }
+        const std::uint32_t parity = mtp_host_parity ^ 1U;
+        // Every row's deferred fold is the pending round's, which the device frame carries.
+        launch_mtp_round(lane_span, maximum_bound, true, parity);
+        mtp_successor = MtpSuccessor{
+            .lanes = lanes, .row_count = rows, .parity = parity, .started = Clock::now()};
+        mtp_frame_rows = 0;
+    } catch (...) {
+        abandon_successor();
+        throw;
+    }
+    if (failed_timing != nullptr) { *failed_timing += timing.finish(); }
+    return true;
+}
+
+bool ProgramImplCore::successor_frame_matches(std::span<const std::uint32_t> lanes,
+                                              std::span<const runtime::RoundBudget> budgets) {
+    (void)stage_mtp_deferred_folds(lanes);
+    build_mtp_ingress_rows(lanes, budgets);
+    return mtp_frame_matches(*mtp_host_ingress, *mtp_host_frame, lanes.size(), draft_window);
+}
+
+SuccessorCollection
+ProgramImplCore::collect_successor(std::span<const SequenceHandle> keep,
+                                   std::span<const runtime::RoundBudget> budgets,
+                                   runtime::ExecutionTiming* failed_timing) {
+    if (!mtp_successor) { throw std::logic_error("no MTP successor is in flight"); }
+    if (pending_transaction_ || keep.size() != budgets.size()) {
+        throw std::logic_error("MTP successor collection overlaps a pending transaction");
+    }
+    nvtx::ScopedRange round_range(nvtx::Name::DecodeMtpRound, nvtx::Category::Mtp,
+                                  static_cast<std::uint64_t>(mtp_successor->row_count));
+    runtime::ExecutionTimingRecorder timing(runtime::ExecutionTimingPhase::Submit, failed_timing);
+    const MtpSuccessor successor = *mtp_successor;
+    const auto lanes = std::span<const std::uint32_t>(successor.lanes.data(), successor.row_count);
+    SuccessorCollection out;
+    try {
+        timing.begin_wait();
+        {
+            nvtx::ScopedRange wait_range(nvtx::Name::DecodeMtpWait, nvtx::Category::Control,
+                                         static_cast<std::uint64_t>(lanes.size()));
+            device.synchronize();
+        }
+        timing.end_wait();
+        mtp_successor.reset();
+        if (ple_gather_stage) {
+            ple_gather_stage->end_round();
+            ple_gather_stage->check();
+        }
+        // The successor is kept only whole: every row still decodes, in the same order, and the
+        // frame it ran on equals the one the host builds now that the pending round committed.
+        bool whole = keep.size() == lanes.size() && !successor.frame_clobbered;
+        for (std::size_t row = 0; whole && row < keep.size(); ++row) {
+            whole = valid_sequence(keep[row]) &&
+                    ContractAccess::lane(keep[row]).value == lanes[row] &&
+                    requests[lanes[row]].lifecycle == Lifecycle::Active &&
+                    budgets[row].generated_tokens_remaining != 0;
+        }
+        if (whole) {
+            (void)validate_mtp_rows(lanes, budgets);
+            whole = successor_frame_matches(lanes, budgets);
+        }
+        if (!whole) {
+            discard_successor_rows(lanes, successor.parity);
+            if (failed_timing != nullptr) { *failed_timing += timing.finish(); }
+            return out;
+        }
+        // The successor folded every deferred commit at its head.
+        for (const std::uint32_t lane : lanes) { active_sequence(lane).deferred_fold.reset(); }
+        adopt_mtp_round_buffers(successor.parity);
+        mtp_frame_rows                       = static_cast<std::uint32_t>(lanes.size());
+        runtime::BatchedGeneratedRound round = publish_mtp_round(
+            lanes, budgets,
+            std::chrono::duration<double>(Clock::now() - successor.started).count());
+        round.timing = timing.finish();
+        if (failed_timing != nullptr) { *failed_timing += round.timing; }
+        out.pending.emplace(wrap_pending(lanes, round));
+        out.kept.fill(true);
+        return out;
+    } catch (...) {
+        abandon_successor();
+        clear_execution_failure_lanes(lanes);
+        throw;
+    }
+}
+
+void ProgramImplCore::discard_successor_rows(std::span<const std::uint32_t> lanes,
+                                             std::uint32_t parity) {
+    const std::uint32_t width                         = draft_window + 1U;
+    const qwen3_8_flash_next::MtpDecodeEgress& egress = *mtp_host_egress_buffers[parity];
+    work.reset();
+    for (std::size_t row = 0; row < lanes.size(); ++row) {
+        const std::uint32_t lane = lanes[row];
+        RequestControl& request  = requests[lane];
+        if (request.lifecycle != Lifecycle::Active && request.lifecycle != Lifecycle::Finishable) {
+            continue; // cancelled and released by the pending round's commit
+        }
+        SequenceState& sequence = active_sequence(lane);
+        // The successor folded the pending round's whole commit at its head into the deferral's
+        // destination; a shortened (terminal) commit was refolded there by that round's commit.
+        if (sequence.deferred_fold) {
+            const std::int32_t destination = sequence.deferred_fold->destination_slot;
+            sequence.deferred_fold.reset();
+            adopt_mtp_state_slot(sequence, destination);
+        }
+        // Undo the successor's penalty occurrences for a row that keeps generating.
+        const std::int32_t produced = egress.licensed_counts[row];
+        if (request.lifecycle == Lifecycle::Active &&
+            request.sampling_host.token_counts != nullptr && produced > 0 &&
+            produced <= static_cast<std::int32_t>(width)) {
+            Tensor tokens =
+                io.mtp_decode->licensed_tokens.slice(1, static_cast<std::int32_t>(row), 1)
+                    .view({width})
+                    .slice(0, 0, produced);
+            Tensor counts(request.sampling_host.token_counts, DType::I32,
+                          {TextConfig::token_domain});
+            ops::decrement_token_counts(tokens, counts, device.stream);
+        }
+        trim_sequence_kv(sequence, sequence.text_kv_valid, backend_kv_valid(sequence));
+    }
+    // The successor advanced the device frame for rows that did not continue.
+    mtp_frame_rows = 0;
+}
+
+void ProgramImplCore::abandon_successor() noexcept {
+    if (!mtp_successor) { return; }
+    try {
+        device.synchronize();
+    } catch (...) {}
+    if (ple_gather_stage) { ple_gather_stage->end_round(); }
+    mtp_successor.reset();
+    mtp_frame_rows = 0;
 }
 
 runtime::BatchedGeneratedRound

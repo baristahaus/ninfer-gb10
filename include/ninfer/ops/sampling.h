@@ -81,4 +81,8 @@ void sample(const Tensor& logits, Tensor& out, std::int32_t token_domain,
 // [token_domain] committed count array. IDs must be in [0,token_domain).
 void increment_token_counts(const Tensor& token_ids, Tensor& token_counts, cudaStream_t stream);
 
+// Removes one occurrence of every id in token_ids, undoing increment_token_counts for the same
+// ids (a discarded speculative round). Same shapes and preconditions.
+void decrement_token_counts(const Tensor& token_ids, Tensor& token_counts, cudaStream_t stream);
+
 } // namespace ninfer::ops

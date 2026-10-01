@@ -320,12 +320,6 @@ auto mtp_decode_batch_body(MtpBatchContext& state, std::int32_t batch_size, std:
                                pending_folds, verify_ids, licensed_tokens, ple_history,
                                state.execution.device.stream);
 
-        CUDA_CHECK(cudaMemcpyAsync(&state.host_egress, frame.egress.data,
-                                   sizeof(qwen3_8_flash_next::MtpDecodeEgress),
-                                   cudaMemcpyDeviceToHost, state.execution.device.stream));
-        CUDA_CHECK(cudaMemcpyAsync(&state.host_frame, frame.ingress.data,
-                                   sizeof(qwen3_8_flash_next::MtpDecodeIngress),
-                                   cudaMemcpyDeviceToHost, state.execution.device.stream));
     };
 }
 

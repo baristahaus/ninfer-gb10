@@ -199,6 +199,39 @@ to 1212 B `9f1893c5` in both modes - a third value (K4a reference: 1234 B `84731
 Three serve configs/trees, three first-request values; a correct engine returns 1234 in
 all of them.
 
+## Decision runs after a5581fce (2026-10-01)
+
+Two runs to split the remaining causes for the first-request residual (cold first
+256-token request, fresh serve, pipelining off):
+
+| Run | Tree | Serve config | CUDA graphs | Result |
+|---|---|---|---|---|
+| K4a, C1 | `3d3d7a25` + `6d851f69` (fresh worktree build, sha `7bd0c8bb...`) | C1 (`pages 1,152/1,152`, 2.15 GiB) | on | **1212 B `9f1893c5`** - not 1234 |
+| K4b, C4, no graph | `a5581fce` (`4d35a292...`) | C4 (`pages 1,152/4,608`, 4.14 GiB) | **off** (`--no-cuda-graph`, 2.81 GiB) | **1172 B `86bd9884`** - the residual |
+
+Readings:
+
+- **The bug predates K4b** (K4a on the C1 config is already wrong: 1212 vs 1234).
+  Next step per the plan: bisect back through K3 -> K2 -> K1.
+- **Not a graph-profile-install cause**: the K4b residual reproduces with
+  `--no-cuda-graph`, byte-identical to the graphed run.
+- **K4b's layout change is invisible under the C1 config**: K4a and K4b on the C1
+  config are byte-identical (1212 B `9f1893c5`), although K4b allocates the backup
+  buffers even with pipelining off. The config-dependence is a property of the
+  pre-existing first-request bug, not of K4b's backup allocation.
+- The C4-config residual (1172 vs K4a's 1234) remains K4b-specific; with the graphs
+  ruled out, K4b's persistent layout growth (backup buffers) is still the leading
+  candidate for which stale bytes the C4 layout exposes.
+
+Full first-request matrix so far:
+
+| Tree | C4 config | C1 config |
+|---|---|---|
+| K4a (`3d3d7a25` + fix) | 1234 B `847314b2` (correct) | 1212 B `9f1893c5` |
+| K4b / `a5581fce`, pipelining off | 1172 B `86bd9884` (residual) | 1212 B `9f1893c5` |
+| K4b / `a5581fce`, `--pipelined-decode` | 1172 B `86bd9884` | 1212 B `9f1893c5` |
+| K4b / `a5581fce`, C4, `--no-cuda-graph` | 1172 B `86bd9884` | - |
+
 ## K4a gate data (3d3d7a25 + fix, serve sha256 82f77128... from the K4a verify turn)
 
 - Unit tests: PASS; real test: PASS bitwise (92 s)
@@ -217,8 +250,10 @@ all of them.
 ## State
 
 - Beads: `ninfer-gb10-nb2` (open - K4 verify; F1-F3 filed); `ninfer-gb10-mol` (F1/F2 -
-  F1 fixed for 3 of 4 shapes by 97beaaaf, first-request shape residual noted 2026-10-01;
-  F2 replays faithful on rerun, stays open); `ninfer-gb10-3w8` (F3 - fixed by 97beaaaf,
-  verified on rerun, pending close); `ninfer-gb10-nkw` (closed).
-- Machine state: tree at branch tip `b61f9867`, clean; build dir holds that binary
-  (`d3b07d5f...`); GPU free.
+  residual isolated to the reworked serial path by the a5581fce bisect; decision runs
+  show the first-request bug predates K4b and is not graph-related); `ninfer-gb10-3w8`
+  (F3 - closed, verified); `ninfer-gb10-pwd` (shutdown 503 - closed, verified);
+  `ninfer-gb10-nkw` (closed).
+- Machine state: tree at branch tip `a5581fce`, clean; build dir holds that binary
+  (`4d35a292...`); worktree `~/ninfer-gb10-k4a` holds the K4a gate tree
+  (`3d3d7a25` + `6d851f69`) with a built binary (`7bd0c8bb...`); GPU free.

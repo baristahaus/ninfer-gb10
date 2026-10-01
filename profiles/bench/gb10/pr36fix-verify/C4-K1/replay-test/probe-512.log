@@ -1,0 +1,36 @@
+# Probe: 4-variant chat-message replay pattern, 512 outputs (probe_hold.cpp).
+# Config: max_context 1024, kv explicit 2048, MTP draft-3/Full, graphs on,
+# 4 state slots, 4 concurrency, 4 pending, 8 private continuations, thinking off.
+# Warm wave: 4x 64 outputs (sequential, blocking). Resub wave: 4x 512 outputs,
+# back-to-back non-blocking submits. GB10 sm_121a, 32 GB fp8-mtp artifact.
+# 2026-10-01 (UTC).
+
+## Pre-fix engine (engine_core.h at dc622216^, re-arm hunk reverted)
+warm-0         reused_prompt_tokens=  0  total=   1.584 s  queue=   0.001 s
+warm-1         reused_prompt_tokens= 12  total=   1.676 s  queue=   0.001 s
+warm-2         reused_prompt_tokens= 12  total=   1.414 s  queue=   0.001 s
+warm-3         reused_prompt_tokens= 12  total=   1.410 s  queue=   0.001 s
+resub-0        reused_prompt_tokens= 29  total=  16.529 s  queue=   0.005 s
+resub-1        reused_prompt_tokens= 29  total=  16.374 s  queue=   0.166 s
+resub-2        reused_prompt_tokens= 31  total=  17.481 s  queue=   0.322 s
+resub-3        reused_prompt_tokens= 30  total=  27.169 s  queue=  16.528 s
+--- check: replays=4 longest_queue=16.528 shortest_total=16.374 -> FAIL ---
+
+## Fixed engine (495c4995 incl. dc622216 re-arm)
+warm-0         reused_prompt_tokens=  0  total=   1.586 s  queue=   0.001 s
+warm-1         reused_prompt_tokens= 12  total=   1.680 s  queue=   0.001 s
+warm-2         reused_prompt_tokens= 12  total=   1.420 s  queue=   0.001 s
+warm-3         reused_prompt_tokens= 12  total=   1.412 s  queue=   0.001 s
+resub-0        reused_prompt_tokens= 29  total=  15.718 s  queue=   0.005 s
+resub-1        reused_prompt_tokens= 29  total=  15.573 s  queue=   0.167 s
+resub-2        reused_prompt_tokens= 31  total=  16.662 s  queue=   0.323 s
+resub-3        reused_prompt_tokens= 30  total=  25.991 s  queue=  15.718 s
+--- check: replays=4 longest_queue=15.718 shortest_total=15.573 -> FAIL ---
+
+## Reading
+Both engines admit resub-1/2 on the ~160 ms stagger, then hold resub-3 until
+resub-0 completes (queue wait equals resub-0's total lifetime to the millisecond,
+in both runs). The dc622216 re-arm (fork-settlement rescue) does not change this
+scenario: the 4th-replay hold is present on the fixed engine too. This is a
+different admission situation from the serve repro, where replays are submitted
+while the original requests are still running.

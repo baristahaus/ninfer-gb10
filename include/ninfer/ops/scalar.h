@@ -8,6 +8,10 @@
 
 namespace ninfer::ops {
 
+// Exact constant fill of a non-null contiguous I32 vector [N], N >= 1.
+// Writes destination[i] = value for every element; no workspace or host-memory dependency.
+void fill_i32(Tensor& destination, std::int32_t value, cudaStream_t stream);
+
 /**
  * Op: finite typed scalar state transitions
  *

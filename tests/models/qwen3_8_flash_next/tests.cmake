@@ -7,6 +7,9 @@ ninfer_add_op_test(ninfer_flash_next_gdn_test SOURCES ops/test_flash_next_gdn.cp
 ninfer_add_test(ninfer_qwen3_8_flash_next_real_test
   SOURCES models/qwen3_8_flash_next_125b_a6b/test_engine_real.cpp LIBRARIES ninfer_engine)
 set_tests_properties(ninfer_qwen3_8_flash_next_real_test PROPERTIES SKIP_RETURN_CODE 77)
+add_test(NAME ninfer_qwen3_8_flash_next_graph_real_test
+  COMMAND ninfer_qwen3_8_flash_next_real_test --graph-equivalence)
+set_tests_properties(ninfer_qwen3_8_flash_next_graph_real_test PROPERTIES SKIP_RETURN_CODE 77)
 add_test(NAME ninfer_flash_next_performance_report_test
   COMMAND ${Python3_EXECUTABLE} -m unittest tests/test_flash_next_performance.py)
 set_tests_properties(ninfer_flash_next_performance_report_test PROPERTIES WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})

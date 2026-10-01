@@ -5,6 +5,13 @@
 
 namespace ninfer::ops::detail {
 
+void fill_i32_launch(Tensor& destination, std::int32_t value, cudaStream_t stream) {
+    const auto count = destination.ne[0];
+    fill_i32_kernel<<<(static_cast<std::uint32_t>(count) + 255U) / 256U, 256, 0, stream>>>(
+        static_cast<std::int32_t*>(destination.data), count, value);
+    CUDA_CHECK(cudaGetLastError());
+}
+
 void set_i32_scalar_launch(Tensor& destination, std::int32_t value, cudaStream_t stream) {
     set_i32_scalar_kernel<<<1, 1, 0, stream>>>(static_cast<std::int32_t*>(destination.data), value);
     CUDA_CHECK(cudaGetLastError());

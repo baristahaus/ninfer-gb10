@@ -85,6 +85,16 @@ scale. Production fusion may choose its reduction and staging precision, but eac
 qualified directly against an independent mathematical oracle at its public output and persistent
 state boundaries.
 
+Ordinary decode graphs are enabled by default. Valid-token counts are filled on the device, so
+graph replay does not depend on temporary host storage.
+
+Ordinary eager decode and CUDA Graph replay select the same target execution envelope; disabling
+CUDA Graphs changes launch machinery without selecting different arithmetic. Prefill and incremental
+decode use distinct qualified GEMM/reduction profiles. Fresh full-history prefill is useful for
+numerical diagnosis, but identical greedy tokens across those profiles are not a mathematical
+oracle: BF16 rounding can change a close argmax. Validate closed Ops against their independent
+oracle, and graph replay against eager execution with the same envelope and token history.
+
 ## Numerical diagnostics
 
 `ninfer-perplexity --token-scores` exports fixed-history token log-probabilities through the public
@@ -92,7 +102,8 @@ Engine scoring route; see [perplexity](../perplexity.md). Cross-engine score dif
 not identify an incorrect operator.
 
 For a targeted maintainer investigation, `NINFER_FLASH_NEXT_LOGITS_DIR=<directory>` captures full
-BF16 target logits after ordinary decode and MTP verification. Use `--no-cuda-graph`: synchronous
+BF16 target logits after ordinary decode and MTP verification. Ordinary decode captures logits
+after replay, outside the graph. For MTP verification, use `--no-cuda-graph`: synchronous
 host copies are prohibited inside capture. Each numbered JSON file identifies the route, input
 IDs, positions, active columns, KV rows, vocabulary size, width, and batch; the matching `.bf16`
 file stores contiguous vocabulary-major rows. Verification includes tentative columns, so compare

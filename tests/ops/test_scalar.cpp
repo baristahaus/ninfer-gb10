@@ -13,6 +13,35 @@ using namespace ninfer::test;
 
 namespace {
 
+int fill_i32_graph_contract(cudaStream_t stream) {
+    int failures = 0;
+    for (const int count : {1, 2, 8, 257}) {
+        GuardedDeviceBuffer destination(count * sizeof(std::int32_t));
+        Tensor vector(destination.data(), DType::I32, {count});
+        cudaGraph_t graph          = nullptr;
+        cudaGraphExec_t executable = nullptr;
+        cuda_check(cudaStreamBeginCapture(stream, cudaStreamCaptureModeThreadLocal),
+                   "begin fill capture");
+        ops::fill_i32(vector, 1, stream);
+        cuda_check(cudaStreamEndCapture(stream, &graph), "end fill capture");
+        cuda_check(cudaGraphInstantiate(&executable, graph, nullptr, nullptr, 0),
+                   "instantiate fill");
+        for (int replay = 0; replay < 3; ++replay) {
+            std::vector<std::int32_t> actual(count, -100 - replay);
+            destination.copy_from_host(actual.data(), destination.bytes());
+            cuda_check(cudaGraphLaunch(executable, stream), "replay fill");
+            cuda_synchronize(stream);
+            destination.copy_to_host(actual.data(), destination.bytes());
+            failures +=
+                verify_exact("fill_i32 graph replay", actual, std::vector<std::int32_t>(count, 1));
+            failures += destination.verify_guards("fill_i32 destination");
+        }
+        cuda_check(cudaGraphExecDestroy(executable), "destroy fill executable");
+        cuda_check(cudaGraphDestroy(graph), "destroy fill graph");
+    }
+    return failures;
+}
+
 template <typename T>
 void store(GuardedDeviceBuffer& buffer, T value) {
     buffer.copy_from_host(&value, sizeof(value));
@@ -136,6 +165,7 @@ int main() {
     cuda_check(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking), "cudaStreamCreate");
 
     int failures = 0;
+    failures += fill_i32_graph_contract(stream);
     failures += set_and_increment_i32_contract(stream);
     failures += assign_i32_contract(stream);
     failures += add_i32_contract(stream);

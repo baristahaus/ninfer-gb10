@@ -26,7 +26,7 @@ inline void capture_target_logits(const char* route, const Tensor& ids, const Te
     cudaStreamCaptureStatus status;
     CUDA_CHECK(cudaStreamIsCapturing(stream, &status));
     if (status != cudaStreamCaptureStatusNone) {
-        throw std::logic_error("Flash-Next logit capture requires --no-cuda-graph");
+        throw std::logic_error("Flash-Next logit capture must run outside CUDA graph capture");
     }
     if (!ids.is_contiguous() || !positions.is_contiguous() || !logits.is_contiguous()) {
         throw std::logic_error("Flash-Next logit capture requires contiguous tensors");

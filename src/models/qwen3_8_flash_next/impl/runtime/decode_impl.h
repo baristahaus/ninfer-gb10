@@ -1,5 +1,6 @@
 #include "models/qwen3_8_flash_next/impl/runtime/instance.h"
 #include "models/qwen3_8_flash_next/impl/runtime/schedule.h"
+#include "models/qwen3_8_flash_next/impl/runtime/diagnostics.h"
 
 #include "ninfer/ops/sampling.h"
 #include "ninfer/ops/scatter.h"
@@ -88,6 +89,14 @@ void ordinary_decode_batch(OrdinaryBatchContext& state, std::int32_t batch_size,
                            DecodeGraphExecutable* executable) {
     auto body = ordinary_batch_body(state, batch_size, envelope);
     run_prepared(state, executable, body);
+    {
+        // Observe completed rounds outside capture for both eager execution and graph replay.
+        qwen3_8_flash_next::detail::capture_target_logits(
+            "ordinary", state.frame.tokens.slice(0, 0, batch_size),
+            state.frame.cache_positions.slice(0, 0, batch_size), nullptr,
+            state.frame.text_kv_table_rows.slice(0, 0, batch_size),
+            state.frame.logits.slice(1, 0, batch_size), state.execution.device.stream);
+    }
 }
 
 } // namespace

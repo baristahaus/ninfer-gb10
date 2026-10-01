@@ -4,6 +4,11 @@
 
 namespace ninfer::ops {
 
+__global__ void fill_i32_kernel(std::int32_t* destination, std::int32_t count, std::int32_t value) {
+    const std::uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < static_cast<std::uint32_t>(count)) { destination[i] = value; }
+}
+
 __global__ void set_i32_scalar_kernel(std::int32_t* destination, std::int32_t value) {
     destination[0] = value;
 }

@@ -875,11 +875,7 @@ make_sequence_planner_impl(DeviceContext& device, const EngineOptions& options,
             }(options.kv_cache),
         .proposal_head = options.speculative.proposal_head,
         .features      = qwen3_8_flash_next::startup_features(options),
-        // Ordinary Flash-Next graph replay currently corrupts continuation state after the first
-        // decode step. Keep the exact eager path until graph/eager state equivalence is restored;
-        // speculative verification uses its separate, qualified graph schedule.
-        .use_cuda_graph =
-            options.use_cuda_graph && options.speculative.backend != SpeculativeBackend::None,
+        .use_cuda_graph = options.use_cuda_graph,
         .causal_scoring = options.purpose == EnginePurpose::CausalScoring,
         .device         = options.device,
         .context_cache  = options.context_cache,

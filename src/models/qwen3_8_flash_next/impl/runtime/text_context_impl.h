@@ -534,8 +534,8 @@ void TextContext::mtp_forward_flash_next(const Tensor& ids, const Tensor& hidden
         valid = *active_valid_columns_;
     } else {
         valid = work_.alloc(DType::I32, {batch});
-        std::vector<std::int32_t> host_valid(static_cast<std::size_t>(batch), width);
-        copy_i32(host_valid.data(), valid, stream);
+        // Captured schedules must not retain a pointer into a temporary host vector.
+        ops::fill_i32(valid, width, stream);
     }
     const Tensor& rows = active_backend_kv_table_rows_ != nullptr ? *active_backend_kv_table_rows_
                                                                   : io_.backend_kv_table_row;
@@ -877,8 +877,6 @@ void TextContext::ordinary_decode_batch(const Tensor& ids, const Tensor& cache_p
             ops::rmsnorm(x, *final_norm_, kCfg.rms_eps, true, hidden, stream);
         }
         ops::linear(hidden, *lm_head_, logits, stream, bf16_gemm_);
-        qwen3_8_flash_next::detail::capture_target_logits("ordinary", ids, cache_positions, nullptr,
-                                                          kv_table_rows, logits, stream);
     }
     work_.reset();
 }
@@ -1310,8 +1308,8 @@ void TextContext::run_flash_next_layers(Tensor& x, Phase ph) {
         valid = *active_valid_columns_;
     } else {
         valid = work_.alloc(DType::I32, {batch});
-        std::vector<std::int32_t> host_valid(static_cast<std::size_t>(batch), width);
-        copy_i32(host_valid.data(), valid, stream);
+        // Captured schedules must not retain a pointer into a temporary host vector.
+        ops::fill_i32(valid, width, stream);
     }
     const Tensor& table_rows =
         active_kv_table_rows_ != nullptr ? *active_kv_table_rows_ : io_.text_kv_table_row;

@@ -768,6 +768,9 @@ ProgramImplCore::ProgramImplCore(const LoadedModelData& model_in, const Sequence
       ple_gather_workers(std::make_unique<HostWorkerPool>(16, 16)),
       continuation_states(continuation_capacity), continuation_slots(continuation_capacity),
       shared_prefix_states(shared_prefix_capacity), shared_prefix_slots(shared_prefix_capacity),
+      ordinary_execution_profiles(plan.speculative_backend == SpeculativeBackend::None
+                                      ? ordinary_graph_profiles(plan.capacity)
+                                      : std::vector<GraphExecutionProfile>{}),
       round_host(sizeof(TokenId)),
       score_logprobs_host(plan.causal_scoring ? std::make_optional<PinnedHostBuffer>(
                                                     kCausalScoreTile * sizeof(float))
@@ -11300,7 +11303,7 @@ void ProgramImplCore::prepare_graphs() {
     };
 
     if (speculative_backend == SpeculativeBackend::None) {
-        const auto ordinary_profiles = ordinary_graph_profiles(capacity);
+        const auto& ordinary_profiles = ordinary_execution_profiles;
         validate_graph_profiles(ordinary_profiles, capacity - 1, "ordinary");
         const std::uint32_t ordinary_batch_limit = max_concurrency;
         schedule::OrdinaryBatchContext ordinary_state{execution_core(),
@@ -11965,13 +11968,21 @@ ProgramImplCore::decode_ordinary_batch(std::span<const std::uint32_t> lanes,
         submit_range.emplace(nvtx::Name::DecodeOrdinarySubmit, nvtx::Category::Decode,
                              static_cast<std::uint64_t>(lanes.size()));
         DecodeGraphExecutable* executable = nullptr;
-        ops::CausalAttentionExecutionEnvelope envelope{maximum_frontier + 1, maximum_frontier + 1};
+        // Graph selection changes launch machinery, not the target's arithmetic profile.
+        const auto planned = std::find_if(
+            ordinary_execution_profiles.begin(), ordinary_execution_profiles.end(),
+            [&](const GraphExecutionProfile& profile) {
+                return maximum_frontier >= profile.min && maximum_frontier <= profile.max;
+            });
+        if (planned == ordinary_execution_profiles.end()) {
+            throw std::logic_error("ordinary execution profile is unavailable");
+        }
+        const ops::CausalAttentionExecutionEnvelope envelope{planned->min + 1, planned->max + 1};
         if (use_cuda_graph) {
             DecodeGraphProfile& profile =
                 select_graph_profile(ordinary_graphs, static_cast<std::uint32_t>(lanes.size()),
                                      maximum_frontier, "ordinary batch");
             executable = &install_graph_profile(ordinary_graphs, profile, "ordinary batch");
-            envelope   = {profile.min_execution_frontier + 1, profile.max_execution_frontier + 1};
         }
 
         for (std::size_t row = 0; row < lanes.size(); ++row) {

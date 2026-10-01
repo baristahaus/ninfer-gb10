@@ -17,6 +17,16 @@ void require_scalar(const Tensor& tensor, DType dtype, const char* name) {
 
 } // namespace
 
+void fill_i32(Tensor& destination, std::int32_t value, cudaStream_t stream) {
+    if (destination.dtype != DType::I32 || destination.ne[0] < 1 || destination.ne[1] != 1 ||
+        destination.ne[2] != 1 || destination.ne[3] != 1 || !destination.is_contiguous() ||
+        destination.data == nullptr) {
+        throw std::invalid_argument(
+            "fill_i32 destination must be a non-null contiguous I32 vector");
+    }
+    detail::fill_i32_launch(destination, value, stream);
+}
+
 void set_i32_scalar(Tensor& destination, std::int32_t value, cudaStream_t stream) {
     require_scalar(destination, DType::I32, "set_i32_scalar destination");
     detail::set_i32_scalar_launch(destination, value, stream);

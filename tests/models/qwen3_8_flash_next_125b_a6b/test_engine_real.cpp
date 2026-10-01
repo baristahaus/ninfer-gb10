@@ -218,12 +218,120 @@ int exercise_vision(ninfer::Engine& engine) {
     return 0;
 }
 
+// Compare graph replay with the same eager arithmetic schedules on the supplied artifact.
+// Projection and selected-slot state mathematics have independent FP64 Op qualification.
+int exercise_graph_equivalence(const char* artifact) {
+    std::vector<std::vector<ninfer::TokenId>> reference;
+    std::vector<std::vector<ninfer::TokenId>> continuation_reference;
+    std::vector<std::vector<ninfer::TokenId>> batch_reference;
+    for (const bool graphs : {false, true}) {
+        auto options                     = engine_options(artifact);
+        options.speculative.backend      = ninfer::SpeculativeBackend::None;
+        options.speculative.draft_tokens = 0;
+        options.enable_vision            = false;
+        options.use_cuda_graph           = graphs;
+        options.max_context              = 1024;
+        options.kv_capacity              = ninfer::KvCapacityPolicy::explicit_capacity(2048);
+        ninfer::Engine engine(options);
+        if ((engine.memory_summary().cuda_graph_allowance_bytes != 0) != graphs) {
+            throw std::runtime_error("ordinary graphs were silently disabled");
+        }
+        std::size_t case_index = 0;
+        for (const std::size_t length : {27U, 124U, 508U}) {
+            auto prompt = canonical_prompt();
+            prompt.resize(length, 198);
+            const auto first =
+                engine.generate(engine.prepare_tokens(prompt), greedy_options(16, false));
+            if (first.generated_token_ids.size() != 16) {
+                throw std::runtime_error("graph fixture did not execute all requested steps");
+            }
+            if (!graphs) {
+                reference.push_back(first.generated_token_ids);
+            } else if (reference.at(case_index) != first.generated_token_ids) {
+                throw std::runtime_error("graph/eager output mismatch at prompt length " +
+                                         std::to_string(length));
+            }
+            for (int repeat = 0; repeat < 2; ++repeat) {
+                const auto repeated =
+                    engine.generate(engine.prepare_tokens(prompt), greedy_options(16, false));
+                if (repeated.generated_token_ids != first.generated_token_ids) {
+                    throw std::runtime_error("ordinary repeated output mismatch");
+                }
+            }
+            engine.generate(engine.prepare_tokens(prompt), greedy_options(16, true));
+            auto history = prompt;
+            history.insert(history.end(), first.generated_token_ids.begin(),
+                           first.generated_token_ids.end());
+            history.push_back(198);
+            const auto reused =
+                engine.generate(engine.prepare_tokens(history), greedy_options(8, true));
+            const auto cold =
+                engine.generate(engine.prepare_tokens(history), greedy_options(8, false));
+            if (reused.reused_prompt_tokens == 0) {
+                throw std::runtime_error("ordinary continuation fixture never reused a prefix");
+            }
+            // Prefill and incremental schedules have their own qualified floating-point profiles.
+            // Verify that graph replay preserves each schedule, including cached state, rather
+            // than imposing bitwise equality between different arithmetic schedules.
+            if (!graphs) {
+                continuation_reference.push_back(reused.generated_token_ids);
+                continuation_reference.push_back(cold.generated_token_ids);
+            } else if (continuation_reference.at(case_index * 2) != reused.generated_token_ids ||
+                       continuation_reference.at(case_index * 2 + 1) != cold.generated_token_ids) {
+                throw std::runtime_error("graph/eager continuation output mismatch");
+            }
+            ++case_index;
+        }
+        auto second_prompt = canonical_prompt();
+        second_prompt.insert(second_prompt.end(), reference[0].begin(), reference[0].begin() + 4);
+        const auto before = engine.runtime_stats();
+        for (bool reverse : {false, true}) {
+            auto a =
+                engine.submit(engine.prepare_tokens(reverse ? second_prompt : canonical_prompt()),
+                              greedy_options(12, false));
+            auto b =
+                engine.submit(engine.prepare_tokens(reverse ? canonical_prompt() : second_prompt),
+                              greedy_options(12, false));
+            const auto first    = a.wait();
+            const auto second   = b.wait();
+            const auto& root    = reverse ? second : first;
+            const auto& resumed = reverse ? first : second;
+            // Batch size selects projection/reduction routes. Compare the same compact-batch
+            // schedule across launch modes; selected-slot mathematics is independently checked
+            // by the GDN FP64 oracle, rather than treating single-row output as an oracle.
+            if (!graphs) {
+                batch_reference.push_back(root.generated_token_ids);
+                batch_reference.push_back(resumed.generated_token_ids);
+            } else {
+                const std::size_t index = reverse ? 2 : 0;
+                if (root.generated_token_ids != batch_reference.at(index) ||
+                    resumed.generated_token_ids != batch_reference.at(index + 1)) {
+                    throw std::runtime_error("ordinary graph/eager compact batch mismatch");
+                }
+            }
+        }
+        const auto after = engine.runtime_stats();
+        if (after.decode_row_rounds - before.decode_row_rounds <=
+            after.decode_rounds - before.decode_rounds) {
+            throw std::runtime_error("graph fixture never executed a two-row batch");
+        }
+        std::cout << "OK " << (graphs ? "graph" : "eager")
+                  << " equivalence: repeats, continuations, batch/lane "
+                     "reuse, 128/512 profile boundaries; decode_rounds="
+                  << after.decode_rounds << '\n';
+    }
+    return 0;
+}
+
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
     const char* artifact = std::getenv("NINFER_QWEN38_FLASH_NEXT_WEIGHTS");
     if (artifact == nullptr || *artifact == '\0') { return 77; }
     try {
+        if (argc == 2 && std::string(argv[1]) == "--graph-equivalence") {
+            return exercise_graph_equivalence(artifact);
+        }
         for (const auto head : {ninfer::ProposalHead::Full, ninfer::ProposalHead::Optimized}) {
             auto options = engine_options(artifact);
             options.speculative.proposal_head = head;

@@ -26,7 +26,8 @@ The pipelining was built and verified exact, and it **did not pay**:
   PLE gather from the file-backed table, which K3 moved inside the round.
 - **What pipelining did:** two rounds in flight then had nothing to hide. The backup copies it
   needs added ~2 ms of device time per round, a ~2% decode regression (ABBA, untraced).
-- **Status:** it stays in the fork as an opt-in flag (`--pipelined-decode`, off).
+- **Status:** K4a/K4b were removed from the fork in `1749c466`. K1–K3 remain. The K4 design
+  below is kept for reference; its code lives in the fork's history at `f86d582a`.
 
 **Consequence for Qwen3.5.** Qwen3.5 has no PLE, so its host gap may already be small, and the
 case for porting K1–K4 is weaker than §3 below suggests. The step-0 measurement in §7 decides it.
@@ -45,7 +46,7 @@ Port only if decode host time is still a material share of the round.
 Measured on GB10, C4 K=1, Flash-Next 125B: before K3 the decode host gap was 8–9 ms of a ~79 ms
 round with a warm page cache; after K3 it is 0.05 ms. K1–K4 are verified bitwise identical to the
 serial loop on the real test and at serve level on the same configuration. K4b pipelining
-measured ~2% slower and is off by default.
+measured ~2% slower, and K4a/K4b were removed (`1749c466`).
 
 ## 2. Why Qwen3.5 has the same structure
 

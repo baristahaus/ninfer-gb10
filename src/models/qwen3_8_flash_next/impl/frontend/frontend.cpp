@@ -1,3 +1,4 @@
+#include <bit>
 #include <ninfer/models/qwen3_8_flash_next/frontend.h>
 
 #include <ninfer/models/qwen3_8_flash_next/frontend_resources.h>
@@ -1374,6 +1375,11 @@ Frontend FrontendTestAccess::create_component(const FrontendResources& resources
 const PreparedPromptData& PreparedPromptAccess::view(const PreparedPrompt& prompt) {
     if (prompt.data_ == nullptr) { throw std::invalid_argument("prepared prompt is empty"); }
     return *prompt.data_;
+}
+
+void PreparedPromptAccess::set_steering(PreparedPrompt& prompt, std::uint64_t generation, float strength) {
+    prompt.data_->identity.steering_generation = generation;
+    prompt.data_->identity.steering_strength_bits = std::bit_cast<std::uint32_t>(strength);
 }
 
 PreparedPromptData PreparedPromptAccess::take(PreparedPrompt&& prompt) {

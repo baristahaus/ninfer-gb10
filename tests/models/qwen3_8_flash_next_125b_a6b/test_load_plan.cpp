@@ -22,6 +22,16 @@ int main() {
         if (plan.bindings.ple_mapping.size() != ple_bytes) {
             throw std::runtime_error("PLE table mapping has the wrong extent");
         }
+        std::uint64_t logical_parameters = 0;
+        for (const auto handle : plan.materialization.device_objects) {
+            const auto& tensor = reader.directory().tensor(handle.object);
+            std::uint64_t count = 1;
+            for (auto dimension : tensor.shape) count *= dimension;
+            logical_parameters += count;
+        }
+        if (logical_parameters < 124000000000ULL || logical_parameters > 126000000000ULL)
+            throw std::runtime_error("text logical parameter range check failed (expected 124B..126B, PLE excluded)");
+        std::cout << "text_logical_parameters=" << logical_parameters << '\n';
         const std::size_t expected_text_objects = table.format == "bf16" ? 1259 : 1260;
         if (plan.materialization.device_objects.size() != expected_text_objects) {
             throw std::runtime_error("MTP0/Vision-off load plan uploaded optional tensors");

@@ -613,3 +613,26 @@ fixed-shape 和 device-specialized 实现）都归 `src/ops`。
   和 consumer address contract；
 - [Op development](op-development.md)：Op 正确性与性能准入；
 - [CLI](../cli.md)与 [HTTP serving](../serving.md)：外部行为。
+
+### Activation pack generations
+
+Flash-Next activation requests carry a resolved pack generation and strength. Engine submission
+resolves these while holding the activation control mutex, stamps both generation and strength bits
+into the family's prepared prefix identity, and exposes the same immutable values to the serving
+adapter before streaming begins. Both exact resident-prefix comparisons and shortlist digests carry
+this namespace. Stored continuations and shared captures therefore cannot license state across pack
+generations or strengths.
+
+The public `Engine::activate_steering` operation parses a pack before mutating device state. It blocks
+new submissions, drains the existing FIFO and active lanes, then acquires the execution boundary to
+update the family's fixed arena. This intentionally serial control operation retains each admitted
+request's pack for its entire lifetime. The serving adapter exposes it as authenticated
+`POST /admin/steering`, with no query route. Capture finalization runs before request success is
+published; a validation/write error reaches the request consumer and does not turn a successful
+capture into a log-only failure. The family owns tensor capture and record serialization; the Engine
+owns admission/publication and the server owns protocol translation.
+
+Activation recording disables prefix reuse for that request only; the server cache remains available
+for unrelated requests. MTP capture retains four target-verification columns in a fixed arena and
+selects the last committed execution position after the decoder's acceptance/commit transaction.
+The speculative frame and state layouts are unchanged.

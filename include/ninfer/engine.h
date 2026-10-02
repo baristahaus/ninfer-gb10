@@ -45,6 +45,7 @@ public:
 
     [[nodiscard]] explicit operator bool() const noexcept;
     [[nodiscard]] const ResolvedSamplingParameters& resolved_sampling() const noexcept;
+    [[nodiscard]] const SteeringState& resolved_steering() const noexcept;
 
     GenerationResult wait(OutputSink* sink = nullptr, const CancellationView& cancellation = {});
 
@@ -108,6 +109,7 @@ public:
     [[nodiscard]] MediaCacheSummary media_cache_summary() const;
     [[nodiscard]] bool is_available() const;
 
+    SteeringState activate_steering(const std::optional<std::filesystem::path>& pack);
     void reset_memory_peaks() noexcept;
 
 private:

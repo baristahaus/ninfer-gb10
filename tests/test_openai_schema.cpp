@@ -782,6 +782,46 @@ int test_common_objects() {
 
 } // namespace
 
+int test_activation_extensions() {
+    int failures = 0;
+    auto body = base_request();
+    body["capture"] = {{"record",true}};
+    body["steering"] = {{"strength",0.0}};
+    const auto request = parse(body);
+    failures += check(request.generation.capture && request.generation.steering_strength == 0.0F,
+                      "capture true and explicit zero survive parsing");
+    failures += check(options(request.generation).execution.capture &&
+                      options(request.generation).execution.steering_strength == 0.0F,
+                      "capture/steering survive Engine translation");
+    for (const auto& value : {Json(false),Json(1),Json("true"),Json(nullptr)}) {
+        body["capture"]["record"] = value;
+        const auto error = api_error([&] { (void)parse(body); });
+        failures += check(error.status == 400 && error.param == "capture.record", "capture literal true check");
+    }
+    body.erase("capture");
+    for (const auto& value : {Json(-0.1),Json(1.1),Json("0.35"),Json(nullptr)}) {
+        body["steering"]["strength"] = value;
+        failures += check(api_error([&] { (void)parse(body); }).status == 400,"invalid steering strength");
+    }
+    body["steering"] = {{"pack","forbidden"}};
+    failures += check(api_error([&] { (void)parse(body); }).status == 400,"client pack selection rejected");
+    body["steering"] = Json::object();
+    failures += check(!parse(body).generation.steering_strength,"omitted strength remains optional");
+    GenerationOutcome outcome;
+    outcome.capture_record_id = "captured";
+    outcome.steering.pack_sha = "sha"; outcome.steering.strength = 0.35F; outcome.steering.generation = 12;
+    const auto identity = make_openai_chat_response_identity("qwen");
+    const auto response = Json::parse(make_chat_completion_response(identity,outcome));
+    failures += check(response["capture"]["record_id"] == "captured" && response["steering"]["generation"] == 12,
+                      "aggregate capture/steering echo");
+    OpenAIChatStream stream(identity,false,false,false);(void)stream.start();
+    const auto events = stream.finish(outcome);
+    const auto extension = parse_sse(events[events.size()-2]);
+    failures += check(extension["capture"]["recorded"] == true && extension["steering"]["pack_sha"] == "sha",
+                      "stream terminal capture/steering echo");
+    return failures;
+}
+
 int main() {
     int failures = 0;
     failures += test_request_envelope_and_sampling();
@@ -795,6 +835,7 @@ int main() {
     failures += test_stream_response();
     failures += test_stream_observations();
     failures += test_common_objects();
+    failures += test_activation_extensions();
     if (failures == 0) { std::cout << "OpenAI Chat protocol tests passed\n"; }
     return failures == 0 ? 0 : 1;
 }

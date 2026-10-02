@@ -13,6 +13,10 @@
 
 namespace ninfer::serve {
 
+void parse_activation_fields(const RequestJson& body, GenerationRequest& request);
+nlohmann::json steering_json(const SteeringState& state);
+std::string steering_header(const SteeringState& state);
+
 enum class OpenAIPromptCacheAutomatic : std::uint8_t {
     Default,
     Requested,

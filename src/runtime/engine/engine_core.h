@@ -114,6 +114,21 @@ public:
     EngineCore(const EngineCore&)            = delete;
     EngineCore& operator=(const EngineCore&) = delete;
 
+    template<class Action> void update_idle_program(Action&& action) {
+        for (;;) {
+            std::unique_lock execution(execution_mutex_);
+            bool idle = !materializing_;
+            for (const auto& slot : slots_) idle &= slot == nullptr;
+            {
+                std::lock_guard queue(queue_mutex_);
+                idle &= pending_.empty();
+            }
+            if (idle) { device_.bind_to_current_thread(); action(*instance_.program); return; }
+            execution.unlock();
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    }
+
     class Submission {
     public:
         Submission() noexcept = default;
@@ -845,6 +860,8 @@ private:
             request->queue_wait_recorded       = true;
         }
         GenerationResult result;
+        result.capture_record_id = request->capture_record_id;
+        result.steering = request->options.execution.steering;
         result.prompt                  = request->prompt_summary;
         result.generated_token_ids     = std::move(request->generated);
         result.content                 = std::move(request->content);
@@ -954,8 +971,21 @@ private:
                 throw std::logic_error("terminal-pending request has invalid ownership");
             }
             const FinishReason reason = *request->terminal_reason;
+            std::exception_ptr capture_error;
+            if constexpr (requires { instance_.program->flush_activation(*request->sequence); }) {
+                try { request->capture_record_id = instance_.program->flush_activation(*request->sequence); }
+                catch (...) { capture_error = std::current_exception(); }
+            }
             auto finished =
                 resources_.finish(*instance_.program, *request->lane, *request->sequence);
+            if (capture_error) {
+                request->terminal_reason.reset();
+                complete_error(request, capture_error);
+                remove_completed_slot(lane);
+                boundary = begin_host_phase();
+                changed = true;
+                continue;
+            }
             request->generation_timings = finished.timings;
             request->speculative_stats  = std::move(finished.speculative);
             request->terminal_reason.reset();
@@ -1393,6 +1423,10 @@ private:
         }
         setup.finish();
         ProgramCallScope program_call(*this);
+        if constexpr (requires { instance_.program->select_activation(std::span<const std::uint32_t>{}); }) {
+            const std::uint32_t lane = request->lane->value;
+            instance_.program->select_activation(std::span(&lane,1));
+        }
         auto progress =
             instance_.program->advance_prefill(*request->sequence, &program_call.failed_timing());
         program_call.finish(progress.timing);
@@ -1616,6 +1650,9 @@ private:
             .started          = Clock::now(),
         };
 
+        if constexpr (requires { instance_.program->begin_activation(destination, request->id, request->prompt, request->options.execution); }) {
+            instance_.program->begin_activation(destination, request->id, request->prompt, request->options.execution);
+        }
         const auto reserved = resources_.reserve_materialization(
             *instance_.program, std::move(choice), std::move(request->prompt),
             CancellationFlagView{&request->cancelled});
@@ -1808,6 +1845,9 @@ private:
         nvtx::ScopedRange decode_range(nvtx::Name::Decode, nvtx::Category::Decode,
                                        static_cast<std::uint64_t>(membership.size));
         ProgramCallScope program_call(*this);
+        if constexpr (requires { instance_.program->select_activation(membership.lane_span()); }) {
+            instance_.program->select_activation(membership.lane_span());
+        }
         auto pending = instance_.program->decode(
             membership.sequence_span(), membership.budget_span(), &program_call.failed_timing());
         program_call.finish(pending.execution_timing());

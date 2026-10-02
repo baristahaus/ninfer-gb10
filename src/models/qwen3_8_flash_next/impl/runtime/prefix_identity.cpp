@@ -146,6 +146,8 @@ void ResidentPrefixIdentity::clear() noexcept {
 }
 
 void ResidentPrefixIdentity::assign(const PreparedPromptData& prompt) {
+    steering_generation_ = prompt.identity.steering_generation;
+    steering_strength_bits_ = prompt.identity.steering_strength_bits;
     const std::size_t tokens = prompt.token_ids.size();
     if (prompt.token_types.size() != tokens || prompt.positions.size() != 3 * tokens) {
         throw std::invalid_argument("prepared prompt identity metadata has an invalid shape");
@@ -160,6 +162,8 @@ void ResidentPrefixIdentity::assign(const PreparedPromptData& prompt) {
 }
 
 void ResidentPrefixIdentity::swap(ResidentPrefixIdentity& other) noexcept {
+    std::swap(steering_generation_, other.steering_generation_);
+    std::swap(steering_strength_bits_, other.steering_strength_bits_);
     token_types_.swap(other.token_types_);
     positions_.swap(other.positions_);
     vision_items_.swap(other.vision_items_);
@@ -217,6 +221,8 @@ void ResidentPrefixIdentity::truncate(std::size_t tokens) {
 }
 
 bool ResidentPrefixIdentity::matches(const PreparedPromptData& prompt, std::size_t count) const {
+    if (steering_generation_ != prompt.identity.steering_generation ||
+        steering_strength_bits_ != prompt.identity.steering_strength_bits) return false;
     const std::size_t prompt_tokens = prompt.token_ids.size();
     if (count > prompt_tokens || count > size() || prompt.token_types.size() != prompt_tokens ||
         prompt.positions.size() != 3 * prompt_tokens) {
@@ -263,7 +269,9 @@ bool ResidentPrefixIdentity::equals(const ResidentPrefixIdentity& other) const {
 
 bool ResidentPrefixIdentity::prefix_equals(const ResidentPrefixIdentity& other,
                                            std::size_t count) const {
-    if (count > size() || count > other.size() ||
+    if (steering_generation_ != other.steering_generation_ ||
+        steering_strength_bits_ != other.steering_strength_bits_ ||
+        count > size() || count > other.size() ||
         !std::equal(token_types_.begin(), token_types_.begin() + static_cast<std::ptrdiff_t>(count),
                     other.token_types_.begin())) {
         return false;
@@ -318,7 +326,10 @@ void PrefixShortlistDigests::assign(const PreparedPromptData& prompt) {
     }
     digests_.clear();
     reserve(tokens);
-    digests_.push_back(kDigestOffset);
+    auto initial = kDigestOffset;
+    initial[0] ^= prompt.identity.steering_generation;
+    initial[1] ^= prompt.identity.steering_strength_bits;
+    digests_.push_back(initial);
     std::size_t next_rewrite = 0;
     std::size_t next_vision  = 0;
     std::size_t next_vision_end =

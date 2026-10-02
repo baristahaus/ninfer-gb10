@@ -237,6 +237,9 @@ GenerationService::GenerationService(ServeOptions options, StartupObserver start
     : options_(std::move(options)) {
     ninfer::EngineOptions engine_options;
     engine_options.artifact_path            = options_.artifact_path;
+    engine_options.capture_path = options_.capture_path;
+    engine_options.capture_sites = options_.capture_sites;
+    engine_options.steering_pack = options_.steering_pack;
     engine_options.chat_template_path       = options_.chat_template_path;
     engine_options.device                   = options_.device;
     engine_options.max_context              = options_.max_context;
@@ -302,6 +305,8 @@ PreparedRequest GenerationService::prepare_impl(const GenerationRequest& request
                                                 ContextCacheHints context_cache,
                                                 CacheParticipation cache_participation,
                                                 DeadlinePolicy deadline_policy) const {
+    if (request.capture && options_.capture_path.empty())
+        throw ApiException({400,"invalid_request_error","capture requires --capture-path","capture"});
     PreparedRequest prepared;
     const ResolvedPromptSemantics semantics = resolve_prompt_semantics(request, options_);
     ninfer::RequestOptions request_options  = to_request_options(
@@ -359,6 +364,7 @@ PreparedRequest GenerationService::prepare_impl(const GenerationRequest& request
                                                   : ninfer::OutputConsumerMode::Aggregate,
                                               observation, prepared.lifetime->deadline);
         prepared.sampling   = prepared.generation.resolved_sampling();
+        prepared.steering = prepared.generation.resolved_steering();
     } catch (const ApiException&) { throw; } catch (const ninfer::RequestError& exception) {
         throw_request_error(exception);
     } catch (const std::invalid_argument& exception) {
@@ -422,6 +428,8 @@ GenerationOutcome GenerationService::run(PreparedRequest& prepared, const Stream
     outcome.reasoning           = std::move(result.reasoning);
     outcome.prompt_tokens       = static_cast<int>(result.prompt.prompt_tokens);
     outcome.completion_tokens   = static_cast<int>(result.generated_token_ids.size());
+    outcome.steering = result.steering;
+    outcome.capture_record_id = std::move(result.capture_record_id);
     outcome.reasoning_tokens    = static_cast<int>(result.reasoning_tokens);
     outcome.thinking            = result.thinking;
     outcome.finish_reason       = result.finish_reason;

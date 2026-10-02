@@ -156,6 +156,7 @@ struct RequestRecord {
     const std::uint64_t id;
     const std::uint64_t publication_order;
     PreparedPrompt prompt;
+    std::string capture_record_id;
     OutputSession output;
     PromptSummary prompt_summary;
     double prepare_seconds = 0.0;

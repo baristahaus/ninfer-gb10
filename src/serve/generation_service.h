@@ -45,6 +45,8 @@ struct GenerationMetrics {
 };
 
 struct GenerationOutcome {
+    ninfer::SteeringState steering;
+    std::string capture_record_id;
     std::string text;
     std::string reasoning;
     std::vector<ninfer::GeneratedToolCall> tool_calls;
@@ -80,6 +82,7 @@ ApiError request_error_to_api_error(const ninfer::RequestError& exception);
 // request keeps its ingress/response lifetime reservation until the HTTP response is released and
 // is consumed exactly once by run().
 struct PreparedRequest {
+    ninfer::SteeringState steering;
     ninfer::GenerationHandle generation;
     ninfer::ResolvedSamplingParameters sampling;
     double prepare_seconds     = 0.0;
@@ -98,6 +101,7 @@ public:
     explicit GenerationService(ServeOptions options, StartupObserver startup_observer = {});
 
     [[nodiscard]] const ServeOptions& options() const noexcept { return options_; }
+    SteeringState activate_steering(const std::optional<std::filesystem::path>& pack) { return engine_->activate_steering(pack); }
 
     // Engine owns the once-normalized startup configuration. Serving diagnostics must use this
     // value instead of reinterpreting optional defaults from ServeOptions.

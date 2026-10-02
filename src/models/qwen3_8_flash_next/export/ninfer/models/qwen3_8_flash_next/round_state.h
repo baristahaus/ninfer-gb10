@@ -10,6 +10,8 @@
 #include <cstdint>
 #include <optional>
 
+namespace ninfer::ops { struct ActivationDevice; }
+
 namespace ninfer::models::qwen3_8_flash_next {
 
 inline constexpr std::uint32_t kMtpDecodeMaximumDrafts    = 5;
@@ -297,6 +299,8 @@ struct DFlashDecodeState {
 };
 
 struct RoundState {
+    ops::ActivationDevice* activation = nullptr;
+    ops::ActivationDevice* activation_capture = nullptr;
     std::optional<OrdinaryDecodeState> ordinary;
     Tensor token;
     Tensor pos;

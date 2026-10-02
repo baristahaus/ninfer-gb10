@@ -437,6 +437,20 @@ void HttpServer::register_routes() {
     server_.Get(R"(/v1/models/(.+))", [this](const httplib::Request& req, httplib::Response& res) {
         handle_model(req, res);
     });
+    server_.Post("/admin/steering", [this](const httplib::Request& req, httplib::Response& res) {
+        try {
+            const auto body = parse_json_body(req);
+            if (!body.is_object() || body.size() != 1 || !body.contains("pack") ||
+                (!body.at("pack").is_null() && !body.at("pack").is_string()))
+                throw ApiException({400,"invalid_request_error","pack must be a path string or null","pack"});
+            const auto pack = body.at("pack").is_null() ? std::optional<std::filesystem::path>{}
+                : std::make_optional(std::filesystem::path(body.at("pack").get<std::string>()));
+            const auto state = service_->activate_steering(pack);
+            res.set_content(nlohmann::json{{"pack_sha",state.pack_sha},{"rank",state.rank},
+                {"layers",state.layers},{"generation",state.generation}}.dump(),"application/json");
+        } catch (const ApiException& error) { write_openai_error(res,error.error()); }
+          catch (const std::exception& error) { write_openai_error(res,{400,"invalid_request_error",error.what(),"pack"}); }
+    });
     server_.Post("/v1/chat/completions",
                  [this](const httplib::Request& req, httplib::Response& res) {
                      handle_chat_completions(req, res);

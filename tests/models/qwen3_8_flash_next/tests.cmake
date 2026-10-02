@@ -26,3 +26,7 @@ endif()
 ninfer_add_test(ninfer_qwen3_8_flash_next_frontend_test
   SOURCES models/qwen3_8_flash_next/test_frontend.cpp LIBRARIES ninfer_model_runtime)
 set_tests_properties(ninfer_qwen3_8_flash_next_frontend_test PROPERTIES SKIP_RETURN_CODE 77)
+
+ninfer_add_op_test(ninfer_activation_steering_test SOURCES ops/test_activation_steering.cpp LIBRARIES ninfer_ops)
+
+ninfer_add_test(ninfer_activation_control_test SOURCES models/qwen3_8_flash_next/test_activation_control.cpp LIBRARIES ninfer_model_runtime)

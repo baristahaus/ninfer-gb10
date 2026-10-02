@@ -80,7 +80,8 @@ std::string serve_usage_text(const char* argv0) {
            "[--response-store-max-records N] [--response-store-max-mib N] "
            "[--kv-dtype bf16|int8|fp8|nvfp4|k8v4] [--spec mtp|dflash|dflash2 --draft-tokens N] "
            "[--default-max-tokens N] [--default-thinking-budget N] "
-           "[--vision] [--no-cuda-graph] [--no-prefix-reuse] "
+           "[--capture-path DIR] [--capture-sites prompt_last,completion_last] "
+           "[--steering-pack PATH] [--vision] [--no-cuda-graph] [--no-prefix-reuse] "
            "[--chat-template FILE] [--lm-head-draft] [--no-thinking] [--preserve-thinking] "
            "[--cors] "
            "[--temperature F] [--top-p F] [--top-k N] [--min-p F] [--presence-penalty F] "
@@ -279,6 +280,20 @@ ServeOptions parse_serve_options(int argc, char** argv) {
                 throw std::invalid_argument("--default-thinking-budget is out of range");
             }
             options.default_thinking_budget = static_cast<std::uint32_t>(budget);
+        } else if (arg == "--capture-path") {
+            options.capture_path = require_value("--capture-path");
+        } else if (arg == "--steering-pack") {
+            options.steering_pack = require_value("--steering-pack");
+        } else if (arg == "--capture-sites") {
+            const std::string sites = require_value("--capture-sites");
+            options.capture_sites.clear();
+            std::size_t start = 0;
+            for (;;) {
+                const auto end = sites.find(',', start);
+                options.capture_sites.push_back(sites.substr(start, end - start));
+                if (end == std::string::npos) break;
+                start = end + 1;
+            }
         } else if (arg == "--vision") {
             options.enable_vision = true;
         } else if (arg == "--no-cuda-graph") {

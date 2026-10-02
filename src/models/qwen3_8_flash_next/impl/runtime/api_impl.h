@@ -12,6 +12,26 @@ namespace ninfer::models::qwen3_8_flash_next {
 
 using detail::NINFER_QWEN38_FLASH_NEXT_RUNTIME_NS::Variant;
 
+template <> void Program<Variant>::configure_activation(const EngineOptions& options, std::string_view identity) {
+    auto effective = options;
+    effective.use_cuda_graph = impl_->use_cuda_graph;
+    impl_->activation->configure(effective, identity);
+}
+template <> void Program<Variant>::activate_steering(const SteeringPack* pack) {
+    impl_->activation->activate(pack);
+}
+template <> void Program<Variant>::begin_activation(runtime::LaneId lane, std::uint64_t request,
+    const PreparedPrompt& prompt, const runtime::ResolvedExecutionOptions& options) {
+    impl_->activation->begin(lane.value, request, PreparedPromptAccess::view(prompt).token_ids,
+                             options.capture, options.steering);
+}
+template <> void Program<Variant>::select_activation(std::span<const std::uint32_t> lanes) {
+    impl_->activation->select(lanes);
+}
+template <> std::string Program<Variant>::flush_activation(SequenceHandle<Variant> sequence) {
+    return impl_->flush_activation(sequence);
+}
+
 template <>
 SequencePlan<Variant>::SequencePlan(
     std::unique_ptr<detail::SequencePlanImpl<Variant>> impl) noexcept

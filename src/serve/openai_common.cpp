@@ -1,3 +1,6 @@
+#include <cmath>
+#include <sstream>
+#include <iomanip>
 #include "serve/openai_common.h"
 #include "serve/request_validation.h"
 
@@ -12,6 +15,40 @@
 #include <utility>
 
 namespace ninfer::serve {
+void parse_activation_fields(const RequestJson& body, GenerationRequest& request) {
+    const auto fail = [](std::string message, std::string param) {
+        throw ApiException({400,"invalid_request_error",std::move(message),std::move(param)});
+    };
+    if (body.contains("capture")) {
+        const auto& value = body.at("capture");
+        if (!value.is_object() || value.size() != 1 || !value.contains("record") ||
+            !value.at("record").is_boolean() || value.at("record") != true)
+            fail("capture.record must be literal true","capture.record");
+        request.capture = true;
+    }
+    if (body.contains("steering")) {
+        const auto& value = body.at("steering");
+        if (!value.is_object()) fail("steering must be an object","steering");
+        for (auto it = value.begin();it != value.end();++it)
+            if (it.key() != "strength") fail("unsupported steering field: " + it.key(),"steering." + it.key());
+        if (value.contains("strength")) {
+            if (!value.at("strength").is_number()) fail("steering.strength must be a number","steering.strength");
+            const double strength = value.at("strength").get<double>();
+            if (!std::isfinite(strength) || strength < 0 || strength > 1)
+                fail("steering.strength must be in [0,1]","steering.strength");
+            request.steering_strength = strength;
+        }
+    }
+}
+nlohmann::json steering_json(const SteeringState& state) {
+    return {{"pack_sha",state.pack_sha},{"strength",state.strength},{"generation",state.generation}};
+}
+std::string steering_header(const SteeringState& state) {
+    std::ostringstream out;
+    out << "sha=" << state.pack_sha << ";strength=" << nlohmann::json(state.strength).dump() << ";gen=" << state.generation;
+    return out.str();
+}
+
 
 namespace {
 

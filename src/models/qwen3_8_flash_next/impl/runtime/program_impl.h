@@ -954,6 +954,11 @@ ProgramImplCore::ProgramImplCore(const LoadedModelData& model_in, const Sequence
     }
 
     io = qwen3_8_flash_next::RoundState(backing, plan.persistent.round);
+    activation = std::make_unique<qwen3_8_flash_next::ActivationControl>(device.stream);
+    // Steering applies to the target model in every backend (prefill, ordinary decode and MTP
+    // verification); the MTP draft head's hyperconnections are never steered.
+    io.activation = activation->device();
+    io.activation_capture = plan.activation_capture ? activation->device() : nullptr;
     if (io.mtp.has_value() != (speculative_backend == SpeculativeBackend::Mtp)) {
         throw std::logic_error("round-state MTP extension does not match the sequence plan");
     }
@@ -9000,6 +9005,7 @@ runtime::ExecutionTiming ProgramImplCore::append_forced_tokens(
         for (std::size_t row = 0; row < members.size(); ++row) {
             timing.resume_submit();
             const std::uint32_t lane = lanes[row];
+            activation->select(std::span(&lane,1));
             SequenceState& sequence  = active_sequence(lane);
             RequestControl& request  = requests[lane];
             const std::span<const TokenId> forced =
@@ -9304,6 +9310,12 @@ DiscardResult ProgramImplCore::abort_pending(PendingBatch&& pending) noexcept {
     if (out.row_count != 0) { advance_resource_revision(); }
     out.status = runtime::ConsumeStatus::Consumed;
     return out;
+}
+
+std::string ProgramImplCore::flush_activation(SequenceHandle sequence) {
+    if (!valid_sequence(sequence)) throw std::logic_error("capture sequence check failed");
+    const auto& state = active_sequence(ContractAccess::lane(sequence).value);
+    return activation->flush(state.lane, state.ledger, state.execution_frontier);
 }
 
 FinishResult ProgramImplCore::finish(SequenceHandle sequence) noexcept {
@@ -12616,6 +12628,7 @@ MemorySummary ProgramImplCore::memory_summary() const noexcept {
     }
     out.workspace_logical_peak_bytes = workspace_logical_peak_bytes;
     out.cuda_graph_allowance_bytes   = graph_allowance_bytes;
+    out.activation_capacity_bytes = activation->capacity_bytes();
     out.kv_payload_bytes             = kv_payload_bytes;
     if (host_state_images) {
         out.host_state_capacity_slots = host_state_images->capacity();

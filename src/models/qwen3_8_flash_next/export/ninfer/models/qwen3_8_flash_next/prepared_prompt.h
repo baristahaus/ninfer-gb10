@@ -81,6 +81,8 @@ struct RewriteCheckpointSpec {
 };
 
 struct PromptIdentity {
+    std::uint64_t steering_generation = 0;
+    std::uint32_t steering_strength_bits = 0;
     bool reusable = true;
     std::optional<RewriteCheckpointSpec> rewrite_checkpoint;
     // Exact token frontiers at which this serialization can agree with a typed rewrite captured
@@ -167,6 +169,7 @@ class PreparedPromptAccess {
 public:
     [[nodiscard]] static const PreparedPromptData& view(const PreparedPrompt& prompt);
     [[nodiscard]] static PreparedPromptData take(PreparedPrompt&& prompt);
+    static void set_steering(PreparedPrompt& prompt, std::uint64_t generation, float strength);
 };
 
 } // namespace ninfer::models::qwen3_8_flash_next

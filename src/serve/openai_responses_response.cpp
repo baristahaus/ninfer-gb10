@@ -168,6 +168,8 @@ BuiltOpenAIResponse build_response(const std::string& id, std::int64_t created_a
     }
 
     Json response            = response_common(id, created_at, request, runtime);
+    response["steering"] = steering_json(outcome.steering);
+    if (!outcome.capture_record_id.empty()) response["capture"] = {{"recorded",true},{"record_id",outcome.capture_record_id}};
     response["status"]       = status;
     response["completed_at"] = status == "completed" ? Json(unix_time_now()) : Json(nullptr);
     response["error"]        = nullptr;

@@ -1,3 +1,8 @@
+#include "artifact/identity.h"
+#include "models/qwen3_8_flash_next/impl/activation_control.h"
+#include <cmath>
+#include <iostream>
+#include <mutex>
 #include "ninfer/engine.h"
 
 #include "core/device.h"
@@ -38,6 +43,7 @@ runtime::ResolvedRequestOptions resolve_request_options(const ModelSamplingDefau
     resolved.execution.requested_output_tokens = options.execution.requested_output_tokens;
     resolved.execution.allow_prefix_reuse      = options.execution.allow_prefix_reuse;
     resolved.execution.thinking                = options.execution.thinking;
+    resolved.execution.capture                 = options.execution.capture;
     resolved.stop                              = std::move(options.stop);
     resolved.output                            = options.output;
     return resolved;
@@ -108,10 +114,11 @@ public:
 
     template <class Submission>
     Impl(std::shared_ptr<void> keep_alive, Submission submission,
-         ResolvedSamplingParameters sampling)
+         ResolvedSamplingParameters sampling, SteeringState steering = {})
         : state_(std::make_unique<Model<Submission>>(std::move(keep_alive), std::move(submission))),
-          sampling_(sampling) {}
+          steering_(std::move(steering)), sampling_(sampling) {}
 
+    const SteeringState& resolved_steering() const noexcept { return steering_; }
     GenerationResult wait(OutputSink* sink, const CancellationView& cancellation) {
         return state_->wait(sink, cancellation);
     }
@@ -122,6 +129,7 @@ public:
 
 private:
     std::unique_ptr<Concept> state_;
+    SteeringState steering_;
     ResolvedSamplingParameters sampling_;
 };
 
@@ -145,6 +153,11 @@ GenerationResult GenerationHandle::wait(OutputSink* sink, const CancellationView
     return impl->wait(sink, cancellation);
 }
 
+const SteeringState& GenerationHandle::resolved_steering() const noexcept {
+    static const SteeringState empty;
+    return impl_ ? impl_->resolved_steering() : empty;
+}
+
 class Engine::Impl {
 public:
     using GenerationCore      = runtime::EngineCore<runtime::ModelInstance>;
@@ -159,6 +172,8 @@ public:
         : options(runtime::normalize_engine_options(std::move(engine_options))),
           device(initialize_device(options)) {
         nvtx::ScopedRange load_range(nvtx::Name::EngineLoad, nvtx::Category::Runtime);
+        std::optional<models::qwen3_8_flash_next::SteeringPack> startup_pack;
+        if (!options.steering_pack.empty()) startup_pack = models::qwen3_8_flash_next::read_steering_pack(options.steering_pack);
         auto constructed = runtime::construct_model(options, device);
         active           = std::move(constructed.instance);
         load             = std::move(constructed.load);
@@ -171,6 +186,21 @@ public:
                         Instance::ModelContract::model_id);
                 } else {
                     sampling_defaults = instance->frontend.sampling_defaults();
+                }
+                if constexpr (std::is_same_v<Instance, runtime::FlashNextInstance>) {
+                    if (!options.capture_path.empty() || startup_pack) {
+                        std::clog << "Computing native encoded-object SHA256 identities serially (source digests cannot be recovered after conversion)\n";
+                        identity = artifact::encoded_identity(options.artifact_path, options.chat_template_path);
+                    }
+                    instance->program->configure_activation(options, identity.is_null() ? "" : identity.dump());
+                    if (startup_pack) {
+                        instance->program->activate_steering(&*startup_pack);
+                        steering = startup_pack->state;
+                        steering.generation = 1;
+                        log_pack(&*startup_pack, options.steering_pack);
+                    }
+                } else if (!options.capture_path.empty() || startup_pack) {
+                    throw std::invalid_argument("capture and steering require Qwen3.8 Flash-Next");
                 }
                 if (options.purpose == EnginePurpose::CausalScoring) {
                     core = std::make_unique<runtime::CausalScoreCore<Instance>>(*instance, device);
@@ -191,6 +221,22 @@ public:
         } catch (...) {}
     }
 
+    void log_pack(const models::qwen3_8_flash_next::SteeringPack* pack, const std::filesystem::path& path) const {
+        nlohmann::json record{{"event","steering_activation"},{"pack",path.string()},
+            {"pack_sha",steering.pack_sha},{"rank",steering.rank},{"layers",steering.layers},
+            {"generation",steering.generation},{"default_steering_strength",steering.strength},
+            {"norm_preserve",pack ? pack->norm_preserve : false},{"served_identity",identity}};
+        if (pack) {
+            record["pack_identity"] = pack->metadata;
+            for (const char* field : {"model_sha","config_sha","template_sha"})
+                if (identity.value(field,"") != pack->metadata.value(field,""))
+                    record["identity_warning"] = "pack and served artifact identities differ (recorded, not enforced)";
+        }
+        std::clog << record.dump() << '\n';
+    }
+    std::mutex activation_mutex;
+    SteeringState steering;
+    nlohmann::json identity;
     EngineOptions options;
     DeviceContext device;
     runtime::ActiveModel active;
@@ -315,6 +361,7 @@ GenerationHandle Engine::submit(PreparedPrompt prompt, RequestOptions options,
                                 GenerationObservationOptions observation,
                                 std::chrono::steady_clock::time_point pending_deadline) {
     if (impl_ == nullptr) { throw std::logic_error("Engine is moved from"); }
+    std::lock_guard activation_lock(impl_->activation_mutex);
     if (impl_->options.purpose != EnginePurpose::Generation) {
         throw std::logic_error("submit requires a Generation Engine");
     }
@@ -325,8 +372,27 @@ GenerationHandle Engine::submit(PreparedPrompt prompt, RequestOptions options,
         throw std::invalid_argument("live generation observations require a Streaming consumer");
     }
 
+    SteeringState steering = impl_->steering;
+    steering.strength = options.execution.steering_strength.value_or(steering.strength);
+    if (!std::isfinite(steering.strength) || steering.strength < 0 || steering.strength > 1)
+        throw std::invalid_argument("steering strength must be in [0,1]");
+    if (steering.strength != 0 && impl_->steering.rank == 0)
+        throw std::invalid_argument("nonzero steering strength requires an active pack");
+    if (options.execution.capture) {
+        if (impl_->options.capture_path.empty()) throw std::invalid_argument("capture requires --capture-path");
+        if (options.execution.requested_output_tokens == 0)
+            throw std::invalid_argument("capture requires at least one generated token");
+    }
+    if (options.execution.capture) options.execution.allow_prefix_reuse = false;
+    std::visit([&](auto& value) {
+        if constexpr (std::is_same_v<std::remove_cvref_t<decltype(value)>, models::qwen3_8_flash_next::PreparedPrompt>)
+            models::qwen3_8_flash_next::PreparedPromptAccess::set_steering(value, steering.generation, steering.strength);
+        else if (options.execution.capture || steering.strength != 0)
+            throw std::invalid_argument("capture and steering require Qwen3.8 Flash-Next");
+    }, prompt.impl_->value);
     runtime::ResolvedRequestOptions resolved_options = resolve_request_options(
         impl_->sampling_defaults, prompt.impl_->sampling_mode, std::move(options));
+    resolved_options.execution.steering = steering;
     const ResolvedSamplingParameters resolved_sampling = resolved_options.execution.sampling;
 
     const PromptSummary prompt_summary = prompt.impl_->summary;
@@ -353,13 +419,14 @@ GenerationHandle Engine::submit(PreparedPrompt prompt, RequestOptions options,
         } immediate{.consumer_mode = consumer_mode};
 
         immediate.result.prompt                     = prompt_summary;
+        immediate.result.steering                   = steering;
         immediate.result.finish_reason              = FinishReason::OutputLimit;
         immediate.result.thinking.configured_budget = resolved_options.execution.thinking.budget;
         immediate.result.timings.prepare_seconds    = prepare_seconds;
         immediate.result.timings.total_seconds      = prepare_seconds;
         prompt.impl_.reset();
         return GenerationHandle(std::make_unique<GenerationHandle::Impl>(
-            impl_, std::move(immediate), resolved_sampling));
+            impl_, std::move(immediate), resolved_sampling, steering));
     }
 
     return std::visit(
@@ -381,10 +448,31 @@ GenerationHandle Engine::submit(PreparedPrompt prompt, RequestOptions options,
                                                std::move(resolved_options), consumer_mode,
                                                observation, pending_deadline);
                 return GenerationHandle(std::make_unique<GenerationHandle::Impl>(
-                    impl_, std::move(submission), resolved_sampling));
+                    impl_, std::move(submission), resolved_sampling, steering));
             }
         },
         impl_->core);
+}
+
+SteeringState Engine::activate_steering(const std::optional<std::filesystem::path>& path) {
+    if (!impl_) throw std::logic_error("Engine is moved from");
+    std::optional<models::qwen3_8_flash_next::SteeringPack> pack;
+    if (path) pack = models::qwen3_8_flash_next::read_steering_pack(*path);
+    std::lock_guard lock(impl_->activation_mutex);
+    auto* core = std::get_if<std::unique_ptr<Impl::FlashGenerationCore>>(&impl_->core);
+    if (!core) throw std::invalid_argument("steering requires a Flash-Next generation Engine");
+    if (impl_->identity.is_null()) {
+        std::clog << "Computing native encoded-object SHA256 identities serially (source digests cannot be recovered after conversion)\n";
+        impl_->identity = artifact::encoded_identity(impl_->options.artifact_path, impl_->options.chat_template_path);
+    }
+    (*core)->update_idle_program([&](auto& program) {
+        program.activate_steering(pack ? &*pack : nullptr);
+    });
+    const auto generation = impl_->steering.generation + 1;
+    impl_->steering = pack ? pack->state : SteeringState{};
+    impl_->steering.generation = generation;
+    impl_->log_pack(pack ? &*pack : nullptr, path.value_or(std::filesystem::path{}));
+    return impl_->steering;
 }
 
 GenerationResult Engine::generate(PreparedPrompt prompt, RequestOptions options, OutputSink* sink,

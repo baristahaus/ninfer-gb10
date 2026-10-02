@@ -21,6 +21,7 @@ struct DeviceContext;
 }
 
 namespace ninfer::models::qwen3_8_flash_next {
+struct SteeringPack;
 
 namespace detail {
 struct CaptureAssessmentImpl;
@@ -866,6 +867,12 @@ struct ReleaseResult {
 template <class Variant>
 class Program {
 public:
+    void configure_activation(const EngineOptions& options, std::string_view identity);
+    void activate_steering(const SteeringPack* pack);
+    void begin_activation(runtime::LaneId lane, std::uint64_t request, const PreparedPrompt& prompt,
+                          const runtime::ResolvedExecutionOptions& options);
+    void select_activation(std::span<const std::uint32_t> lanes);
+    std::string flush_activation(SequenceHandle<Variant> sequence);
     ~Program() noexcept;
 
     Program(const Program&)            = delete;

@@ -117,3 +117,34 @@ values. This is a GDN diagnostic, not a complete continuation snapshot: KV, PLE,
 are not included. A single dump is approximately 110 MiB; choose a short, specific fixture.
 Both diagnostics are disabled when their environment variables are absent, and their timings must
 not be used for performance claims.
+
+## Activation controls
+
+The Flash-Next family owns `ActivationControl`, its startup-sized direction arena, bounded capture
+arenas and capture record writer. The exact package supplies the family Program normally. Steering
+mathematics lives in the fused attention-input kernels of `src/ops/launcher/hyperconnection.cu`; GPU
+capture conversion lives in `src/ops/launcher/activation_capture.cu`. No activation
+state is shared with another Program or added to the speculative frame layout. Direction and capture
+capacity participate in the physical sequence reservation and `activation_capacity_bytes` memory
+summary. The direction arena is always allocated so admin activation can use its original addresses;
+capture storage is allocated only on a capture server.
+
+Attention hyper-connection steering runs inside the fused combine/grouped-RMSNorm kernel: each
+(lane, token) block forms the represented BF16 combine of the preceding branch in registers, adjusts
+selected residual lanes, writes the steered BF16 state once and normalizes it. Rows, ranks and lane
+masks are device data, so inactive blocks run the unsteered arithmetic bit for bit, in prefill,
+ordinary decode and MTP verification alike. MLP and MTP hyper-connections are unchanged.
+All dot products use the original represented BF16 lane and represented F32 pack vectors; directions
+are not removed sequentially. Qualification compares against an independent FP64 formula at width
+2560, including nonorthogonal directions, partial lane masks and ranks through the compiled capacity.
+The zero-strength path returns before reading or writing lane values. Capture takes the full lane
+normalization and feature-wise gates and retains the mixed BF16 boundary. See
+[serving](../serving.md#flash-next-activation-capture-and-steering) for the wire, pack and capture formats,
+terminal-token semantics. Captures support active steering packs and record the post-steering stream
+with the request pack SHA, generation and effective strength.
+
+The native text-only device load binds approximately 125.1B logical parameters (125.7B tensor
+entries including auxiliary storage), excluding the 51.2B BF16 PLE elements. Parameter counts refer
+to logical shapes, not packed byte or scalar counts. The load-plan guard checks 124B through 126B
+device tensor entries and the complete file-backed PLE mapping; the 74B estimate does not describe
+this native artifact's logical inventory.

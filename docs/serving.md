@@ -1009,3 +1009,129 @@ decoding.
 
 Prompt-token usage includes chat-template and expanded media tokens. Generated-token usage comes
 from accepted output token IDs, including a stop token whose decoded text may be withheld.
+
+## Flash-Next activation capture and steering
+
+The Qwen3.8 Flash-Next Engine supports explicit activation capture and one server-wide steering
+pack. These extensions apply to OpenAI Chat Completions and Responses. Capture and steering both
+support ordinary and MTP decoding. With MTP, steering applies to the target model's prefill and
+verification; the MTP draft head is never steered, so steering can lower draft acceptance but not
+change which tokens are accepted. Other model families reject these features.
+
+`--capture-path DIR` enables capture storage, with a startup log message. Only requests asking for capture bypass prefix-cache reads and writes. Other requests
+retain the server's cache and speculative-decoding settings. There is no fallback directory. The destination must be outside source
+model directories and the served artifact directory, including through symlinks.
+`--capture-sites prompt_last,completion_last` selects sites; both are enabled by default, and the
+list must contain unique supported names. Requests are captured only with `"capture":{"record":true}`.
+False, null, numbers and strings are rejected with 400. Without `--capture-path`, requesting capture
+returns 400 naming that flag. Successful responses include
+`"capture":{"recorded":true,"record_id":"..."}`. Streaming Chat responses include this echo in a
+terminal extension chunk; Responses includes it in the completed response object. No capture file
+is written for requests that omit the field.
+
+Capture observes the **attention/GDN hyper-connection input**, after the previous MLP branch and
+any PLE addition, before attention/GDN projection. `prompt_last` is the last rendered token position.
+`completion_last` is the last **executed** token before the final sample, rather than the unexecuted
+final accepted token. For a one-token completion this is the final prompt token. Positions and token
+IDs are checked against the rendered prompt or the committed sequence ledger, independently for
+both sites. Capture may run with an active steering pack and nonzero strength. Records identify the
+pack SHA, generation and effective request strength. The captured stream is after steering and before
+normalisation; it therefore exposes the adjusted activations. Assertion errors name the failing check
+and return to the caller; the writer validates
+the entire request before creating a file.
+
+Each `.capture` file begins with a little-endian uint64 JSON-header byte length, followed by that
+UTF-8 header and F32 record payloads. The header contains record count, absolute byte offsets and
+sizes for every record, the record layout, request ID, rendered token IDs, served identities and
+engine flags. Records reference the header's rendered IDs rather than duplicating the complete
+prompt 96 times. Records contain site, layer, sequence length, captured index, token ID and strength.
+The fixed layout is:
+
+| Tensor | Shape | Payload byte offset | Source representation |
+|---|---|---:|---|
+| pre_normalisation_stream | `[4,2560]` | 0 | BF16 |
+| post_normalisation | `[4,2560]` | 40960 | BF16 grouped RMSNorm output |
+| lane_mix_weights | `[4,2560]` | 81920 | sigmoid of BF16 gate logits, evaluated in F32 |
+| post_mix | `[2560]` | 122880 | BF16 mixed input |
+| adjustment_input | `[4,2560]` | 0 | alias of pre_normalisation_stream |
+
+The actual model has feature-wise gates, not four scalar mix weights, and normalization retains all
+four lanes. This layout therefore uses 6.09375 MiB per site, or 12.1875 MiB for both sites, per active
+request. Ordinary decode reserves 97.5 MiB of capture payloads for eight active requests. MTP
+reserves four completion candidate columns plus the prompt snapshot, or 30.46875 MiB per active
+request (243.75 MiB for eight). After acceptance, completion capture selects the column at the
+committed execution frontier; rejected and truncated draft columns are never written. Both routes
+include small check arrays. The host flush copies one 130 KiB layer record at a time. Requests flush independently via
+an atomic temporary-file rename; a run is never accumulated in memory.
+
+`--steering-pack PATH` validates and activates a pack at startup. `POST /admin/steering` uses the
+same API-key authentication as the other server routes:
+
+```json
+{"pack":"/path/to/pack.safetensors"}
+```
+
+`{"pack":null}` disables steering and zeroes the direction arena. There is no query endpoint.
+The response records `pack_sha`, maximum enabled `rank`, sorted `layers`, and `generation`.
+Activation drains admitted and queued requests while preventing new submissions; every existing
+request completes under its original pack. Then the arena changes once and the generation advances.
+Loading errors preserve the previous pack. Pack activation works with capture and with MTP.
+
+Packs use the standard safetensors format, with F32 tensors named
+`layers.L.directions`, shaped `[k,4,2560]`. Omitted layers are untouched. The compiled `MAX_RANK` is
+32; both declared maximum rank and actual tensor ranks must fit. Directions must be finite and
+unit norm (squared-norm tolerance `1e-4`). The safetensors `__metadata__` string map contains one
+`ninfer.steering` entry whose value is a serialized JSON object:
+
+```json
+{
+  "schema":"ninfer.steering/1",
+  "model_sha":"...", "model_sha_struct":"...",
+  "config_sha":"...", "template_sha":"...", "pack_sha":"...",
+  "max_rank":2, "created":"...",
+  "layers":{"3":{"k":2,"lanes":5,"provenance":"..."}},
+  "norm_preserve":false, "default_steering_strength":0.35
+}
+```
+
+`lanes` is a nonzero integer bit mask (`1..15`), with bit 0 selecting lane 0. Unknown schemas are
+rejected. Identity strings are logged and compared for warnings; they do not gate activation.
+
+`"steering":{"strength":0.35}` overrides the active pack's default for a request. Omission of
+`steering` or `strength` uses the default; explicit zero is identity. Strength must be numeric and
+in `[0,1]`. Pack names and other fields inside `steering` are rejected. Nonzero strength requires an
+active pack. Aggregate responses echo `pack_sha`, `strength` and `generation`; both aggregate and
+streaming responses carry the same values in `X-Steering: sha=...;strength=...;gen=N`.
+
+Steering modifies each selected attention-input residual lane using simultaneous dot products from
+the original input: `y = x - a * sum_k dot(x,d_k) d_k`, with one final BF16 representation boundary.
+Steering runs inside the fused attention-input hyperconnection kernel, between the represented BF16
+combine and grouped RMSNorm; there is no separate pass over the residual stream. Zero strength or
+rank bypasses all arithmetic and writes, so an unsteered request computes exactly what a server
+without steering computes. Norm preservation scales the adjusted lane to its
+original norm; an exactly zero result remains zero because it has no direction to rescale.
+Unit norm alone does not make multiple directions orthogonal: exact subspace projection removal at
+strength one additionally requires orthonormal directions, which remains the pack producer's choice.
+
+Direction storage has fixed capacity and addresses, and kernels read rank, mask, normalization
+policy and per-request strength from device data. Reloading needs no graph rebuild. Per-row
+strengths are uploaded stream-ordered without waiting on the GPU, and only when the active rows
+change. Flash-Next decode and MTP verification use CUDA Graph replay by default, including steering
+and completion capture.
+Prefill remains eager. Capture metadata records the effective graph flag. Valid-token counts are
+initialized on the device; captured schedules retain no temporary host-vector pointer.
+
+The Engine computes SHA256 identities serially from native encoded tensor objects in bounded
+4 MiB reads. Hashing includes file-backed PLE bytes without materializing that table into an owning
+host or device tensor. `identity_domain` is `ninfer.v3.encoded_objects/1`: sorted per-object name,
+format/layout, shape and content digest determine `model_sha`; omitting content determines
+`model_sha_struct`. `config_sha` hashes the canonical native component configurations, and
+`template_sha` hashes the actual rendering template bytes, including an override. These hashes
+cannot reconstruct source safetensors names, dtypes, packed values or original config bytes lost
+or transformed during conversion. Source-bound packs may therefore warn about different identities;
+the warning and explicit identity domain preserve that distinction. Hashing occurs at capture/pack
+startup or the first admin activation and can add substantial loading time.
+
+Cache identity includes both pack generation and the exact resolved strength bits. A pack change
+invalidates reuse of every earlier-generation entry; different request strengths also cannot share
+steered state. Capturing bypasses all prefix caching.

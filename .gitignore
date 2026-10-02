@@ -42,6 +42,7 @@ out/
 /tmp-*/
 /AGENTS.override.md
 /logs/
+/oracle/
 *.log
 *.tmp
 /core

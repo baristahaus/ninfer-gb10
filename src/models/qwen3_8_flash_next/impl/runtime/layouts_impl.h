@@ -1,3 +1,4 @@
+#include "models/qwen3_8_flash_next/impl/activation_control.h"
 #include "models/qwen3_8_flash_next/impl/runtime/instance.h"
 #include "models/qwen3_8_flash_next/impl/runtime/layouts.h"
 #include "models/qwen3_8_flash_next/impl/runtime/vision_context.h"
@@ -799,6 +800,8 @@ std::unique_ptr<SequencePlanImpl> build_sequence_candidate(const SequencePlannin
     impl->features            = inputs.features;
     impl->use_cuda_graph      = inputs.use_cuda_graph;
     impl->causal_scoring      = inputs.causal_scoring;
+    impl->activation_capture = inputs.activation_capture;
+    impl->activation_capacity_bytes = qwen3_8_flash_next::activation_device_bytes(inputs.activation_capture, inputs.max_concurrency, inputs.speculative_backend);
     impl->device              = inputs.device;
     impl->context_cache       = inputs.context_cache;
     impl->kv_storage          = inputs.kv_storage;
@@ -848,7 +851,7 @@ std::unique_ptr<SequencePlanImpl> build_sequence_candidate(const SequencePlannin
 
     impl->device_reservation_bytes = checked_add(
         checked_add(impl->persistent.bytes, impl->workspace.capacity, "sequence memory plan"),
-        impl->graph_allowance_bytes, "sequence graph allowance");
+        checked_add(impl->graph_allowance_bytes, impl->activation_capacity_bytes, "activation memory plan"), "sequence graph allowance");
     return impl;
 }
 
@@ -877,6 +880,7 @@ make_sequence_planner_impl(DeviceContext& device, const EngineOptions& options,
         .features      = qwen3_8_flash_next::startup_features(options),
         .use_cuda_graph = options.use_cuda_graph,
         .causal_scoring = options.purpose == EnginePurpose::CausalScoring,
+        .activation_capture = !options.capture_path.empty(),
         .device         = options.device,
         .context_cache  = options.context_cache,
     };

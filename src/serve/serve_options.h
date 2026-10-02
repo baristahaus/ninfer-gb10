@@ -22,6 +22,9 @@ inline constexpr std::size_t kDefaultResponseStoreBytes   = 256ULL << 20;
 struct ServeOptions {
     bool help_requested = false;
     std::string artifact_path;
+    std::filesystem::path capture_path;
+    std::vector<std::string> capture_sites = {"prompt_last", "completion_last"};
+    std::filesystem::path steering_pack;
     std::filesystem::path chat_template_path;
     std::string host = "127.0.0.1";
     int port         = 8080;

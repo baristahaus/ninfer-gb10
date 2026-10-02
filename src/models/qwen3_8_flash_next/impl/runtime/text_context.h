@@ -341,6 +341,7 @@ private:
     Tensor* rewrite_checkpoint_mtp_hidden_output_ = nullptr;
     std::uint32_t prefill_chunk_;
     std::uint32_t text_kv_base_;
+    const Tensor* active_activation_ids_ = nullptr;
     const Tensor* active_cache_positions_                                          = nullptr;
     const Tensor* active_rope_positions_                                           = nullptr;
     const Tensor* active_kv_table_rows_                                            = nullptr;

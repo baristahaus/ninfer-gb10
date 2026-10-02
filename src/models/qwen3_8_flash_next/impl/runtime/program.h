@@ -1,3 +1,4 @@
+#include "models/qwen3_8_flash_next/impl/activation_control.h"
 #pragma once
 #include "models/qwen3_8_flash_next/impl/runtime/instance.h"
 // Qwen3.6 family runtime implementation; instantiated only by exact variants.
@@ -497,6 +498,8 @@ struct RequestControl {
 
 class ProgramImplCore {
 public:
+    std::unique_ptr<qwen3_8_flash_next::ActivationControl> activation;
+    std::string flush_activation(SequenceHandle sequence);
     struct PressureRecoveryScratch {
         struct StatePlacement {
             StateImageHandle state;

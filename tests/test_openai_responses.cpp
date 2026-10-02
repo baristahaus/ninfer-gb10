@@ -982,8 +982,21 @@ int test_input_tokens_uses_shared_state_path() {
 
 } // namespace
 
-int main() {
+int test_activation_extensions() {
     int failures = 0;
+    Json body{{"model","qwen"},{"input","hello"},{"capture",{{"record",true}}},
+              {"steering",{{"strength",0.35}}}};
+    const auto request = parse_openai_responses_create_request(body,limits());
+    failures += check(request.prompt.generation.capture && request.prompt.generation.steering_strength == 0.35,
+                      "Responses capture/steering extensions lost");
+    body["capture"]["record"] = false;
+    failures += check(api_error([&] { (void)parse_openai_responses_create_request(body,limits()); }).status == 400,
+                      "Responses capture literal true validation missing");
+    return failures;
+}
+
+int main() {
+    int failures = test_activation_extensions();
     failures += test_basic_request_and_resolution();
     failures += test_budgets_and_nonsemantic_hints();
     failures += test_typed_items_and_cache_markers();

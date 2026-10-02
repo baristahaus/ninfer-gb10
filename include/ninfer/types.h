@@ -149,7 +149,18 @@ struct ContextCostOptions {
     std::filesystem::path preset_path;
 };
 
+struct SteeringState {
+    std::string pack_sha;
+    double strength = 0;
+    std::uint64_t generation = 0;
+    int rank = 0;
+    std::vector<int> layers;
+};
+
 struct EngineOptions {
+    std::filesystem::path capture_path;
+    std::vector<std::string> capture_sites = {"prompt_last", "completion_last"};
+    std::filesystem::path steering_pack;
     std::filesystem::path artifact_path;
     std::filesystem::path chat_template_path;
     EnginePurpose purpose              = EnginePurpose::Generation;
@@ -247,6 +258,8 @@ struct ThinkingControlOptions {
 };
 
 struct ExecutionOptions {
+    bool capture = false;
+    std::optional<double> steering_strength;
     SamplingOverrides sampling;
     std::uint32_t requested_output_tokens = 0;
     bool allow_prefix_reuse               = true;
@@ -793,6 +806,8 @@ struct MaterializationDiagnostics {
 };
 
 struct GenerationResult {
+    std::string capture_record_id;
+    SteeringState steering;
     PromptSummary prompt;
     std::vector<TokenId> generated_token_ids;
     std::string content;
@@ -831,6 +846,7 @@ struct VisionWorkspaceMemorySummary {
 };
 
 struct MemorySummary {
+    std::size_t activation_capacity_bytes = 0;
     int device                                = 0;
     std::uint32_t max_context                 = 0;
     KvCapacityMode kv_capacity_mode           = KvCapacityMode::Explicit;

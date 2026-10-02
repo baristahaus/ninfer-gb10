@@ -28,6 +28,22 @@ ServeOptions parse(std::vector<std::string> arguments) {
 int main() {
     int failures = 0;
 
+    const auto capture = parse({"ninfer-serve","model.ninfer","--capture-path","/tmp/captures",
+                                "--capture-sites","completion_last,prompt_last"});
+    failures += check(capture.allow_prefix_reuse && capture.context_cache.enabled &&
+                      capture.capture_sites == std::vector<std::string>{"completion_last","prompt_last"},
+                      "capture flags disabled the server prefix cache");
+    const auto mtp_capture = parse({"ninfer-serve", "model.ninfer", "--capture-path", "/tmp/captures",
+                                    "--spec", "mtp", "--draft-tokens", "3",
+                                    "--device-state-slots", "2", "--host-state-slots", "8",
+                                    "--host-kv-mib", "16384"});
+    failures += check(mtp_capture.allow_prefix_reuse && mtp_capture.context_cache.enabled &&
+                          mtp_capture.speculative.backend == ninfer::SpeculativeBackend::Mtp &&
+                          mtp_capture.speculative.draft_tokens == 3 &&
+                          mtp_capture.context_cache.host_kv_capacity_bytes == (16384ULL << 20),
+                      "capture changed MTP or cache capacity settings");
+    const auto steering = parse({"ninfer-serve","model.ninfer","--steering-pack","/tmp/pack.safetensors"});
+    failures += check(steering.steering_pack == "/tmp/pack.safetensors", "steering startup flag lost");
     const ServeOptions defaults = parse({"ninfer-serve", "model.ninfer"});
     failures += check(defaults.allow_prefix_reuse, "prefix reuse is not enabled by default");
     failures +=

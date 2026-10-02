@@ -82,6 +82,7 @@ struct SequencePlanningInputs {
     StartupFeatures features;
     bool use_cuda_graph = true;
     bool causal_scoring = false;
+    bool activation_capture = false;
     int device          = 0;
     ContextCacheOptions context_cache;
 };
@@ -105,11 +106,13 @@ struct SequencePlanImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT> {
     StartupFeatures features;
     bool use_cuda_graph = true;
     bool causal_scoring = false;
+    bool activation_capture = false;
     int device          = 0;
     ContextCacheOptions context_cache;
     NINFER_QWEN38_FLASH_NEXT_RUNTIME_NS::PersistentLayout persistent;
     NINFER_QWEN38_FLASH_NEXT_RUNTIME_NS::WorkspacePlan workspace;
     std::size_t graph_allowance_bytes    = 0;
+    std::size_t activation_capacity_bytes = 0;
     std::size_t device_reservation_bytes = 0;
 };
 

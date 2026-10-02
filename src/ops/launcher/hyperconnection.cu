@@ -44,17 +44,81 @@ __global__ void add_repeated_kernel(const __nv_bfloat16* embedding, __nv_bfloat1
     }
 }
 
-__global__ void grouped_rmsnorm_kernel(const __nv_bfloat16* hyper,
-                                       const __nv_bfloat16* weight,
-                                       __nv_bfloat16* normalized) {
-    const int stream = static_cast<int>(blockIdx.x);
-    const int token = static_cast<int>(blockIdx.y);
-    const std::int64_t base = static_cast<std::int64_t>(kHyper) * token + kHidden * stream;
-    float sum = 0.0F;
-    for (int d = static_cast<int>(threadIdx.x); d < kHidden; d += static_cast<int>(blockDim.x)) {
-        const float x = __bfloat162float(hyper[base + d]);
-        sum = fmaf(x, x, sum);
+// Grouped RMSNorm kernels: one 256-thread block per (stream lane, token), each thread holding
+// kPerThread values of the lane in registers.
+constexpr int kNormThreads = 256;
+constexpr int kPerThread   = kHidden / kNormThreads;
+static_assert(kHidden % kNormThreads == 0);
+
+__device__ __forceinline__ float block_sum(float value, float* shared) {
+    for (int shift = 16; shift; shift >>= 1) value += __shfl_down_sync(0xffffffffU, value, shift);
+    const int lane = threadIdx.x & 31, warp = threadIdx.x >> 5;
+    if (!lane) shared[warp] = value;
+    __syncthreads();
+    if (!warp) {
+        value = lane < kNormThreads / 32 ? shared[lane] : 0;
+        for (int shift = 16; shift; shift >>= 1)
+            value += __shfl_down_sync(0xffffffffU, value, shift);
+        if (!lane) shared[0] = value;
     }
+    __syncthreads();
+    return shared[0];
+}
+
+// Activation steering of one residual lane: y = x - a * sum_k dot(x, d_k) d_k with simultaneous
+// dot products from the represented input, optional norm preservation, one final BF16 boundary.
+// Strength, rank and lane mask are device data, so the decision is uniform per block and needs
+// no host involvement. Returns false (x untouched, no arithmetic) when the lane is not steered.
+__device__ __forceinline__ bool steer_lane(float (&x)[kPerThread], const ActivationDevice* c,
+                                           int layer, int width, int lane, int token,
+                                           float* shared) {
+    if (c == nullptr) { return false; }
+    const float strength = c->rows[token / width].strength;
+    const int rank       = c->ranks[layer];
+    if (strength == 0 || rank == 0 || !(c->masks[layer] & (1 << lane))) { return false; }
+    float before = 0, delta[kPerThread]{};
+#pragma unroll
+    for (int j = 0; j < kPerThread; ++j) before = fmaf(x[j], x[j], before);
+    for (int r = 0; r < rank; ++r) {
+        const float* d =
+            c->directions + ((layer * kSteeringMaxRank + r) * kStreams + lane) * kHidden;
+        float dot = 0;
+#pragma unroll
+        for (int j = 0; j < kPerThread; ++j)
+            dot = fmaf(x[j], d[threadIdx.x + j * kNormThreads], dot);
+        dot = block_sum(dot, shared);
+#pragma unroll
+        for (int j = 0; j < kPerThread; ++j)
+            delta[j] = fmaf(dot, d[threadIdx.x + j * kNormThreads], delta[j]);
+        __syncthreads();
+    }
+    float y[kPerThread], after = 0;
+#pragma unroll
+    for (int j = 0; j < kPerThread; ++j) {
+        y[j]  = x[j] - strength * delta[j];
+        after = fmaf(y[j], y[j], after);
+    }
+    float scale = 1;
+    if (c->norm_preserve) {
+        before = block_sum(before, shared);
+        __syncthreads();
+        after = block_sum(after, shared);
+        // A zero projection has no direction to rescale; preserve zero.
+        if (after > 0) scale = sqrtf(before / after);
+    }
+#pragma unroll
+    for (int j = 0; j < kPerThread; ++j) x[j] = __bfloat162float(__float2bfloat16_rn(y[j] * scale));
+    return true;
+}
+
+// RMS-normalizes represented lane values held in registers and writes the normalized row.
+__device__ __forceinline__ void normalize_lane(const float (&x)[kPerThread],
+                                               const __nv_bfloat16* weight,
+                                               __nv_bfloat16* normalized, std::int64_t base,
+                                               int stream) {
+    float sum = 0.0F;
+#pragma unroll
+    for (int j = 0; j < kPerThread; ++j) sum = fmaf(x[j], x[j], sum);
     for (int offset = 16; offset != 0; offset >>= 1) {
         sum += __shfl_down_sync(0xffffffffU, sum, offset);
     }
@@ -71,54 +135,59 @@ __global__ void grouped_rmsnorm_kernel(const __nv_bfloat16* hyper,
         if (lane == 0) { partial[0] = rsqrtf(value / static_cast<float>(kHidden) + 1.0e-6F); }
     }
     __syncthreads();
-    for (int d = static_cast<int>(threadIdx.x); d < kHidden; d += static_cast<int>(blockDim.x)) {
-        const float x = __bfloat162float(hyper[base + d]);
+#pragma unroll
+    for (int j = 0; j < kPerThread; ++j) {
+        const int d       = static_cast<int>(threadIdx.x) + j * kNormThreads;
         const float scale = 1.0F + __bfloat162float(weight[kHidden * stream + d]);
-        normalized[base + d] = __float2bfloat16_rn(x * partial[0] * scale);
+        normalized[base + d] = __float2bfloat16_rn(x[j] * partial[0] * scale);
     }
 }
 
+// Steering (when active) adjusts hyper in place before normalization.
+__global__ void grouped_rmsnorm_kernel(__nv_bfloat16* hyper, const __nv_bfloat16* weight,
+                                       __nv_bfloat16* normalized,
+                                       const ActivationDevice* steering, int layer, int width) {
+    const int stream = static_cast<int>(blockIdx.x);
+    const int token = static_cast<int>(blockIdx.y);
+    const std::int64_t base = static_cast<std::int64_t>(kHyper) * token + kHidden * stream;
+    float x[kPerThread];
+#pragma unroll
+    for (int j = 0; j < kPerThread; ++j)
+        x[j] = __bfloat162float(hyper[base + threadIdx.x + j * kNormThreads]);
+    __shared__ float steer_shared[kNormThreads / 32];
+    if (steer_lane(x, steering, layer, width, stream, token, steer_shared)) {
+#pragma unroll
+        for (int j = 0; j < kPerThread; ++j)
+            hyper[base + threadIdx.x + j * kNormThreads] = __float2bfloat16_rn(x[j]);
+    }
+    normalize_lane(x, weight, normalized, base, stream);
+}
+
+// Commits the pending branch output at the represented BF16 combine boundary, steers it when
+// active, writes hyper once, and normalizes the final represented values.
 __global__ void combine_grouped_rmsnorm_kernel(
     __nv_bfloat16* hyper, const __nv_bfloat16* block,
     const __nv_bfloat16* injection, const __nv_bfloat16* weight,
-    __nv_bfloat16* normalized) {
+    __nv_bfloat16* normalized, const ActivationDevice* steering, int layer, int width) {
     const int stream = static_cast<int>(blockIdx.x);
     const int token = static_cast<int>(blockIdx.y);
     const std::int64_t base = static_cast<std::int64_t>(kHyper) * token + kHidden * stream;
     const float logit = __bfloat162float(injection[stream + kStreams * token]) * 0.25F;
     const float branch_scale = 2.0F / (1.0F + expf(-logit));
-    float sum = 0.0F;
-    for (int d = static_cast<int>(threadIdx.x); d < kHidden; d += blockDim.x) {
-        const __nv_bfloat16 represented = __float2bfloat16_rn(
+    float x[kPerThread];
+#pragma unroll
+    for (int j = 0; j < kPerThread; ++j) {
+        const int d = static_cast<int>(threadIdx.x) + j * kNormThreads;
+        x[j] = __bfloat162float(__float2bfloat16_rn(
             __bfloat162float(hyper[base + d]) +
-            branch_scale * __bfloat162float(block[d + kHidden * token]));
-        hyper[base + d] = represented;
-        const float value = __bfloat162float(represented);
-        sum = fmaf(value, value, sum);
+            branch_scale * __bfloat162float(block[d + kHidden * token])));
     }
-    for (int offset = 16; offset != 0; offset >>= 1) {
-        sum += __shfl_down_sync(0xffffffffU, sum, offset);
-    }
-    __shared__ float partial[8];
-    const int lane = static_cast<int>(threadIdx.x) & 31;
-    const int warp = static_cast<int>(threadIdx.x) >> 5;
-    if (lane == 0) { partial[warp] = sum; }
-    __syncthreads();
-    if (warp == 0) {
-        float value = lane < 8 ? partial[lane] : 0.0F;
-        for (int offset = 16; offset != 0; offset >>= 1) {
-            value += __shfl_down_sync(0xffffffffU, value, offset);
-        }
-        if (lane == 0) {
-            partial[0] = rsqrtf(value / static_cast<float>(kHidden) + 1.0e-6F);
-        }
-    }
-    __syncthreads();
-    for (int d = static_cast<int>(threadIdx.x); d < kHidden; d += blockDim.x) {
-        const float value = __bfloat162float(hyper[base + d]);
-        const float scale = 1.0F + __bfloat162float(weight[kHidden * stream + d]);
-        normalized[base + d] = __float2bfloat16_rn(value * partial[0] * scale);
-    }
+    __shared__ float steer_shared[kNormThreads / 32];
+    steer_lane(x, steering, layer, width, stream, token, steer_shared);
+#pragma unroll
+    for (int j = 0; j < kPerThread; ++j)
+        hyper[base + threadIdx.x + j * kNormThreads] = __float2bfloat16_rn(x[j]);
+    normalize_lane(x, weight, normalized, base, stream);
 }
 
 __global__ void scaled_silu_kernel(__nv_bfloat16* values, std::int64_t count) {
@@ -339,9 +408,18 @@ void validate_combine_inputs(const Tensor& hyper, const Tensor& block_output,
     }
 }
 
-void finish_mix(const Tensor& normalized, const HyperConnectionWeights& weights,
-                Tensor& block_input, Tensor* injection, WorkspaceArena& workspace,
-                cudaStream_t stream, Bf16GemmContext* bf16_gemm) {
+void validate_steering(const HyperConnectionActivation* activation, int tokens) {
+    if (activation == nullptr || activation->steering == nullptr) { return; }
+    if (activation->layer < 0 || activation->layer >= kActivationLayers || activation->width <= 0 ||
+        tokens % activation->width != 0 || tokens / activation->width > kActivationRows) {
+        throw std::invalid_argument("hyperconnection steering: layer/width check failed");
+    }
+}
+
+void finish_mix(const Tensor& hyper, const Tensor& normalized,
+                const HyperConnectionWeights& weights, Tensor& block_input, Tensor* injection,
+                WorkspaceArena& workspace, cudaStream_t stream, Bf16GemmContext* bf16_gemm,
+                const HyperConnectionActivation* activation) {
     const int tokens = normalized.ne[1];
     Tensor low_rank = workspace.alloc(DType::BF16, {kRank, tokens});
     const bool fused_down_silu = tokens <= 16;
@@ -385,6 +463,12 @@ void finish_mix(const Tensor& normalized, const HyperConnectionWeights& weights,
             static_cast<__nv_bfloat16*>(block_input.data), tokens);
     }
     CUDA_CHECK(cudaGetLastError());
+    if (activation != nullptr && activation->capture != nullptr) {
+        activation_capture(hyper, normalized, gate, block_input, *activation->positions,
+                           *activation->ids, *activation->valid, activation->capture,
+                           activation->layer, activation->width, stream,
+                           activation->speculative_columns);
+    }
 }
 
 } // namespace
@@ -439,7 +523,8 @@ std::size_t hyperconnection_mix_workspace_capacity_bytes(std::int32_t tokens,
 
 void hyperconnection_mix(const Tensor& hyper, const HyperConnectionWeights& weights,
                          Tensor& block_input, Tensor* injection, WorkspaceArena& workspace,
-                         cudaStream_t stream, Bf16GemmContext* bf16_gemm) {
+                         cudaStream_t stream, Bf16GemmContext* bf16_gemm,
+                         const HyperConnectionActivation* activation) {
     NINFER_PERF_SCOPE("hyper.mix", hyper.ne[1], 0, 0,
                        flash_next_work::hyper(hyper.ne[1], injection != nullptr, false));
 
@@ -447,11 +532,16 @@ void hyperconnection_mix(const Tensor& hyper, const HyperConnectionWeights& weig
     const int tokens = hyper.ne[1];
     auto scope = workspace.scope();
     Tensor normalized = workspace.alloc(DType::BF16, {kHyper, tokens});
-    grouped_rmsnorm_kernel<<<dim3(kStreams, static_cast<unsigned int>(tokens)), 256, 0, stream>>>(
-        static_cast<const __nv_bfloat16*>(hyper.data),
+    const ActivationDevice* steering = activation != nullptr ? activation->steering : nullptr;
+    validate_steering(activation, tokens);
+    grouped_rmsnorm_kernel<<<dim3(kStreams, static_cast<unsigned int>(tokens)), kNormThreads, 0,
+                             stream>>>(
+        static_cast<__nv_bfloat16*>(hyper.data),
         static_cast<const __nv_bfloat16*>(weights.norm.data),
-        static_cast<__nv_bfloat16*>(normalized.data));
-    finish_mix(normalized, weights, block_input, injection, workspace, stream, bf16_gemm);
+        static_cast<__nv_bfloat16*>(normalized.data), steering,
+        activation != nullptr ? activation->layer : 0, activation != nullptr ? activation->width : 1);
+    finish_mix(hyper, normalized, weights, block_input, injection, workspace, stream, bf16_gemm,
+               activation);
 }
 
 void hyperconnection_combine_mix(Tensor& hyper, const Tensor& previous_block_output,
@@ -459,7 +549,8 @@ void hyperconnection_combine_mix(Tensor& hyper, const Tensor& previous_block_out
                                  const HyperConnectionWeights& weights,
                                  Tensor& block_input, Tensor* injection,
                                  WorkspaceArena& workspace, cudaStream_t stream,
-                                 Bf16GemmContext* bf16_gemm) {
+                                 Bf16GemmContext* bf16_gemm,
+                                 const HyperConnectionActivation* activation) {
     NINFER_PERF_SCOPE("hyper.combine_mix", hyper.ne[1], 0, 0,
                        flash_next_work::hyper(hyper.ne[1], injection != nullptr, true));
 
@@ -468,14 +559,18 @@ void hyperconnection_combine_mix(Tensor& hyper, const Tensor& previous_block_out
     const int tokens = hyper.ne[1];
     auto scope = workspace.scope();
     Tensor normalized = workspace.alloc(DType::BF16, {kHyper, tokens});
+    const ActivationDevice* steering = activation != nullptr ? activation->steering : nullptr;
+    validate_steering(activation, tokens);
     combine_grouped_rmsnorm_kernel<<<
-        dim3(kStreams, static_cast<unsigned int>(tokens)), 256, 0, stream>>>(
+        dim3(kStreams, static_cast<unsigned int>(tokens)), kNormThreads, 0, stream>>>(
         static_cast<__nv_bfloat16*>(hyper.data),
         static_cast<const __nv_bfloat16*>(previous_block_output.data),
         static_cast<const __nv_bfloat16*>(previous_injection.data),
         static_cast<const __nv_bfloat16*>(weights.norm.data),
-        static_cast<__nv_bfloat16*>(normalized.data));
-    finish_mix(normalized, weights, block_input, injection, workspace, stream, bf16_gemm);
+        static_cast<__nv_bfloat16*>(normalized.data), steering,
+        activation != nullptr ? activation->layer : 0, activation != nullptr ? activation->width : 1);
+    finish_mix(hyper, normalized, weights, block_input, injection, workspace, stream, bf16_gemm,
+               activation);
 }
 
 void hyperconnection_combine(Tensor& hyper, const Tensor& block_output, const Tensor& injection,

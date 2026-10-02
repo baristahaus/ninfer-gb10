@@ -854,6 +854,7 @@ void TextContext::ordinary_decode_batch(const Tensor& ids, const Tensor& cache_p
     cudaStream_t stream = ctx_.stream;
     work_.reset();
     {
+        ScopedPositions ids_binding(active_activation_ids_, ids);
         ScopedPositions cache_binding(active_cache_positions_, cache_positions);
         ScopedPositions rope_binding(active_rope_positions_, rope_positions);
         ScopedEnvelope envelope_binding(active_causal_attention_envelope_, envelope);
@@ -914,6 +915,7 @@ void TextContext::target_verify_batch_impl(const Tensor& ids, const Tensor& cach
     cudaStream_t stream = ctx_.stream;
     work_.reset();
     {
+        ScopedPositions ids_binding(active_activation_ids_, ids);
         ScopedPositions cache_binding(active_cache_positions_, cache_positions);
         ScopedPositions rope_binding(active_rope_positions_, rope_positions);
         ScopedEnvelope envelope_binding(active_causal_attention_envelope_, envelope);
@@ -1358,11 +1360,26 @@ void TextContext::run_flash_next_layers(Tensor& x, Phase ph) {
         }
 
         const ops::HyperConnectionWeights& attention_hc = source.attention_hc;
+        // Steering and capture ride the fused attention-input mix in every phase. Their device
+        // controls are fixed addresses, so graphs need no rebuild; inactive rows run the plain mix.
+        const bool capturing = io_.activation_capture != nullptr && active_activation_ids_ != nullptr;
+        const ops::HyperConnectionActivation activation{
+            .steering            = io_.activation,
+            .layer               = static_cast<int>(full_index + gdn_index),
+            .width               = width,
+            .capture             = capturing ? io_.activation_capture : nullptr,
+            .positions           = &positions,
+            .ids                 = active_activation_ids_,
+            .valid               = &valid,
+            .speculative_columns = ph == Phase::Verify && width > 1};
+        const auto* hooks =
+            io_.activation != nullptr || capturing ? &activation : nullptr;
         if (pending) {
             ops::hyperconnection_combine_mix(hyper, block_output, injection, attention_hc,
-                                             block_input, &injection, work_, stream);
+                                             block_input, &injection, work_, stream, nullptr, hooks);
         } else {
-            ops::hyperconnection_mix(hyper, attention_hc, block_input, &injection, work_, stream);
+            ops::hyperconnection_mix(hyper, attention_hc, block_input, &injection, work_, stream,
+                                     nullptr, hooks);
         }
         if constexpr (std::is_same_v<std::remove_cvref_t<decltype(source)>,
                                      typename LoadedModelData::FullLayer>) {
@@ -1582,6 +1599,7 @@ TextContext::prefill_impl(std::span<const int> ids, const TextPrefill* text_pref
                 rope_positions = roots.rope_positions;
                 ops::offset_i32_positions(positions, io_.rope_delta, rope_positions, s);
             }
+            ScopedPositions scoped_ids(active_activation_ids_, ids_device);
             ScopedPositions scoped_cache(active_cache_positions_, positions);
             ScopedPositions scoped_rope(active_rope_positions_, rope_positions);
             const auto visible = static_cast<std::uint32_t>(base_i + t0 + len);
@@ -1632,6 +1650,9 @@ TextContext::prefill_impl(std::span<const int> ids, const TextPrefill* text_pref
                 Tensor last_xf = xf.slice(1, len - 1, 1);
                 Tensor logits  = matrix_window(io_.logits, 1);
                 ops::linear(last_xf, *lm_head_, logits, s, bf16_gemm_);
+                qwen3_8_flash_next::detail::capture_target_logits(
+                    "prefill", ids_device.slice(0, len - 1, 1), positions.slice(0, len - 1, 1),
+                    nullptr, io_.text_kv_table_row, logits, s);
                 // Set io_.pos to the bonus token's absolute position (base + T) before picking so
                 // the sampler RNG is keyed by it (prefill purpose keeps it distinct from the first
                 // decode step, which reuses the same io_.pos).

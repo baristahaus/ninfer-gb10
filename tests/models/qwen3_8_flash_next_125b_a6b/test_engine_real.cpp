@@ -75,6 +75,12 @@ int exercise_mtp_and_prefix(ninfer::Engine& engine) {
         first.speculative.backend != ninfer::SpeculativeBackend::Mtp ||
         first.speculative.rounds == 0) {
         std::cerr << "Flash-Next greedy text prefix is corrupt or did not complete through MTP\n";
+        std::cerr << "actual:";
+        for (auto token : first.generated_token_ids) { std::cerr << ' ' << token; }
+        std::cerr << "\nexpected:";
+        for (auto token : expected_prefix) { std::cerr << ' ' << token; }
+        std::cerr << "\nbackend=" << static_cast<int>(first.speculative.backend)
+                  << " rounds=" << first.speculative.rounds << '\n';
         return 1;
     }
 
@@ -138,7 +144,7 @@ int exercise_ordinary_greedy(const char* artifact) {
     ninfer::EngineOptions options    = engine_options(artifact);
     options.speculative.backend      = ninfer::SpeculativeBackend::None;
     options.speculative.draft_tokens = 0;
-    options.enable_vision = false;
+    options.enable_vision            = false;
     ninfer::Engine engine(std::move(options));
     const ninfer::GenerationResult result =
         engine.generate(engine.prepare_tokens(canonical_prompt()),
@@ -333,7 +339,7 @@ int main(int argc, char** argv) {
             return exercise_graph_equivalence(artifact);
         }
         for (const auto head : {ninfer::ProposalHead::Full, ninfer::ProposalHead::Optimized}) {
-            auto options = engine_options(artifact);
+            auto options                      = engine_options(artifact);
             options.speculative.proposal_head = head;
             ninfer::Engine engine(options);
             const ninfer::LoadSummary load = engine.load_summary();

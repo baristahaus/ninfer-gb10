@@ -1093,7 +1093,7 @@ void reject_unsupported_platform_fields(const Json& body) {
 }
 
 void validate_common_top_level(const Json& body, bool create) {
-    static const std::unordered_set<std::string> create_fields = {"background",
+    static const std::unordered_set<std::string> create_fields = {"capture", "steering", "background",
                                                                   "chat_template_kwargs",
                                                                   "client_metadata",
                                                                   "context_management",
@@ -1160,6 +1160,7 @@ OpenAIResponsesCreateRequest parse_openai_responses_create_request(const Json& b
     const OpenAIPromptCachePolicy cache_policy = parse_openai_prompt_cache_policy(body);
 
     ParsedPromptFields parsed = parse_prompt_fields(body, limits);
+    parse_activation_fields(body, parsed.prompt.generation);
     apply_openai_prompt_cache_policy(parsed.prompt.generation, cache_policy);
     OpenAIResponsesCreateRequest out;
     out.prompt              = std::move(parsed.prompt);

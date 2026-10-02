@@ -39,6 +39,36 @@ int main() {
         for (const ninfer::DType dtype : {ninfer::DType::FP8_E4M3FN, ninfer::DType::BF16}) {
             const std::size_t row_bytes     = 160U * ninfer::dtype_size(dtype);
             const std::uint64_t table_bytes = q38::kPleRows * row_bytes;
+            // A logical row may straddle artifact parts at a sub-element boundary.
+            // Keep the huge table sparse in this fixture; every requested byte is backed.
+            ninfer::artifact::MappedRange split_table;
+            std::array<q38::PleIds, 2> split_ids{};
+            std::vector<std::byte> split_expected(32 * row_bytes);
+            constexpr std::array<std::size_t, 4> boundaries = {8, 4, 2, 1};
+            for (std::size_t index = 0; index < 32; ++index) {
+                const auto row = static_cast<std::uint32_t>(index == 31 ? q38::kPleRows - 1 : index);
+                split_ids[index / q38::kPleHeads][index % q38::kPleHeads] = row;
+                auto storage = std::make_shared<std::vector<std::byte>>(row_bytes);
+                for (std::size_t byte = 0; byte < row_bytes; ++byte) {
+                    const auto value = std::byte((row * 37ULL + byte * 13ULL) & 255U);
+                    (*storage)[byte] = value;
+                    split_expected[index * row_bytes + byte] = value;
+                }
+                const auto begin = static_cast<std::uint64_t>(row) * row_bytes;
+                const auto split = boundaries[index % boundaries.size()];
+                split_table.segments.push_back(
+                    {std::shared_ptr<const std::byte>(storage, storage->data()), begin, split});
+                split_table.segments.push_back(
+                    {std::shared_ptr<const std::byte>(storage, storage->data() + split),
+                     begin + split, row_bytes - split});
+            }
+            std::vector<std::byte> split_result(split_expected.size());
+            q38::gather_ple(split_table, dtype, split_ids, split_result);
+            if (split_result != split_expected) {
+                throw std::runtime_error("PLE split-boundary rows differ from exact byte oracle");
+            }
+            std::cout << "PLE " << (dtype == ninfer::DType::BF16 ? "BF16" : "FP8")
+                      << ": 32/32 bit-exact rows; boundaries 8,4,2,1; maximum ID 320001535\n";
             auto first = std::make_shared<std::vector<std::byte>>(2 * row_bytes);
             auto last  = std::make_shared<std::vector<std::byte>>(2 * row_bytes);
             for (std::size_t offset = 0; offset < row_bytes; ++offset) {

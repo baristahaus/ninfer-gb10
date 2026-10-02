@@ -245,6 +245,8 @@ std::string make_chat_completion_response(const OpenAIChatResponseIdentity& iden
                has_tool_calls ? Json("tool_calls") : Json(finish_reason(outcome.finish_reason))}}});
     payload["usage"]   = usage_json(usage_from(outcome));
     payload["timings"] = timings_json(outcome_timings(outcome));
+    payload["steering"] = steering_json(outcome.steering);
+    if (!outcome.capture_record_id.empty()) payload["capture"] = {{"recorded",true},{"record_id",outcome.capture_record_id}};
     return payload.dump();
 }
 
@@ -391,6 +393,13 @@ std::vector<std::string> OpenAIChatStream::finish(const GenerationOutcome& outco
     }
     if (include_usage_) {
         events.push_back(usage_chunk(identity_, usage_from(outcome), final_timings));
+    }
+    if (!outcome.capture_record_id.empty() || outcome.steering.generation != 0) {
+        auto extension = base_payload(identity_, "chat.completion.chunk");
+        extension["choices"] = Json::array();
+        extension["steering"] = steering_json(outcome.steering);
+        if (!outcome.capture_record_id.empty()) extension["capture"] = {{"recorded",true},{"record_id",outcome.capture_record_id}};
+        events.push_back(event(std::move(extension)));
     }
     events.emplace_back("data: [DONE]\n\n");
     return events;

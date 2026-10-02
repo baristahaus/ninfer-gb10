@@ -313,6 +313,8 @@ ninfer::RequestOptions to_request_options(const GenerationRequest& request,
                                           const ResolvedPromptSemantics& semantics,
                                           bool allow_prefix_reuse) {
     ninfer::RequestOptions options;
+    options.execution.capture = request.capture;
+    options.execution.steering_strength = request.steering_strength;
     options.execution.requested_output_tokens = static_cast<std::uint32_t>(request.max_tokens);
     options.execution.allow_prefix_reuse      = allow_prefix_reuse;
     if (semantics.enable_thinking != false) {

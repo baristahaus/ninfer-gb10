@@ -1,4 +1,5 @@
 target_sources(ninfer_model_runtime PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/impl/activation_control.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/impl/frontend/chat_template.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/impl/frontend/digest.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/impl/frontend/frontend.cpp

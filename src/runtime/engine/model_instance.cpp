@@ -1,3 +1,5 @@
+#include <iostream>
+#include <set>
 #include "runtime/engine/model_instance.h"
 #include "artifact/reader.h"
 #include "artifact/binder.h"
@@ -71,6 +73,27 @@ std::size_t current_free_device_bytes() {
 } // namespace
 
 EngineOptions normalize_engine_options(EngineOptions options) {
+    if (!options.capture_path.empty()) {
+        auto ancestor = std::filesystem::weakly_canonical(options.capture_path);
+        while (!ancestor.empty()) {
+            if (ancestor == std::filesystem::weakly_canonical(options.artifact_path).parent_path() ||
+                std::filesystem::exists(ancestor / "config.json") ||
+                std::filesystem::exists(ancestor / "model.safetensors.index.json"))
+                throw std::invalid_argument("--capture-path must not be inside a model directory");
+            const auto parent = ancestor.parent_path();
+            if (parent == ancestor) break;
+            ancestor = parent;
+        }
+        std::clog << "--capture-path: capture requests bypass prefix reuse\n";
+        if (options.capture_sites.empty()) throw std::invalid_argument("capture-sites must be nonempty");
+        std::set<std::string> unique;
+        for (const auto& site : options.capture_sites)
+            if ((site != "prompt_last" && site != "completion_last") || !unique.insert(site).second)
+                throw std::invalid_argument("invalid or duplicate capture site: " + site);
+    }
+    if (!options.capture_path.empty() && options.speculative.backend != SpeculativeBackend::None &&
+        options.speculative.backend != SpeculativeBackend::Mtp)
+        throw std::invalid_argument("capture supports ordinary and MTP decoding");
     switch (options.purpose) {
     case EnginePurpose::Generation:
         break;

@@ -1372,10 +1372,14 @@ void TextContext::run_flash_next_layers(Tensor& x, Phase ph) {
                                                      batch, ple_output, work_, stream, bf16_gemm_);
                 }
             } else {
-                Tensor ple_state =
+                // A fork continues from the source checkpoint into another slot, exactly as
+                // the GDN layers do; the destination slot's prior content is never read.
+                const Tensor ple_source =
+                    ple_state_->slice(2, linear_state_source_slot_, 1).view({10240, 9});
+                Tensor ple_destination =
                     ple_state_->slice(2, linear_state_destination_slot_, 1).view({10240, 9});
-                ops::flash_next_ple(hyper, gathered, source.ple, ple_state, ple_output, work_,
-                                    stream, bf16_gemm_);
+                ops::flash_next_ple(hyper, gathered, source.ple, ple_source, ple_destination,
+                                    ple_output, work_, stream, bf16_gemm_);
             }
             ops::residual_add(ple_output, hyper, stream);
         }

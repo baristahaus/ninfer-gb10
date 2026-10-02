@@ -10,6 +10,7 @@
 #include <cuda_runtime.h>
 
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
@@ -107,16 +108,19 @@ __global__ void grouped_norm_kernel(const __nv_bfloat16* input, const __nv_bfloa
     }
 }
 
-__global__ void dilated_conv_kernel(const __nv_bfloat16* input,
-                                    const __nv_bfloat16* weight,
-                                    __nv_bfloat16* state, const __nv_bfloat16* gated,
+// Each thread owns whole channels: it reads the channel's source history before writing the
+// destination history, so source_state may alias destination_state.
+__global__ void dilated_conv_kernel(const __nv_bfloat16* input, const __nv_bfloat16* weight,
+                                    const __nv_bfloat16* source_state,
+                                    __nv_bfloat16* destination_state, const __nv_bfloat16* gated,
                                     __nv_bfloat16* destination, int tokens) {
     for (int channel = static_cast<int>(blockIdx.x) * blockDim.x + threadIdx.x;
          channel < kHyper; channel += static_cast<int>(blockDim.x) * gridDim.x) {
         float history[kState];
 #pragma unroll
         for (int i = 0; i < kState; ++i) {
-            history[i] = __bfloat162float(state[channel + static_cast<std::int64_t>(kHyper) * i]);
+            history[i] =
+                __bfloat162float(source_state[channel + static_cast<std::int64_t>(kHyper) * i]);
         }
         for (int token = 0; token < tokens; ++token) {
             const float current = __bfloat162float(input[channel + static_cast<std::int64_t>(kHyper) * token]);
@@ -136,7 +140,8 @@ __global__ void dilated_conv_kernel(const __nv_bfloat16* input,
         }
 #pragma unroll
         for (int i = 0; i < kState; ++i) {
-            state[channel + static_cast<std::int64_t>(kHyper) * i] = __float2bfloat16_rn(history[i]);
+            destination_state[channel + static_cast<std::int64_t>(kHyper) * i] =
+                __float2bfloat16_rn(history[i]);
         }
     }
 }
@@ -312,12 +317,21 @@ std::size_t flash_next_ple_workspace_capacity_bytes(std::int32_t tokens) {
 }
 
 void flash_next_ple(const Tensor& hyper, const Tensor& gathered_fp8,
-                    const FlashNextPleWeights& weights, Tensor& conv_state,
-                    Tensor& destination, WorkspaceArena& workspace, cudaStream_t stream,
-                    Bf16GemmContext* bf16_gemm) {
+                    const FlashNextPleWeights& weights, const Tensor& source_state,
+                    Tensor& destination_state, Tensor& destination, WorkspaceArena& workspace,
+                    cudaStream_t stream, Bf16GemmContext* bf16_gemm) {
     NINFER_PERF_SCOPE("ple.prefill", hyper.ne[1], 1, 0, flash_next_work::ple(hyper.ne[1]));
 
-    validate(hyper, gathered_fp8, weights, conv_state, destination);
+    validate(hyper, gathered_fp8, weights, source_state, destination);
+    validate(hyper, gathered_fp8, weights, destination_state, destination);
+    if (source_state.data != destination_state.data) {
+        const auto* source_begin = static_cast<const std::byte*>(source_state.data);
+        const auto* target_begin = static_cast<const std::byte*>(destination_state.data);
+        if (source_begin < target_begin + destination_state.bytes() &&
+            target_begin < source_begin + source_state.bytes()) {
+            throw std::invalid_argument("flash_next_ple: source and destination states overlap");
+        }
+    }
     const int tokens = hyper.ne[1];
     auto scope = workspace.scope();
     Tensor embedding = workspace.alloc(DType::BF16, {kHidden, tokens});
@@ -344,7 +358,8 @@ void flash_next_ple(const Tensor& hyper, const Tensor& gathered_fp8,
     dilated_conv_kernel<<<40, 256, 0, stream>>>(
         static_cast<const __nv_bfloat16*>(normalized.data),
         static_cast<const __nv_bfloat16*>(weights.convolution.data),
-        static_cast<__nv_bfloat16*>(conv_state.data),
+        static_cast<const __nv_bfloat16*>(source_state.data),
+        static_cast<__nv_bfloat16*>(destination_state.data),
         static_cast<const __nv_bfloat16*>(gated.data),
         static_cast<__nv_bfloat16*>(destination.data), tokens);
     CUDA_CHECK(cudaGetLastError());

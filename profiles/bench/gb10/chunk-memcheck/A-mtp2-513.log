@@ -1,0 +1,18 @@
+========= COMPUTE-SANITIZER
+[ninfer_bench] loading /home/apollo11/ninfer-gb10/out/fp8mtp/qwen3_8_flash_next_125b_a6b_nvfp4_fp8_mtp.ninfer (max_context=2048, kv_cache=fp8-e4m3-row256)
+[ninfer_bench] test 1/1 pp513+tg4: warmup=0 reps=1
+ninfer: persistent grids sized for 48 SMs
+ninfer_bench product throughput report
+  architecture: Qwen3_8FlashNextForCausalLM
+  model:      qwen3.8-flash-next-125b-a6b
+  gpu:        NVIDIA GB10 (device 0)
+  cuda:       runtime 13.0, driver 13.0
+  artifact:   /home/apollo11/ninfer-gb10/out/fp8mtp/qwen3_8_flash_next_125b_a6b_nvfp4_fp8_mtp.ninfer (32000000000 bytes)
+  load:       17.404 s, upload 13.9535 s, read 70.26 GiB, H2D 70.24 GiB, staging peak 256.0 MiB
+  memory:     weights 70.24 GiB, sequence 157.1 MiB, workspace 77.3 MiB, Vision handoff disabled (within workspace), graph allowance -, KV payload 33.1 MiB
+  corpus:     bench/fixtures/qwen3_8_flash_next_context.ids (261760 tokens)
+  config:     max_context=2048 prefill_chunk=256 kv_cache=fp8-e4m3-row256 spec=mtp draft_tokens=2 proposal_head=optimized sampling=greedy decode_path=mtp_eager graph_prime=n/a repetitions=1 warmup=0
+
+test       n_prompt  n_gen  prefill t/s  decode out t/s  decode eng t/s  spec acc  spec round/fb  work peak
+pp513+tg4       513      4         8.13            0.30            0.30       0.5            2/0   77.3 MiB
+========= ERROR SUMMARY: 0 errors

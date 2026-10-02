@@ -64,7 +64,15 @@ for n in range(len(words)):
         print(n, "error", error, flush=True)
 PY
 [[ $waited -lt 7200 ]] || log "B: server never became healthy; see $dir/B-serve.log"
-kill -TERM "$SERVER_PID" 2>/dev/null || true
+# TERM the serve app (not the sanitizer): the sanitizer prints its error
+# summary only when the target exits on its own, and the app keeps its
+# process name under the sanitizer, so match the name.
+pkill -TERM -x ninfer-serve 2>/dev/null || true
+finalize_waited=0
+while kill -0 "$SERVER_PID" 2>/dev/null; do
+    ((finalize_waited < 600)) || { echo "sanitizer did not finalize within 10 min; killing it" >&2; kill -TERM "$SERVER_PID" 2>/dev/null; break; }
+    sleep 5; finalize_waited=$((finalize_waited + 5))
+done
 status=0
 wait "$SERVER_PID" || status=$?
 SERVER_PID=

@@ -178,8 +178,9 @@ int run() {
 }
 
 // The production NVFP4 W4A4 routes against an FP64 oracle: 1 and 2 rows (the per-assignment
-// decode route), 8 and 16 rows (the expert-grouped decode tile) and 17 rows (the grouped prefill
-// tile). W4A4 has
+// decode route), 8 and 16 rows (the expert-grouped decode tile, grouped inside the routing
+// kernel), 17 rows (the 32-row grouped tile, still grouped inside the routing kernel) and 40 rows
+// (grouped by the separate count/scan/jobs kernels, with two jobs per expert). W4A4 has
 // two explicit activation quantizations, the expert input and the down-projection input, each
 // NVFP4 per 16 values with an E4M3 scale RNE(divisor * max|x| / 6) and E2M1 codes RNE(x *
 // divisor / scale), both saturating. The oracle applies them to the BF16 values they quantize
@@ -187,8 +188,8 @@ int run() {
 // the decoded weights. Routing is exact: each token's 10 experts score distinct BF16 values on a
 // dedicated input dimension, and tokens share experts from a pool of 12, as decode rows do.
 // Token t's routing dimension is kRoutingDim + t; every token needs one inside the hidden row.
-constexpr int kMaxTokens  = 17;
-constexpr int kRoutingDim = kHidden - 32;
+constexpr int kMaxTokens  = 40;
+constexpr int kRoutingDim = kHidden - 48;
 static_assert(kRoutingDim + kMaxTokens <= kHidden);
 constexpr std::array<int, 12> kPool{3, 41, 88, 130, 177, 211, 260, 305, 349, 402, 455, 509};
 // Residual differences are FP32 accumulation order against FP64, BF16 rounding of the gate, up
@@ -456,7 +457,7 @@ int run_nvfp4() {
     }
     upload_router(shared);
     const std::vector<double> expected = oracle(shared);
-    for (const int tokens : {1, 2, 8, 16, 17}) {
+    for (const int tokens : {1, 2, 8, 16, 17, 40}) {
         auto [got, guard_failures] = run_rows(tokens);
         failures += guard_failures;
         const std::vector<double> want(expected.begin(),

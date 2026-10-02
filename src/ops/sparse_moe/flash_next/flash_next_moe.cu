@@ -32,7 +32,6 @@ constexpr int kExperts                = 512;
 constexpr int kTop                    = 10;
 constexpr int kIntermediate           = 640;
 constexpr int kWarps                  = 8;
-constexpr int kGroupedFirstToken      = 1;
 constexpr int kGroupedTokenTile       = 32;
 constexpr int kLargeGroupedTokenTile  = 128;
 constexpr int kDecodeGroupedTokenTile = 16;
@@ -61,96 +60,179 @@ using Bf16GroupedSchedule =
 using Bf16GroupedGateGeometry = detail::flash_next::Bf16GemvGeometry<2 * kIntermediate, kHidden>;
 using Bf16GroupedDownGeometry = detail::flash_next::Bf16GemvGeometry<kHidden, kIntermediate>;
 
-__global__ void route_kernel(const __nv_bfloat16* scores, const __nv_bfloat16* input,
-                             const __nv_bfloat16* shared_scale_weight, int* ids, float* alpha,
-                             float* shared_alpha, int tokens) {
-    const int token   = static_cast<int>(blockIdx.x);
-    const int lane    = static_cast<int>(threadIdx.x) & 31;
-    const int warp    = static_cast<int>(threadIdx.x) >> 5;
-    const int expert0 = static_cast<int>(threadIdx.x);
-    const int expert1 = expert0 + static_cast<int>(blockDim.x);
-    const float value0 =
-        __bfloat162float(scores[expert0 + static_cast<std::int64_t>(kExperts) * token]);
-    const float value1 =
-        __bfloat162float(scores[expert1 + static_cast<std::int64_t>(kExperts) * token]);
-    bool selected0 = false;
-    bool selected1 = false;
-    __shared__ float warp_values[8];
-    __shared__ int warp_ids[8];
-    __shared__ float top_values[kTop];
-    __shared__ int top_ids[kTop];
-    float shared_value = 0.0F;
-    for (int k = static_cast<int>(threadIdx.x); k < kHidden; k += static_cast<int>(blockDim.x)) {
-        shared_value = fmaf(__bfloat162float(input[k + static_cast<std::int64_t>(kHidden) * token]),
-                            __bfloat162float(shared_scale_weight[k]), shared_value);
-    }
-    for (int offset = 16; offset != 0; offset >>= 1) {
-        shared_value += __shfl_down_sync(0xffffffffU, shared_value, offset);
-    }
-    if (lane == 0) { warp_values[warp] = shared_value; }
-    __syncthreads();
-    if (warp == 0) {
-        shared_value = lane < 8 ? warp_values[lane] : 0.0F;
-        for (int offset = 16; offset != 0; offset >>= 1) {
-            shared_value += __shfl_down_sync(0xffffffffU, shared_value, offset);
-        }
-        if (lane == 0) { shared_alpha[token] = 1.0F / (1.0F + expf(-shared_value)); }
-    }
-    __syncthreads();
-    const auto better = [](float lhs, int lhs_id, float rhs, int rhs_id) {
-        return lhs > rhs || (lhs == rhs && lhs_id < rhs_id);
-    };
-    for (int rank = 0; rank < kTop; ++rank) {
-        float value = selected0 ? -__int_as_float(0x7f800000) : value0;
-        int expert  = selected0 ? kExperts : expert0;
-        if (!selected1 && better(value1, expert1, value, expert)) {
-            value  = value1;
-            expert = expert1;
-        }
-        for (int offset = 16; offset != 0; offset >>= 1) {
-            const float other_value = __shfl_down_sync(0xffffffffU, value, offset);
-            const int other_expert  = __shfl_down_sync(0xffffffffU, expert, offset);
-            if (lane + offset < 32 && better(other_value, other_expert, value, expert)) {
-                value  = other_value;
-                expert = other_expert;
-            }
-        }
-        if (lane == 0) {
-            warp_values[warp] = value;
-            warp_ids[warp]    = expert;
-        }
-        __syncthreads();
-        if (warp == 0) {
-            value  = lane < 8 ? warp_values[lane] : -__int_as_float(0x7f800000);
-            expert = lane < 8 ? warp_ids[lane] : kExperts;
-            for (int offset = 16; offset != 0; offset >>= 1) {
-                const float other_value = __shfl_down_sync(0xffffffffU, value, offset);
-                const int other_expert  = __shfl_down_sync(0xffffffffU, expert, offset);
-                if (lane + offset < 32 && better(other_value, other_expert, value, expert)) {
-                    value  = other_value;
-                    expert = other_expert;
-                }
-            }
-            if (lane == 0) {
-                top_values[rank] = value;
-                top_ids[rank]    = expert;
-            }
-        }
-        __syncthreads();
-        selected0 = selected0 || top_ids[rank] == expert0;
-        selected1 = selected1 || top_ids[rank] == expert1;
-    }
-    if (threadIdx.x == 0) {
-        const float maximum = top_values[0];
-        float denominator   = 0.0F;
+// Routing, one warp per token, 32 tokens per CTA: the shared-expert gate, the top-10 experts and
+// their normalized weights. The results are bitwise those of the 256-thread-per-token kernel this
+// replaced: the gate's dot product is evaluated as the same eight 32-thread fmaf chains and
+// shuffle trees, and the top-10 order (score descending, then expert ascending) is unique.
+//
+// With grouping (`offsets` non-null; one CTA, tokens <= kFusedRouteTokens) the CTA also packs the
+// assignments by expert in token order and emits one grouped job per selected expert, as
+// count_routes/scan_routes/make_route_jobs do at any token tile >= tokens.
+constexpr int kRouteWarps       = 32;
+constexpr int kFusedRouteTokens = kRouteWarps;
+
+struct RouteOutputs {
+    int* ids;
+    float* alpha;
+    float* shared_alpha;
+    int* offsets;       // [kExperts + 1], null without grouping
+    int* packed_index;  // [assignments]: assignment -> packed row
+    int* packed_expert; // [assignments]: packed row -> expert
+    int* job_experts;   // [assignments]
+    int* job_columns;   // [assignments]
+    int* job_count;     // [1]
+};
+
+__device__ __forceinline__ bool route_better(float lhs, int lhs_id, float rhs, int rhs_id) {
+    return lhs > rhs || (lhs == rhs && lhs_id < rhs_id);
+}
+
+__global__ void __launch_bounds__(kRouteWarps * 32)
+    route_kernel(const __nv_bfloat16* scores, const __nv_bfloat16* input,
+                 const __nv_bfloat16* shared_scale_weight, RouteOutputs out, int tokens) {
+    __shared__ int group_ids[kFusedRouteTokens * kTop];
+    __shared__ int group_offsets[kExperts];
+    __shared__ int scan_totals[kRouteWarps];
+    constexpr unsigned kFull = 0xffffffffU;
+    const int lane           = static_cast<int>(threadIdx.x) & 31;
+    const int warp           = static_cast<int>(threadIdx.x) >> 5;
+    const int token          = static_cast<int>(blockIdx.x) * kRouteWarps + warp;
+    if (token < tokens) {
+        // Shared gate: virtual thread v*32+lane of the former 256-thread block accumulates
+        // k = v*32+lane, +256, ... in order; each virtual warp reduces by shuffle-down and the
+        // eight warp sums reduce the same way from lanes 0..7.
+        const __nv_bfloat16* row = input + static_cast<std::int64_t>(kHidden) * token;
+        float gathered           = 0.0F;
 #pragma unroll
-        for (int rank = 0; rank < kTop; ++rank) { denominator += expf(top_values[rank] - maximum); }
+        for (int v = 0; v < 8; ++v) {
+            float value = 0.0F;
+            for (int k = v * 32 + lane; k < kHidden; k += 256) {
+                value =
+                    fmaf(__bfloat162float(row[k]), __bfloat162float(shared_scale_weight[k]), value);
+            }
+            for (int offset = 16; offset != 0; offset >>= 1) {
+                value += __shfl_down_sync(kFull, value, offset);
+            }
+            const float sum = __shfl_sync(kFull, value, 0);
+            if (lane == v) { gathered = sum; }
+        }
+        for (int offset = 16; offset != 0; offset >>= 1) {
+            gathered += __shfl_down_sync(kFull, gathered, offset);
+        }
+        if (lane == 0) { out.shared_alpha[token] = 1.0F / (1.0F + expf(-gathered)); }
+
+        // Top-10: lane holds experts lane + 32 j.
+        float values[kExperts / 32];
+#pragma unroll
+        for (int j = 0; j < kExperts / 32; ++j) {
+            values[j] = __bfloat162float(
+                scores[lane + 32 * j + static_cast<std::int64_t>(kExperts) * token]);
+        }
+        unsigned taken = 0;
+        float top_values[kTop];
+        int top_ids[kTop];
 #pragma unroll
         for (int rank = 0; rank < kTop; ++rank) {
-            const int offset = rank + kTop * token;
-            ids[offset]      = top_ids[rank];
-            alpha[offset]    = expf(top_values[rank] - maximum) / denominator;
+            float best  = -__int_as_float(0x7f800000);
+            int best_id = kExperts;
+#pragma unroll
+            for (int j = 0; j < kExperts / 32; ++j) {
+                if (((taken >> j) & 1U) == 0U &&
+                    route_better(values[j], lane + 32 * j, best, best_id)) {
+                    best    = values[j];
+                    best_id = lane + 32 * j;
+                }
+            }
+            for (int offset = 16; offset != 0; offset >>= 1) {
+                const float other  = __shfl_xor_sync(kFull, best, offset);
+                const int other_id = __shfl_xor_sync(kFull, best_id, offset);
+                if (route_better(other, other_id, best, best_id)) {
+                    best    = other;
+                    best_id = other_id;
+                }
+            }
+            top_values[rank] = best;
+            top_ids[rank]    = best_id;
+            if ((best_id & 31) == lane) { taken |= 1U << (best_id >> 5); }
         }
+        if (lane == 0) {
+            const float maximum = top_values[0];
+            float denominator   = 0.0F;
+#pragma unroll
+            for (int rank = 0; rank < kTop; ++rank) {
+                denominator += expf(top_values[rank] - maximum);
+            }
+#pragma unroll
+            for (int rank = 0; rank < kTop; ++rank) {
+                const int offset  = rank + kTop * token;
+                out.ids[offset]   = top_ids[rank];
+                out.alpha[offset] = expf(top_values[rank] - maximum) / denominator;
+            }
+        }
+        if (out.offsets != nullptr) {
+#pragma unroll
+            for (int rank = 0; rank < kTop; ++rank) {
+                if (lane == rank) { group_ids[rank + kTop * token] = top_ids[rank]; }
+            }
+        }
+    }
+    if (out.offsets == nullptr) { return; }
+
+    // Grouping (one CTA): per-expert counts and one job per selected expert, exclusive-scanned
+    // together as count | job << 16 (both totals are at most kFusedRouteTokens * kTop).
+    __syncthreads();
+    const int assignments = tokens * kTop;
+    const int tid         = static_cast<int>(threadIdx.x);
+    int packed_count      = 0;
+    if (tid < kExperts) {
+        int count = 0;
+        for (int a = 0; a < assignments; ++a) { count += group_ids[a] == tid ? 1 : 0; }
+        packed_count = count | (count > 0 ? 1 << 16 : 0);
+    }
+    int inclusive = packed_count;
+#pragma unroll
+    for (int offset = 1; offset < 32; offset <<= 1) {
+        const int add = __shfl_up_sync(kFull, inclusive, offset);
+        if (lane >= offset) { inclusive += add; }
+    }
+    if (lane == 31) { scan_totals[warp] = inclusive; }
+    __syncthreads();
+    if (warp == 0) {
+        int total = scan_totals[lane];
+#pragma unroll
+        for (int offset = 1; offset < 32; offset <<= 1) {
+            const int add = __shfl_up_sync(kFull, total, offset);
+            if (lane >= offset) { total += add; }
+        }
+        scan_totals[lane] = total;
+    }
+    __syncthreads();
+    if (tid < kExperts) {
+        const int exclusive = (warp == 0 ? 0 : scan_totals[warp - 1]) + inclusive - packed_count;
+        const int count     = packed_count & 0xffff;
+        const int offset    = exclusive & 0xffff;
+        const int job       = exclusive >> 16;
+        group_offsets[tid]  = offset;
+        out.offsets[tid]    = offset;
+        if (count > 0) {
+            out.job_experts[job] = tid;
+            out.job_columns[job] = 0;
+        }
+        if (tid == kExperts - 1) {
+            out.offsets[kExperts] = offset + count;
+            out.job_count[0]      = job + (count > 0 ? 1 : 0);
+        }
+    }
+    __syncthreads();
+    if (tid < assignments) {
+        // Rank among the earlier tokens that chose the same expert (each token's ten are distinct).
+        const int expert = group_ids[tid];
+        const int before = (tid / kTop) * kTop;
+        int rank         = 0;
+        for (int a = 0; a < before; ++a) { rank += group_ids[a] == expert ? 1 : 0; }
+        const int packed          = group_offsets[expert] + rank;
+        out.packed_index[tid]     = packed;
+        out.packed_expert[packed] = expert;
     }
 }
 
@@ -241,11 +323,22 @@ __global__ void make_route_jobs_kernel(const int* counts, int* job_experts, int*
     if (expert == kExperts - 1) { job_count[0] = prefix[expert]; }
 }
 
+// Packed rows for the multi-kernel grouping: assignment -> offsets[expert] + rank and back.
+__global__ void pack_routes_kernel(const int* ids, const int* local_rank, const int* offsets,
+                                   int* packed_index, int* packed_expert, int assignments) {
+    const int assignment =
+        static_cast<int>(blockIdx.x) * static_cast<int>(blockDim.x) + static_cast<int>(threadIdx.x);
+    if (assignment >= assignments) { return; }
+    const int expert         = ids[assignment];
+    const int packed         = offsets[expert] + local_rank[assignment];
+    packed_index[assignment] = packed;
+    packed_expert[packed]    = expert;
+}
+
 __global__ void gather_quantize_routes_kernel(const __nv_bfloat16* input, const int* ids,
-                                              const int* local_rank, const int* offsets,
-                                              const float* input_divisors, std::uint8_t* codes,
-                                              std::uint8_t* scales, int* packed_index,
-                                              int* packed_expert, int assignments, int columns) {
+                                              const int* packed_index, const float* input_divisors,
+                                              std::uint8_t* codes, std::uint8_t* scales,
+                                              int assignments, int columns) {
     const int groups = columns / 16;
     const int task =
         static_cast<int>(blockIdx.x) * static_cast<int>(blockDim.x) + static_cast<int>(threadIdx.x);
@@ -253,17 +346,13 @@ __global__ void gather_quantize_routes_kernel(const __nv_bfloat16* input, const 
     const int assignment                      = task / groups;
     const int group                           = task - assignment * groups;
     const int expert                          = ids[assignment];
-    const int packed                          = offsets[expert] + local_rank[assignment];
+    const int packed                          = packed_index[assignment];
     const int token                           = assignment / kTop;
     const detail::Nvfp4QuantizedK16 quantized = detail::quantize_nvfp4_k16(
         input + static_cast<std::int64_t>(token) * columns + group * 16, input_divisors[expert]);
     auto* destination = codes + static_cast<std::int64_t>(packed) * (columns / 2) + group * 8;
     *reinterpret_cast<uint2*>(destination) = make_uint2(quantized.codes_lo, quantized.codes_hi);
     scales[static_cast<std::int64_t>(packed) * groups + group] = quantized.scale;
-    if (group == 0) {
-        packed_index[assignment] = packed;
-        packed_expert[packed]    = expert;
-    }
 }
 
 __global__ void quantize_decode_routes_kernel(const __nv_bfloat16* input, const int* ids,
@@ -784,11 +873,40 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
     Tensor ids          = workspace.alloc(DType::I32, {kTop, tokens});
     Tensor alpha        = workspace.alloc(DType::FP32, {kTop, tokens});
     Tensor shared_alpha = workspace.alloc(DType::FP32, {tokens});
-    route_kernel<<<tokens, 256, 0, stream>>>(
+    // The NVFP4 expert-grouped route packs its assignments by expert. Up to kFusedRouteTokens rows
+    // (every decode and verify shape) the routing kernel does it in the same launch; one job per
+    // expert then matches every token tile the route uses (16 or 32 >= tokens).
+    const int assignments     = tokens * kTop;
+    const bool nvfp4          = weights.routed_gate_up.qtype == QType::NVFP4;
+    const bool grouped        = nvfp4 && tokens >= kGroupedDecodeMinTokens;
+    const bool fused_grouping = grouped && tokens <= kFusedRouteTokens;
+    static_assert(kFusedRouteTokens <= kGroupedTokenTile);
+    Tensor offsets;
+    Tensor packed_index;
+    Tensor packed_expert;
+    Tensor job_experts;
+    Tensor job_columns;
+    Tensor job_count;
+    if (grouped) {
+        offsets       = workspace.alloc(DType::I32, {kExperts + 1});
+        packed_index  = workspace.alloc(DType::I32, {assignments});
+        packed_expert = workspace.alloc(DType::I32, {assignments});
+        job_experts   = workspace.alloc(DType::I32, {assignments});
+        job_columns   = workspace.alloc(DType::I32, {assignments});
+        job_count     = workspace.alloc(DType::I32, {1});
+    }
+    const auto i32 = [](Tensor& tensor) { return static_cast<int*>(tensor.data); };
+    route_kernel<<<(tokens + kRouteWarps - 1) / kRouteWarps, kRouteWarps * 32, 0, stream>>>(
         static_cast<const __nv_bfloat16*>(scores.data),
         static_cast<const __nv_bfloat16*>(input.data),
-        static_cast<const __nv_bfloat16*>(weights.shared_scale.qdata), static_cast<int*>(ids.data),
-        static_cast<float*>(alpha.data), static_cast<float*>(shared_alpha.data), tokens);
+        static_cast<const __nv_bfloat16*>(weights.shared_scale.qdata),
+        RouteOutputs{
+            i32(ids), static_cast<float*>(alpha.data), static_cast<float*>(shared_alpha.data),
+            fused_grouping ? i32(offsets) : nullptr, fused_grouping ? i32(packed_index) : nullptr,
+            fused_grouping ? i32(packed_expert) : nullptr,
+            fused_grouping ? i32(job_experts) : nullptr,
+            fused_grouping ? i32(job_columns) : nullptr, fused_grouping ? i32(job_count) : nullptr},
+        tokens);
     Tensor shared_activation = workspace.alloc(DType::BF16, {kIntermediate, tokens});
     if (shared_packed != nullptr) {
         linear_swiglu(input, *shared_packed, shared_activation, workspace, stream);
@@ -804,48 +922,42 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
     }
     linear(shared_activation, weights.shared_down, destination, stream, bf16_gemm);
     Tensor routed_activation = workspace.alloc(DType::BF16, {kIntermediate, kTop, tokens});
-    if (weights.routed_gate_up.qtype == QType::NVFP4 && tokens >= kGroupedFirstToken) {
-        if (tokens < kGroupedDecodeMinTokens) {
+    if (nvfp4) {
+        if (!grouped) {
             run_nvfp4_decode_routes(input, weights, ids, alpha, shared_alpha, destination,
                                     routed_activation, workspace, stream, tokens, wide_decode_gate);
             return;
         }
-        const int assignments = tokens * kTop;
-        Tensor local_rank     = workspace.alloc(DType::I32, {assignments});
-        Tensor counts         = workspace.alloc(DType::I32, {kExperts});
-        Tensor offsets        = workspace.alloc(DType::I32, {kExperts + 1});
-        Tensor packed_index   = workspace.alloc(DType::I32, {assignments});
-        Tensor packed_expert  = workspace.alloc(DType::I32, {assignments});
-        Tensor job_experts    = workspace.alloc(DType::I32, {assignments});
-        Tensor job_columns    = workspace.alloc(DType::I32, {assignments});
-        Tensor job_count      = workspace.alloc(DType::I32, {1});
-        CUDA_CHECK(cudaMemsetAsync(counts.data, 0, counts.bytes(), stream));
-        CUDA_CHECK(cudaMemsetAsync(job_count.data, 0, job_count.bytes(), stream));
-        count_routes_kernel<<<kExperts, 256, 0, stream>>>(static_cast<const int*>(ids.data),
-                                                          static_cast<int*>(local_rank.data),
-                                                          static_cast<int*>(counts.data), tokens);
-        scan_routes_kernel<<<1, kExperts, 0, stream>>>(static_cast<const int*>(counts.data),
-                                                       static_cast<int*>(offsets.data));
         const bool decode_grouped = tokens <= kDecodeGroupedTokenTile;
         const bool large_grouped  = tokens >= 4096;
-        const int grouped_token_tile =
-            decode_grouped ? kDecodeGroupedTokenTile
-                           : (large_grouped ? kLargeGroupedTokenTile : kGroupedTokenTile);
-        make_route_jobs_kernel<<<1, kExperts, 0, stream>>>(
-            static_cast<const int*>(counts.data), static_cast<int*>(job_experts.data),
-            static_cast<int*>(job_columns.data), static_cast<int*>(job_count.data),
-            grouped_token_tile);
+        if (!fused_grouping) {
+            const int grouped_token_tile =
+                large_grouped ? kLargeGroupedTokenTile : kGroupedTokenTile;
+            Tensor local_rank = workspace.alloc(DType::I32, {assignments});
+            Tensor counts     = workspace.alloc(DType::I32, {kExperts});
+            CUDA_CHECK(cudaMemsetAsync(counts.data, 0, counts.bytes(), stream));
+            CUDA_CHECK(cudaMemsetAsync(job_count.data, 0, job_count.bytes(), stream));
+            count_routes_kernel<<<kExperts, 256, 0, stream>>>(static_cast<const int*>(ids.data),
+                                                              i32(local_rank), i32(counts), tokens);
+            scan_routes_kernel<<<1, kExperts, 0, stream>>>(static_cast<const int*>(counts.data),
+                                                           i32(offsets));
+            make_route_jobs_kernel<<<1, kExperts, 0, stream>>>(static_cast<const int*>(counts.data),
+                                                               i32(job_experts), i32(job_columns),
+                                                               i32(job_count), grouped_token_tile);
+            pack_routes_kernel<<<(assignments + 255) / 256, 256, 0, stream>>>(
+                static_cast<const int*>(ids.data), static_cast<const int*>(local_rank.data),
+                static_cast<const int*>(offsets.data), i32(packed_index), i32(packed_expert),
+                assignments);
+        }
 
         Tensor gate_codes  = workspace.alloc(DType::U8, {kHidden / 2, assignments});
         Tensor gate_scales = workspace.alloc(DType::U8, {kHidden / 16, assignments});
         gather_quantize_routes_kernel<<<(assignments * (kHidden / 16) + 255) / 256, 256, 0,
                                         stream>>>(
             static_cast<const __nv_bfloat16*>(input.data), static_cast<const int*>(ids.data),
-            static_cast<const int*>(local_rank.data), static_cast<const int*>(offsets.data),
-            weights.routed_gate_up.input_scale_divisors,
+            static_cast<const int*>(packed_index.data), weights.routed_gate_up.input_scale_divisors,
             static_cast<std::uint8_t*>(gate_codes.data),
-            static_cast<std::uint8_t*>(gate_scales.data), static_cast<int*>(packed_index.data),
-            static_cast<int*>(packed_expert.data), assignments, kHidden);
+            static_cast<std::uint8_t*>(gate_scales.data), assignments, kHidden);
         detail::flash_next::Nvfp4W4a4MaterializedActivation gate_input{
             static_cast<const std::uint8_t*>(gate_codes.data),
             static_cast<const std::uint8_t*>(gate_scales.data)};
@@ -951,14 +1063,13 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
         return;
     }
     if (weights.routed_gate_up.qtype == QType::BF16 && tokens > 16) {
-        const int assignments = tokens * kTop;
-        Tensor local_rank     = workspace.alloc(DType::I32, {assignments});
-        Tensor counts         = workspace.alloc(DType::I32, {kExperts});
-        Tensor offsets        = workspace.alloc(DType::I32, {kExperts + 1});
-        Tensor packed_index   = workspace.alloc(DType::I32, {assignments});
-        Tensor job_experts    = workspace.alloc(DType::I32, {assignments});
-        Tensor job_columns    = workspace.alloc(DType::I32, {assignments});
-        Tensor job_count      = workspace.alloc(DType::I32, {1});
+        Tensor local_rank = workspace.alloc(DType::I32, {assignments});
+        Tensor counts     = workspace.alloc(DType::I32, {kExperts});
+        offsets           = workspace.alloc(DType::I32, {kExperts + 1});
+        packed_index      = workspace.alloc(DType::I32, {assignments});
+        job_experts       = workspace.alloc(DType::I32, {assignments});
+        job_columns       = workspace.alloc(DType::I32, {assignments});
+        job_count         = workspace.alloc(DType::I32, {1});
         CUDA_CHECK(cudaMemsetAsync(counts.data, 0, counts.bytes(), stream));
         CUDA_CHECK(cudaMemsetAsync(job_count.data, 0, job_count.bytes(), stream));
         count_routes_kernel<<<kExperts, 256, 0, stream>>>(static_cast<const int*>(ids.data),

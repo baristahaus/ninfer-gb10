@@ -185,7 +185,10 @@ int run() {
 // (the input, and the BF16 SiLU(gate) * up activation) and evaluates everything else in FP64 on
 // the decoded weights. Routing is exact: each token's 10 experts score distinct BF16 values on a
 // dedicated input dimension, and tokens share experts from a pool of 12, as decode rows do.
-constexpr int kRoutingDim = 2544;
+// Token t's routing dimension is kRoutingDim + t; every token needs one inside the hidden row.
+constexpr int kMaxTokens  = 17;
+constexpr int kRoutingDim = kHidden - 32;
+static_assert(kRoutingDim + kMaxTokens <= kHidden);
 constexpr std::array<int, 12> kPool{3, 41, 88, 130, 177, 211, 260, 305, 349, 402, 455, 509};
 // Residual differences are FP32 accumulation order against FP64, BF16 rounding of the gate, up
 // and down outputs, and the rare activation block whose BF16 value lands on the other side of a
@@ -294,7 +297,6 @@ struct Nvfp4Bank {
 };
 
 int run_nvfp4() {
-    constexpr int kMaxTokens = 17;
     std::vector<float> input(static_cast<std::size_t>(kHidden) * kMaxTokens);
     fill_uniform(input, 4101, -1.0F, 1.0F);
     for (int t = 0; t < kMaxTokens; ++t) {

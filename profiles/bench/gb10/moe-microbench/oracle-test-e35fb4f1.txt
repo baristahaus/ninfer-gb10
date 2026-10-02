@@ -1,0 +1,68 @@
+Per-token and isolated-expert NVFP4 MoE diagnostics on exp/moe-grouped-decode (e35fb4f1), 2026-10-02, twoFour:
+
+ninfer: persistent grids sized for 48 SMs
+Flash-Next NVFP4 MoE T=1: relative L2 0.003553, max |err| 0.8615 of max |ref| 177.5
+Flash-Next NVFP4 MoE T=2: relative L2 0.07385, max |err| 18.05 of max |ref| 177.5
+Flash-Next NVFP4 MoE T=2: reduction criterion failed at index 2567 actual=63.25 reference=81.2972
+Flash-Next NVFP4 MoE T=8: relative L2 0.1216, max |err| 54.31 of max |ref| 255
+Flash-Next NVFP4 MoE T=8: reduction criterion failed at index 5127 actual=-191 reference=-245.308
+Flash-Next NVFP4 MoE T=16: relative L2 0.03635, max |err| 54.31 of max |ref| 1846
+Flash-Next NVFP4 MoE T=16: reduction criterion failed at index 5127 actual=-191 reference=-245.308
+Flash-Next NVFP4 MoE T=17: relative L2 0.05048, max |err| 54.31 of max |ref| 1846
+  Flash-Next NVFP4 MoE T=17 token 0: relative L2 0.003553, max |err| 0.8615 at row 5 (162 vs 162.9), slots 0 1 2 3 4 5 6 7 8 9
+  Flash-Next NVFP4 MoE T=17 token 1: relative L2 0.1951, max |err| 18.05 at row 7 (63.25 vs 81.3), slots 3 4 5 6 7 8 9 10 11 0
+  Flash-Next NVFP4 MoE T=17 token 2: relative L2 0.1878, max |err| 54.31 at row 7 (-191 vs -245.3), slots 6 7 8 9 10 11 0 1 2 3
+  Flash-Next NVFP4 MoE T=17 token 3: relative L2 0.001885, max |err| 0.3856 at row 7 (-138 vs -138.4), slots 9 10 11 0 1 2 3 4 5 6
+  Flash-Next NVFP4 MoE T=17 token 4: relative L2 0.003233, max |err| 0.3741 at row 6 (-6.844 vs -6.47), slots 0 1 2 3 4 5 6 7 8 9
+  Flash-Next NVFP4 MoE T=17 token 5: relative L2 0.003426, max |err| 0.8295 at row 7 (-241 vs -240.2), slots 3 4 5 6 7 8 9 10 11 0
+  Flash-Next NVFP4 MoE T=17 token 6: relative L2 0.002834, max |err| 0.214 at row 6 (-60 vs -60.21), slots 6 7 8 9 10 11 0 1 2 3
+  Flash-Next NVFP4 MoE T=17 token 7: relative L2 0.005013, max |err| 0.814 at row 0 (120 vs 120.8), slots 9 10 11 0 1 2 3 4 5 6
+  Flash-Next NVFP4 MoE T=17 token 8: relative L2 0.001468, max |err| 0.6163 at row 3 (286 vs 286.6), slots 0 1 2 3 4 5 6 7 8 9
+  Flash-Next NVFP4 MoE T=17 token 9: relative L2 0.003213, max |err| 1.155 at row 7 (296 vs 294.8), slots 3 4 5 6 7 8 9 10 11 0
+  Flash-Next NVFP4 MoE T=17 token 10: relative L2 0.002135, max |err| 0.1505 at row 1 (-2.562 vs -2.412), slots 6 7 8 9 10 11 0 1 2 3
+  Flash-Next NVFP4 MoE T=17 token 11: relative L2 0.004164, max |err| 0.3091 at row 5 (-19 vs -19.31), slots 9 10 11 0 1 2 3 4 5 6
+  Flash-Next NVFP4 MoE T=17 token 12: relative L2 0.003135, max |err| 0.9099 at row 7 (-258 vs -258.9), slots 0 1 2 3 4 5 6 7 8 9
+  Flash-Next NVFP4 MoE T=17 token 13: relative L2 0.001964, max |err| 2.275 at row 5 (-484 vs -481.7), slots 3 4 5 6 7 8 9 10 11 0
+  Flash-Next NVFP4 MoE T=17 token 14: relative L2 0.001857, max |err| 0.6512 at row 2 (160 vs 160.7), slots 6 7 8 9 10 11 0 1 2 3
+  Flash-Next NVFP4 MoE T=17 token 15: relative L2 0.0007676, max |err| 0.09819 at row 7 (129 vs 128.9), slots 9 10 11 0 1 2 3 4 5 6
+  Flash-Next NVFP4 MoE T=17 token 16: relative L2 1, max |err| 53.43 at row 2 (0 vs 53.43), slots 0 1 2 3 4 5 6 7 8 9
+Flash-Next NVFP4 MoE T=17: reduction criterion failed at index 5127 actual=-191 reference=-245.308
+  isolated expert token 0: relative L2 0.002083, max |err| 1.862 at row 5 (540 vs 541.9), slots 0 1 2 3 4 5 6 7 8 9
+  isolated expert token 1: relative L2 0.001752, max |err| 0.2299 at row 7 (86 vs 85.77), slots 1 2 3 4 5 6 7 8 9 10
+  isolated expert token 2: relative L2 0.001683, max |err| 0.9443 at row 6 (-392 vs -392.9), slots 2 3 4 5 6 7 8 9 10 11
+  isolated expert token 3: relative L2 0.001034, max |err| 0.3802 at row 5 (344 vs 343.6), slots 3 4 5 6 7 8 9 10 11 0
+  isolated expert token 4: relative L2 0.0008874, max |err| 0.7109 at row 4 (-628 vs -628.7), slots 4 5 6 7 8 9 10 11 0 1
+  isolated expert token 5: relative L2 0.001841, max |err| 0.8677 at row 1 (490 vs 489.1), slots 5 6 7 8 9 10 11 0 1 2
+  isolated expert token 6: relative L2 0.002612, max |err| 0.4941 at row 2 (-169 vs -168.5), slots 6 7 8 9 10 11 0 1 2 3
+  isolated expert token 7: relative L2 0.001487, max |err| 0.4329 at row 5 (-159 vs -159.4), slots 7 8 9 10 11 0 1 2 3 4
+  isolated expert token 8: relative L2 0.001324, max |err| 1.617 at row 1 (-1344 vs -1342), slots 8 9 10 11 0 1 2 3 4 5
+  isolated expert token 9: relative L2 0.001386, max |err| 0.7952 at row 1 (600 vs 600.8), slots 9 10 11 0 1 2 3 4 5 6
+  isolated expert token 10: relative L2 0.001654, max |err| 0.3021 at row 0 (-174 vs -173.7), slots 10 11 0 1 2 3 4 5 6 7
+  isolated expert token 11: relative L2 0.001796, max |err| 0.2409 at row 7 (80 vs 80.24), slots 11 0 1 2 3 4 5 6 7 8
+Flash-Next NVFP4 MoE 8 rows batched vs one by one: relative L2 0, max |diff| 0
+FAIL Flash-Next MoE
+
+Notes (twoFour):
+- Isolated pass: 12/12 experts clean (0.09-0.26% relative L2), including pool
+  experts 10 and 11 (ids 455, 509). Per the decision tree: not a per-expert
+  fault; the fault is in multi-expert combination for a token or the oracle's
+  handling of it.
+- Expert composition is a red herring: identical expert sets pass. Token 5/9/13
+  have the same slots as failing token 1 ("3 4 5 6 7 8 9 10 11 0"); tokens
+  6/10/14 the same slots as failing token 2 ("6 7 8 9 10 11 0 1 2 3"); tokens
+  0/4/8/12 the same slots as zeroed token 16.
+- The failing set is token-position- and T-specific: token 1 fails at T=2 and
+  T=17; token 2 at T=8, T=16, T=17; token 16 (T=17 only) is exactly zero.
+- Max-error values are constant across T for each failing token (token 1:
+  18.05, 63.25 vs 81.3, row 7; token 2: 54.31, -191 vs -245.3, row 7),
+  pointing at deterministic corruption of the combined output at hidden dim 7.
+- Token 16 at T=17: kernel output exactly 0.0 (relative L2 1) — the single
+  token in the final partial tile row (1 of 8 slots) produced no output at all.
+  Structural dropped-row signature in the per-row route (T=17 is outside the
+  2..16 grouped window).
+- Open questions that pin the geometry: does the reduction criterion report
+  the first or the worst failing element, and is the synthetic input a function
+  of (T, token) or of token alone? If input is token-only, token 1 passing at
+  T=8 (reduction reported 5127, not 2567) while failing at T=17 with an
+  identical max-error value would be contradictory and would implicate the
+  criterion's reporting policy.

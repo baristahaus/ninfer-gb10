@@ -443,6 +443,40 @@ Results recorded here (twoFour, 2026-10-01 23:4xZ UTC, build 80951608...):
   1749c466 and is deterministic (same output text on both sides of the
   removal).
 
+## F1 fix verification (twoFour, 2026-10-02) - fix 11b180d2, post-fix serve b2b9797a...
+
+Root cause (Opus): a prefill that forks at a context-cache capture point read the
+PLE history from the destination slot instead of the source checkpoint slot
+(GDN honoured the source/destination slots; PLE updated the destination in
+place). `flash_next_ple` now takes source and destination history (may alias);
+the prefill schedule passes both slots. The plain-decode oracle 5/5 PASS was
+not exoneration: the 26-token oracle prompt has no capture point, so it never
+forks.
+
+Battery (one GPU job at a time, serial):
+
+| # | Check | Build | Result |
+|---|---|---|---|
+| 1 | MTP-off C1/C4 73-token probe (expect SPLIT) | 80951608 (pre-fix) | **SPLIT** (C1 f1efaa05.../C4 ad0fe80a...) - the bug is MTP-independent |
+| 2 | `test_flash_next_ple` (in-place + fork) | b2b9797a (post-fix) | PASS |
+| 3 | Real test (bitwise goldens) | b2b9797a | PASS |
+| 4 | MTP-on C1/C4 73-token probe (expect IDENTICAL) | b2b9797a | **IDENTICAL** (847314b2..., len 1234) |
+| 5 | MTP-off C1/C4 73-token probe (expect IDENTICAL) | b2b9797a | **IDENTICAL** (0cdbfcbc..., len 1230) |
+| 6 | C4 K=1 decode, A-arm config (speed + acceptance) | b2b9797a | 22.5 tok/s, 1.62 tok/round, 72.0 ms/round device, 0.05 ms/round host, runtime 3.70 GiB - inside the K2 A-arm band (22.2-22.5 tok/s, 70.9-72.1 ms/round) |
+| 7 | Unit tests 5/5 (sampling, ple_stage, mtp_round, gdn_replay_fold, ple) | b2b9797a | PASS |
+
+Notes:
+
+- The post-fix output (847314b2...) differs from BOTH pre-fix outputs
+  (9f1893c5.../86bd9884...): pre-fix C1 and C4 each read stale destination-slot
+  content (different stale data per pool shape), so neither was correct; the
+  post-fix output is the config-independent one. Expected, not a regression.
+- The fix touches only the forked-prefill PLE slot read; the decode path is
+  unchanged, so the unchanged A-arm speed is expected, not a measurement.
+- F2 (response-cache entry corruption for a discarded row) is a separate
+  finding and is not covered by this battery; status is Opus's call.
+
+
 ## K4a gate data (3d3d7a25 + fix, serve sha256 82f77128... from the K4a verify turn)
 
 - Unit tests: PASS; real test: PASS bitwise (92 s)
@@ -460,23 +494,21 @@ Results recorded here (twoFour, 2026-10-01 23:4xZ UTC, build 80951608...):
 
 ## State
 
-- Beads: `ninfer-gb10-04m` (open, P1 - agreed removal of the pipelined-decode
-  machinery + K4a spare state slots + documentation; removal landed as
-  `1749c466`, twoFour's reruns pending);
-  `ninfer-gb10-mol` (reopened 2026-10-02 - F1 is a real config-dependent
-  prefill defect, root cause open, candidate: stale/uninitialized workspace
-  read in the prefill post-mixer);
+- Beads: `ninfer-gb10-04m` (closed - removal landed as `1749c466`, docs landed,
+  all reruns verified 2026-10-01 23:58Z);
+  `ninfer-gb10-mol` (open - F1 root-caused and fixed by Opus as `11b180d2`,
+  fix verified by twoFour 2026-10-02, battery above; F2 - response-cache entry
+  corruption for a discarded row - remains open, status is Opus's call);
   `ninfer-gb10-nb2` (closed - K4 verify complete);
   `ninfer-gb10-3w8` (closed, verified); `ninfer-gb10-pwd` (closed, verified);
   `ninfer-gb10-nkw` (closed).
-- Open work: F1 root cause (Opus tracing; initcheck evidence inconclusive by
-  proven tracking artifact, oracle 5/5 PASS plain decode at all shapes, so the
-  defect is in the MTP path; the next discriminating probe is the oracle
-  prompt through the MTP schedule at conc 1/2/4).
-- Machine state: code at `1749c466` (pipelined-decode + K4a spare-slot removal,
-  F1/F2 records); build dir holds `80951608...`; worktree `~/ninfer-gb10-k4a`
+- Open work: F2 (Opus). The F1 batch-shape-dependent greedy output is closed:
+  root cause (forked-prefill PLE slot) found, fixed, and verified on GB10
+  (pre-fix MTP-off SPLIT; post-fix MTP-on/off C1==C4; real test bitwise;
+  PLE op test in-place + fork; A-arm speed unchanged).
+- Machine state: code at `11b180d2` (PLE fork fix on top of the removal);
+  build dir holds `b2b9797a...` (post-fix); the pre-fix serve `80951608...`
+  is saved as `k4-speed/postremoval/old_serve`; worktree `~/ninfer-gb10-k4a`
   holds the K4a gate tree (`3d3d7a25` + `6d851f69`, binary `7bd0c8bb...`);
-  GPU free; twoFour's post-removal reruns all done (2026-10-01 23:58Z):
-  unit tests 5/5, real test bitwise, oracle 5/5, C4 decode 3.70 GiB /
-  72.1 ms/round / 0.05 ms/round host, C1/C4 cold split reproduces
-  (9f1893c5... vs 86bd9884...).
+  GPU free; verification battery evidence in `k4-speed/plefix/` (probe json,
+  real-test out; serve logs and the old binary stay on this machine).

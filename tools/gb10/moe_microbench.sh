@@ -6,6 +6,8 @@
 #
 #   tools/gb10/moe_microbench.sh            # timing sweep only
 #   NCU=1 tools/gb10/moe_microbench.sh      # plus ncu --set full on the routed kernels
+#   PROBE=1 tools/gb10/moe_microbench.sh    # the bandwidth probe instead of the sweep
+#                                           # (DISTINCT defaults to 40,60,80; writes probe.txt)
 #
 # Memory guard. ncu replay saves and restores device memory per kernel pass. On GB10 the GPU
 # shares the 121 GB pool with the host, and an ncu run against a model-size process exhausted it
@@ -19,16 +21,20 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 LAYERS=${LAYERS:-4}
 TOKENS=${TOKENS:-8}
-DISTINCT=${DISTINCT:-10,20,40,64,80}
+PROBE=${PROBE:-0}
+if [[ $PROBE == 1 ]]; then
+    DISTINCT=${DISTINCT:-40,60,80}
+else
+    DISTINCT=${DISTINCT:-10,20,40,64,80}
+fi
 NCU=${NCU:-0}
 out=profiles/bench/gb10/moe-microbench
 mkdir -p "$out"
 bin=build/bench/ninfer_flash_next_moe_bench
 
-if [[ ! -x $bin ]]; then
-    cmake -S . -B build -DNINFER_BUILD_BENCHMARKS=ON >/dev/null
-    cmake --build build -j --target ninfer_flash_next_moe_bench
-fi
+# Always rebuild (incremental): a stale binary would time the previous code.
+[[ -f build/CMakeCache.txt ]] || cmake -S . -B build -DNINFER_BUILD_BENCHMARKS=ON >/dev/null
+cmake --build build -j --target ninfer_flash_next_moe_bench
 
 guard() { # $1 = layers the run allocates
     if [[ -n $(nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null) ]]; then
@@ -48,6 +54,11 @@ guard() { # $1 = layers the run allocates
 }
 
 guard "$LAYERS"
+if [[ $PROBE == 1 ]]; then
+    "$bin" --tokens "$TOKENS" --layers "$LAYERS" --distinct "$DISTINCT" --probe |
+        tee "$out/probe.txt"
+    exit 0
+fi
 "$bin" --tokens "$TOKENS" --layers "$LAYERS" --distinct "$DISTINCT" | tee "$out/timing.txt"
 
 if [[ $NCU == 1 ]]; then

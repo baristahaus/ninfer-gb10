@@ -1,0 +1,18 @@
+2026-10-02 01:15:20.936  INFO  starting engine
+2026-10-02 01:15:21.260  INFO  loading weights | 72.5 GiB
+2026-10-02 01:15:31.262  INFO    loading weights 50.3% | 36.5 GiB/72.5 GiB | 5.07 GiB/s | ETA 7.1s
+2026-10-02 01:15:38.472  INFO  weights ready | 72.5 GiB | 17.2s | 4.21 GiB/s
+2026-10-02 01:15:39.094  INFO  pinning host state | 882.3 MiB
+2026-10-02 01:15:39.583  INFO  host state pinned | 882.3 MiB | 489 ms
+2026-10-02 01:15:39.583  INFO  pinning host KV | 8.00 GiB
+2026-10-02 01:15:42.803  INFO  host KV pinned | 8.00 GiB | 3.2s
+2026-10-02 01:15:42.805  INFO  engine ready | qwen3.8-flash-next-125b-a6b | total 21.9s | weights 72.5 GiB
+2026-10-02 01:15:42.805  INFO  capacity | KV 73,728 tokens, fp8, explicit | pages 1,152/1,152 | runtime 1.54 GiB | free 12.9 GiB
+2026-10-02 01:15:42.805  INFO  context cache | 1 active + 1 cached device states | host 8 states, 8.00 GiB KV | private 2 | shared 4 | anchors 2
+2026-10-02 01:15:43.817  INFO  warmup complete | 1.0s
+2026-10-02 01:15:43.817  INFO  listening on http://127.0.0.1:18903 | model qwen3.8-flash-next-125b-a6b | auth disabled
+2026-10-02 01:15:43.840  INFO  req#1 started | openai-chat non-stream | 1 message | max output 256 | thinking template default | preserve thinking
+2026-10-02 01:15:48.817  INFO  throughput | 5.0s | prefill 14.6 tok/s (73 tok) | decode 17.0 tok/s (85 tok) | running 1 (decode-ready 1) | batch 1.00 | host 19.3% (963 ms)
+2026-10-02 01:15:53.818  INFO  throughput | 5.0s | decode 18.4 tok/s (92 tok) | running 1 (decode-ready 1) | batch 1.00 | host 19.0% (949 ms)
+2026-10-02 01:15:58.155  INFO  req#1 done | openai-chat | output limit | prompt 73 | output 256 | cache 0 (0.0%) | TTFT 351 ms | total 14.3s | prefill 210.3 tok/s | decode 18.3 tok/s
+2026-10-02 01:15:58.161  INFO  server stopped

@@ -1,0 +1,15 @@
+model qwen3.8-flash-next-125b-a6b
+warm 0: status 200 tokens 64
+== prose concurrency 4: 01:07:23.304 .. 01:07:25.125  wall 1.8 s
+Traceback (most recent call last):
+  File "/home/apollo11/dgpp/scripts/serve_load.py", line 375, in <module>
+    main()
+  File "/home/apollo11/dgpp/scripts/serve_load.py", line 352, in main
+    rates = [run_phase(args.host, args.port, model, c, args.max_tokens, args.think, base,
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/apollo11/dgpp/scripts/serve_load.py", line 250, in phase
+    metrics = phase_metrics(outs, t_start, t_end)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/apollo11/dgpp/scripts/bench_stream.py", line 65, in phase_metrics
+    raise RuntimeError(request["error"])
+RuntimeError: stream error: {'code': None, 'message': 'view element count mismatch: requested 18, available 6', 'param': None, 'type': 'internal_error'}

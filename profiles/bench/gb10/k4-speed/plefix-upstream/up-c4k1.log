@@ -1,0 +1,25 @@
+2026-10-02 01:06:55.056  INFO  starting engine
+2026-10-02 01:06:55.384  INFO  loading weights | 77.5 GiB
+2026-10-02 01:07:05.395  INFO    loading weights 46.2% | 35.8 GiB/77.5 GiB | 5.07 GiB/s | ETA 8.2s
+2026-10-02 01:07:13.714  INFO  weights ready | 77.5 GiB | 18.3s | 4.23 GiB/s
+2026-10-02 01:07:14.342  INFO  pinning host state | 882.5 MiB
+2026-10-02 01:07:14.860  INFO  host state pinned | 882.5 MiB | 518 ms
+2026-10-02 01:07:14.863  INFO  pinning host KV | 8.00 GiB
+2026-10-02 01:07:19.197  INFO  host KV pinned | 8.00 GiB | 4.3s
+2026-10-02 01:07:19.200  INFO  engine ready | qwen3.8-flash-next-125b-a6b | total 24.1s | weights 77.5 GiB
+2026-10-02 01:07:19.200  INFO  capacity | KV 73,728 tokens, fp8, explicit | pages 1,152/4,608 | runtime 2.34 GiB | free 21.4 GiB
+2026-10-02 01:07:19.200  INFO  context cache | 4 active + 4 cached device states | host 8 states, 8.00 GiB KV | private 8 | shared 4 | anchors 2
+2026-10-02 01:07:20.157  INFO  warmup complete | 958 ms
+2026-10-02 01:07:20.157  INFO  listening on http://127.0.0.1:18895 | model qwen3.8-flash-next-125b-a6b | auth disabled
+2026-10-02 01:07:20.193  INFO  req#1 started | openai-chat stream | 1 message | max output 64 | thinking off | preserve thinking
+2026-10-02 01:07:23.303  INFO  req#1 done | openai-chat | output limit | prompt 64 | output 64 | cache 0 (0.0%) | TTFT 554 ms | total 3.1s | prefill 116.0 tok/s | decode 24.6 tok/s | mtp accepted 27/36 (75.0%)
+2026-10-02 01:07:23.305  INFO  req#2 started | openai-chat stream | 1 message | max output 256 | thinking off | preserve thinking
+2026-10-02 01:07:23.306  INFO  req#3 started | openai-chat stream | 1 message | max output 256 | thinking off | preserve thinking
+2026-10-02 01:07:23.306  INFO  req#4 started | openai-chat stream | 1 message | max output 256 | thinking off | preserve thinking
+2026-10-02 01:07:23.306  INFO  req#5 started | openai-chat stream | 1 message | max output 256 | thinking off | preserve thinking
+2026-10-02 01:07:25.123  ERROR req#3 failed during generation | openai-chat | HTTP 500 | internal error
+2026-10-02 01:07:25.124  ERROR req#4 failed during generation | openai-chat | HTTP 500 | internal error
+2026-10-02 01:07:25.124  ERROR req#2 failed during generation | openai-chat | HTTP 500 | internal error
+2026-10-02 01:07:25.124  ERROR req#5 failed during generation | openai-chat | HTTP 500 | internal error
+2026-10-02 01:07:25.158  INFO  throughput | 5.0s | prefill 34.4 tok/s (172 tok) | decode 16.4 tok/s (82 tok) | running 0 | batch 1.09 | host 39.7% (2.0s)
+2026-10-02 01:07:25.182  INFO  server stopped

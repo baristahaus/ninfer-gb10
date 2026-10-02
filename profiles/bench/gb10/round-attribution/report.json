@@ -13,19 +13,19 @@
     "fp32_tflops": 31.0
   },
   "measurement": {
-    "wall_ms": 9458.501776,
-    "rounds": 132,
-    "gpu_work_ms": 9367.479488,
-    "gpu_busy_ms": 9367.460448,
-    "attributed_gpu_work_pct": 94.19361555371681,
-    "unattributed_gpu_work_ms": 543.911872,
-    "unattributed_graph_activities": 5016
+    "wall_ms": 9132.1812,
+    "rounds": 133,
+    "gpu_work_ms": 9039.811936,
+    "gpu_busy_ms": 9039.788896,
+    "attributed_gpu_work_pct": 94.17099909012974,
+    "unattributed_gpu_work_ms": 526.93072,
+    "unattributed_graph_activities": 5054
   },
   "phases": [
     {
       "phase": "decode",
-      "gpu_work_ms": 9367.479488,
-      "gpu_busy_ms": 9367.460448
+      "gpu_work_ms": 9039.811936,
+      "gpu_busy_ms": 9039.788896
     }
   ],
   "stages": [
@@ -41,53 +41,53 @@
       "bf16_flops": 99655680,
       "nvfp4_flops": 786432000,
       "fp32_flops": 0,
-      "calls": 6336,
-      "gpu_work_ms": 4942.956415999998,
-      "gpu_busy_ms": 4942.937439999999,
-      "estimated_ms_min": 908.6627590244785,
-      "estimated_ms_max": 5893.423703414288,
+      "calls": 6384,
+      "gpu_work_ms": 4878.309695999985,
+      "gpu_busy_ms": 4878.288991999985,
+      "estimated_ms_min": 915.5465678049674,
+      "estimated_ms_max": 5938.070852682564,
       "partial_calls": 0,
       "kernels": [
         {
           "name": "nvfp4_w4a4_mma_kernel",
-          "activities": 12672,
-          "gpu_work_ms": 4522.674784000012
+          "activities": 12768,
+          "gpu_work_ms": 4456.200959999986
         },
         {
           "name": "fp8_a16_sliced_k_mma_kernel",
-          "activities": 12672,
-          "gpu_work_ms": 169.79391999999888
+          "activities": 12768,
+          "gpu_work_ms": 169.82499199999864
         },
         {
           "name": "bf16_small_t_inner_kernel",
-          "activities": 6336,
-          "gpu_work_ms": 104.93686400000001
+          "activities": 6384,
+          "gpu_work_ms": 105.92179200000022
         },
         {
           "name": "route_kernel",
-          "activities": 6336,
-          "gpu_work_ms": 78.71350400000057
+          "activities": 6384,
+          "gpu_work_ms": 79.43737600000084
         },
         {
           "name": "quantize_grouped_kernel",
-          "activities": 6336,
-          "gpu_work_ms": 26.869568000000303
+          "activities": 6384,
+          "gpu_work_ms": 27.132704000000366
         },
         {
           "name": "gather_quantize_routes_kernel",
-          "activities": 6336,
-          "gpu_work_ms": 26.547808000000355
+          "activities": 6384,
+          "gpu_work_ms": 26.696384000000357
         },
         {
           "name": "reduce_grouped_kernel",
-          "activities": 6336,
-          "gpu_work_ms": 13.419968000000056
+          "activities": 6384,
+          "gpu_work_ms": 13.095487999999833
         }
       ],
-      "gpu_work_share_pct": 52.76719764726532,
-      "phase_gpu_work_share_pct": 52.76719764726532,
-      "estimate_efficiency_pct_min": 18.38305198182882,
-      "estimate_efficiency_pct_max": 119.22917849865179
+      "gpu_work_share_pct": 53.96472548917399,
+      "phase_gpu_work_share_pct": 53.96472548917399,
+      "estimate_efficiency_pct_min": 18.767780451432717,
+      "estimate_efficiency_pct_max": 121.72445835866917
     },
     {
       "phase": "decode",
@@ -101,43 +101,43 @@
       "bf16_flops": 926679040,
       "nvfp4_flops": 0,
       "fp32_flops": 37748736,
-      "calls": 4752,
-      "gpu_work_ms": 1801.501023999999,
-      "gpu_busy_ms": 1801.5009599999992,
-      "estimated_ms_min": 1374.6783406829222,
-      "estimated_ms_max": 1374.6783406829222,
+      "calls": 4788,
+      "gpu_work_ms": 1802.8449280000004,
+      "gpu_busy_ms": 1802.8425920000004,
+      "estimated_ms_min": 1385.092570536583,
+      "estimated_ms_max": 1385.092570536583,
       "partial_calls": 0,
       "kernels": [
         {
           "name": "fp8_a16_sliced_k_mma_kernel",
-          "activities": 14256,
-          "gpu_work_ms": 1345.9028159999996
+          "activities": 14364,
+          "gpu_work_ms": 1350.936799999999
         },
         {
           "name": "recurrent_fold_record_kernel",
-          "activities": 4752,
-          "gpu_work_ms": 374.7389759999997
+          "activities": 4788,
+          "gpu_work_ms": 375.49788799999976
         },
         {
           "name": "project_control_gating_kernel",
-          "activities": 4752,
-          "gpu_work_ms": 38.75398400000028
+          "activities": 4788,
+          "gpu_work_ms": 39.17337600000026
         },
         {
           "name": "conv_replay_record_kernel",
-          "activities": 4752,
-          "gpu_work_ms": 32.887071999999954
+          "activities": 4788,
+          "gpu_work_ms": 28.103615999999978
         },
         {
           "name": "rmsnorm_warp_bf16x2_kernel",
-          "activities": 4752,
-          "gpu_work_ms": 9.218176000000177
+          "activities": 4788,
+          "gpu_work_ms": 9.13324800000015
         }
       ],
-      "gpu_work_share_pct": 19.231438150548087,
-      "phase_gpu_work_share_pct": 19.231438150548087,
-      "estimate_efficiency_pct_min": 76.30738873893928,
-      "estimate_efficiency_pct_max": 76.30738873893928
+      "gpu_work_share_pct": 19.943389760359725,
+      "phase_gpu_work_share_pct": 19.943389760359725,
+      "estimate_efficiency_pct_min": 76.82825870005753,
+      "estimate_efficiency_pct_max": 76.82825870005753
     },
     {
       "phase": "decode",
@@ -151,78 +151,78 @@
       "bf16_flops": 823132160,
       "nvfp4_flops": 0,
       "fp32_flops": 0,
-      "calls": 1584,
-      "gpu_work_ms": 846.2255999999998,
-      "gpu_busy_ms": 846.2255999999998,
-      "estimated_ms_min": 359.4084152195167,
-      "estimated_ms_max": 359.4084152195167,
+      "calls": 1596,
+      "gpu_work_ms": 852.6825919999997,
+      "gpu_busy_ms": 852.6825919999997,
+      "estimated_ms_min": 362.131206243907,
+      "estimated_ms_max": 362.131206243907,
       "partial_calls": 0,
       "kernels": [
         {
           "name": "selected_attention_split_fp8_kernel",
-          "activities": 1584,
-          "gpu_work_ms": 380.275584000001
+          "activities": 1596,
+          "gpu_work_ms": 384.1202880000003
         },
         {
           "name": "fp8_a16_sliced_k_mma_kernel",
-          "activities": 3168,
-          "gpu_work_ms": 327.67439999999857
+          "activities": 3192,
+          "gpu_work_ms": 329.3791680000011
         },
         {
           "name": "bf16_small_t_inner_kernel",
-          "activities": 6336,
-          "gpu_work_ms": 93.61039999999984
+          "activities": 6384,
+          "gpu_work_ms": 94.27359999999948
         },
         {
           "name": "append_cache_fp8_kernel",
-          "activities": 1584,
-          "gpu_work_ms": 8.679135999999966
+          "activities": 1596,
+          "gpu_work_ms": 8.791775999999953
         },
         {
           "name": "reduce_selected_attention_splits_kernel",
-          "activities": 1584,
-          "gpu_work_ms": 7.77955199999977
+          "activities": 1596,
+          "gpu_work_ms": 7.805567999999952
         },
         {
           "name": "rmsnorm_warp_bf16x2_kernel",
-          "activities": 3168,
-          "gpu_work_ms": 6.682176000000041
+          "activities": 3192,
+          "gpu_work_ms": 6.706368000000038
         },
         {
           "name": "rope_generic_kernel",
-          "activities": 1584,
-          "gpu_work_ms": 6.6680639999999025
+          "activities": 1596,
+          "gpu_work_ms": 6.655135999999877
         },
         {
           "name": "compress_index_groups_kernel",
-          "activities": 1584,
-          "gpu_work_ms": 4.80838399999996
+          "activities": 1596,
+          "gpu_work_ms": 4.923263999999957
         },
         {
           "name": "prepare_index_query_kernel",
-          "activities": 1584,
-          "gpu_work_ms": 3.038624000000038
+          "activities": 1596,
+          "gpu_work_ms": 3.0786240000000364
         },
         {
           "name": "split_query_gate_kernel",
-          "activities": 1584,
-          "gpu_work_ms": 2.653951999999991
+          "activities": 1596,
+          "gpu_work_ms": 2.6541119999999747
         },
         {
           "name": "sigmoid_gate_mul_bf16x8_kernel",
-          "activities": 1584,
-          "gpu_work_ms": 2.4205120000000195
+          "activities": 1596,
+          "gpu_work_ms": 2.453056000000025
         },
         {
           "name": "hadamard_rows_kernel",
-          "activities": 1584,
-          "gpu_work_ms": 1.9348160000000365
+          "activities": 1596,
+          "gpu_work_ms": 1.8416320000000377
         }
       ],
-      "gpu_work_share_pct": 9.033653087621254,
-      "phase_gpu_work_share_pct": 9.033653087621254,
-      "estimate_efficiency_pct_min": 42.47193836011541,
-      "estimate_efficiency_pct_max": 42.47193836011541
+      "gpu_work_share_pct": 9.432525787447972,
+      "phase_gpu_work_share_pct": 9.432525787447972,
+      "estimate_efficiency_pct_min": 42.469637546430306,
+      "estimate_efficiency_pct_max": 42.469637546430306
     },
     {
       "phase": "decode",
@@ -236,78 +236,28 @@
       "bf16_flops": 105512960,
       "nvfp4_flops": 0,
       "fp32_flops": 0,
-      "calls": 12408,
-      "gpu_work_ms": 714.7019199999972,
-      "gpu_busy_ms": 714.7019199999972,
-      "estimated_ms_min": 356.42070790245583,
-      "estimated_ms_max": 356.42070790245583,
+      "calls": 12502,
+      "gpu_work_ms": 721.5860800000027,
+      "gpu_busy_ms": 721.5860800000027,
+      "estimated_ms_min": 359.12086478050475,
+      "estimated_ms_max": 359.12086478050475,
       "partial_calls": 0,
       "kernels": [
         {
           "name": "fp8_a16_sliced_k_mma_kernel",
-          "activities": 24816,
-          "gpu_work_ms": 539.0805440000016
+          "activities": 25004,
+          "gpu_work_ms": 544.769184000001
         },
         {
           "name": "combine_grouped_rmsnorm_kernel",
-          "activities": 12408,
-          "gpu_work_ms": 175.62137599999969
+          "activities": 12502,
+          "gpu_work_ms": 176.8168959999995
         }
       ],
-      "gpu_work_share_pct": 7.62960752586168,
-      "phase_gpu_work_share_pct": 7.62960752586168,
-      "estimate_efficiency_pct_min": 49.86984054869437,
-      "estimate_efficiency_pct_max": 49.86984054869437
-    },
-    {
-      "phase": "decode",
-      "role": "target.verify",
-      "stage": "ple.record",
-      "tokens": 8,
-      "batch": 4,
-      "context": 0,
-      "bytes_min": 65884160,
-      "bytes_max": 65884160,
-      "bf16_flops": 524288000,
-      "nvfp4_flops": 0,
-      "fp32_flops": 0,
-      "calls": 132,
-      "gpu_work_ms": 304.97968000000003,
-      "gpu_busy_ms": 304.97968000000003,
-      "estimated_ms_min": 35.352476097561066,
-      "estimated_ms_max": 35.352476097561066,
-      "partial_calls": 0,
-      "kernels": [
-        {
-          "name": "bf16_gemv_kernel",
-          "activities": 2112,
-          "gpu_work_ms": 301.46617600000013
-        },
-        {
-          "name": "gate_kernel",
-          "activities": 132,
-          "gpu_work_ms": 1.4217600000000004
-        },
-        {
-          "name": "dilated_conv_record_kernel",
-          "activities": 132,
-          "gpu_work_ms": 0.8530559999999998
-        },
-        {
-          "name": "grouped_norm_kernel",
-          "activities": 132,
-          "gpu_work_ms": 0.7719680000000008
-        },
-        {
-          "name": "dequantize_embedding_kernel",
-          "activities": 132,
-          "gpu_work_ms": 0.4667200000000001
-        }
-      ],
-      "gpu_work_share_pct": 3.255728292660661,
-      "phase_gpu_work_share_pct": 3.255728292660661,
-      "estimate_efficiency_pct_min": 11.591748046152144,
-      "estimate_efficiency_pct_max": 11.591748046152144
+      "gpu_work_share_pct": 7.982312963020503,
+      "phase_gpu_work_share_pct": 7.982312963020503,
+      "estimate_efficiency_pct_min": 49.76826393054914,
+      "estimate_efficiency_pct_max": 49.76826393054914
     },
     {
       "phase": "decode",
@@ -321,53 +271,53 @@
       "bf16_flops": 99655680,
       "nvfp4_flops": 786432000,
       "fp32_flops": 0,
-      "calls": 132,
-      "gpu_work_ms": 102.47203199999994,
-      "gpu_busy_ms": 102.47203199999994,
-      "estimated_ms_min": 18.930474146341478,
-      "estimated_ms_max": 122.77966048780505,
+      "calls": 133,
+      "gpu_work_ms": 101.41513600000002,
+      "gpu_busy_ms": 101.41513600000002,
+      "estimated_ms_min": 19.073886829268307,
+      "estimated_ms_max": 123.70980943089448,
       "partial_calls": 0,
       "kernels": [
         {
           "name": "nvfp4_w4a4_mma_kernel",
-          "activities": 264,
-          "gpu_work_ms": 93.77961599999998
+          "activities": 266,
+          "gpu_work_ms": 92.21116799999999
         },
         {
           "name": "fp8_a16_sliced_k_mma_kernel",
-          "activities": 264,
-          "gpu_work_ms": 3.523488000000002
+          "activities": 266,
+          "gpu_work_ms": 3.8736319999999997
         },
         {
           "name": "bf16_small_t_inner_kernel",
-          "activities": 132,
-          "gpu_work_ms": 2.1827839999999994
+          "activities": 133,
+          "gpu_work_ms": 2.315776000000001
         },
         {
           "name": "route_kernel",
-          "activities": 132,
-          "gpu_work_ms": 1.6121280000000004
+          "activities": 133,
+          "gpu_work_ms": 1.6316800000000007
         },
         {
           "name": "quantize_grouped_kernel",
-          "activities": 132,
-          "gpu_work_ms": 0.552384
+          "activities": 133,
+          "gpu_work_ms": 0.5590080000000002
         },
         {
           "name": "gather_quantize_routes_kernel",
-          "activities": 132,
-          "gpu_work_ms": 0.5516479999999998
+          "activities": 133,
+          "gpu_work_ms": 0.5588799999999998
         },
         {
           "name": "reduce_grouped_kernel",
-          "activities": 132,
-          "gpu_work_ms": 0.2699840000000002
+          "activities": 133,
+          "gpu_work_ms": 0.264992
         }
       ],
-      "gpu_work_share_pct": 1.093912531447434,
-      "phase_gpu_work_share_pct": 1.093912531447434,
-      "estimate_efficiency_pct_min": 18.473795997664503,
-      "estimate_efficiency_pct_max": 119.817727912144
+      "gpu_work_share_pct": 1.1218721884702716,
+      "phase_gpu_work_share_pct": 1.1218721884702716,
+      "estimate_efficiency_pct_min": 18.807731845144204,
+      "estimate_efficiency_pct_max": 121.98357593376836
     },
     {
       "phase": "decode",
@@ -381,83 +331,133 @@
       "bf16_flops": 823132160,
       "nvfp4_flops": 0,
       "fp32_flops": 0,
-      "calls": 132,
-      "gpu_work_ms": 68.61052799999999,
-      "gpu_busy_ms": 68.61052799999999,
-      "estimated_ms_min": 29.95070126829271,
-      "estimated_ms_max": 29.95070126829271,
+      "calls": 133,
+      "gpu_work_ms": 70.21036800000002,
+      "gpu_busy_ms": 70.21036800000002,
+      "estimated_ms_min": 30.17760052032523,
+      "estimated_ms_max": 30.17760052032523,
       "partial_calls": 0,
       "kernels": [
         {
           "name": "selected_attention_split_fp8_kernel",
-          "activities": 132,
-          "gpu_work_ms": 30.104128000000003
+          "activities": 133,
+          "gpu_work_ms": 30.749184000000007
         },
         {
           "name": "fp8_a16_sliced_k_mma_kernel",
-          "activities": 264,
-          "gpu_work_ms": 26.599104000000025
+          "activities": 266,
+          "gpu_work_ms": 27.24908799999999
         },
         {
           "name": "bf16_small_t_inner_kernel",
-          "activities": 528,
-          "gpu_work_ms": 7.928799999999995
+          "activities": 532,
+          "gpu_work_ms": 8.167904000000007
         },
         {
           "name": "append_cache_fp8_kernel",
-          "activities": 132,
-          "gpu_work_ms": 0.9568320000000002
+          "activities": 133,
+          "gpu_work_ms": 0.9889920000000001
         },
         {
           "name": "reduce_selected_attention_splits_kernel",
-          "activities": 132,
-          "gpu_work_ms": 0.6437760000000001
+          "activities": 133,
+          "gpu_work_ms": 0.6448959999999988
         },
         {
           "name": "rope_generic_kernel",
-          "activities": 132,
-          "gpu_work_ms": 0.5154880000000003
+          "activities": 133,
+          "gpu_work_ms": 0.5177599999999997
         },
         {
           "name": "rmsnorm_warp_bf16x2_kernel",
-          "activities": 264,
-          "gpu_work_ms": 0.4974719999999997
+          "activities": 266,
+          "gpu_work_ms": 0.5136320000000001
         },
         {
           "name": "compress_index_groups_kernel",
-          "activities": 132,
-          "gpu_work_ms": 0.38892800000000016
+          "activities": 133,
+          "gpu_work_ms": 0.39212800000000014
         },
         {
           "name": "prepare_index_query_kernel",
-          "activities": 132,
-          "gpu_work_ms": 0.25193600000000027
+          "activities": 133,
+          "gpu_work_ms": 0.2554880000000004
         },
         {
           "name": "split_query_gate_kernel",
-          "activities": 132,
-          "gpu_work_ms": 0.2192319999999996
+          "activities": 133,
+          "gpu_work_ms": 0.21673599999999957
         },
         {
           "name": "sigmoid_gate_mul_bf16x8_kernel",
-          "activities": 132,
-          "gpu_work_ms": 0.20076800000000034
+          "activities": 133,
+          "gpu_work_ms": 0.20553600000000025
         },
         {
           "name": "dense_indices_batched_kernel",
-          "activities": 132,
-          "gpu_work_ms": 0.15260799999999983
+          "activities": 133,
+          "gpu_work_ms": 0.15727999999999984
         },
         {
           "name": "hadamard_rows_kernel",
-          "activities": 132,
-          "gpu_work_ms": 0.15145599999999973
+          "activities": 133,
+          "gpu_work_ms": 0.1517439999999999
         }
       ],
-      "gpu_work_share_pct": 0.7324331810695925,
-      "phase_gpu_work_share_pct": 0.7324331810695925,
-      "estimate_efficiency_pct_min": 43.65321495309396,
-      "estimate_efficiency_pct_max": 43.65321495309396
+      "gpu_work_share_pct": 0.7766795205151933,
+      "phase_gpu_work_share_pct": 0.7766795205151933,
+      "estimate_efficiency_pct_min": 42.98168686471665,
+      "estimate_efficiency_pct_max": 42.98168686471665
+    },
+    {
+      "phase": "decode",
+      "role": "target.verify",
+      "stage": "ple.record",
+      "tokens": 8,
+      "batch": 4,
+      "context": 0,
+      "bytes_min": 65884160,
+      "bytes_max": 65884160,
+      "bf16_flops": 524288000,
+      "nvfp4_flops": 0,
+      "fp32_flops": 0,
+      "calls": 133,
+      "gpu_work_ms": 43.641344000000025,
+      "gpu_busy_ms": 43.641344000000025,
+      "estimated_ms_min": 35.62029788617895,
+      "estimated_ms_max": 35.62029788617895,
+      "partial_calls": 0,
+      "kernels": [
+        {
+          "name": "bf16_gemv_columns_kernel",
+          "activities": 266,
+          "gpu_work_ms": 40.45171199999999
+        },
+        {
+          "name": "gate_kernel",
+          "activities": 133,
+          "gpu_work_ms": 1.082272
+        },
+        {
+          "name": "dilated_conv_record_kernel",
+          "activities": 133,
+          "gpu_work_ms": 0.8169280000000001
+        },
+        {
+          "name": "grouped_norm_kernel",
+          "activities": 133,
+          "gpu_work_ms": 0.7854080000000002
+        },
+        {
+          "name": "dequantize_embedding_kernel",
+          "activities": 133,
+          "gpu_work_ms": 0.5050239999999999
+        }
+      ],
+      "gpu_work_share_pct": 0.48276827337749634,
+      "phase_gpu_work_share_pct": 0.48276827337749634,
+      "estimate_efficiency_pct_min": 81.62053369891389,
+      "estimate_efficiency_pct_max": 81.62053369891389
     },
     {
       "phase": "decode",
@@ -471,28 +471,28 @@
       "bf16_flops": 105512960,
       "nvfp4_flops": 0,
       "fp32_flops": 0,
-      "calls": 264,
-      "gpu_work_ms": 14.086496000000002,
-      "gpu_busy_ms": 14.086496000000002,
-      "estimated_ms_min": 7.363565268292732,
-      "estimated_ms_max": 7.363565268292732,
+      "calls": 266,
+      "gpu_work_ms": 14.412512000000001,
+      "gpu_busy_ms": 14.412512000000001,
+      "estimated_ms_min": 7.419349853658587,
+      "estimated_ms_max": 7.419349853658587,
       "partial_calls": 0,
       "kernels": [
         {
           "name": "fp8_a16_sliced_k_mma_kernel",
-          "activities": 528,
-          "gpu_work_ms": 11.655744000000002
+          "activities": 532,
+          "gpu_work_ms": 11.813119999999994
         },
         {
           "name": "grouped_rmsnorm_kernel",
-          "activities": 264,
-          "gpu_work_ms": 2.430751999999997
+          "activities": 266,
+          "gpu_work_ms": 2.5993920000000004
         }
       ],
-      "gpu_work_share_pct": 0.15037658761938247,
-      "phase_gpu_work_share_pct": 0.15037658761938247,
-      "estimate_efficiency_pct_min": 52.27393148936919,
-      "estimate_efficiency_pct_max": 52.27393148936919
+      "gpu_work_share_pct": 0.15943375926443612,
+      "phase_gpu_work_share_pct": 0.15943375926443612,
+      "estimate_efficiency_pct_min": 51.47853374664032,
+      "estimate_efficiency_pct_max": 51.47853374664032
     },
     {
       "phase": "decode",
@@ -506,28 +506,28 @@
       "bf16_flops": 105512960,
       "nvfp4_flops": 0,
       "fp32_flops": 0,
-      "calls": 132,
-      "gpu_work_ms": 8.703392,
-      "gpu_busy_ms": 8.703392,
-      "estimated_ms_min": 3.7917096585365946,
-      "estimated_ms_max": 3.7917096585365946,
+      "calls": 133,
+      "gpu_work_ms": 8.566144,
+      "gpu_busy_ms": 8.566144,
+      "estimated_ms_min": 3.8204347317073264,
+      "estimated_ms_max": 3.8204347317073264,
       "partial_calls": 0,
       "kernels": [
         {
           "name": "fp8_a16_sliced_k_mma_kernel",
-          "activities": 264,
-          "gpu_work_ms": 6.860735999999998
+          "activities": 266,
+          "gpu_work_ms": 6.682687999999999
         },
         {
           "name": "combine_grouped_rmsnorm_kernel",
-          "activities": 132,
-          "gpu_work_ms": 1.8426559999999996
+          "activities": 133,
+          "gpu_work_ms": 1.8834559999999994
         }
       ],
-      "gpu_work_share_pct": 0.09291071318756858,
-      "phase_gpu_work_share_pct": 0.09291071318756858,
-      "estimate_efficiency_pct_min": 43.56588395118357,
-      "estimate_efficiency_pct_max": 43.56588395118357
+      "gpu_work_share_pct": 0.09476020143611978,
+      "phase_gpu_work_share_pct": 0.09476020143611978,
+      "estimate_efficiency_pct_min": 44.59923545188274,
+      "estimate_efficiency_pct_max": 44.59923545188274
     },
     {
       "phase": "decode",
@@ -541,63 +541,28 @@
       "bf16_flops": 105512960,
       "nvfp4_flops": 0,
       "fp32_flops": 0,
-      "calls": 132,
-      "gpu_work_ms": 6.149631999999999,
-      "gpu_busy_ms": 6.149631999999999,
-      "estimated_ms_min": 3.6817826341463396,
-      "estimated_ms_max": 3.6817826341463396,
+      "calls": 133,
+      "gpu_work_ms": 6.057375999999999,
+      "gpu_busy_ms": 6.057375999999999,
+      "estimated_ms_min": 3.7096749268292664,
+      "estimated_ms_max": 3.7096749268292664,
       "partial_calls": 0,
       "kernels": [
         {
           "name": "fp8_a16_sliced_k_mma_kernel",
-          "activities": 264,
-          "gpu_work_ms": 5.0508159999999975
+          "activities": 266,
+          "gpu_work_ms": 4.956640000000003
         },
         {
           "name": "grouped_rmsnorm_kernel",
-          "activities": 132,
-          "gpu_work_ms": 1.0988159999999996
+          "activities": 133,
+          "gpu_work_ms": 1.1007360000000002
         }
       ],
-      "gpu_work_share_pct": 0.06564873729243653,
-      "phase_gpu_work_share_pct": 0.06564873729243653,
-      "estimate_efficiency_pct_min": 59.86996675811398,
-      "estimate_efficiency_pct_max": 59.86996675811398
-    },
-    {
-      "phase": "decode",
-      "role": "predictor",
-      "stage": "hyper.mix",
-      "tokens": 8,
-      "batch": 0,
-      "context": 0,
-      "bytes_min": 6779520,
-      "bytes_max": 6779520,
-      "bf16_flops": 104857600,
-      "nvfp4_flops": 0,
-      "fp32_flops": 0,
-      "calls": 132,
-      "gpu_work_ms": 5.744287999999997,
-      "gpu_busy_ms": 5.744287999999997,
-      "estimated_ms_min": 3.6377912195121853,
-      "estimated_ms_max": 3.6377912195121853,
-      "partial_calls": 0,
-      "kernels": [
-        {
-          "name": "fp8_a16_sliced_k_mma_kernel",
-          "activities": 264,
-          "gpu_work_ms": 4.914239999999997
-        },
-        {
-          "name": "grouped_rmsnorm_kernel",
-          "activities": 132,
-          "gpu_work_ms": 0.8300480000000001
-        }
-      ],
-      "gpu_work_share_pct": 0.06132159677913988,
-      "phase_gpu_work_share_pct": 0.06132159677913988,
-      "estimate_efficiency_pct_min": 63.32884457590196,
-      "estimate_efficiency_pct_max": 63.32884457590196
+      "gpu_work_share_pct": 0.0670077656801377,
+      "phase_gpu_work_share_pct": 0.0670077656801377,
+      "estimate_efficiency_pct_min": 61.24227597608713,
+      "estimate_efficiency_pct_max": 61.24227597608713
     },
     {
       "phase": "decode",
@@ -611,28 +576,63 @@
       "bf16_flops": 104857600,
       "nvfp4_flops": 0,
       "fp32_flops": 0,
-      "calls": 132,
-      "gpu_work_ms": 5.720511999999999,
-      "gpu_busy_ms": 5.720511999999999,
-      "estimated_ms_min": 3.6377912195121853,
-      "estimated_ms_max": 3.6377912195121853,
+      "calls": 133,
+      "gpu_work_ms": 5.777855999999999,
+      "gpu_busy_ms": 5.777855999999999,
+      "estimated_ms_min": 3.665350243902429,
+      "estimated_ms_max": 3.665350243902429,
       "partial_calls": 0,
       "kernels": [
         {
           "name": "fp8_a16_sliced_k_mma_kernel",
-          "activities": 264,
-          "gpu_work_ms": 4.883167999999997
+          "activities": 266,
+          "gpu_work_ms": 4.950336000000002
         },
         {
           "name": "grouped_rmsnorm_kernel",
-          "activities": 132,
-          "gpu_work_ms": 0.8373439999999995
+          "activities": 133,
+          "gpu_work_ms": 0.8275199999999997
         }
       ],
-      "gpu_work_share_pct": 0.0610677825057224,
-      "phase_gpu_work_share_pct": 0.0610677825057224,
-      "estimate_efficiency_pct_min": 63.592056436769745,
-      "estimate_efficiency_pct_max": 63.592056436769745
+      "gpu_work_share_pct": 0.06391566595528785,
+      "phase_gpu_work_share_pct": 0.06391566595528785,
+      "estimate_efficiency_pct_min": 63.43789536988166,
+      "estimate_efficiency_pct_max": 63.43789536988166
+    },
+    {
+      "phase": "decode",
+      "role": "predictor",
+      "stage": "hyper.mix",
+      "tokens": 8,
+      "batch": 0,
+      "context": 0,
+      "bytes_min": 6779520,
+      "bytes_max": 6779520,
+      "bf16_flops": 104857600,
+      "nvfp4_flops": 0,
+      "fp32_flops": 0,
+      "calls": 133,
+      "gpu_work_ms": 5.674015999999999,
+      "gpu_busy_ms": 5.674015999999999,
+      "estimated_ms_min": 3.665350243902429,
+      "estimated_ms_max": 3.665350243902429,
+      "partial_calls": 0,
+      "kernels": [
+        {
+          "name": "fp8_a16_sliced_k_mma_kernel",
+          "activities": 266,
+          "gpu_work_ms": 4.840768
+        },
+        {
+          "name": "grouped_rmsnorm_kernel",
+          "activities": 133,
+          "gpu_work_ms": 0.833248
+        }
+      ],
+      "gpu_work_share_pct": 0.06276696949196355,
+      "phase_gpu_work_share_pct": 0.06276696949196355,
+      "estimate_efficiency_pct_min": 64.59887042797253,
+      "estimate_efficiency_pct_max": 64.59887042797253
     },
     {
       "phase": "decode",
@@ -646,23 +646,23 @@
       "bf16_flops": 0,
       "nvfp4_flops": 0,
       "fp32_flops": 0,
-      "calls": 264,
-      "gpu_work_ms": 0.7807680000000006,
-      "gpu_busy_ms": 0.7807680000000006,
-      "estimated_ms_min": 0.3956823414634163,
-      "estimated_ms_max": 0.3956823414634163,
+      "calls": 266,
+      "gpu_work_ms": 0.7602880000000003,
+      "gpu_busy_ms": 0.7602880000000003,
+      "estimated_ms_min": 0.3986799349593513,
+      "estimated_ms_max": 0.3986799349593513,
       "partial_calls": 0,
       "kernels": [
         {
           "name": "combine_kernel",
-          "activities": 264,
-          "gpu_work_ms": 0.7807680000000006
+          "activities": 266,
+          "gpu_work_ms": 0.7602880000000003
         }
       ],
-      "gpu_work_share_pct": 0.00833487813877987,
-      "phase_gpu_work_share_pct": 0.00833487813877987,
-      "estimate_efficiency_pct_min": 50.678606380309645,
-      "estimate_efficiency_pct_max": 50.678606380309645
+      "gpu_work_share_pct": 0.008410440453658574,
+      "phase_gpu_work_share_pct": 0.008410440453658574,
+      "estimate_efficiency_pct_min": 52.43801493109862,
+      "estimate_efficiency_pct_max": 52.43801493109862
     },
     {
       "phase": "decode",
@@ -676,23 +676,23 @@
       "bf16_flops": 0,
       "nvfp4_flops": 0,
       "fp32_flops": 0,
-      "calls": 132,
-      "gpu_work_ms": 0.3774080000000002,
-      "gpu_busy_ms": 0.3774080000000002,
-      "estimated_ms_min": 0.19784117073170762,
-      "estimated_ms_max": 0.19784117073170762,
+      "calls": 133,
+      "gpu_work_ms": 0.382048,
+      "gpu_busy_ms": 0.382048,
+      "estimated_ms_min": 0.1993399674796751,
+      "estimated_ms_max": 0.1993399674796751,
       "partial_calls": 0,
       "kernels": [
         {
           "name": "combine_kernel",
-          "activities": 132,
-          "gpu_work_ms": 0.3774080000000002
+          "activities": 133,
+          "gpu_work_ms": 0.382048
         }
       ],
-      "gpu_work_share_pct": 0.004028917282215245,
-      "phase_gpu_work_share_pct": 0.004028917282215245,
-      "estimate_efficiency_pct_min": 52.421032604424795,
-      "estimate_efficiency_pct_max": 52.421032604424795
+      "gpu_work_share_pct": 0.004226282611904107,
+      "phase_gpu_work_share_pct": 0.004226282611904107,
+      "estimate_efficiency_pct_min": 52.17668132791564,
+      "estimate_efficiency_pct_max": 52.17668132791564
     },
     {
       "phase": "decode",
@@ -706,23 +706,23 @@
       "bf16_flops": 0,
       "nvfp4_flops": 0,
       "fp32_flops": 0,
-      "calls": 132,
-      "gpu_work_ms": 0.2809600000000002,
-      "gpu_busy_ms": 0.2809600000000002,
-      "estimated_ms_min": 0.19780682926829285,
-      "estimated_ms_max": 0.19780682926829285,
+      "calls": 133,
+      "gpu_work_ms": 0.28304000000000035,
+      "gpu_busy_ms": 0.28304000000000035,
+      "estimated_ms_min": 0.1993053658536587,
+      "estimated_ms_max": 0.1993053658536587,
       "partial_calls": 0,
       "kernels": [
         {
           "name": "add_repeated_kernel",
-          "activities": 132,
-          "gpu_work_ms": 0.2809600000000002
+          "activities": 133,
+          "gpu_work_ms": 0.28304000000000035
         }
       ],
-      "gpu_work_share_pct": 0.0029993126791461643,
-      "phase_gpu_work_share_pct": 0.0029993126791461643,
-      "estimate_efficiency_pct_min": 70.40391132840715,
-      "estimate_efficiency_pct_max": 70.40391132840715
+      "gpu_work_share_pct": 0.0031310385880133906,
+      "phase_gpu_work_share_pct": 0.0031310385880133906,
+      "estimate_efficiency_pct_min": 70.4159715424175,
+      "estimate_efficiency_pct_max": 70.4159715424175
     },
     {
       "phase": "decode",
@@ -736,194 +736,194 @@
       "bf16_flops": 0,
       "nvfp4_flops": 0,
       "fp32_flops": 0,
-      "calls": 132,
-      "gpu_work_ms": 0.27696000000000026,
-      "gpu_busy_ms": 0.27696000000000026,
-      "estimated_ms_min": 0.10989268292682944,
-      "estimated_ms_max": 0.10989268292682944,
+      "calls": 133,
+      "gpu_work_ms": 0.2777920000000002,
+      "gpu_busy_ms": 0.2777920000000002,
+      "estimated_ms_min": 0.1107252032520327,
+      "estimated_ms_max": 0.1107252032520327,
       "partial_calls": 0,
       "kernels": [
         {
           "name": "repeat_kernel",
-          "activities": 132,
-          "gpu_work_ms": 0.27696000000000026
+          "activities": 133,
+          "gpu_work_ms": 0.2777920000000002
         }
       ],
-      "gpu_work_share_pct": 0.0029566117583154964,
-      "phase_gpu_work_share_pct": 0.0029566117583154964,
-      "estimate_efficiency_pct_min": 39.67817841090025,
-      "estimate_efficiency_pct_max": 39.67817841090025
+      "gpu_work_share_pct": 0.0030729842829332085,
+      "phase_gpu_work_share_pct": 0.0030729842829332085,
+      "estimate_efficiency_pct_min": 39.85903238827346,
+      "estimate_efficiency_pct_max": 39.85903238827346
     }
   ],
   "unattributed": [
     {
       "kind": "kernel",
       "name": "fp8_a16_sliced_k_mma_kernel",
-      "activities": 132,
-      "gpu_work_ms": 339.83315200000004
+      "activities": 133,
+      "gpu_work_ms": 344.91219199999995
     },
     {
       "kind": "kernel",
       "name": "q4_a16_sliced_k_mma_kernel",
-      "activities": 132,
-      "gpu_work_ms": 116.37596799999994
-    },
-    {
-      "kind": "kernel",
-      "name": "wait_staged_kernel",
-      "activities": 132,
-      "gpu_work_ms": 26.501664000000012
+      "activities": 133,
+      "gpu_work_ms": 120.20873599999997
     },
     {
       "kind": "kernel",
       "name": "bf16_gemm_mma_kernel",
-      "activities": 132,
-      "gpu_work_ms": 9.418752000000001
+      "activities": 133,
+      "gpu_work_ms": 9.234656000000003
     },
     {
       "kind": "kernel",
       "name": "bf16_small_t_inner_kernel",
-      "activities": 132,
-      "gpu_work_ms": 7.764544000000001
+      "activities": 133,
+      "gpu_work_ms": 8.176960000000005
     },
     {
       "kind": "kernel",
       "name": "copy_record_rows_kernel",
-      "activities": 132,
-      "gpu_work_ms": 7.491551999999998
+      "activities": 133,
+      "gpu_work_ms": 7.429151999999997
     },
     {
       "kind": "kernel",
       "name": "argmax_tiled_atomic_kernel",
-      "activities": 132,
-      "gpu_work_ms": 7.176576
+      "activities": 133,
+      "gpu_work_ms": 7.2196799999999985
     },
     {
       "kind": "kernel",
       "name": "shortlist_exact_scores_fp8_kernel",
-      "activities": 132,
-      "gpu_work_ms": 6.329919999999998
+      "activities": 133,
+      "gpu_work_ms": 6.359008000000002
     },
     {
       "kind": "kernel",
       "name": "speculative_sampling_partial_topk_kernel",
-      "activities": 132,
-      "gpu_work_ms": 4.4551680000000005
+      "activities": 133,
+      "gpu_work_ms": 4.496608000000001
     },
     {
       "kind": "kernel",
       "name": "shortlist_tile_candidates_kernel",
-      "activities": 132,
-      "gpu_work_ms": 3.710112000000001
+      "activities": 133,
+      "gpu_work_ms": 3.740736000000003
     },
     {
       "kind": "kernel",
       "name": "ple_fold_kernel",
-      "activities": 132,
-      "gpu_work_ms": 3.5413760000000005
+      "activities": 133,
+      "gpu_work_ms": 3.5800000000000005
     },
     {
       "kind": "kernel",
       "name": "rmsnorm_generic_kernel",
-      "activities": 132,
-      "gpu_work_ms": 2.5194239999999994
+      "activities": 133,
+      "gpu_work_ms": 2.677792000000001
     },
     {
       "kind": "memcpy",
       "name": "memcpy",
-      "activities": 816,
-      "gpu_work_ms": 1.5582720000000054
+      "activities": 811,
+      "gpu_work_ms": 1.3031040000000047
     },
     {
       "kind": "kernel",
       "name": "speculative_sampling_group_finalize_kernel",
-      "activities": 132,
-      "gpu_work_ms": 1.206688
+      "activities": 133,
+      "gpu_work_ms": 1.2262720000000003
     },
     {
       "kind": "kernel",
       "name": "embed_gather_dense_kernel",
-      "activities": 264,
-      "gpu_work_ms": 1.0963200000000015
-    },
-    {
-      "kind": "kernel",
-      "name": "speculative_select_accepted_hidden_kernel",
-      "activities": 528,
-      "gpu_work_ms": 0.8314880000000012
-    },
-    {
-      "kind": "kernel",
-      "name": "scatter_bf16x8_kernel",
-      "activities": 264,
-      "gpu_work_ms": 0.8261759999999981
+      "activities": 266,
+      "gpu_work_ms": 1.0721280000000004
     },
     {
       "kind": "kernel",
       "name": "publish_ids_kernel",
-      "activities": 132,
-      "gpu_work_ms": 0.8222400000000002
+      "activities": 133,
+      "gpu_work_ms": 0.8854719999999999
+    },
+    {
+      "kind": "kernel",
+      "name": "speculative_select_accepted_hidden_kernel",
+      "activities": 532,
+      "gpu_work_ms": 0.8378879999999994
+    },
+    {
+      "kind": "kernel",
+      "name": "scatter_bf16x8_kernel",
+      "activities": 266,
+      "gpu_work_ms": 0.5837439999999992
     },
     {
       "kind": "kernel",
       "name": "mtp_advance_round_kernel",
-      "activities": 132,
-      "gpu_work_ms": 0.5295040000000008
+      "activities": 133,
+      "gpu_work_ms": 0.5323200000000005
+    },
+    {
+      "kind": "kernel",
+      "name": "wait_staged_kernel",
+      "activities": 133,
+      "gpu_work_ms": 0.47465599999999947
     },
     {
       "kind": "kernel",
       "name": "rmsnorm_cta_bf16x2_kernel",
-      "activities": 132,
-      "gpu_work_ms": 0.44092799999999993
+      "activities": 133,
+      "gpu_work_ms": 0.47196800000000017
     },
     {
       "kind": "kernel",
       "name": "expand_text_positions_kernel",
-      "activities": 264,
-      "gpu_work_ms": 0.3313280000000008
+      "activities": 266,
+      "gpu_work_ms": 0.331744000000001
     },
     {
       "kind": "kernel",
       "name": "mtp_prepare_next_round_kernel",
-      "activities": 132,
-      "gpu_work_ms": 0.2945919999999998
+      "activities": 133,
+      "gpu_work_ms": 0.30441599999999985
     },
     {
       "kind": "kernel",
       "name": "speculative_prepare_verify_inputs_kernel",
-      "activities": 132,
-      "gpu_work_ms": 0.2545600000000005
+      "activities": 133,
+      "gpu_work_ms": 0.26048000000000043
     },
     {
       "kind": "kernel",
       "name": "select_shared_indices_kernel",
-      "activities": 132,
-      "gpu_work_ms": 0.199808
+      "activities": 133,
+      "gpu_work_ms": 0.20182400000000017
     },
     {
       "kind": "kernel",
       "name": "shortlist_exact_select_kernel",
-      "activities": 132,
-      "gpu_work_ms": 0.1970240000000003
+      "activities": 133,
+      "gpu_work_ms": 0.1984960000000003
     },
     {
       "kind": "kernel",
       "name": "residual_add_bf16x8_kernel",
-      "activities": 132,
-      "gpu_work_ms": 0.17526400000000014
+      "activities": 133,
+      "gpu_work_ms": 0.1790720000000001
     },
     {
       "kind": "memset",
       "name": "memset",
-      "activities": 132,
-      "gpu_work_ms": 0.029471999999999995
+      "activities": 133,
+      "gpu_work_ms": 0.03161600000000001
     }
   ],
   "host": [
     {
       "stage": "ple.gather",
-      "calls": 132,
-      "host_work_ms": 156.360416
+      "calls": 133,
+      "host_work_ms": 78.536848
     },
     {
       "stage": "ple.hash",
@@ -939,7 +939,7 @@
     "DRAM cache reuse, scratch traffic, nonlinear math and instruction geometry are unmodeled.",
     "Profiler overhead affects timings; use unprofiled paired benchmarks for speed claims.",
     "Unattributed GPU work is retained; no whole-model efficiency is reported.",
-    "Serve window: GPU work launched inside 132 decode.mtp_round ranges with batch 4 (trim 0.00 of rounds at each end); work from other host threads launched during a round is included.",
+    "Serve window: GPU work launched inside 133 decode.mtp_round ranges with batch 4 (trim 0.00 of rounds at each end); work from other host threads launched during a round is included.",
     "An estimate exceeds measured time: inspect cache reuse, envelope work and hardware rates; percentages are not clamped."
   ]
 }

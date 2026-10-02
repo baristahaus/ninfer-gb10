@@ -1,4 +1,27 @@
--- Configuring done (0.0s)
+-- Configuring done (0.1s)
 -- Generating done (0.0s)
 -- Build files have been written to: /home/apollo11/ninfer-gb10/build-trace
-ninja: no work to do.
+[1/24] Building CXX object src/models/CMakeFiles/ninfer_model_loading.dir/qwen3_5/load/dflash.cpp.o
+[2/24] Building CXX object src/models/CMakeFiles/ninfer_model_loading.dir/qwen3_5/load/mtp.cpp.o
+[3/24] Building CXX object src/models/CMakeFiles/ninfer_model_loading.dir/qwen3_5/load/vision.cpp.o
+[4/24] Building CXX object src/models/CMakeFiles/ninfer_model_loading.dir/qwen3_5/load/prepare.cpp.o
+[5/24] Building CXX object src/artifact/CMakeFiles/ninfer_artifact.dir/binder.cpp.o
+[6/24] Building CXX object src/models/CMakeFiles/ninfer_model_loading.dir/qwen3_5/load/resources.cpp.o
+[7/24] Building CXX object src/artifact/CMakeFiles/ninfer_artifact.dir/views.cpp.o
+[8/24] Building CXX object src/models/CMakeFiles/ninfer_model_runtime.dir/qwen3_8_flash_next/impl/ple_stage.cpp.o
+[9/24] Building CXX object src/artifact/CMakeFiles/ninfer_artifact.dir/materializer.cpp.o
+[10/24] Building CXX object src/models/CMakeFiles/ninfer_model_loading.dir/qwen3_5/load/dflash2.cpp.o
+[11/24] Building CXX object src/models/CMakeFiles/ninfer_model_runtime.dir/qwen3_8_flash_next/impl/ple_table.cpp.o
+[12/24] Building CXX object src/artifact/CMakeFiles/ninfer_artifact.dir/reader.cpp.o
+[13/24] Linking CXX static library src/artifact/libninfer_artifact.a
+[14/24] Building CXX object src/models/CMakeFiles/ninfer_model_runtime.dir/qwen3_8_flash_next_125b_a6b/impl/load_plan.cpp.o
+[15/24] Building CXX object src/models/CMakeFiles/ninfer_model_loading.dir/qwen3_5/load.cpp.o
+[16/24] Building CXX object src/models/CMakeFiles/ninfer_model_loading.dir/qwen3_5/load/text.cpp.o
+[17/24] Linking CXX static library src/models/libninfer_model_loading.a
+[18/24] Building CXX object src/models/CMakeFiles/ninfer_model_runtime.dir/qwen3_8_flash_next_125b_a6b/impl/package.cpp.o
+[19/24] Building CXX object src/models/CMakeFiles/ninfer_model_runtime.dir/qwen3_8_flash_next_125b_a6b/impl/model.cpp.o
+[20/24] Building CXX object src/runtime/CMakeFiles/ninfer_engine.dir/engine/model_instance.cpp.o
+[21/24] Building CXX object src/models/CMakeFiles/ninfer_model_runtime.dir/qwen3_8_flash_next_125b_a6b/impl/variant.cpp.o
+[22/24] Linking CXX static library src/models/libninfer_model_runtime.a
+[23/24] Linking CXX static library src/runtime/libninfer_engine.a
+[24/24] Linking CXX executable apps/ninfer-serve

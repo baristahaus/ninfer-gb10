@@ -291,14 +291,26 @@ int run_pending_fold(const PendingFoldCase& test) {
     record_round(batch, test.sources, test.valid, 59U, reference_out, nullptr);
     const GdnReplayRecordLayer reference_layer = records.layer(tested_layer, batch);
     const auto reference_states = from_device<std::uint8_t>(state_storage, state_storage.bytes);
-    const auto reference_conv =
-        from_device<std::uint8_t>(reference_layer.conv.data, reference_layer.conv.bytes());
-    const auto reference_key =
-        from_device<std::uint8_t>(reference_layer.key.data, reference_layer.key.bytes());
-    const auto reference_value =
-        from_device<std::uint8_t>(reference_layer.value.data, reference_layer.value.bytes());
-    const auto reference_gate =
-        from_device<std::uint8_t>(reference_layer.gate.data, reference_layer.gate.bytes());
+    // The verify writes record columns [0, valid) of each row only; columns past valid keep
+    // whatever the buffer held and are never read (folds read [0, commit), commit <= valid).
+    const auto valid_columns = [&](const Tensor& plane) {
+        const std::vector<std::uint8_t> all = from_device<std::uint8_t>(plane.data, plane.bytes());
+        const std::size_t column_bytes      = all.size() / static_cast<std::size_t>(width * batch);
+        std::vector<std::uint8_t> written;
+        for (std::int32_t row = 0; row < batch; ++row) {
+            const auto begin =
+                all.begin() +
+                static_cast<std::ptrdiff_t>(static_cast<std::size_t>(row * width) * column_bytes);
+            written.insert(written.end(), begin,
+                           begin + static_cast<std::ptrdiff_t>(
+                                       static_cast<std::size_t>(test.valid[row]) * column_bytes));
+        }
+        return written;
+    };
+    const auto reference_conv  = valid_columns(reference_layer.conv);
+    const auto reference_key   = valid_columns(reference_layer.key);
+    const auto reference_value = valid_columns(reference_layer.value);
+    const auto reference_gate  = valid_columns(reference_layer.gate);
 
     // Fused: restore the unfolded states and scribble over the live records, which this round
     // overwrites while the fold reads the snapshot.
@@ -337,18 +349,10 @@ int run_pending_fold(const PendingFoldCase& test) {
     expect_same(from_device<std::uint8_t>(reference_out, reference_out.bytes),
                 from_device<std::uint8_t>(fused_out, fused_out.bytes), "block output");
     const GdnReplayRecordLayer fused_layer = records.layer(tested_layer, batch);
-    expect_same(reference_conv,
-                from_device<std::uint8_t>(fused_layer.conv.data, fused_layer.conv.bytes()),
-                "conv records");
-    expect_same(reference_key,
-                from_device<std::uint8_t>(fused_layer.key.data, fused_layer.key.bytes()),
-                "key records");
-    expect_same(reference_value,
-                from_device<std::uint8_t>(fused_layer.value.data, fused_layer.value.bytes()),
-                "value records");
-    expect_same(reference_gate,
-                from_device<std::uint8_t>(fused_layer.gate.data, fused_layer.gate.bytes()),
-                "gate records");
+    expect_same(reference_conv, valid_columns(fused_layer.conv), "conv records");
+    expect_same(reference_key, valid_columns(fused_layer.key), "key records");
+    expect_same(reference_value, valid_columns(fused_layer.value), "value records");
+    expect_same(reference_gate, valid_columns(fused_layer.gate), "gate records");
     if (layer_bytes(initial_states, recurrent_states) ==
         layer_bytes(fused_states, recurrent_states)) {
         std::cerr << label << ": the pending fold left the recurrent states unchanged\n";

@@ -193,6 +193,9 @@ public:
 
     void set_linear_state_slots(std::int32_t source_slot, std::int32_t destination_slot);
     void set_gdn_state_action(GdnStateAction action, const GdnReplayRecords* replay_records);
+    // RecordForReplay only: the previous round's GDN commits (rows I32 [4,R] over record rows
+    // [0,R) of records) fold into each row's states inside the record pass. Null clears it.
+    void set_gdn_pending_fold(const GdnReplayRecords* records, const Tensor* rows);
 
     void set_ple_replay_records(Tensor* records) noexcept { ple_replay_records_ = records; }
 
@@ -364,6 +367,8 @@ private:
     std::int32_t linear_state_destination_slot_                                    = 0;
     GdnStateAction gdn_state_action_          = GdnStateAction::UpdateInPlace;
     const GdnReplayRecords* replay_records_   = nullptr;
+    const GdnReplayRecords* pending_records_  = nullptr;
+    const Tensor* pending_fold_rows_          = nullptr;
     std::int64_t prefill_split_frontier_      = -1;
     Tensor* rewrite_checkpoint_hidden_output_ = nullptr;
     std::uint32_t mtp_proposal_extent_        = 0;

@@ -77,20 +77,65 @@ __global__ void project_control_gating_kernel(const __nv_bfloat16* input,
     }
 }
 
-__global__ void conv_replay_record_kernel(
-    const __nv_bfloat16* input, const __nv_bfloat16* weight,
-    const __nv_bfloat16* states, const std::int32_t* valid_columns,
-    const std::int32_t* source_slots, __nv_bfloat16* records,
-    __nv_bfloat16* q, __nv_bfloat16* k, __nv_bfloat16* v,
-    int width, int batch, std::int64_t slot_stride) {
+// A pending fold's convolution side: {rows [4,R], the previous round's conv records
+// [kConvolution, width, R]}. rows == nullptr folds nothing.
+struct PendingConvFold {
+    const std::int32_t* rows;
+    int count;
+    const __nv_bfloat16* records;
+    int width;
+};
+
+__global__ void conv_replay_record_kernel(const __nv_bfloat16* input, const __nv_bfloat16* weight,
+                                          __nv_bfloat16* states, const std::int32_t* valid_columns,
+                                          const std::int32_t* source_slots, __nv_bfloat16* records,
+                                          __nv_bfloat16* q, __nv_bfloat16* k, __nv_bfloat16* v,
+                                          int width, int batch, std::int64_t slot_stride,
+                                          PendingConvFold pending) {
     const int lane = static_cast<int>(blockIdx.y);
+    const int slot  = source_slots[lane];
+    int pending_row = -1;
+    int committed   = 0;
+    for (int entry = 0; pending.rows != nullptr && entry < pending.count; ++entry) {
+        if (pending.rows[4 * entry + 2] > 0 && pending.rows[4 * entry] == slot &&
+            pending.rows[4 * entry + 1] == slot) {
+            pending_row = entry;
+            committed   = pending.rows[4 * entry + 2];
+            break;
+        }
+    }
     for (int channel = static_cast<int>(blockIdx.x) * blockDim.x + threadIdx.x;
          channel < kConvolution; channel += static_cast<int>(blockDim.x) * gridDim.x) {
-        const __nv_bfloat16* source =
-            states + static_cast<std::int64_t>(source_slots[lane]) * slot_stride;
+        __nv_bfloat16* source = states + static_cast<std::int64_t>(slot) * slot_stride;
         __nv_bfloat16 s0 = source[channel];
         __nv_bfloat16 s1 = source[kConvolution + channel];
         __nv_bfloat16 s2 = source[2LL * kConvolution + channel];
+        if (pending_row >= 0) {
+            // tail_3(history || committed columns), as gdn_replay_fold publishes it; this thread
+            // owns the channel, so the in-place write cannot race.
+            const __nv_bfloat16* record =
+                pending.records + channel +
+                static_cast<std::int64_t>(kConvolution) * pending_row * pending.width;
+            const auto column = [&](int index) {
+                return record[static_cast<std::int64_t>(kConvolution) * index];
+            };
+            if (committed == 1) {
+                s0 = s1;
+                s1 = s2;
+                s2 = column(0);
+            } else if (committed == 2) {
+                s0 = s2;
+                s1 = column(0);
+                s2 = column(1);
+            } else {
+                s0 = column(committed - 3);
+                s1 = column(committed - 2);
+                s2 = column(committed - 1);
+            }
+            source[channel]                      = s0;
+            source[kConvolution + channel]       = s1;
+            source[2LL * kConvolution + channel] = s2;
+        }
         const float w0 = __bfloat162float(weight[channel]);
         const float w1 = __bfloat162float(weight[kConvolution + channel]);
         const float w2 = __bfloat162float(weight[2LL * kConvolution + channel]);
@@ -321,11 +366,11 @@ void flash_next_gdn_batch_update(const Tensor& input, const FlashNextGdnWeights&
 }
 
 void flash_next_gdn_replay_record(const Tensor& input, const FlashNextGdnWeights& weights,
-                                  const Tensor& convolution_states,
-                                  const Tensor& recurrent_states,
+                                  Tensor& convolution_states, Tensor& recurrent_states,
                                   const Tensor& valid_columns, const Tensor& source_slots,
                                   GdnReplayRecordLayer records, Tensor& destination,
-                                  WorkspaceArena& workspace, cudaStream_t stream) {
+                                  WorkspaceArena& workspace, cudaStream_t stream,
+                                  const FlashNextGdnPendingFold* pending) {
     NINFER_PERF_SCOPE("gdn.record", input.ne[1], records.conv.ne[2], 0,
                        flash_next_work::gdn(input.ne[1], records.conv.ne[2], true, false,
                                             fp8_row_weight(weights.query_key_value)));
@@ -353,6 +398,22 @@ void flash_next_gdn_replay_record(const Tensor& input, const FlashNextGdnWeights
         records.gate.ne[0] != 2 || records.gate.ne[1] != kHeads ||
         records.gate.ne[2] != width || records.gate.ne[3] != batch) {
         throw std::invalid_argument("flash_next_gdn_replay_record: invalid exact geometry");
+    }
+    PendingConvFold pending_conv{nullptr, 0, nullptr, 0};
+    if (pending != nullptr) {
+        const int pending_rows               = pending->rows.ne[1];
+        const GdnReplayRecordLayer& previous = pending->records;
+        if (pending->rows.dtype != DType::I32 || pending->rows.ne[0] != 4 || pending_rows <= 0 ||
+            pending_rows > 8 || !pending->rows.is_contiguous() ||
+            previous.conv.dtype != DType::BF16 || previous.conv.ne[0] != kConvolution ||
+            previous.conv.ne[1] != width || previous.conv.ne[2] != pending_rows ||
+            !previous.conv.is_contiguous() || previous.conv.data == records.conv.data) {
+            throw std::invalid_argument(
+                "flash_next_gdn_replay_record: invalid pending fold (rows, or conv records that "
+                "are not a separate copy of the previous round)");
+        }
+        pending_conv = {static_cast<const std::int32_t*>(pending->rows.data), pending_rows,
+                        static_cast<const __nv_bfloat16*>(previous.conv.data), width};
     }
     validate(input, weights,
              convolution_states.slice(2, 0, 1).view({kConvolution, 3}),
@@ -385,13 +446,12 @@ void flash_next_gdn_replay_record(const Tensor& input, const FlashNextGdnWeights
     conv_replay_record_kernel<<<conv_grid, 256, 0, stream>>>(
         static_cast<const __nv_bfloat16*>(projected.data),
         static_cast<const __nv_bfloat16*>(weights.convolution.data),
-        static_cast<const __nv_bfloat16*>(convolution_states.data),
+        static_cast<__nv_bfloat16*>(convolution_states.data),
         static_cast<const std::int32_t*>(valid_columns.data),
         static_cast<const std::int32_t*>(source_slots.data),
-        static_cast<__nv_bfloat16*>(records.conv.data),
-        static_cast<__nv_bfloat16*>(q.data), static_cast<__nv_bfloat16*>(k.data),
-        static_cast<__nv_bfloat16*>(v.data), width, batch,
-        static_cast<std::int64_t>(kConvolution) * 3);
+        static_cast<__nv_bfloat16*>(records.conv.data), static_cast<__nv_bfloat16*>(q.data),
+        static_cast<__nv_bfloat16*>(k.data), static_cast<__nv_bfloat16*>(v.data), width, batch,
+        static_cast<std::int64_t>(kConvolution) * 3, pending_conv);
     CUDA_CHECK(cudaGetLastError());
     Tensor recurrent = workspace.alloc(DType::BF16, {kValue, tokens});
     Tensor q_batch = q.view({kDim, kQkHeads, width, batch});
@@ -400,10 +460,19 @@ void flash_next_gdn_replay_record(const Tensor& input, const FlashNextGdnWeights
     Tensor g_batch = g.view({kHeads, width, batch});
     Tensor beta_batch = beta.view({kHeads, width, batch});
     Tensor recurrent_batch = recurrent.view({kDim, kHeads, width, batch});
-    gated_delta_net_replay_record(q_batch, k_batch, v_batch, g_batch, beta_batch,
-                                  0.08838834764831845F, recurrent_states, valid_columns,
-                                  source_slots, records.key, records.value, records.gate,
-                                  recurrent_batch, stream);
+    if (pending != nullptr) {
+        const GdnPendingFold recurrent_pending{pending->rows, pending->records.key,
+                                               pending->records.value, pending->records.gate};
+        gated_delta_net_fold_replay_record(q_batch, k_batch, v_batch, g_batch, beta_batch,
+                                           0.08838834764831845F, recurrent_states, valid_columns,
+                                           source_slots, records.key, records.value, records.gate,
+                                           recurrent_batch, recurrent_pending, stream);
+    } else {
+        gated_delta_net_replay_record(q_batch, k_batch, v_batch, g_batch, beta_batch,
+                                      0.08838834764831845F, recurrent_states, valid_columns,
+                                      source_slots, records.key, records.value, records.gate,
+                                      recurrent_batch, stream);
+    }
     Tensor normalized = workspace.alloc(DType::BF16, {kValue, tokens});
     Tensor recurrent_heads = recurrent.view({kDim, kHeads, tokens});
     Tensor z_heads = z.view({kDim, kHeads, tokens});

@@ -268,6 +268,14 @@ void TextContext::set_gdn_state_action(GdnStateAction action,
     replay_records_   = replay_records;
 }
 
+void TextContext::set_gdn_pending_fold(const GdnReplayRecords* records, const Tensor* rows) {
+    if ((records == nullptr) != (rows == nullptr)) {
+        throw std::invalid_argument("TextContext GDN pending fold is incomplete");
+    }
+    pending_records_   = records;
+    pending_fold_rows_ = rows;
+}
+
 void TextContext::bind() {
     using TargetBindings = LoadedModelData;
     using TargetMlp      = MlpWeights;
@@ -1409,11 +1417,18 @@ void TextContext::run_flash_next_layers(Tensor& x, Phase ph) {
                     if (replay_records_ == nullptr) {
                         throw std::logic_error("Flash-Next GDN replay records are unavailable");
                     }
+                    std::optional<ops::FlashNextGdnPendingFold> pending_fold;
+                    if (pending_records_ != nullptr) {
+                        pending_fold.emplace(ops::FlashNextGdnPendingFold{
+                            *pending_fold_rows_,
+                            pending_records_->layer(static_cast<std::int32_t>(gdn_index),
+                                                    pending_fold_rows_->ne[1])});
+                    }
                     ops::flash_next_gdn_replay_record(
                         block_input, source.projection, layer_state.conv, layer_state.recurrent,
                         valid, *active_linear_state_source_slots_,
                         replay_records_->layer(static_cast<std::int32_t>(gdn_index), batch),
-                        block_output, work_, stream);
+                        block_output, work_, stream, pending_fold ? &*pending_fold : nullptr);
                 } else {
                     if (width != 1) {
                         throw std::logic_error(

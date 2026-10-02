@@ -1,9 +1,12 @@
 #include "core/gdn_replay_records.h"
 
+#include "core/device.h"
+
 #include <array>
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <utility>
 
 namespace ninfer {
 namespace {
@@ -137,6 +140,44 @@ GdnReplayRecordLayer GdnReplayRecords::layer(std::int32_t layer_index, std::int3
         .value = value.slice(3, outer_begin, rows),
         .gate  = gate.slice(3, outer_begin, rows),
     };
+}
+
+void copy_gdn_replay_record_rows(const GdnReplayRecords& source,
+                                 const GdnReplayRecords& destination, std::int32_t rows,
+                                 cudaStream_t stream) {
+    validate_spec(source.spec);
+    const GdnReplayRecordSpec& a = source.spec;
+    const GdnReplayRecordSpec& b = destination.spec;
+    if (a.layers != b.layers || a.record_capacity != b.record_capacity || a.width != b.width ||
+        a.conv_channels != b.conv_channels || a.qk_heads != b.qk_heads ||
+        a.value_heads != b.value_heads || a.key_dim != b.key_dim || a.value_dim != b.value_dim) {
+        throw std::invalid_argument("GDN replay record copy requires one spec");
+    }
+    if (rows <= 0 || rows > a.record_capacity) {
+        throw std::out_of_range("GDN replay record copy row count out of range");
+    }
+    const std::array<std::pair<const Tensor*, const Tensor*>, 4> planes{{
+        {&source.conv, &destination.conv},
+        {&source.key, &destination.key},
+        {&source.value, &destination.value},
+        {&source.gate, &destination.gate},
+    }};
+    for (const auto& [from, to] : planes) {
+        if (from->bytes() != to->bytes() || !from->is_contiguous() || !to->is_contiguous()) {
+            throw std::invalid_argument("GDN replay record copy planes do not match");
+        }
+        const auto* begin = static_cast<const std::byte*>(from->data);
+        const auto* other = static_cast<const std::byte*>(to->data);
+        if (begin < other + to->bytes() && other < begin + from->bytes()) {
+            throw std::invalid_argument("GDN replay record copy planes overlap");
+        }
+        // Outer index layer * capacity + row: one pitch per layer, the first rows of each.
+        const std::size_t pitch     = from->bytes() / static_cast<std::size_t>(a.layers);
+        const std::size_t row_bytes = pitch / static_cast<std::size_t>(a.record_capacity);
+        CUDA_CHECK(cudaMemcpy2DAsync(
+            to->data, pitch, from->data, pitch, row_bytes * static_cast<std::size_t>(rows),
+            static_cast<std::size_t>(a.layers), cudaMemcpyDeviceToDevice, stream));
+    }
 }
 
 } // namespace ninfer

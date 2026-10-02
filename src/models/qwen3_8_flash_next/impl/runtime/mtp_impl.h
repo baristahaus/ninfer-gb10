@@ -103,11 +103,16 @@ auto mtp_decode_batch_body(MtpBatchContext& state, std::int32_t batch_size, std:
 
         qwen3_8_flash_next::MtpDecodeState& frame = state.frame;
         const std::int32_t width                  = static_cast<std::int32_t>(k) + 1;
-        // The previous round's deferred commit: its accepted columns fold into the state slots
-        // before this round's verify reads them and overwrites the records they come from.
-        if (state.pending_fold != nullptr && state.pending_fold_rows > 0) {
-            state.pending_fold->execute_device(frame.pending_folds, state.pending_fold_rows,
-                                               state.execution.device.stream);
+        // The previous round's deferred commit. This round's verify overwrites the records its
+        // accepted columns come from, so the GDN records are first copied to the snapshot the
+        // verify folds from; the PLE commits fold here.
+        const bool pending = state.pending_fold_rows > 0;
+        if (pending) {
+            if (state.pending_snapshot == nullptr || state.execution.replay_records == nullptr) {
+                throw std::logic_error("MTP deferred GDN fold storage is unavailable");
+            }
+            copy_gdn_replay_record_rows(*state.execution.replay_records, *state.pending_snapshot,
+                                        state.pending_fold_rows, state.execution.device.stream);
             if constexpr (Variant::flash_next) {
                 if (state.execution.ple_records == nullptr ||
                     state.execution.ple_state == nullptr) {
@@ -218,7 +223,11 @@ auto mtp_decode_batch_body(MtpBatchContext& state, std::int32_t batch_size, std:
                                      .selected_hidden         = selected_hidden,
                                      .selected_mtp_hidden     = selected_mtp_hidden,
                                      .replay_records          = state.execution.replay_records,
-                                     .sampling                = frame.sampling,
+                                     .pending_records = pending ? state.pending_snapshot : nullptr,
+                                     .pending_folds   = pending ? frame.pending_folds.slice(
+                                                                    1, 0, state.pending_fold_rows)
+                                                                : Tensor{},
+                                     .sampling        = frame.sampling,
                                  },
                                  envelopes.target_verify);
         }

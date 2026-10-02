@@ -127,6 +127,41 @@ void launch_recurrent_record_fixed(const Tensor& q, const Tensor& k, const Tenso
     CUDA_CHECK(cudaGetLastError());
 }
 
+template <bool Masked>
+void launch_recurrent_fold_record_fixed(const Tensor& q, const Tensor& k, const Tensor& v,
+                                        const Tensor& g, const Tensor& beta, float scale,
+                                        Tensor& ssm_states, const Tensor& valid_columns,
+                                        const Tensor& initial_state_slots, Tensor& key_record,
+                                        Tensor& value_record, Tensor& gate_record, Tensor& out,
+                                        const PendingFoldTable& pending, cudaStream_t stream) {
+    const auto heads = head_map::of(q.ne[1], v.ne[1]);
+    const dim3 grid(static_cast<unsigned>(v.ne[1]), static_cast<unsigned>(q.ne[3]),
+                    static_cast<unsigned>(kStateDim / kBlockDv));
+    const dim3 block(kWarpSize, kNumWarps, 1);
+    const std::int64_t state_slot_stride =
+        static_cast<std::int64_t>(kStateDim) * kStateDim * ssm_states.ne[2];
+    const RecordAccess<Masked> access{
+        static_cast<const __nv_bfloat16*>(q.data),
+        static_cast<const __nv_bfloat16*>(k.data),
+        static_cast<const __nv_bfloat16*>(v.data),
+        static_cast<const float*>(g.data),
+        static_cast<const float*>(beta.data),
+        static_cast<const float*>(ssm_states.data),
+        Masked ? static_cast<const std::int32_t*>(valid_columns.data) : nullptr,
+        static_cast<const std::int32_t*>(initial_state_slots.data),
+        static_cast<__nv_bfloat16*>(key_record.data),
+        static_cast<__nv_bfloat16*>(value_record.data),
+        reinterpret_cast<uint2*>(gate_record.data),
+        static_cast<__nv_bfloat16*>(out.data),
+        heads,
+        q.ne[2],
+        state_slot_stride,
+        scale,
+    };
+    recurrent_fold_record_kernel<Masked><<<grid, block, 0, stream>>>(access, pending);
+    CUDA_CHECK(cudaGetLastError());
+}
+
 template <class Geometry>
 void launch_replay_fold_fixed(const GdnReplayRecords& records,
                               LinearAttentionStateAllLayersView states,
@@ -226,6 +261,34 @@ void launch_recurrent_record(const Tensor& q, const Tensor& k, const Tensor& v, 
         launch_recurrent_record_fixed<true>(q, k, v, g, beta, scale, ssm_states, valid_columns,
                                             initial_state_slots, key_record, value_record,
                                             gate_record, out, stream);
+    }
+}
+
+void launch_recurrent_fold_record(const Tensor& q, const Tensor& k, const Tensor& v,
+                                  const Tensor& g, const Tensor& beta, float scale,
+                                  Tensor& ssm_states, const Tensor& valid_columns,
+                                  const Tensor& initial_state_slots, Tensor& key_record,
+                                  Tensor& value_record, Tensor& gate_record, Tensor& out,
+                                  const GdnReplayFoldKernelRow* pending_rows,
+                                  std::int32_t pending_count, const Tensor& pending_key_record,
+                                  const Tensor& pending_value_record,
+                                  const Tensor& pending_gate_record, cudaStream_t stream) {
+    const PendingFoldTable pending{
+        pending_rows,
+        pending_count,
+        static_cast<const __nv_bfloat16*>(pending_key_record.data),
+        static_cast<const __nv_bfloat16*>(pending_value_record.data),
+        reinterpret_cast<const uint2*>(pending_gate_record.data),
+        pending_key_record.ne[2],
+    };
+    if (valid_columns.data == nullptr) {
+        launch_recurrent_fold_record_fixed<false>(q, k, v, g, beta, scale, ssm_states,
+                                                  valid_columns, initial_state_slots, key_record,
+                                                  value_record, gate_record, out, pending, stream);
+    } else {
+        launch_recurrent_fold_record_fixed<true>(q, k, v, g, beta, scale, ssm_states, valid_columns,
+                                                 initial_state_slots, key_record, value_record,
+                                                 gate_record, out, pending, stream);
     }
 }
 

@@ -679,6 +679,7 @@ public:
     std::unique_ptr<qwen3_8_flash_next::HostStatePool> host_state_images;
     std::unique_ptr<StateImageStore> state_store;
     std::optional<GdnReplayRecords> replay_records;
+    std::optional<GdnReplayRecords> replay_snapshot;
     std::optional<ops::GdnReplayFoldPlan> replay_fold;
     std::optional<DFlashPersistentState> dflash;
     qwen3_8_flash_next::RoundState io;

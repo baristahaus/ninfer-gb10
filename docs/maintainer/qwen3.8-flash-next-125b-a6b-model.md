@@ -66,9 +66,13 @@ speculative replay/fold, commit, rollback, and restore. An execution that contin
 fork reads every persistent component, GDN and PLE alike, from the source checkpoint slot and
 writes the destination slot; it never reads the destination's prior content. A generated token is public only after the
 target transaction commits it. When an MTP round's row continues in place (not terminal, not
-cancelled, no unsettled fork), its GDN and PLE fold is deferred: the next MTP round folds it at the
-head of its graph from device-resident row descriptors, before its verify reads the state or
-overwrites the records. Until then, the sequence's committed state is its slot plus that pending
+cancelled, no unsettled fork), its GDN and PLE fold is deferred to the next MTP round, from
+device-resident row descriptors. That round folds the PLE commit at the head of its graph and copies
+the pending GDN record rows to a snapshot; each GDN layer of its verify then folds the row's
+committed columns from the snapshot into the slot's state (in place) before recording the round
+from it. This is the same arithmetic in the same order as a separate fold. The Program keeps a fold
+in the graph only when its row is a lane of that round on the same slot, and otherwise folds
+eagerly first. Until then, the sequence's committed state is its slot plus that pending
 fold. Every other operation that reads or replaces the state or the records runs the fold on the
 stream first: admission, a context transaction, prefill, an active capture, forced tokens, a
 non-MTP decode, and finishing.

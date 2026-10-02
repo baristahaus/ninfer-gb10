@@ -759,6 +759,75 @@ __global__ void __launch_bounds__(kWarpSize* kNumWarps, 2)
     zero_output_suffix(access, coord, valid, access.width);
 }
 
+// One layer of a previous round's records (raw k, v, {g, beta}), read for the pending fold that
+// precedes a row's verify. `row` is the pending record row; columns are [0, commit_columns).
+struct PendingRecordAccess {
+    const __nv_bfloat16* key_record;
+    const __nv_bfloat16* value_record;
+    const uint2* gate_record;
+    head_map heads;
+    std::int32_t width;
+    std::int32_t row;
+
+    __device__ __forceinline__ std::int64_t column(std::int32_t token) const {
+        return static_cast<std::int64_t>(row) * width + token;
+    }
+
+    __device__ __forceinline__ const __nv_bfloat16* key_ptr(const RecurrentCoordinates& coord,
+                                                            std::int32_t token) const {
+        return key_record + (column(token) * heads.H_qk + coord.qk_head) * kStateDim;
+    }
+
+    __device__ __forceinline__ const __nv_bfloat16* value_ptr(const RecurrentCoordinates& coord,
+                                                              std::int32_t token) const {
+        return value_record + (column(token) * heads.H_v + coord.value_head) * kStateDim;
+    }
+
+    __device__ __forceinline__ RawGatePair load_gate(const RecurrentCoordinates& coord,
+                                                     std::int32_t token) const {
+        return load_record_gate(gate_record, column(token) * heads.H_v + coord.value_head);
+    }
+};
+
+struct PendingFoldTable {
+    const GdnReplayFoldKernelRow* rows;
+    std::int32_t count;
+    const __nv_bfloat16* key_record;
+    const __nv_bfloat16* value_record;
+    const uint2* gate_record;
+    std::int32_t width;
+};
+
+// recurrent_record_kernel preceded by the row's pending fold: when a pending row names this row's
+// state slot (in place) with a positive extent, its committed columns are applied to the state
+// tile with the fold's arithmetic and the tile is stored back before this round's columns run.
+// Same register tile, same transition, same order as gdn_replay_fold followed by the record pass.
+template <bool Masked>
+__global__ void __launch_bounds__(kWarpSize* kNumWarps, 2)
+    recurrent_fold_record_kernel(RecordAccess<Masked> access, PendingFoldTable pending) {
+    const RecurrentCoordinates coord = access.coordinates();
+    const std::int32_t valid         = access.active_columns(coord);
+    const float* base                = access.state_read_base(coord);
+    __align__(16) float state[kDvPerWarp][kQkPerLane];
+    load_state_tile(state, base, coord);
+    const std::int32_t slot = access.initial_slots[coord.batch];
+    for (std::int32_t entry = 0; entry < pending.count; ++entry) {
+        const GdnReplayFoldKernelRow row = pending.rows[entry];
+        if (row.commit_columns <= 0 || row.source_state_slot != slot ||
+            row.destination_state_slot != slot) {
+            continue;
+        }
+        const PendingRecordAccess records{pending.key_record,  pending.value_record,
+                                          pending.gate_record, access.heads,
+                                          pending.width,       entry};
+        run_recurrent_sequence<true, FoldEffects>(state, records, coord, row.commit_columns);
+        store_state_tile(state, const_cast<float*>(base), coord);
+        break;
+    }
+    run_recurrent_sequence<true, RecordEffects>(state, access, coord, valid);
+    zero_output_suffix(access, coord, valid, access.width);
+}
+
 template <class Geometry>
 __global__ void __launch_bounds__(kWarpSize* kNumWarps, 2)
     recurrent_fold_kernel(const __grid_constant__ FoldAccess<Geometry> access) {

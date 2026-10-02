@@ -14,6 +14,8 @@ void target_verify_accept(ExecutionCore& execution, Tensor& continuation_hidden_
         throw std::logic_error("speculative target verify has no ReplaySSM record storage");
     }
     card.set_gdn_state_action(GdnStateAction::RecordForReplay, frame.replay_records);
+    card.set_gdn_pending_fold(frame.pending_records,
+                              frame.pending_records != nullptr ? &frame.pending_folds : nullptr);
     card.set_ple_replay_records(execution.ple_records);
     card.set_flash_predictor_hidden_output(
         frame.target_mtp_hidden.data != nullptr ? &frame.target_mtp_hidden : nullptr);
@@ -48,6 +50,7 @@ void target_verify_accept(ExecutionCore& execution, Tensor& continuation_hidden_
                      *execution.mtp_continuation_hidden_store, execution.device.stream);
     }
     card.set_flash_predictor_hidden_output(nullptr);
+    card.set_gdn_pending_fold(nullptr, nullptr);
 }
 
 } // namespace

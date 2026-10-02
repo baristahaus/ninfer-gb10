@@ -86,10 +86,14 @@ struct MtpBatchContext {
     qwen3_8_flash_next::MtpDecodeEgress& host_egress;
     Tensor& continuation_hidden_store;
     const Tensor* ple_embeddings = nullptr;
-    // Folds the previous round's deferred GDN/PLE commits (frame.pending_folds) over the first
-    // pending_fold_rows record rows at the head of the round; null or zero rows folds nothing.
-    const ops::GdnReplayFoldPlan* pending_fold = nullptr;
-    std::int32_t pending_fold_rows             = 0;
+    // The previous round's deferred commits (frame.pending_folds, first pending_fold_rows record
+    // rows; zero rows folds nothing). The round head copies those record rows into
+    // pending_snapshot and folds the PLE commits; the verify folds the GDN commits into each
+    // row's states as it reads them (flash_next_gdn_replay_record with a pending fold). That
+    // requires every pending entry to name, in place, the state slot of one row of this round;
+    // the Program settles deferred folds on the host before any round where that does not hold.
+    const GdnReplayRecords* pending_snapshot = nullptr;
+    std::int32_t pending_fold_rows           = 0;
     // The host PLE gather stage (Flash-Next): the round publishes its verify columns' row IDs
     // at its head and waits for the staged rows before its first PLE consumer.
     ops::FlashNextPleStageMailbox* ple_stage_mailbox = nullptr;
@@ -145,6 +149,9 @@ struct TargetVerifyFrameView {
     Tensor selected_hidden;
     Tensor selected_mtp_hidden;
     const GdnReplayRecords* replay_records = nullptr;
+    // Pending GDN commits folded by the verify: rows I32 [4,R] over snapshot record rows [0,R).
+    const GdnReplayRecords* pending_records = nullptr;
+    Tensor pending_folds;
     const ops::SamplingConfig* sampling    = nullptr;
     DFlashFeatureSink* feature_sink        = nullptr;
 };

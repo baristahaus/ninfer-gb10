@@ -307,6 +307,47 @@ void gated_delta_net_replay_record(const Tensor& q, const Tensor& k, const Tenso
                                                      value_record, gate_record, out, stream);
 }
 
+void gated_delta_net_fold_replay_record(const Tensor& q, const Tensor& k, const Tensor& v,
+                                        const Tensor& g, const Tensor& beta, float scale,
+                                        Tensor& ssm_states, const Tensor& valid_columns,
+                                        const Tensor& initial_state_slots, Tensor& key_record,
+                                        Tensor& value_record, Tensor& gate_record, Tensor& out,
+                                        const GdnPendingFold& pending, cudaStream_t stream) {
+    constexpr const char* kOp = "gated_delta_net_fold_replay_record";
+    validate_replay_record(q, k, v, g, beta, scale, ssm_states, valid_columns, initial_state_slots,
+                           key_record, value_record, gate_record, out);
+    const std::int32_t qk_heads     = q.ne[1];
+    const std::int32_t value_heads  = v.ne[1];
+    const std::int32_t width        = q.ne[2];
+    const std::int32_t pending_rows = pending.rows.ne[1];
+    if (pending_rows <= 0 || pending_rows > kMaximumRows) {
+        throw std::invalid_argument(std::string(kOp) + ": pending row count must be in [1,8]");
+    }
+    require_tensor(pending.rows, DType::I32, {4, pending_rows}, 16, kOp, "pending rows");
+    require_tensor(pending.key_record, DType::BF16, {kStateDim, qk_heads, width, pending_rows}, 8,
+                   kOp, "pending key record");
+    require_tensor(pending.value_record, DType::BF16, {kStateDim, value_heads, width, pending_rows},
+                   2, kOp, "pending value record");
+    require_tensor(pending.gate_record, DType::FP32, {2, value_heads, width, pending_rows}, 8, kOp,
+                   "pending gate record");
+    const std::array<const Tensor*, 7> written{&ssm_states,  &key_record, &value_record,
+                                               &gate_record, &out,        &pending.key_record,
+                                               &pending.rows};
+    std::vector<MemoryRange> ranges;
+    for (const Tensor* tensor : written) { ranges.push_back(tensor_range(*tensor, kOp)); }
+    ranges.push_back(tensor_range(pending.value_record, kOp));
+    ranges.push_back(tensor_range(pending.gate_record, kOp));
+    require_pairwise_disjoint(
+        ranges, "gated_delta_net_fold_replay_record: pending records must be a separate copy");
+    static_assert(sizeof(detail::gated_delta_net::GdnReplayFoldKernelRow) ==
+                  4 * sizeof(std::int32_t));
+    detail::gated_delta_net::launch_recurrent_fold_record(
+        q, k, v, g, beta, scale, ssm_states, valid_columns, initial_state_slots, key_record,
+        value_record, gate_record, out,
+        static_cast<const detail::gated_delta_net::GdnReplayFoldKernelRow*>(pending.rows.data),
+        pending_rows, pending.key_record, pending.value_record, pending.gate_record, stream);
+}
+
 GdnReplayFoldPlan::GdnReplayFoldPlan(const GdnReplayRecords& records,
                                      LinearAttentionStateAllLayersView states)
     : records_(records), states_(states) {

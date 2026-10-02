@@ -103,4 +103,36 @@ void gated_delta_net_replay_record(const Tensor& q, const Tensor& k, const Tenso
                                    Tensor& value_record, Tensor& gate_record, Tensor& out,
                                    cudaStream_t stream);
 
+// The previous round's commits still to be folded, and that round's records (a copy the current
+// round does not overwrite). rows is device I32 [4,R] with one {source_state_slot,
+// destination_state_slot, commit_columns, 0} descriptor per previous record row r in [0,R),
+// R in [1,8]; key_record BF16 [128,Hq,T,R], value_record BF16 [128,Hv,T,R] and gate_record FP32
+// [2,Hv,T,R] hold that row's records in columns [0, commit_columns).
+struct GdnPendingFold {
+    Tensor rows;
+    Tensor key_record;
+    Tensor value_record;
+    Tensor gate_record;
+};
+
+/**
+ * Op: gated_delta_net_fold_replay_record
+ *
+ * gated_delta_net_replay_record preceded, per row, by that row's pending fold. Row b's state slot
+ * s = initial_state_slots[b]; a pending descriptor r with destination_state_slot == s and a
+ * positive commit_columns c must also have source_state_slot == s (an in-place continuation). Its
+ * c committed transitions are applied to slot s from the pending records, exactly as
+ * gdn_replay_fold applies them, and the folded state is written back to slot s before row b's
+ * recurrence reads it; at most one descriptor may name s. Rows no descriptor names are evaluated
+ * as by gated_delta_net_replay_record and leave their state unchanged. The recurrent state and
+ * outputs are bit-identical to gdn_replay_fold over the named rows followed by
+ * gated_delta_net_replay_record. Convolution history is not touched: the caller folds it.
+ */
+void gated_delta_net_fold_replay_record(const Tensor& q, const Tensor& k, const Tensor& v,
+                                        const Tensor& g, const Tensor& beta, float scale,
+                                        Tensor& ssm_states, const Tensor& valid_columns,
+                                        const Tensor& initial_state_slots, Tensor& key_record,
+                                        Tensor& value_record, Tensor& gate_record, Tensor& out,
+                                        const GdnPendingFold& pending, cudaStream_t stream);
+
 } // namespace ninfer::ops

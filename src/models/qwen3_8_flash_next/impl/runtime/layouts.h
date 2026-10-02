@@ -35,6 +35,9 @@ struct PersistentLayout {
     qwen3_8_flash_next::DecoderStateLayout decoder;
     qwen3_8_flash_next::StateImageDeviceLayout state_images;
     std::optional<GdnReplayRecordLayout> replay_records;
+    // MTP: the previous round's records, copied at the round head so the verify can fold them
+    // while it overwrites replay_records.
+    std::optional<GdnReplayRecordLayout> replay_snapshot;
     std::optional<DFlashPersistentLayout> dflash;
     qwen3_8_flash_next::RoundStateLayout round;
     TensorLayout prefill_hidden;

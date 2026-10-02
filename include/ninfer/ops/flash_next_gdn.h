@@ -49,11 +49,24 @@ void flash_next_gdn_batch_update(const Tensor& input, const FlashNextGdnWeights&
                                  Tensor& destination, WorkspaceArena& workspace,
                                  cudaStream_t stream);
 
+// The previous round's commits still to be folded into this layer's states: rows is device I32
+// [4,R] ({source, destination, commit_columns, 0} per previous record row), and records is this
+// layer's copy of that round's records with R rows (the current round overwrites the originals).
+struct FlashNextGdnPendingFold {
+    Tensor rows;
+    GdnReplayRecordLayer records;
+};
+
+// Records one MTP verify block per row from its source slot without committing it. With a
+// pending fold, a row whose source slot a pending descriptor names (in place, positive extent)
+// first folds those committed columns into its convolution history and recurrent state, written
+// back to the slot, exactly as gdn_replay_fold would; the record pass then starts from the folded
+// state (gated_delta_net_fold_replay_record).
 void flash_next_gdn_replay_record(const Tensor& input, const FlashNextGdnWeights& weights,
-                                  const Tensor& convolution_states,
-                                  const Tensor& recurrent_states,
+                                  Tensor& convolution_states, Tensor& recurrent_states,
                                   const Tensor& valid_columns, const Tensor& source_slots,
                                   GdnReplayRecordLayer records, Tensor& destination,
-                                  WorkspaceArena& workspace, cudaStream_t stream);
+                                  WorkspaceArena& workspace, cudaStream_t stream,
+                                  const FlashNextGdnPendingFold* pending = nullptr);
 
 } // namespace ninfer::ops

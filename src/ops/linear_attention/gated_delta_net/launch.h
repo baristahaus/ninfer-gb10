@@ -49,6 +49,19 @@ void launch_recurrent_record(const Tensor& q, const Tensor& k, const Tensor& v, 
                              Tensor& key_record, Tensor& value_record, Tensor& gate_record,
                              Tensor& out, cudaStream_t stream);
 
+// launch_recurrent_record preceded by each row's pending fold (recurrent_fold_record_kernel).
+// pending_rows is device memory with pending_count descriptors; the pending records are BF16
+// key [128,Hq,T,R], BF16 value [128,Hv,T,R] and FP32 gate [2,Hv,T,R] of the previous round.
+void launch_recurrent_fold_record(const Tensor& q, const Tensor& k, const Tensor& v,
+                                  const Tensor& g, const Tensor& beta, float scale,
+                                  Tensor& ssm_states, const Tensor& valid_columns,
+                                  const Tensor& initial_state_slots, Tensor& key_record,
+                                  Tensor& value_record, Tensor& gate_record, Tensor& out,
+                                  const GdnReplayFoldKernelRow* pending_rows,
+                                  std::int32_t pending_count, const Tensor& pending_key_record,
+                                  const Tensor& pending_value_record,
+                                  const Tensor& pending_gate_record, cudaStream_t stream);
+
 // device_rows, when non-null, replaces rows: the kernel reads each row's descriptor from device
 // memory at execution time.
 void launch_replay_fold(const GdnReplayRecords& records, LinearAttentionStateAllLayersView states,

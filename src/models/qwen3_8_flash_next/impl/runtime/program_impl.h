@@ -924,8 +924,12 @@ ProgramImplCore::ProgramImplCore(const LoadedModelData& model_in, const Sequence
         replay_records.emplace(backing, *plan.persistent.replay_records);
         replay_fold.emplace(*replay_records, state_images->linear().all_layers_view());
     }
+    if (plan.persistent.replay_snapshot) {
+        replay_snapshot.emplace(backing, *plan.persistent.replay_snapshot);
+    }
     if (replay_records.has_value() != (speculative_backend != SpeculativeBackend::None) ||
-        replay_fold.has_value() != replay_records.has_value()) {
+        replay_fold.has_value() != replay_records.has_value() ||
+        replay_snapshot.has_value() != (speculative_backend == SpeculativeBackend::Mtp)) {
         throw std::logic_error("ReplaySSM records do not match the sequence plan");
     }
     if (plan.persistent.dflash) {
@@ -11566,9 +11570,9 @@ void ProgramImplCore::prepare_graphs() {
                 profile.max_execution_frontier = planned.max;
                 profile.topology_class =
                     planned.topology_class * max_concurrency + (batch_size - 1U);
-                // Every MTP executable carries the deferred-fold node; rows with zero columns
+                // Every MTP executable carries the deferred-fold nodes; rows with zero columns
                 // fold nothing at replay.
-                mtp_state.pending_fold      = replay_fold ? &*replay_fold : nullptr;
+                mtp_state.pending_snapshot  = &*replay_snapshot;
                 mtp_state.pending_fold_rows = static_cast<std::int32_t>(batch_size);
                 schedule::capture_mtp_decode_batch(
                     mtp_state, static_cast<std::int32_t>(batch_size), draft_window,
@@ -12487,7 +12491,7 @@ ProgramImplCore::decode_mtp_batch(std::span<const std::uint32_t> lanes,
             state_images->continuation_hidden_store(),
             flash_decode_ple ? &*flash_decode_ple : nullptr};
 
-        schedule_state.pending_fold = replay_fold ? &*replay_fold : nullptr;
+        schedule_state.pending_snapshot = &*replay_snapshot;
         schedule_state.pending_fold_rows =
             any_deferred ? static_cast<std::int32_t>(lanes.size()) : 0;
         bind_ple_stage(ple_gather_stage, schedule_state);

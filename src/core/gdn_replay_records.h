@@ -3,6 +3,8 @@
 #include "core/layout.h"
 #include "core/tensor.h"
 
+#include <cuda_runtime.h>
+
 #include <cstddef>
 #include <cstdint>
 
@@ -57,5 +59,14 @@ struct GdnReplayRecords {
 
     [[nodiscard]] GdnReplayRecordLayer layer(std::int32_t layer, std::int32_t rows) const;
 };
+
+/**
+ * Copies record rows [0, rows) of every layer and plane from source to destination (one strided
+ * device-to-device copy per plane, stream-ordered and graph-capturable). Both sets share one
+ * spec and must not overlap.
+ */
+void copy_gdn_replay_record_rows(const GdnReplayRecords& source,
+                                 const GdnReplayRecords& destination, std::int32_t rows,
+                                 cudaStream_t stream);
 
 } // namespace ninfer

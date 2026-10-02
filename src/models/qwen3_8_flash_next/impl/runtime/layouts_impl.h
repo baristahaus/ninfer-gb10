@@ -177,17 +177,20 @@ PersistentLayout persistent_layout(const SequencePlanImpl& plan) {
     }
     out.state_images = qwen3_8_flash_next::plan_state_image_device_pool(builder, state_image_spec);
     if (plan.speculative_backend != SpeculativeBackend::None) {
-        out.replay_records = plan_gdn_replay_records(
-            builder, GdnReplayRecordSpec{
-                         .layers          = TextConfig::gdn_layers(),
-                         .record_capacity = static_cast<std::int32_t>(plan.max_concurrency),
-                         .width           = static_cast<std::int32_t>(plan.draft_window + 1U),
-                         .conv_channels   = TextConfig::convolution_dim,
-                         .qk_heads        = TextConfig::gdn_key_heads,
-                         .value_heads     = TextConfig::gdn_value_heads,
-                         .key_dim         = TextConfig::gdn_key_head_dim,
-                         .value_dim       = TextConfig::gdn_value_head_dim,
-                     });
+        const GdnReplayRecordSpec replay_spec{
+            .layers          = TextConfig::gdn_layers(),
+            .record_capacity = static_cast<std::int32_t>(plan.max_concurrency),
+            .width           = static_cast<std::int32_t>(plan.draft_window + 1U),
+            .conv_channels   = TextConfig::convolution_dim,
+            .qk_heads        = TextConfig::gdn_key_heads,
+            .value_heads     = TextConfig::gdn_value_heads,
+            .key_dim         = TextConfig::gdn_key_head_dim,
+            .value_dim       = TextConfig::gdn_value_head_dim,
+        };
+        out.replay_records = plan_gdn_replay_records(builder, replay_spec);
+        if (plan.speculative_backend == SpeculativeBackend::Mtp) {
+            out.replay_snapshot = plan_gdn_replay_records(builder, replay_spec);
+        }
     }
     if constexpr (Variant::supports_dflash) {
         if (plan.features.dflash()) {

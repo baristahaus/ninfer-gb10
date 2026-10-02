@@ -1,0 +1,120 @@
+
+probe: T=8 rows, 40 distinct experts, 4 layer banks, 73.7 MB gate/up + 36.9 MB down per layer, 48 SMs
+case                                       grid   us/layer       GB/s    % 246
+contig codes+scales                          48      452.5      244.4     99.4
+contig codes+scales                          96      457.2      241.9     98.3
+contig codes+scales                         144      457.8      241.6     98.2
+contig codes+scales                         192      462.0      239.4     97.3
+contig codes only                            96      403.0      243.9     99.2
+rows gate codes S=64B (BK128)               144      307.3      213.2     86.7
+rows gate codes S=128B (BK256)              144      288.4      227.3     92.4
+rows gate codes S=256B (BK512)              144      282.3      232.1     94.4
+rows down codes S=64B (BK128)               144      146.5      223.7     90.9
+rows down codes S=320B (whole row)          144      135.5      241.8     98.3
+gate BN128 BK128 S2 (current)                96      349.9      210.7     85.7
+gate BN128 BK128 S3                          96      349.7      210.8     85.7
+gate BN128 BK128 S4                          96      350.8      210.1     85.4
+gate BN128 BK256 S2                          96      324.9      226.9     92.2
+gate BN64 BK256 S3                           96      319.1      231.0     93.9
+gate BN64 BK256 S4                           96      318.6      231.4     94.1
+gate BN64 BK512 S2                           96      314.2      234.6     95.4
+gate BN256 BK128 S2 (wide)                   96      360.4      204.5     83.1
+down BN128 BK128 S2 (current)                96      162.8      226.5     92.1
+down BN128 BK128 S3                          96      162.6      226.7     92.2
+down BN128 BK128 S4                          96      162.5      226.9     92.2
+down BN64 BK128 S4                           96      156.2      236.1     96.0
+down BN256 BK128 S2                          96      170.9      215.8     87.7
+gate BN128 BK128 S2 (current)               144      353.4      208.6     84.8
+gate BN128 BK128 S3                         144      354.4      208.0     84.6
+gate BN128 BK128 S4                         144      347.6      212.1     86.2
+gate BN128 BK256 S2                         144      322.8      228.4     92.9
+gate BN64 BK256 S3                          144      317.3      232.3     94.4
+gate BN64 BK256 S4                          144      316.9      232.7     94.6
+gate BN64 BK512 S2                          144      311.4      236.7     96.2
+gate BN256 BK128 S2 (wide)                  144      359.3      205.2     83.4
+down BN128 BK128 S2 (current)               144      166.8      221.0     89.8
+down BN128 BK128 S3                         144      167.4      220.3     89.5
+down BN128 BK128 S4                         144      160.6      229.5     93.3
+down BN64 BK128 S4                          144      157.7      233.7     95.0
+down BN256 BK128 S2                         144      168.3      219.1     89.1
+gate+down current, back to back             144      520.3      212.6     86.4
+
+probe: T=8 rows, 60 distinct experts, 4 layer banks, 110.6 MB gate/up + 55.3 MB down per layer, 48 SMs
+case                                       grid   us/layer       GB/s    % 246
+contig codes+scales                          48      676.8      245.1     99.6
+contig codes+scales                          96      680.6      243.7     99.1
+contig codes+scales                         144      686.7      241.6     98.2
+contig codes+scales                         192      693.6      239.2     97.2
+contig codes only                            96      603.6      244.3     99.3
+rows gate codes S=64B (BK128)               144      460.4      213.5     86.8
+rows gate codes S=128B (BK256)              144      431.2      228.0     92.7
+rows gate codes S=256B (BK512)              144      420.2      233.9     95.1
+rows down codes S=64B (BK128)               144      220.8      222.6     90.5
+rows down codes S=320B (whole row)          144      201.7      243.7     99.1
+gate BN128 BK128 S2 (current)                96      516.3      214.2     87.1
+gate BN128 BK128 S3                          96      519.6      212.8     86.5
+gate BN128 BK128 S4                          96      521.9      211.9     86.1
+gate BN128 BK256 S2                          96      483.9      228.6     92.9
+gate BN64 BK256 S3                           96      474.2      233.2     94.8
+gate BN64 BK256 S4                           96      474.5      233.1     94.7
+gate BN64 BK512 S2                           96      466.6      237.0     96.3
+gate BN256 BK128 S2 (wide)                   96      530.8      208.3     84.7
+down BN128 BK128 S2 (current)                96      240.8      229.6     93.3
+down BN128 BK128 S3                          96      240.8      229.6     93.4
+down BN128 BK128 S4                          96      240.4      230.0     93.5
+down BN64 BK128 S4                           96      231.1      239.3     97.3
+down BN256 BK128 S2                          96      252.9      218.7     88.9
+gate BN128 BK128 S2 (current)               144      526.7      210.0     85.3
+gate BN128 BK128 S3                         144      527.1      209.8     85.3
+gate BN128 BK128 S4                         144      516.3      214.2     87.1
+gate BN128 BK256 S2                         144      481.9      229.5     93.3
+gate BN64 BK256 S3                          144      472.2      234.2     95.2
+gate BN64 BK256 S4                          144      471.9      234.4     95.3
+gate BN64 BK512 S2                          144      464.3      238.2     96.8
+gate BN256 BK128 S2 (wide)                  144      528.3      209.3     85.1
+down BN128 BK128 S2 (current)               144      248.0      223.0     90.7
+down BN128 BK128 S3                         144      250.0      221.2     89.9
+down BN128 BK128 S4                         144      238.2      232.1     94.4
+down BN64 BK128 S4                          144      235.5      234.8     95.4
+down BN256 BK128 S2                         144      248.9      222.2     90.3
+gate+down current, back to back             144      775.0      214.0     87.0
+
+probe: T=8 rows, 80 distinct experts, 4 layer banks, 147.5 MB gate/up + 73.7 MB down per layer, 48 SMs
+case                                       grid   us/layer       GB/s    % 246
+contig codes+scales                          48      904.8      244.4     99.4
+contig codes+scales                          96      908.0      243.6     99.0
+contig codes+scales                         144      915.9      241.5     98.2
+contig codes+scales                         192      929.2      238.0     96.8
+contig codes only                            96      804.7      244.3     99.3
+rows gate codes S=64B (BK128)               144      612.0      214.2     87.1
+rows gate codes S=128B (BK256)              144      573.9      228.4     92.8
+rows gate codes S=256B (BK512)              144      560.0      234.1     95.1
+rows down codes S=64B (BK128)               144      296.2      221.3     90.0
+rows down codes S=320B (whole row)          144      269.5      243.2     98.9
+gate BN128 BK128 S2 (current)                96      685.2      215.2     87.5
+gate BN128 BK128 S3                          96      691.5      213.2     86.7
+gate BN128 BK128 S4                          96      694.4      212.3     86.3
+gate BN128 BK256 S2                          96      642.2      229.6     93.3
+gate BN64 BK256 S3                           96      629.6      234.2     95.2
+gate BN64 BK256 S4                           96      630.5      233.9     95.1
+gate BN64 BK512 S2                           96      618.4      238.4     96.9
+gate BN256 BK128 S2 (wide)                   96      705.5      209.0     85.0
+down BN128 BK128 S2 (current)                96      320.4      230.1     93.5
+down BN128 BK128 S3                          96      319.9      230.5     93.7
+down BN128 BK128 S4                          96      319.4      230.8     93.8
+down BN64 BK128 S4                           96      308.1      239.3     97.3
+down BN256 BK128 S2                          96      336.2      219.3     89.2
+gate BN128 BK128 S2 (current)               144      699.5      210.8     85.7
+gate BN128 BK128 S3                         144      701.8      210.1     85.4
+gate BN128 BK128 S4                         144      688.0      214.3     87.1
+gate BN128 BK256 S2                         144      639.9      230.4     93.7
+gate BN64 BK256 S3                          144      628.5      234.6     95.4
+gate BN64 BK256 S4                          144      627.6      235.0     95.5
+gate BN64 BK512 S2                          144      617.1      239.0     97.1
+gate BN256 BK128 S2 (wide)                  144      701.4      210.2     85.5
+down BN128 BK128 S2 (current)               144      329.9      223.5     90.9
+down BN128 BK128 S3                         144      333.0      221.4     90.0
+down BN128 BK128 S4                         144      316.0      233.3     94.8
+down BN64 BK128 S4                          144      313.0      235.6     95.8
+down BN256 BK128 S2                         144      331.1      222.6     90.5
+gate+down current, back to back             144     1029.1      214.9     87.4

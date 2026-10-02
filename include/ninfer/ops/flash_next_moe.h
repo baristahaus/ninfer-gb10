@@ -41,7 +41,6 @@ struct FlashNextMoeWeights {
 // Destination is overwritten with the BF16 result.
 void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Tensor& destination,
                     WorkspaceArena& workspace, cudaStream_t stream,
-                    Bf16GemmContext* bf16_gemm = nullptr,
-                    bool wide_decode_gate = true);
+                    Bf16GemmContext* bf16_gemm = nullptr);
 
 } // namespace ninfer::ops

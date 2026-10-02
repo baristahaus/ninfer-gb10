@@ -521,13 +521,20 @@ void TextContext::mtp_forward_flash_next(const Tensor& ids, const Tensor& hidden
                              stream);
 
     Tensor cache_positions = positions.view({width, batch});
+    // Three-axis MRoPE positions hold three values per token ([T,3] or [width,batch,3]); text
+    // positions hold one ([width,batch]). The element count decides: a shape test on ne[1]
+    // mistook [width,batch] text positions for [T,3] whenever batch was 3.
     Tensor mrope_positions;
-    if (rope_positions.ne[2] == 3 || rope_positions.ne[1] == 3) {
+    const std::int64_t rope_elements = rope_positions.numel();
+    if (rope_elements == 3LL * tokens) {
         mrope_positions = rope_positions.view({width, batch, 3});
-    } else {
+    } else if (rope_elements == tokens) {
         mrope_positions = work_.alloc(DType::I32, {width, batch, 3});
         ops::flash_next_expand_text_positions(rope_positions.view({width, batch}), mrope_positions,
                                               stream);
+    } else {
+        throw std::invalid_argument("Flash-Next MTP RoPE positions must hold one or three values "
+                                    "per token");
     }
     Tensor valid;
     if (active_valid_columns_ != nullptr) {

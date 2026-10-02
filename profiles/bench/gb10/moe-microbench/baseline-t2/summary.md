@@ -1,0 +1,24 @@
+## Flash-Next MoE microbench
+
+- Commit: 72f1140d (with local changes)
+- GPU/driver: NVIDIA GB10, 580.173.02
+- T=2 rows, 4 layer banks, distinct experts 10,20,40,64,80
+
+```
+flash_next_moe NVFP4 decode route: T=2 rows, 4 layer banks of 1.42 GB, 2.765 MB streamed per selected expert
+wide_gate  distinct      us/layer       min us    routed GB/s
+off        10               192.6        190.7          143.5
+off        20               309.4        306.8          178.7
+off        20               308.3        307.3          179.3
+off        20               308.7        307.6          179.1
+off        20               308.3        307.3          179.3
+fit wide_gate=off: 11.61 us per distinct expert (238 GB/s, 97% of 246 GB/s), 76.6 us fixed per layer
+on         10               191.8        189.5          144.2
+on         20               317.3        316.0          174.3
+on         20               317.0        315.6          174.4
+on         20               316.8        315.7          174.6
+on         20               317.3        315.8          174.2
+fit wide_gate=on: 12.53 us per distinct expert (221 GB/s, 90% of 246 GB/s), 66.5 us fixed per layer
+```
+
+ncu (one eager pass, 2 layers, 80 distinct experts): see ncu-details.txt and moe-ncu.ncu-rep.

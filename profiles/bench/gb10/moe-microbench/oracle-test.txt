@@ -1,0 +1,15 @@
+Flash-Next NVFP4 MoE oracle test on exp/moe-grouped-decode (59041aba), 2026-10-02, twoFour:
+
+ninfer: persistent grids sized for 48 SMs
+Flash-Next NVFP4 MoE T=1: relative L2 0.1906, max |err| 36.04 of max |ref| 213
+Flash-Next NVFP4 MoE T=2: relative L2 0.2076, max |err| 36.04 of max |ref| 213
+Flash-Next NVFP4 MoE T=8: relative L2 0.2691, max |err| 73.83 of max |ref| 257.7
+Flash-Next NVFP4 MoE T=8: reduction criterion failed at index 5120 actual=-60.75 reference=13.0755
+Flash-Next NVFP4 MoE T=16: relative L2 0.1287, max |err| 170.1 of max |ref| 1814
+Flash-Next NVFP4 MoE T=17: relative L2 0.1371, max |err| 170.1 of max |ref| 1814
+Flash-Next NVFP4 MoE 8 rows batched vs one by one: relative L2 0, max |diff| 0
+FAIL Flash-Next MoE
+
+Notes: grouped-vs-per-row parity is bitwise (max |diff| 0), so the T=8 oracle
+deviation belongs to the per-row route or the oracle/synthetic setup, not to the
+grouping change itself. T=8 relative L2 (0.2691) also exceeds the 0.25 bound.

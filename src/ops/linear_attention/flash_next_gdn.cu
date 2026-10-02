@@ -28,7 +28,11 @@ constexpr int kQk = kQkHeads * kDim;
 constexpr int kValue = kHeads * kDim;
 constexpr int kConvolution = 2 * kQk + kValue;
 
-__global__ void project_control_gating_kernel(const __nv_bfloat16* input,
+constexpr int kControlThreads = 256;
+static_assert(kHidden % kControlThreads == 0);
+
+__global__ void __launch_bounds__(kControlThreads) project_control_gating_kernel(
+                                              const __nv_bfloat16* input,
                                               const __nv_bfloat16* a_weight,
                                               const __nv_bfloat16* b_weight,
                                               const float* a_log, const float* dt_bias,
@@ -37,7 +41,9 @@ __global__ void project_control_gating_kernel(const __nv_bfloat16* input,
     const int token = static_cast<int>(blockIdx.y);
     float av = 0.0F;
     float bv = 0.0F;
-    for (int k = static_cast<int>(threadIdx.x); k < kHidden; k += blockDim.x) {
+    // Compile-time trip count: all loads issue before the first use.
+#pragma unroll
+    for (int k = static_cast<int>(threadIdx.x); k < kHidden; k += kControlThreads) {
         const float x = __bfloat162float(input[k + static_cast<std::int64_t>(kHidden) * token]);
         av = fmaf(__bfloat162float(a_weight[k + static_cast<std::int64_t>(kHidden) * row]), x, av);
         bv = fmaf(__bfloat162float(b_weight[k + static_cast<std::int64_t>(kHidden) * row]), x, bv);
@@ -214,7 +220,7 @@ void flash_next_gdn(const Tensor& input, const FlashNextGdnWeights& weights,
         linear(input, weights.b_projection, b, stream, bf16_gemm);
         gdn_gating(a, b, weights.a_log, weights.dt_bias, g, beta, stream);
     } else {
-        project_control_gating_kernel<<<dim3(kHeads, static_cast<unsigned int>(tokens)), 256, 0,
+        project_control_gating_kernel<<<dim3(kHeads, static_cast<unsigned int>(tokens)), kControlThreads, 0,
                                         stream>>>(
             static_cast<const __nv_bfloat16*>(input.data),
             static_cast<const __nv_bfloat16*>(weights.a_projection.qdata),
@@ -283,7 +289,7 @@ void flash_next_gdn_batch_update(const Tensor& input, const FlashNextGdnWeights&
     Tensor b = workspace.alloc(DType::BF16, {kHeads, batch});
     Tensor g = workspace.alloc(DType::FP32, {kHeads, batch});
     Tensor beta = workspace.alloc(DType::FP32, {kHeads, batch});
-    project_control_gating_kernel<<<dim3(kHeads, static_cast<unsigned int>(batch)), 256, 0,
+    project_control_gating_kernel<<<dim3(kHeads, static_cast<unsigned int>(batch)), kControlThreads, 0,
                                     stream>>>(
         static_cast<const __nv_bfloat16*>(input.data),
         static_cast<const __nv_bfloat16*>(weights.a_projection.qdata),
@@ -364,7 +370,7 @@ void flash_next_gdn_replay_record(const Tensor& input, const FlashNextGdnWeights
     Tensor b = workspace.alloc(DType::BF16, {kHeads, tokens});
     Tensor g = workspace.alloc(DType::FP32, {kHeads, tokens});
     Tensor beta = workspace.alloc(DType::FP32, {kHeads, tokens});
-    project_control_gating_kernel<<<dim3(kHeads, static_cast<unsigned int>(tokens)), 256, 0,
+    project_control_gating_kernel<<<dim3(kHeads, static_cast<unsigned int>(tokens)), kControlThreads, 0,
                                     stream>>>(
         static_cast<const __nv_bfloat16*>(input.data),
         static_cast<const __nv_bfloat16*>(weights.a_projection.qdata),

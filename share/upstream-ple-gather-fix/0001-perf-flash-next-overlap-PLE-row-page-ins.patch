@@ -1,0 +1,179 @@
+From f46d2ae4a36a586901d635bb415dd161e19e1ae6 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 2 Oct 2026 13:50:40 +0000
+Subject: [PATCH] perf(flash-next): overlap PLE row page-ins in the host gather
+
+The PLE table (51.2 GB, 320,001,536 x 160 B) is a file mapping, and its rows
+are hashed bigram/trigram lookups scattered over the whole file. The gather
+copied each call's rows one by one, so every uncached row was a demand page
+fault served serially, and default fault readahead read around each scattered
+row, evicting others.
+
+MappedRange gains page-cache advice: advise_random() (set once on the PLE
+mapping) and prefetch(), which starts asynchronous reads of a byte range.
+gather_ple_fp8 prefetches the next 512 rows ahead of each copy, so the
+page-ins of a call overlap. Gathered bytes are unchanged.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01PB8TNZ3p817zVAp6aH4yrz
+---
+ src/artifact/reader.cpp                       | 43 +++++++++++++++++++
+ src/artifact/reader.h                         |  6 +++
+ .../qwen3_8_flash_next/impl/ple_table.cpp     | 27 ++++++++----
+ .../impl/load_plan.cpp                        |  3 ++
+ tests/artifact/test_reader.cpp                |  4 ++
+ 5 files changed, 75 insertions(+), 8 deletions(-)
+
+diff --git a/src/artifact/reader.cpp b/src/artifact/reader.cpp
+index 77ab0a36..ce7ce70d 100644
+--- a/src/artifact/reader.cpp
++++ b/src/artifact/reader.cpp
+@@ -4,7 +4,11 @@
+ #include "artifact/formats.h"
+ #include "artifact/layouts.h"
+ 
++#include <sys/mman.h>
++#include <unistd.h>
++
+ #include <algorithm>
++#include <cstdint>
+ #include <array>
+ #include <limits>
+ 
+@@ -202,4 +206,43 @@ void MappedRange::copy(std::uint64_t offset, std::span<std::byte> destination) c
+         ++it;
+     }
+ }
++
++namespace {
++
++// madvise needs page-aligned starts; a segment's storage begins inside its first mapped page.
++void advise_pages(const std::byte* begin, std::uint64_t bytes, int advice) {
++    static const auto page = static_cast<std::uintptr_t>(::sysconf(_SC_PAGESIZE));
++    const auto first       = reinterpret_cast<std::uintptr_t>(begin) / page * page;
++    const auto last        = reinterpret_cast<std::uintptr_t>(begin) + bytes;
++    // Advice only: a refused hint (for example EAGAIN under memory pressure) leaves the later
++    // read to fault the page in as before.
++    (void)::madvise(reinterpret_cast<void*>(first), last - first, advice);
++}
++
++} // namespace
++
++void MappedRange::advise_random() const {
++    for (const auto& segment : segments) {
++        advise_pages(segment.storage.get(), segment.bytes, MADV_RANDOM);
++    }
++}
++
++void MappedRange::prefetch(std::uint64_t offset, std::uint64_t bytes) const {
++    if (offset > size() || bytes > size() - offset) {
++        throw ArtifactError("mapped prefetch exceeds range");
++    }
++    if (bytes == 0) { return; }
++    auto it = std::upper_bound(
++        segments.begin(), segments.end(), offset,
++        [](std::uint64_t value, const MappedSegment& segment) { return value < segment.begin; });
++    --it;
++    while (bytes != 0) {
++        const auto local = offset - it->begin;
++        const auto count = std::min<std::uint64_t>(bytes, it->bytes - local);
++        advise_pages(it->storage.get() + local, count, MADV_WILLNEED);
++        offset += count;
++        bytes -= count;
++        ++it;
++    }
++}
+ } // namespace ninfer::artifact
+diff --git a/src/artifact/reader.h b/src/artifact/reader.h
+index 3d1d7f53..b446e2bf 100644
+--- a/src/artifact/reader.h
++++ b/src/artifact/reader.h
+@@ -24,6 +24,12 @@ public:
+         return segments.empty() ? 0 : segments.back().begin + segments.back().bytes;
+     }
+     void copy(std::uint64_t offset, std::span<std::byte> destination) const;
++    // Page-cache advice for the mapped file pages; both are best effort and never change
++    // contents. advise_random() stops fault readahead around scattered reads. prefetch() starts
++    // asynchronous reads of the pages covering [offset, offset + bytes) without waiting, so a
++    // caller that prefetches many scattered rows before copying them overlaps their I/O.
++    void advise_random() const;
++    void prefetch(std::uint64_t offset, std::uint64_t bytes) const;
+ };
+ 
+ struct ReadSegment {
+diff --git a/src/models/qwen3_8_flash_next/impl/ple_table.cpp b/src/models/qwen3_8_flash_next/impl/ple_table.cpp
+index ab7d273d..b1741bd0 100644
+--- a/src/models/qwen3_8_flash_next/impl/ple_table.cpp
++++ b/src/models/qwen3_8_flash_next/impl/ple_table.cpp
+@@ -83,15 +83,26 @@ void gather_ple_fp8(const artifact::MappedRange& table, std::span<const PleIds>
+     if (output.size() != required) {
+         throw std::invalid_argument("PLE gathered output has the wrong byte length");
+     }
+-    for (std::size_t token = 0; token < ids.size(); ++token) {
+-        for (std::size_t head = 0; head < kPleHeads; ++head) {
+-            const std::uint64_t row = ids[token][head];
+-            if (row >= kPleRows) { throw std::out_of_range("PLE row ID is outside the table"); }
+-            const std::uint64_t source = row * kPleHeadWidth;
+-            const std::uint64_t destination =
+-                static_cast<std::uint64_t>(token) * kPleEmbeddingDim + head * kPleHeadWidth;
+-            table.copy(source, output.subspan(destination, kPleHeadWidth));
++    // The table does not fit in page cache next to the weights on a unified-memory device, and
++    // hashed rows are scattered, so an uncached row is one page fault. Copying row by row would
++    // serve those faults one at a time. Instead the reads of the next kPrefetchRows rows are
++    // started ahead of the copy, so their I/O overlaps; the window bounds the advice calls in
++    // flight for a long prefill chunk.
++    constexpr std::size_t kPrefetchRows = 512;
++    const std::size_t rows              = ids.size() * kPleHeads;
++    const auto row_id                   = [&ids](std::size_t index) -> std::uint64_t {
++        const std::uint64_t row = ids[index / kPleHeads][index % kPleHeads];
++        if (row >= kPleRows) { throw std::out_of_range("PLE row ID is outside the table"); }
++        return row;
++    };
++    std::size_t prefetched = 0;
++    for (std::size_t index = 0; index < rows; ++index) {
++        for (const std::size_t end = std::min(rows, index + kPrefetchRows); prefetched < end;
++             ++prefetched) {
++            table.prefetch(row_id(prefetched) * kPleHeadWidth, kPleHeadWidth);
+         }
++        const std::uint64_t destination = static_cast<std::uint64_t>(index) * kPleHeadWidth;
++        table.copy(row_id(index) * kPleHeadWidth, output.subspan(destination, kPleHeadWidth));
+     }
+ }
+ 
+diff --git a/src/models/qwen3_8_flash_next_125b_a6b/impl/load_plan.cpp b/src/models/qwen3_8_flash_next_125b_a6b/impl/load_plan.cpp
+index bb7cab2c..61091fea 100644
+--- a/src/models/qwen3_8_flash_next_125b_a6b/impl/load_plan.cpp
++++ b/src/models/qwen3_8_flash_next_125b_a6b/impl/load_plan.cpp
+@@ -279,6 +279,9 @@ ArtifactLoadPlan plan_artifact(artifact::Binder& binder,
+             const auto& binding = target.ple.embedding_table.binding;
+             const auto& object  = binder.reader().directory().tensor(binding.parts.front().object);
+             out.bindings.ple_mapping = binder.reader().map_range(object.offset, object.bytes);
++            // PLE rows are hashed n-gram lookups scattered over the 51 GB table: readahead
++            // around a faulting row only evicts other rows. The gather prefetches what it reads.
++            out.bindings.ple_mapping.advise_random();
+         }
+         target.mlp_hc = bind_hc(binder, prefix + "mlp_hyper_connection.");
+         target.moe    = bind_main_moe(binder, prefix + "mlp.");
+diff --git a/tests/artifact/test_reader.cpp b/tests/artifact/test_reader.cpp
+index 16d20188..6e03536a 100644
+--- a/tests/artifact/test_reader.cpp
++++ b/tests/artifact/test_reader.cpp
+@@ -64,11 +64,15 @@ void mapped_shards() {
+     mapped.copy(0, actual);
+     require(std::equal(actual.begin(), actual.end(), fixture.payload.begin() + 256),
+             "mapped parent crossing an unaligned shard boundary changed bytes");
++    // Page-cache advice never changes contents, including across a shard boundary.
++    mapped.advise_random();
++    mapped.prefetch(200, 160);
+     std::array<std::byte, 160> row{};
+     mapped.copy(200, row);
+     require(std::equal(row.begin(), row.end(), fixture.payload.begin() + 456),
+             "mapped PLE-width row crossing a shard boundary changed bytes");
+     rejects([&] { mapped.copy(400, row); }, "mapped read beyond range accepted");
++    rejects([&] { mapped.prefetch(400, 160); }, "mapped prefetch beyond range accepted");
+     const auto raw = weight_geometry(QType::FP8_E4M3FN, QuantLayout::Contiguous,
+                                     std::array<std::uint64_t, 2>{320001536, 160});
+     require(raw.bytes == 51200245760ULL, "PLE FP8 geometry changed");
+-- 
+2.43.0
+

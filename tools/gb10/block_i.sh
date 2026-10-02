@@ -32,7 +32,8 @@ fi
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
 PHASES=${PHASES:-I0,I1,I2,I3,I4,I5,I6,I7,I8,I9}
-ROOT=$OUT_ROOT/block-i
+# BLOCK_I_ROOT keeps a rerun (for example PHASES=I9) from replacing an earlier campaign's records.
+ROOT=${BLOCK_I_ROOT:-$OUT_ROOT/block-i}
 mkdir -p "$ROOT"
 want() { case ",$PHASES," in *",$1,"*) [[ ! -f $ROOT/$1/DONE ]] ;; *) return 1 ;; esac; }
 begin() { rm -rf "${ROOT:?}/$1"; mkdir -p "$ROOT/$1"; log "phase $1: $2"; }

@@ -43,9 +43,14 @@ done
 "$PYTHON" tools/gb10/concurrency_sweep.py "$BASE_URL" "$dir/load.json" \
     --n "$CONC,$CONC" --max-tokens "$MAX_TOKENS" --prompt-chars 2000 >"$dir/load.log" 2>&1 ||
     log "load driver reported errors; see $dir/load.log"
-# SIGTERM to the server (not nsys) drains it; nsys then finalizes the trace and exports SQLite.
-pkill -TERM -f '^build-trace/apps/ninfer-serve ' || true
-wait "$NSYS_PID" || true
+# SIGTERM the server (not nsys) so it drains; nsys then finalizes the trace and exports SQLite.
+# nsys re-execs the target with an absolute path, so match the process name, not the cmdline prefix.
+pkill -TERM -x ninfer-serve || true
+finalize_waited=0
+while kill -0 "$NSYS_PID" 2>/dev/null; do
+    ((finalize_waited < 900)) || { echo "nsys did not finalize within 15 min; killing it" >&2; kill -TERM "$NSYS_PID" 2>/dev/null; exit 1; }
+    sleep 5; finalize_waited=$((finalize_waited + 5))
+done
 [[ -f $dir/trace.sqlite ]] || { echo "no SQLite export; see $dir/serve.log" >&2; exit 1; }
 
 "$PYTHON" tools/bench/flash_next_performance.py "$dir/trace.sqlite" \

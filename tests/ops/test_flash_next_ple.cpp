@@ -56,7 +56,9 @@ double represented_bf16(double value) {
     return bf16_to_f32(f32_to_bf16(static_cast<float>(value)));
 }
 
-int run() {
+// fork: the history continues from a checkpoint slot into a distinct slot whose prior content
+// is unrelated; the checkpoint must stay unchanged and the stale content must never be read.
+int run(bool fork) {
     std::vector<float> hyper(kHyper * kTokens), key_norm(kHyper), query_norm(kHyper), conv_norm(kHyper), state(kHyper * kState);
     fill_uniform(hyper, 1701, -0.5F, 0.5F);
     fill_uniform(key_norm, 1702, -0.08F, 0.08F);
@@ -154,11 +156,17 @@ int run() {
     DeviceBuffer d_conv_norm = to_device(encode(conv_norm));
     DeviceBuffer d_conv_weight = to_device(encode(conv_weight));
     DeviceBuffer d_scale = to_device(encode(std::vector<float>{embedding_scale}));
-    DeviceBuffer d_state = to_device(encode(state));
+    const std::vector<std::uint16_t> state_bits = encode(state);
+    std::vector<float> stale(state.size());
+    fill_uniform(stale, 1723, -4.0F, 4.0F);
+    DeviceBuffer d_state             = to_device(state_bits);
+    DeviceBuffer d_destination_state = to_device(fork ? encode(stale) : state_bits);
     GuardedDeviceBuffer d_output(expected.size() * sizeof(std::uint16_t));
     Tensor hyper_tensor(d_hyper.p, DType::BF16, {kHyper, kTokens});
     Tensor gathered_tensor(d_gathered.p, DType::FP8_E4M3FN, {kHidden, kTokens});
     Tensor state_tensor(d_state.p, DType::BF16, {kHyper, kState});
+    Tensor destination_state_tensor(fork ? d_destination_state.p : d_state.p, DType::BF16,
+                                    {kHyper, kState});
     Tensor output_tensor(d_output.data(), DType::BF16, {kHyper, kTokens});
     ops::FlashNextPleWeights weights{
         .key_projection = bf16_weight(d_key_weight, kHyper, kHidden),
@@ -170,11 +178,22 @@ int run() {
         .embedding_scale = Tensor(d_scale.p, DType::BF16, {1}),
     };
     WorkspaceArena workspace(ops::flash_next_ple_workspace_capacity_bytes(kTokens));
-    ops::flash_next_ple(hyper_tensor, gathered_tensor, weights, state_tensor, output_tensor, workspace, nullptr);
+    ops::flash_next_ple(hyper_tensor, gathered_tensor, weights, state_tensor,
+                        destination_state_tensor, output_tensor, workspace, nullptr);
     cuda_synchronize();
-    int failures = verify_pointwise("Flash-Next PLE output", from_device_bf16(d_output.data(), expected.size()), expected, {/*absolute*/ 1.0e-2, /*relative*/ 2.0e-2});
-    failures += verify_pointwise("Flash-Next PLE state", from_device_bf16(d_state, expected_state.size()), expected_state, {/*absolute*/ 1.0e-2, /*relative*/ 2.0e-2});
-    failures += d_output.verify_guards("Flash-Next PLE output");
+    const char* output_label = fork ? "Flash-Next PLE fork output" : "Flash-Next PLE output";
+    const char* state_label  = fork ? "Flash-Next PLE fork state" : "Flash-Next PLE state";
+    int failures =
+        verify_pointwise(output_label, from_device_bf16(d_output.data(), expected.size()), expected,
+                         {/*absolute*/ 1.0e-2, /*relative*/ 2.0e-2});
+    failures += verify_pointwise(
+        state_label, from_device_bf16(fork ? d_destination_state : d_state, expected_state.size()),
+        expected_state, {/*absolute*/ 1.0e-2, /*relative*/ 2.0e-2});
+    if (fork && from_device<std::uint16_t>(d_state, state_bits.size()) != state_bits) {
+        std::cerr << "Flash-Next PLE fork modified its source state\n";
+        ++failures;
+    }
+    failures += d_output.verify_guards(output_label);
     return failures;
 }
 
@@ -183,7 +202,7 @@ int run() {
 int main() {
     if (ninfer::test::cuda_unavailable()) { return 77; }
     try {
-        const int failures = run();
+        const int failures = run(false) + run(true);
         std::cout << (failures == 0 ? "OK" : "FAIL") << " Flash-Next PLE\n";
         return failures == 0 ? 0 : 1;
     } catch (const std::exception& error) {

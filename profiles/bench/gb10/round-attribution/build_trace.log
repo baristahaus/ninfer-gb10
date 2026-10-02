@@ -1,27 +1,39 @@
 -- Configuring done (0.1s)
 -- Generating done (0.0s)
 -- Build files have been written to: /home/apollo11/ninfer-gb10/build-trace
-[1/24] Building CXX object src/models/CMakeFiles/ninfer_model_loading.dir/qwen3_5/load/dflash.cpp.o
-[2/24] Building CXX object src/models/CMakeFiles/ninfer_model_loading.dir/qwen3_5/load/mtp.cpp.o
-[3/24] Building CXX object src/models/CMakeFiles/ninfer_model_loading.dir/qwen3_5/load/vision.cpp.o
-[4/24] Building CXX object src/models/CMakeFiles/ninfer_model_loading.dir/qwen3_5/load/prepare.cpp.o
-[5/24] Building CXX object src/artifact/CMakeFiles/ninfer_artifact.dir/binder.cpp.o
-[6/24] Building CXX object src/models/CMakeFiles/ninfer_model_loading.dir/qwen3_5/load/resources.cpp.o
-[7/24] Building CXX object src/artifact/CMakeFiles/ninfer_artifact.dir/views.cpp.o
-[8/24] Building CXX object src/models/CMakeFiles/ninfer_model_runtime.dir/qwen3_8_flash_next/impl/ple_stage.cpp.o
-[9/24] Building CXX object src/artifact/CMakeFiles/ninfer_artifact.dir/materializer.cpp.o
-[10/24] Building CXX object src/models/CMakeFiles/ninfer_model_loading.dir/qwen3_5/load/dflash2.cpp.o
-[11/24] Building CXX object src/models/CMakeFiles/ninfer_model_runtime.dir/qwen3_8_flash_next/impl/ple_table.cpp.o
-[12/24] Building CXX object src/artifact/CMakeFiles/ninfer_artifact.dir/reader.cpp.o
-[13/24] Linking CXX static library src/artifact/libninfer_artifact.a
-[14/24] Building CXX object src/models/CMakeFiles/ninfer_model_runtime.dir/qwen3_8_flash_next_125b_a6b/impl/load_plan.cpp.o
-[15/24] Building CXX object src/models/CMakeFiles/ninfer_model_loading.dir/qwen3_5/load.cpp.o
-[16/24] Building CXX object src/models/CMakeFiles/ninfer_model_loading.dir/qwen3_5/load/text.cpp.o
-[17/24] Linking CXX static library src/models/libninfer_model_loading.a
-[18/24] Building CXX object src/models/CMakeFiles/ninfer_model_runtime.dir/qwen3_8_flash_next_125b_a6b/impl/package.cpp.o
-[19/24] Building CXX object src/models/CMakeFiles/ninfer_model_runtime.dir/qwen3_8_flash_next_125b_a6b/impl/model.cpp.o
-[20/24] Building CXX object src/runtime/CMakeFiles/ninfer_engine.dir/engine/model_instance.cpp.o
-[21/24] Building CXX object src/models/CMakeFiles/ninfer_model_runtime.dir/qwen3_8_flash_next_125b_a6b/impl/variant.cpp.o
-[22/24] Linking CXX static library src/models/libninfer_model_runtime.a
-[23/24] Linking CXX static library src/runtime/libninfer_engine.a
-[24/24] Linking CXX executable apps/ninfer-serve
+[1/36] Building CXX object src/core/CMakeFiles/ninfer_core.dir/gdn_replay_records.cpp.o
+[2/36] Building CXX object src/ops/CMakeFiles/ninfer_ops.dir/linear_attention/gated_delta_net/gated_delta_net.cpp.o
+[3/36] Building CXX object src/ops/CMakeFiles/ninfer_ops.dir/linear_attention/gated_delta_net/replay.cpp.o
+[4/36] Building CUDA object src/core/CMakeFiles/ninfer_core.dir/gdn_replay_records.cu.o
+[5/36] Building CXX object src/models/CMakeFiles/ninfer_model_runtime.dir/qwen3_5/program/storage/draft_context.cpp.o
+[6/36] Linking CXX static library CMakeFiles/ninfer_core.dir/cmake_device_link.o
+[7/36] Linking CXX static library src/core/libninfer_core.a
+[8/36] Building CUDA object src/ops/CMakeFiles/ninfer_ops.dir/linear_attention/gated_delta_net/recurrent.cu.o
+[9/36] Building CXX object src/models/CMakeFiles/ninfer_model_runtime.dir/qwen3_5/execution/vision.cpp.o
+[10/36] Building CUDA object src/ops/CMakeFiles/ninfer_ops.dir/linear_attention/flash_next_gdn.cu.o
+[11/36] Building CXX object src/models/CMakeFiles/ninfer_model_runtime.dir/qwen3_5/execution/draft.cpp.o
+[12/36] Building CXX object src/models/CMakeFiles/ninfer_model_runtime.dir/qwen3_5/execution/text.cpp.o
+[13/36] Building CXX object src/models/CMakeFiles/ninfer_model_runtime.dir/qwen3_5/program/transactions/commit.cpp.o
+[14/36] Building CXX object src/models/CMakeFiles/ninfer_model_runtime.dir/qwen3_5/program/planning/checkpoint_recovery.cpp.o
+[15/36] Building CXX object src/models/CMakeFiles/ninfer_model_runtime.dir/qwen3_5/program/program.cpp.o
+[16/36] Building CXX object src/models/CMakeFiles/ninfer_model_runtime.dir/qwen3_5/program/speculative/target_verification.cpp.o
+[17/36] Building CXX object src/models/CMakeFiles/ninfer_model_runtime.dir/qwen3_5/program/context_work.cpp.o
+[18/36] Building CXX object src/models/CMakeFiles/ninfer_model_runtime.dir/qwen3_5/program/prefill.cpp.o
+[19/36] Building CXX object src/models/CMakeFiles/ninfer_model_runtime.dir/qwen3_5/program/speculative/mtp.cpp.o
+[20/36] Building CXX object src/models/CMakeFiles/ninfer_model_runtime.dir/qwen3_5/program/program_impl.cpp.o
+[21/36] Building CXX object src/models/CMakeFiles/ninfer_model_runtime.dir/qwen3_5/program/planning/startup.cpp.o
+[22/36] Building CXX object src/models/CMakeFiles/ninfer_model_runtime.dir/qwen3_5/program/planning/request_plan.cpp.o
+[23/36] Building CXX object src/models/CMakeFiles/ninfer_model_runtime.dir/qwen3_5/program/decode.cpp.o
+[24/36] Building CXX object src/models/CMakeFiles/ninfer_model_runtime.dir/qwen3_8_flash_next_125b_a6b/impl/package.cpp.o
+[25/36] Building CXX object src/models/CMakeFiles/ninfer_model_runtime.dir/qwen3_5/program/graphs.cpp.o
+[26/36] Building CXX object src/models/CMakeFiles/ninfer_model_runtime.dir/qwen3_8_flash_next_125b_a6b/impl/model.cpp.o
+[27/36] Building CXX object src/models/CMakeFiles/ninfer_model_runtime.dir/qwen3_5/program/storage/context.cpp.o
+[28/36] Building CXX object src/models/CMakeFiles/ninfer_model_runtime.dir/qwen3_5/program/transactions/capture.cpp.o
+[29/36] Building CXX object src/models/CMakeFiles/ninfer_model_runtime.dir/qwen3_5/program/planning/pressure_planner.cpp.o
+[30/36] Building CXX object src/models/CMakeFiles/ninfer_model_runtime.dir/qwen3_5/program/transactions/materialization.cpp.o
+[31/36] Building CXX object src/models/CMakeFiles/ninfer_model_runtime.dir/qwen3_5/program/planning/pressure.cpp.o
+[32/36] Building CXX object src/models/CMakeFiles/ninfer_model_runtime.dir/qwen3_8_flash_next_125b_a6b/impl/variant.cpp.o
+[33/36] Linking CXX static library CMakeFiles/ninfer_ops.dir/cmake_device_link.o
+[34/36] Linking CXX static library src/ops/libninfer_ops.a
+[35/36] Linking CXX static library src/models/libninfer_model_runtime.a
+[36/36] Linking CXX executable apps/ninfer-serve

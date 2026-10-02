@@ -1,0 +1,100 @@
+{
+ "shared": false,
+ "max_tokens": 256,
+ "runs": [
+  {
+   "n": 4,
+   "failed": 0,
+   "wall_seconds": 17.09723448753357,
+   "completion_tokens": 1024,
+   "aggregate_tok_s": 59.89272713938904,
+   "per_request_tok_s": [
+    24.744893450500538,
+    14.973292240310236,
+    22.365523782996924,
+    21.674127043789863
+   ],
+   "requests": [
+    {
+     "stream": "wikitext-00",
+     "start": 1790961851.5345569,
+     "end": 1790961861.8801258,
+     "seconds": 10.345568895339966,
+     "completion_tokens": 256,
+     "finish_reason": "length"
+    },
+    {
+     "stream": "wikitext-01",
+     "start": 1790961851.5339627,
+     "end": 1790961868.631071,
+     "seconds": 17.097108364105225,
+     "completion_tokens": 256,
+     "finish_reason": "length"
+    },
+    {
+     "stream": "wikitext-02",
+     "start": 1790961851.5348697,
+     "end": 1790961862.9810581,
+     "seconds": 11.44618844985962,
+     "completion_tokens": 256,
+     "finish_reason": "length"
+    },
+    {
+     "stream": "wikitext-03",
+     "start": 1790961851.5338366,
+     "end": 1790961863.3451543,
+     "seconds": 11.811317682266235,
+     "completion_tokens": 256,
+     "finish_reason": "length"
+    }
+   ]
+  },
+  {
+   "n": 4,
+   "failed": 0,
+   "wall_seconds": 11.577927827835083,
+   "completion_tokens": 1024,
+   "aggregate_tok_s": 88.44415125288221,
+   "per_request_tok_s": [
+    23.30469351528156,
+    22.112605141733148,
+    22.48990248576318,
+    22.790233127978063
+   ],
+   "requests": [
+    {
+     "stream": "wikitext-00",
+     "start": 1790961868.6336658,
+     "end": 1790961879.6185775,
+     "seconds": 10.984911680221558,
+     "completion_tokens": 256,
+     "finish_reason": "length"
+    },
+    {
+     "stream": "wikitext-01",
+     "start": 1790961868.6339996,
+     "end": 1790961880.2111068,
+     "seconds": 11.577107191085815,
+     "completion_tokens": 256,
+     "finish_reason": "length"
+    },
+    {
+     "stream": "wikitext-02",
+     "start": 1790961868.6333046,
+     "end": 1790961880.0161908,
+     "seconds": 11.382886171340942,
+     "completion_tokens": 256,
+     "finish_reason": "length"
+    },
+    {
+     "stream": "wikitext-03",
+     "start": 1790961868.633179,
+     "end": 1790961879.866061,
+     "seconds": 11.232882022857666,
+     "completion_tokens": 256,
+     "finish_reason": "length"
+    }
+   ]
+  }
+ ]
+}

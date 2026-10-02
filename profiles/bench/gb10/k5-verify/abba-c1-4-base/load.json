@@ -1,0 +1,46 @@
+{
+ "shared": false,
+ "max_tokens": 256,
+ "runs": [
+  {
+   "n": 1,
+   "failed": 0,
+   "wall_seconds": 6.799213171005249,
+   "completion_tokens": 256,
+   "aggregate_tok_s": 37.65141547432185,
+   "per_request_tok_s": [
+    37.65141547432185
+   ],
+   "requests": [
+    {
+     "stream": "wikitext-00",
+     "start": 1790962466.8045735,
+     "end": 1790962473.6037867,
+     "seconds": 6.799213171005249,
+     "completion_tokens": 256,
+     "finish_reason": "length"
+    }
+   ]
+  },
+  {
+   "n": 1,
+   "failed": 0,
+   "wall_seconds": 6.333574295043945,
+   "completion_tokens": 256,
+   "aggregate_tok_s": 40.419514807037366,
+   "per_request_tok_s": [
+    40.419514807037366
+   ],
+   "requests": [
+    {
+     "stream": "wikitext-00",
+     "start": 1790962473.6045947,
+     "end": 1790962479.938169,
+     "seconds": 6.333574295043945,
+     "completion_tokens": 256,
+     "finish_reason": "length"
+    }
+   ]
+  }
+ ]
+}

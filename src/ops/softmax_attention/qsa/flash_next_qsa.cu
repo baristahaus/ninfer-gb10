@@ -1243,7 +1243,14 @@ __launch_bounds__(128, 1) __global__ void selected_attention_batched_fp8_kernel(
 }
 
 constexpr int kMaxDecodeAttentionSplits = 64;
-constexpr int kSplitHeadsPerBlock = 4;
+// The split-count heuristics below were set with four query heads per split block; they keep that
+// arithmetic so tile partitions (and every reduction tree) do not depend on the block shape.
+constexpr int kSplitHeadGroups = kQueryHeads / 4;
+// A split block serves every query head of one KV head, so each KV tile is staged once for all
+// twelve heads that read it.
+constexpr int kSplitHeadsPerBlock = kQueryHeads / kKvHeads;
+// The split-reduce kernel's block shape (independent of the split block).
+constexpr int kReduceHeadsPerBlock = 4;
 
 // Match the split-K profiles used by the reference vLLM Triton kernel for this
 // target's two KV heads. In particular, four-row MTP verification uses 32
@@ -1261,7 +1268,7 @@ int decode_attention_splits(int tokens) {
 // count follows the visible-key envelope instead of the 2051-slot selection width: enough
 // 128-thread blocks for about eight per SM, and no split shorter than one 16-key tile.
 int dense_decode_attention_splits(int tokens, std::uint32_t max_visible_keys) {
-    const int blocks_per_split = (kQueryHeads / kSplitHeadsPerBlock) * tokens;
+    const int blocks_per_split = kSplitHeadGroups * tokens;
     const int by_device        = std::max(1, 8 * device_sm_count() / blocks_per_split);
     const int by_work          = static_cast<int>((max_visible_keys + 15U) / 16U);
     return std::max(1, std::min({by_device, by_work, kMaxDecodeAttentionSplits}));
@@ -1277,10 +1284,8 @@ __device__ __forceinline__ void selected_attention_split_body(
     float* partial_denominator, float* partial_numerator, int num_splits) {
     constexpr int kTile = 16;
     constexpr float kLog2E = 1.4426950408889634F;
-    const int head_group = static_cast<int>(blockIdx.x);
-    const int head = head_group * kSplitHeadsPerBlock +
-                     (static_cast<int>(threadIdx.x) >> 5);
-    const int kv_head = head / (kQueryHeads / kKvHeads);
+    const int kv_head      = static_cast<int>(blockIdx.x);
+    const int head         = kv_head * kSplitHeadsPerBlock + (static_cast<int>(threadIdx.x) >> 5);
     const int token = static_cast<int>(blockIdx.y);
     const int split = static_cast<int>(blockIdx.z);
     const int lane_id = static_cast<int>(threadIdx.x) & 31;
@@ -1320,8 +1325,8 @@ __device__ __forceinline__ void selected_attention_split_body(
     const int item_end = min(item_count,
                              ((split + 1) * num_tiles / num_splits) * kTile);
     const int table_row = table_rows[batch_lane];
-    __shared__ __nv_bfloat16 staged_key[kTile][kHeadDim];
-    __shared__ __nv_bfloat16 staged_value[kTile][kHeadDim];
+    __shared__ __align__(16) __nv_bfloat16 staged_key[kTile][kHeadDim];
+    __shared__ __align__(16) __nv_bfloat16 staged_value[kTile][kHeadDim];
     __shared__ int staged_positions[kTile];
     for (int tile_begin = item_begin; tile_begin < item_end; tile_begin += kTile) {
         const int tile_size = min(kTile, item_end - tile_begin);
@@ -1332,36 +1337,47 @@ __device__ __forceinline__ void selected_attention_split_body(
                           static_cast<std::int64_t>(kOutputWidth) * token];
         }
         __syncthreads();
-        for (int element = static_cast<int>(threadIdx.x);
-             element < tile_size * kHeadDim; element += static_cast<int>(blockDim.x)) {
-            const int item = element / kHeadDim;
-            const int d = element - item * kHeadDim;
+        // Stage the tile's key and value rows in 16-byte pieces: one page lookup per piece instead
+        // of per element, and the same per-element dequantization, so the staged BF16 values are
+        // unchanged.
+        constexpr int kPieceElements = Fp8 ? 16 : 8;
+        constexpr int kPiecesPerRow  = kHeadDim / kPieceElements;
+        for (int task = static_cast<int>(threadIdx.x); task < 2 * tile_size * kPiecesPerRow;
+             task += static_cast<int>(blockDim.x)) {
+            const bool is_value   = task >= tile_size * kPiecesPerRow;
+            const int row_task    = is_value ? task - tile_size * kPiecesPerRow : task;
+            const int item        = row_task / kPiecesPerRow;
+            const int d0          = (row_task - item * kPiecesPerRow) * kPieceElements;
+            __nv_bfloat16* staged = is_value ? &staged_value[item][d0] : &staged_key[item][d0];
             const int position = staged_positions[item];
-            if (position >= 0) {
-                const int page = physical_page(tables, logical_pages, table_row, position);
-                const std::int64_t offset = d + static_cast<std::int64_t>(kHeadDim) *
-                    (position % kPagedKVPageSize + kPagedKVPageSize *
-                        (kv_head + kKvHeads * page));
-                if constexpr (Fp8) {
-                    const std::int64_t scale_offset =
-                        position % kPagedKVPageSize +
-                        static_cast<std::int64_t>(kPagedKVPageSize) *
-                            (kv_head + kKvHeads * page);
-                    staged_key[item][d] = __float2bfloat16_rn(
-                        kv_cache_fp8_dequant_code_to_float(
-                            static_cast<const std::uint8_t*>(key_pages)[offset],
-                            key_scales[scale_offset]));
-                    staged_value[item][d] = __float2bfloat16_rn(
-                        kv_cache_fp8_dequant_code_to_float(
-                            static_cast<const std::uint8_t*>(value_pages)[offset],
-                            value_scales[scale_offset]));
-                } else {
-                    staged_key[item][d] = static_cast<const __nv_bfloat16*>(key_pages)[offset];
-                    staged_value[item][d] = static_cast<const __nv_bfloat16*>(value_pages)[offset];
+            if (position < 0) {
+#pragma unroll
+                for (int e = 0; e < kPieceElements; ++e) { staged[e] = __float2bfloat16_rn(0.0F); }
+                continue;
+            }
+            const int page = physical_page(tables, logical_pages, table_row, position);
+            const std::int64_t row_index =
+                position % kPagedKVPageSize +
+                static_cast<std::int64_t>(kPagedKVPageSize) * (kv_head + kKvHeads * page);
+            const std::int64_t offset = d0 + static_cast<std::int64_t>(kHeadDim) * row_index;
+            if constexpr (Fp8) {
+                const auto* pages =
+                    static_cast<const std::uint8_t*>(is_value ? value_pages : key_pages);
+                const __half scale = (is_value ? value_scales : key_scales)[row_index];
+                const uint4 codes  = *reinterpret_cast<const uint4*>(pages + offset);
+                const auto* bytes  = reinterpret_cast<const std::uint8_t*>(&codes);
+                __align__(16) __nv_bfloat16 converted[kPieceElements];
+#pragma unroll
+                for (int e = 0; e < kPieceElements; ++e) {
+                    converted[e] =
+                        __float2bfloat16_rn(kv_cache_fp8_dequant_code_to_float(bytes[e], scale));
                 }
+                reinterpret_cast<uint4*>(staged)[0] = reinterpret_cast<const uint4*>(converted)[0];
+                reinterpret_cast<uint4*>(staged)[1] = reinterpret_cast<const uint4*>(converted)[1];
             } else {
-                staged_key[item][d] = __float2bfloat16_rn(0.0F);
-                staged_value[item][d] = __float2bfloat16_rn(0.0F);
+                const auto* pages =
+                    static_cast<const __nv_bfloat16*>(is_value ? value_pages : key_pages);
+                *reinterpret_cast<uint4*>(staged) = *reinterpret_cast<const uint4*>(pages + offset);
             }
         }
         __syncthreads();
@@ -1451,8 +1467,7 @@ __global__ void reduce_selected_attention_splits_kernel(
     const float* partial_numerator, const int* valid_columns, int width, int tokens,
     __nv_bfloat16* output, int num_splits) {
     const int head_group = static_cast<int>(blockIdx.x);
-    const int head = head_group * kSplitHeadsPerBlock +
-                     (static_cast<int>(threadIdx.x) >> 5);
+    const int head       = head_group * kReduceHeadsPerBlock + (static_cast<int>(threadIdx.x) >> 5);
     const int token = static_cast<int>(blockIdx.y);
     const int lane_id = static_cast<int>(threadIdx.x) & 31;
     const int batch_lane = token / width;
@@ -1794,10 +1809,9 @@ void flash_next_qsa(const Tensor& input, const Tensor& cache_positions,
         }
     };
     const auto launch_split = [&]<bool Fp8>(std::bool_constant<Fp8>, const int* indices,
-                                            float* partial_maximum,
-                                            float* partial_denominator,
+                                            float* partial_maximum, float* partial_denominator,
                                             float* partial_numerator, int num_splits) {
-        const dim3 grid(kQueryHeads / kSplitHeadsPerBlock, tokens, num_splits);
+        const dim3 grid(kKvHeads, tokens, num_splits);
         if constexpr (Fp8) {
             selected_attention_split_fp8_kernel<<<grid, kSplitHeadsPerBlock * 32, 0, stream>>>(
                 static_cast<const __nv_bfloat16*>(normalized_query.data),
@@ -1842,8 +1856,8 @@ void flash_next_qsa(const Tensor& input, const Tensor& cache_positions,
         dispatch_split(indices, static_cast<float*>(partial_maximum.data),
                        static_cast<float*>(partial_denominator.data),
                        static_cast<float*>(partial_numerator.data), num_splits);
-        reduce_selected_attention_splits_kernel<<<dim3(kQueryHeads / kSplitHeadsPerBlock, tokens),
-                                                  kSplitHeadsPerBlock * 32, 0, stream>>>(
+        reduce_selected_attention_splits_kernel<<<dim3(kQueryHeads / kReduceHeadsPerBlock, tokens),
+                                                  kReduceHeadsPerBlock * 32, 0, stream>>>(
             static_cast<const float*>(partial_maximum.data),
             static_cast<const float*>(partial_denominator.data),
             static_cast<const float*>(partial_numerator.data),
@@ -2016,9 +2030,9 @@ void flash_next_qsa(const Tensor& input, const Tensor& cache_positions,
                              static_cast<float*>(partial_denominator.data),
                              static_cast<float*>(partial_numerator.data),
                              static_cast<__nv_bfloat16*>(attention.data));
-            reduce_selected_attention_splits_kernel<<<
-                dim3(kQueryHeads / kSplitHeadsPerBlock, tokens),
-                kSplitHeadsPerBlock * 32, 0, stream>>>(
+            reduce_selected_attention_splits_kernel<<<dim3(kQueryHeads / kReduceHeadsPerBlock,
+                                                           tokens),
+                                                      kReduceHeadsPerBlock * 32, 0, stream>>>(
                 static_cast<const float*>(partial_maximum.data),
                 static_cast<const float*>(partial_denominator.data),
                 static_cast<const float*>(partial_numerator.data),

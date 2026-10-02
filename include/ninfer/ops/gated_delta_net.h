@@ -41,7 +41,11 @@ namespace ninfer::ops {
  * compared directly with that result; output storage rounding belongs to the Op's numerical
  * criterion, not the oracle. Recurrent implementations may apply the normalization directly;
  * chunked implementations may use private normalized staging. The corresponding private storage
- * is included by gated_delta_net_workspace_capacity_bytes when `normalize_qk` is true.
+ * is included by gated_delta_net_workspace_capacity_bytes when `normalize_qk` is true. A call
+ * evaluates its leading floor(T/64)*64 tokens with the chunked route and the remainder with the
+ * recurrent route, and a recurrent token's arithmetic never depends on whether chunked tokens
+ * precede it in the same call. Splitting a sequence into calls whose lengths are multiples of 64
+ * (followed by any final call) therefore reproduces the single call bit-exactly.
  * Inputs and out do not overlap state or one another. `ws` supplies transient storage reported by
  * gated_delta_net_workspace_capacity_bytes; scratch is scoped to the call. T may be any positive
  * value.

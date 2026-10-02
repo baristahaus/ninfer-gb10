@@ -258,6 +258,61 @@ int distinct_state_case(const Case& test_case, std::uint32_t seed) {
     return failures;
 }
 
+// Prefill chunking must not change results. A single call and the same sequence split into
+// 64-aligned calls (the final call carrying the tail) evaluate every token with the same route,
+// so outputs and final state are bit-identical. Reproduces a Flash-Next prompt whose one-pass
+// prefill differed from 256-token chunked prefill.
+int split_invariance_case(const Case& test_case, const std::vector<int>& cuts,
+                          std::uint32_t seed) {
+    const gdn_ref::Inputs in = make_inputs(test_case, seed);
+    const float scale        = 1.0f / std::sqrt(static_cast<float>(kStateDim));
+    DeviceInputs device(in);
+    const int T = test_case.tokens;
+    const std::size_t workspace_bytes = ops::gated_delta_net_workspace_capacity_bytes(
+        test_case.qk_heads, test_case.value_heads, test_case.normalize_qk, 1, T);
+    WorkspaceArena workspace(std::max<std::size_t>(workspace_bytes, 256));
+
+    const auto run = [&](const std::vector<int>& ends, std::vector<double>& out_host,
+                         std::vector<double>& state_host) {
+        DeviceBuffer state(in.state.size() * sizeof(float));
+        DeviceBuffer out(in.v.size() * sizeof(std::uint16_t));
+        state.copy_from_host(in.state.data(), state.bytes);
+        const auto offset = [](const DeviceBuffer& buffer, std::size_t elements, std::size_t size) {
+            return static_cast<char*>(buffer.p) + elements * size;
+        };
+        int begin = 0;
+        for (const int end : ends) {
+            const int n         = end - begin;
+            const auto qk_first = static_cast<std::size_t>(begin) * kStateDim * test_case.qk_heads;
+            const auto v_first = static_cast<std::size_t>(begin) * kStateDim * test_case.value_heads;
+            const auto g_first = static_cast<std::size_t>(begin) * test_case.value_heads;
+            Tensor q(offset(device.q, qk_first, 2), DType::BF16, {kStateDim, test_case.qk_heads, n});
+            Tensor k(offset(device.k, qk_first, 2), DType::BF16, {kStateDim, test_case.qk_heads, n});
+            Tensor v(offset(device.v, v_first, 2), DType::BF16,
+                     {kStateDim, test_case.value_heads, n});
+            Tensor g(offset(device.g, g_first, 4), DType::FP32, {test_case.value_heads, n});
+            Tensor beta(offset(device.beta, g_first, 4), DType::FP32, {test_case.value_heads, n});
+            Tensor state_tensor(state.p, DType::FP32,
+                                {kStateDim, kStateDim, test_case.value_heads});
+            Tensor out_tensor(offset(out, v_first, 2), DType::BF16,
+                              {kStateDim, test_case.value_heads, n});
+            ops::gated_delta_net(q, k, v, g, beta, scale, test_case.normalize_qk, workspace,
+                                 state_tensor, out_tensor, nullptr);
+            begin = end;
+        }
+        cuda_synchronize();
+        out_host   = from_device_bf16(out.p, in.v.size());
+        state_host = read_f32(state.p, in.state.size());
+    };
+
+    std::vector<double> single_out, single_state, split_out, split_state;
+    run({T}, single_out, single_state);
+    run(cuts, split_out, split_state);
+    const std::string label = std::string(test_case.name) + " split-invariance";
+    return verify_exact(label + " out", split_out, single_out) +
+           verify_exact(label + " state", split_state, single_state);
+}
+
 int batch_update_case(const Case& test_case, const std::vector<int>& source_slots,
                       const std::vector<int>& destination_slots, int slots, std::uint32_t seed) {
     if (test_case.tokens != 1) { throw std::logic_error("batch_update_case requires W=1"); }
@@ -467,6 +522,15 @@ int main() {
     failures += distinct_state_case({"generic grouped-map chunk-tail", 3, 12, 65, true}, 12365u);
     failures += distinct_state_case({"27b two-chunk fused-qk-norm", 16, 48, 128, true}, 12128u);
     failures += inplace_case({"35b two-chunk raw-qk", 16, 32, 128, false}, 12228u);
+
+    // Chunk-aligned prefill splits reproduce one call bit-exactly, including a multi-chunk call
+    // whose long tail follows full chunks (a 313-token Flash-Next prompt).
+    failures += split_invariance_case({"multi-chunk long-tail fused-qk-norm", 16, 48, 313, true},
+                                      {256, 313}, 12313u);
+    failures += split_invariance_case({"multi-chunk long-tail fused-qk-norm", 16, 48, 313, true},
+                                      {128, 256, 313}, 12313u);
+    failures += split_invariance_case({"35b chunk-tail fused-qk-norm", 16, 32, 200, true},
+                                      {64, 200}, 12200u);
 
     // The production decode path updates selected state-pool slots in place at width one.
     failures += batch_update_case({"27b selected-slot fused-qk-norm", 16, 48, 1, true}, {7}, {7}, 8,

@@ -50,26 +50,25 @@ using Bf16GroupedSchedule = detail::Bf16MmaSchedule<64, 64, 64, 32, 32, 3, 2, Ca
 using Bf16GroupedGateGeometry = detail::Bf16Geometry<2 * kIntermediate, kHidden>;
 using Bf16GroupedDownGeometry = detail::Bf16Geometry<kHidden, kIntermediate>;
 
-__global__ void route_kernel(const __nv_bfloat16* scores, const __nv_bfloat16* input,
-                             const __nv_bfloat16* shared_scale_weight, int* ids, float* alpha,
-                             float* shared_alpha, int tokens) {
+constexpr int kRouteThreads = 256;
+static_assert(kExperts == 2 * kRouteThreads && kHidden % kRouteThreads == 0);
+
+__global__ void __launch_bounds__(kRouteThreads)
+    route_kernel(const __nv_bfloat16* scores, const __nv_bfloat16* input,
+                 const __nv_bfloat16* shared_scale_weight, int* ids, float* alpha,
+                 float* shared_alpha, int tokens) {
     const int token   = static_cast<int>(blockIdx.x);
     const int lane    = static_cast<int>(threadIdx.x) & 31;
     const int warp    = static_cast<int>(threadIdx.x) >> 5;
     const int expert0 = static_cast<int>(threadIdx.x);
-    const int expert1 = expert0 + static_cast<int>(blockDim.x);
-    const float value0 =
-        __bfloat162float(scores[expert0 + static_cast<std::int64_t>(kExperts) * token]);
-    const float value1 =
-        __bfloat162float(scores[expert1 + static_cast<std::int64_t>(kExperts) * token]);
-    bool selected0 = false;
-    bool selected1 = false;
+    const int expert1 = expert0 + kRouteThreads;
     __shared__ float warp_values[8];
-    __shared__ int warp_ids[8];
     __shared__ float top_values[kTop];
     __shared__ int top_ids[kTop];
+    // Compile-time trip count: all loads issue before the first use.
     float shared_value = 0.0F;
-    for (int k = static_cast<int>(threadIdx.x); k < kHidden; k += static_cast<int>(blockDim.x)) {
+#pragma unroll
+    for (int k = static_cast<int>(threadIdx.x); k < kHidden; k += kRouteThreads) {
         shared_value = fmaf(__bfloat162float(input[k + static_cast<std::int64_t>(kHidden) * token]),
                             __bfloat162float(shared_scale_weight[k]), shared_value);
     }
@@ -86,49 +85,56 @@ __global__ void route_kernel(const __nv_bfloat16* scores, const __nv_bfloat16* i
         if (lane == 0) { shared_alpha[token] = 1.0F / (1.0F + expf(-shared_value)); }
     }
     __syncthreads();
-    const auto better = [](float lhs, int lhs_id, float rhs, int rhs_id) {
-        return lhs > rhs || (lhs == rhs && lhs_id < rhs_id);
+    // BF16 scores order exactly as 32-bit keys (order-preserving value bits, then the inverted
+    // expert id), so (value descending, id ascending) is one unsigned maximum per round. The
+    // global top-k lies within the union of the per-warp top-k sets: each warp selects locally
+    // without block barriers and warp 0 selects from the 8 * kTop candidates.
+    const auto key_of = [](__nv_bfloat16 value, int expert) {
+        // -0 and +0 compare equal; canonicalize so their tie is broken by expert id.
+        unsigned bits = __bfloat16_as_ushort(value);
+        bits = bits == 0x8000U ? 0U : bits;
+        const unsigned ordered = (bits & 0x8000U) != 0 ? (~bits & 0xffffU) : (bits | 0x8000U);
+        return (ordered << 16) | static_cast<unsigned>(0xffff - expert);
     };
+    const auto value_of = [](unsigned key) {
+        const unsigned ordered = key >> 16;
+        const unsigned bits = (ordered & 0x8000U) != 0 ? (ordered & 0x7fffU) : (~ordered & 0xffffU);
+        return __bfloat162float(__ushort_as_bfloat16(static_cast<unsigned short>(bits)));
+    };
+    __shared__ unsigned candidates[8 * kTop];
+    unsigned key0 = key_of(scores[expert0 + static_cast<std::int64_t>(kExperts) * token], expert0);
+    unsigned key1 = key_of(scores[expert1 + static_cast<std::int64_t>(kExperts) * token], expert1);
+#pragma unroll
     for (int rank = 0; rank < kTop; ++rank) {
-        float value = selected0 ? -__int_as_float(0x7f800000) : value0;
-        int expert  = selected0 ? kExperts : expert0;
-        if (!selected1 && better(value1, expert1, value, expert)) {
-            value  = value1;
-            expert = expert1;
-        }
-        for (int offset = 16; offset != 0; offset >>= 1) {
-            const float other_value = __shfl_down_sync(0xffffffffU, value, offset);
-            const int other_expert  = __shfl_down_sync(0xffffffffU, expert, offset);
-            if (lane + offset < 32 && better(other_value, other_expert, value, expert)) {
-                value  = other_value;
-                expert = other_expert;
-            }
-        }
-        if (lane == 0) {
-            warp_values[warp] = value;
-            warp_ids[warp]    = expert;
-        }
-        __syncthreads();
-        if (warp == 0) {
-            value  = lane < 8 ? warp_values[lane] : -__int_as_float(0x7f800000);
-            expert = lane < 8 ? warp_ids[lane] : kExperts;
-            for (int offset = 16; offset != 0; offset >>= 1) {
-                const float other_value = __shfl_down_sync(0xffffffffU, value, offset);
-                const int other_expert  = __shfl_down_sync(0xffffffffU, expert, offset);
-                if (lane + offset < 32 && better(other_value, other_expert, value, expert)) {
-                    value  = other_value;
-                    expert = other_expert;
-                }
-            }
-            if (lane == 0) {
-                top_values[rank] = value;
-                top_ids[rank]    = expert;
-            }
-        }
-        __syncthreads();
-        selected0 = selected0 || top_ids[rank] == expert0;
-        selected1 = selected1 || top_ids[rank] == expert1;
+        const unsigned best = __reduce_max_sync(0xffffffffU, max(key0, key1));
+        if (lane == 0) { candidates[warp * kTop + rank] = best; }
+        key0 = key0 == best ? 0U : key0;
+        key1 = key1 == best ? 0U : key1;
     }
+    __syncthreads();
+    if (warp == 0) {
+        constexpr int kSlots = (8 * kTop + 31) / 32;
+        unsigned keys[kSlots];
+#pragma unroll
+        for (int slot = 0; slot < kSlots; ++slot) {
+            const int index = lane + 32 * slot;
+            keys[slot] = index < 8 * kTop ? candidates[index] : 0U;
+        }
+#pragma unroll
+        for (int rank = 0; rank < kTop; ++rank) {
+            unsigned local = keys[0];
+#pragma unroll
+            for (int slot = 1; slot < kSlots; ++slot) { local = max(local, keys[slot]); }
+            const unsigned best = __reduce_max_sync(0xffffffffU, local);
+#pragma unroll
+            for (int slot = 0; slot < kSlots; ++slot) { keys[slot] = keys[slot] == best ? 0U : keys[slot]; }
+            if (lane == 0) {
+                top_values[rank] = value_of(best);
+                top_ids[rank]    = 0xffff - static_cast<int>(best & 0xffffU);
+            }
+        }
+    }
+    __syncthreads();
     if (threadIdx.x == 0) {
         const float maximum = top_values[0];
         float denominator   = 0.0F;
@@ -750,7 +756,7 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
     Tensor ids          = workspace.alloc(DType::I32, {kTop, tokens});
     Tensor alpha        = workspace.alloc(DType::FP32, {kTop, tokens});
     Tensor shared_alpha = workspace.alloc(DType::FP32, {tokens});
-    route_kernel<<<tokens, 256, 0, stream>>>(
+    route_kernel<<<tokens, kRouteThreads, 0, stream>>>(
         static_cast<const __nv_bfloat16*>(scores.data),
         static_cast<const __nv_bfloat16*>(input.data),
         static_cast<const __nv_bfloat16*>(weights.shared_scale.qdata), static_cast<int*>(ids.data),

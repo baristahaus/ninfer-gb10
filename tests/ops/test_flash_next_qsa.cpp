@@ -37,7 +37,7 @@ void store_bf16(DeviceBuffer& storage, std::size_t element, float value) {
 }
 
 int run(int kPrefillTokens) {
-    constexpr std::size_t kFullContextPrefillWorkspace = 2879492096ULL;
+    constexpr std::size_t kFullContextPrefillWorkspace = 2909048832ULL;
     if (ops::flash_next_qsa_workspace_capacity_bytes(8192, 262144) !=
         kFullContextPrefillWorkspace) {
         std::cerr << "Flash-Next QSA full-context prefill workspace regressed\n";

@@ -1,0 +1,15 @@
+### profiles/bench/gb10/m2-verify/abba-c4-1-base/requests.jsonl
+
+| req | prompt | queue wait s | TTFT s | computed prefill | completion | prefill s | decode s | decode tok/s | rounds | tok/round | device wait ms/round | host exposed ms/round |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 4 | 539 | 1266 ms | 1.83 | 539 | 256 | 0.56 | 9.14 | 28.0 | 142 | 1.80 | 64.4 | 0.02 |
+| 3 | 524 | 1 ms | 0.53 | 524 | 256 | 0.53 | 9.78 | 26.2 | 154 | 1.66 | 63.5 | 0.03 |
+| 2 | 571 | 578 ms | 1.13 | 571 | 256 | 0.55 | 9.66 | 26.5 | 151 | 1.70 | 64.0 | 0.03 |
+| 1 | 468 | 11133 ms | 11.66 | 468 | 256 | 0.52 | 5.33 | 48.1 | 132 | 1.94 | 40.3 | 0.02 |
+| 6 | 524 | 5 ms | 0.10 | 7 | 256 | 0.09 | 10.30 | 24.8 | 146 | 1.75 | 70.3 | 0.26 |
+| 7 | 571 | 329 ms | 0.42 | 7 | 256 | 0.09 | 10.50 | 24.4 | 148 | 1.73 | 70.7 | 0.24 |
+| 8 | 468 | 605 ms | 0.70 | 7 | 256 | 0.09 | 10.57 | 24.2 | 150 | 1.71 | 70.2 | 0.22 |
+| 5 | 539 | 196 ms | 0.29 | 7 | 256 | 0.09 | 10.93 | 23.4 | 157 | 1.63 | 69.4 | 0.23 |
+
+Totals: 2048 tokens, decode 76.2 s (26.9 tok/s), prefill 2.5 s, rounds 1180, 1.74 tok/round, device wait 64.5 ms/round, queue wait mean 1764 ms, host exposed 0.13 ms/round
+

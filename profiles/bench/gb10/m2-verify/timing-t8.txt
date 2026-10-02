@@ -1,0 +1,8 @@
+flash_next_moe NVFP4 decode route: T=8 rows, 4 layer banks of 1.42 GB, 2.765 MB streamed per selected expert
+distinct      us/layer       min us    routed GB/s
+10               179.1        178.3          154.4
+20               298.4        296.2          185.3
+40               529.9        528.8          208.7
+64               809.2        806.4          218.7
+80               993.7        991.4          222.6
+fit: 11.63 us per distinct expert (238 GB/s, 97% of 246 GB/s), 64.4 us fixed per layer

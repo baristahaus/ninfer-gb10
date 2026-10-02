@@ -1,0 +1,2 @@
+N=4: aggregate 60.3 tok/s, per request min 15.1 / max 25.4 tok/s, wall 17.0 s
+N=4: aggregate 93.8 tok/s, per request min 23.4 / max 26.9 tok/s, wall 10.9 s

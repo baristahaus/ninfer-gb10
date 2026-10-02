@@ -1,0 +1,9 @@
+### profiles/bench/gb10/m2-verify/abba-c1-2-new/requests.jsonl
+
+| req | prompt | queue wait s | TTFT s | computed prefill | completion | prefill s | decode s | decode tok/s | rounds | tok/round | device wait ms/round | host exposed ms/round |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 524 | 1 ms | 0.53 | 524 | 256 | 0.53 | 6.11 | 41.9 | 158 | 1.62 | 38.6 | 0.02 |
+| 2 | 524 | 3 ms | 0.09 | 7 | 256 | 0.09 | 6.10 | 42.0 | 158 | 1.62 | 38.6 | 0.02 |
+
+Totals: 512 tokens, decode 12.2 s (41.9 tok/s), prefill 0.6 s, rounds 316, 1.62 tok/round, device wait 38.6 ms/round, queue wait mean 2 ms, host exposed 0.02 ms/round
+

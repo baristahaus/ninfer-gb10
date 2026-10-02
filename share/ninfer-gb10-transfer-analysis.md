@@ -120,6 +120,7 @@ and ~1.5% on the 35B.
 
 | Change | Commit | Relevance |
 |---|---|---|
+| Prefill PLE reads its history from the fork source slot, not the destination (`flash_next_ple` takes source and destination states) | `11b180d2` | **Correctness bug fix for upstream Flash-Next.** Present on `lk/master`. A prompt that continues past a context-cache capture point forks its state; layer 1's PLE then read stale history from a reused slot, so output depended on the slot pool (`max_concurrency`). Verified on GB10: C1/C4 outputs, with and without MTP, now identical |
 | QSA workspace sized for every call of ≤16 rows (fixes a `bad_alloc` on short chunk tails) | `eb9e87fa` | Bug fix for upstream Flash-Next (RTX PRO 6000) |
 | QSA skips index selection when all visible keys fit the budget | `d1efb24f` | Flash-Next speed: on GB10, attention −60% and decode +5.2% at C4 |
 | Fused HyperConnection gate mix in the FP8 up projection | `8630b6a1` | Flash-Next; speed-neutral, small favourable perplexity change |

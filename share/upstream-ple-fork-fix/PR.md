@@ -1,6 +1,7 @@
 **Title:** fix(flash-next): read PLE history from the fork source during prefill
 
-**Base:** `master` at `2aa87467`
+**Target:** lkarlsund's NInfer fork (the 125B-A6B Flash-Next runtime's home), `master` at `2aa87467`.
+**Head:** `baristahaus/ninfer-gb10` branch `upstream/flash-next-ple-fork-source` (`e5c45144`).
 
 ## Problem and scope
 
@@ -81,7 +82,7 @@ system + user chat prompt, greedy, 256 output tokens, cold first request,
 - C4 MTP decode speed: unchanged within run-to-run variation (22.5 tok/s vs 22.2–22.5 before).
   The fix only changes which slot one prefill launch reads.
 
-**Not verified:**
+**Not verified (an RTX PRO 6000 run of the probe above, before and after, would close the first two):**
 - RTX PRO 6000;
 - the rebased commit run end-to-end on `master`;
 - multimodal prefill through the fork path (same schedule code, not exercised).

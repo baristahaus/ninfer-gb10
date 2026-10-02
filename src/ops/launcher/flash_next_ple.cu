@@ -4,6 +4,7 @@
 
 #include "core/device.h"
 #include "ninfer/ops/linear.h"
+#include "ops/linear/bf16/flash_next/bf16_launch.h"
 #include "ops/linear/nvfp4/nvfp4_codec.cuh"
 
 #include <cuda_bf16.h>
@@ -452,15 +453,13 @@ void flash_next_ple_replay_record(const Tensor& hyper, const Tensor& gathered_fp
     Tensor value = workspace.alloc(DType::BF16, {kHidden, tokens});
     // Replay must produce the same represented transition as sequential ordinary decode.
     // Multi-column BF16 GEMMs may select a different reduction kernel than M=1 and perturb
-    // a verified token before the remaining layers amplify the difference.  Preserve the
-    // ordinary one-column projection route; gate, convolution, and recording remain batched.
-    for (int token = 0; token < tokens; ++token) {
-        Tensor embedding_column = embedding.slice(1, token, 1);
-        Tensor key_column = key.slice(1, token, 1);
-        Tensor value_column = value.slice(1, token, 1);
-        linear(embedding_column, weights.key_projection, key_column, stream, bf16_gemm);
-        linear(embedding_column, weights.value_projection, value_column, stream, bf16_gemm);
-    }
+    // a verified token before the remaining layers amplify the difference, so each column is
+    // projected bitwise as the one-column route does, with the weights read once per eight
+    // columns; gate, convolution, and recording remain batched.
+    (void)bf16_gemm;
+    detail::flash_next::launch_bf16_decode_columns(embedding, weights.key_projection, key, stream);
+    detail::flash_next::launch_bf16_decode_columns(embedding, weights.value_projection, value,
+                                                   stream);
     Tensor gated = workspace.alloc(DType::BF16, {kHyper, tokens});
     gate_kernel<<<dim3(kStreams, static_cast<unsigned int>(tokens)), 256, 0, stream>>>(
         static_cast<const __nv_bfloat16*>(hyper.data), static_cast<const __nv_bfloat16*>(key.data),

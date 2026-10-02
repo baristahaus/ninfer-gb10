@@ -4,6 +4,7 @@
 #include "core/decode_graph.h"
 #include "core/device.h"
 #include "ops/direct_bf16_weight.h"
+#include "ops/linear/bf16/flash_next/bf16_launch.h"
 #include "ops/op_tester.h"
 
 #include <algorithm>
@@ -257,6 +258,60 @@ int run_selector_linear() {
     return failures;
 }
 
+// The column route (PLE key/value projections over a replay block): every column bitwise the
+// one-column decode GEMV, and sampled outputs against the FP64 oracle.
+int run_decode_columns_case(DeviceWeight& weight, std::int32_t tokens) {
+    const std::int32_t rows                          = weight.host.n;
+    const std::int32_t hidden                        = weight.host.k;
+    const std::vector<std::uint16_t> activation_bits = make_activation_bits(hidden, tokens);
+    const std::vector<float> activation              = materialize(activation_bits);
+    DeviceBuffer device_activation                   = to_device(activation_bits);
+    const std::size_t outputs                        = static_cast<std::size_t>(rows) * tokens;
+    GuardedDeviceBuffer columns_output(outputs * sizeof(std::uint16_t));
+    GuardedDeviceBuffer single_output(outputs * sizeof(std::uint16_t));
+    columns_output.fill(0xff);
+    single_output.fill(0xff);
+
+    Tensor x(device_activation.p, DType::BF16, {hidden, tokens});
+    Tensor out(columns_output.data(), DType::BF16, {rows, tokens});
+    ops::detail::flash_next::launch_bf16_decode_columns(x, weight.view(), out, nullptr);
+    DeviceArena workspace(256);
+    for (std::int32_t token = 0; token < tokens; ++token) {
+        Tensor x_column = x.slice(1, token, 1);
+        Tensor out_column(static_cast<std::uint16_t*>(single_output.data()) +
+                              static_cast<std::size_t>(token) * rows,
+                          DType::BF16, {rows, 1});
+        ops::linear(x_column, weight.view(), out_column, ops::LinearPolicy::A16Only, workspace,
+                    nullptr);
+    }
+    cuda_synchronize();
+
+    const std::string label = "BF16 decode columns [" + std::to_string(rows) + "," +
+                              std::to_string(hidden) + "] T=" + std::to_string(tokens);
+    int failures = columns_output.verify_guards(label) + single_output.verify_guards(label);
+    const auto columns_bits = from_device<std::uint16_t>(columns_output.data(), outputs);
+    const auto single_bits  = from_device<std::uint16_t>(single_output.data(), outputs);
+    if (columns_bits != single_bits) {
+        std::cerr << label << ": differs from the one-column decode GEMV\n";
+        ++failures;
+    }
+    std::vector<double> actual;
+    std::vector<double> expected;
+    for (const std::int32_t row : sampled_rows(rows)) {
+        for (std::int32_t token = 0; token < tokens; ++token) {
+            actual.push_back(
+                bf16_to_f32(columns_bits[static_cast<std::size_t>(token) * rows + row]));
+            expected.push_back(dot_fp64(
+                weight.host, row,
+                std::span<const float>(activation.data() + static_cast<std::size_t>(token) * hidden,
+                                       hidden)));
+        }
+    }
+    failures += verify_reduction(label, actual, expected, kA16Tolerance);
+    failures += weight.verify_preserved(label + " weight");
+    return failures;
+}
+
 int run_bf16_linear() {
     int failures = 0;
     DeviceWeight attention_weight(make_patterned(14336, 5120, 401U));
@@ -274,6 +329,13 @@ int run_bf16_linear() {
         }
     }
     failures += run_selector_linear();
+    DeviceWeight ple_key(make_patterned(10240, 2560, 419U));
+    DeviceWeight ple_value(make_patterned(2560, 2560, 421U));
+    for (DeviceWeight* weight : {&ple_key, &ple_value}) {
+        for (int tokens : {1, 3, 8, 9, 16}) {
+            failures += run_decode_columns_case(*weight, tokens);
+        }
+    }
     return failures;
 }
 

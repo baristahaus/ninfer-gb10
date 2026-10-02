@@ -147,6 +147,41 @@ void launch_bf16_shared_swiglu_decode(const Tensor& x, const Weight& gate_weight
     CUDA_CHECK(cudaGetLastError());
 }
 
+template <class Geometry>
+void launch_geometry_columns(const Tensor& x, const Weight& weight, Tensor& out,
+                             cudaStream_t stream) {
+    using Schedule              = Bf16LinearDecodeSchedule<Geometry>;
+    constexpr int kColumns      = 8;
+    constexpr int kRowsPerWarp  = 2;
+    constexpr int kRowsPerBlock = Schedule::kWarpsPerCta * kRowsPerWarp;
+    static_assert(Geometry::kOutputRows % kRowsPerBlock == 0);
+    const int columns = x.ne[1];
+    const dim3 grid(Geometry::kOutputRows / kRowsPerBlock, (columns + kColumns - 1) / kColumns);
+    bf16_gemv_columns_kernel<Geometry, Schedule, kColumns, kRowsPerWarp>
+        <<<grid, Schedule::kThreads, 0, stream>>>(static_cast<const __nv_bfloat16*>(x.data),
+                                                  static_cast<const __nv_bfloat16*>(weight.qdata),
+                                                  static_cast<__nv_bfloat16*>(out.data), columns);
+    CUDA_CHECK(cudaGetLastError());
+}
+
+void launch_bf16_decode_columns(const Tensor& x, const Weight& weight, Tensor& out,
+                                cudaStream_t stream) {
+    if (x.dtype != DType::BF16 || out.dtype != DType::BF16 || !x.is_contiguous() ||
+        !out.is_contiguous() || weight.qtype != QType::BF16 || x.ne[0] != weight.k ||
+        out.ne[0] != weight.n || out.ne[1] != x.ne[1] || x.ne[1] <= 0) {
+        throw std::invalid_argument("bf16 decode columns: invalid problem");
+    }
+    if (weight.n == 10240 && weight.k == 2560) {
+        launch_geometry_columns<Bf16GemvGeometry<10240, 2560>>(x, weight, out, stream);
+        return;
+    }
+    if (weight.n == 2560 && weight.k == 2560) {
+        launch_geometry_columns<Bf16GemvGeometry<2560, 2560>>(x, weight, out, stream);
+        return;
+    }
+    throw std::invalid_argument("bf16 decode columns: unsupported exact problem");
+}
+
 void launch_bf16_decode(const Tensor& x, const Weight& weight, Tensor& out, cudaStream_t stream) {
 #define NINFER_BF16_DECODE(N, K)                                                               \
     if (weight.n == (N) && weight.k == (K)) {                                                  \

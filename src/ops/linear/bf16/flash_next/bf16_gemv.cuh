@@ -288,4 +288,73 @@ __global__ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void
     }
 }
 
+// Column for column, the one-column decode GEMV above (bf16_gemv_kernel with Schedule) over up to
+// Columns columns per weight pass. Each (row, column) runs that kernel's lane partition, K-phase
+// order (taken from the row's Schedule row group), accumulator chains, chain sum and warp
+// reduction, so every column is bitwise the T=1 result, while each weight element is read once
+// per pass instead of once per column. A warp owns RowsPerWarp rows of one Schedule row group.
+// x is [K, columns] and out [N, columns], both column-contiguous; blockIdx.y is the column pass.
+template <class Geometry, class Schedule, int Columns, int RowsPerWarp>
+__global__ __launch_bounds__(Schedule::kThreads) void bf16_gemv_columns_kernel(
+    const __nv_bfloat16* __restrict__ x, const __nv_bfloat16* __restrict__ weight,
+    __nv_bfloat16* __restrict__ out, std::int32_t columns) {
+    static_assert(Schedule::kWarpsPerRow == 1 &&
+                  Schedule::kActivationAccess == Bf16ActivationAccess::Direct);
+    static_assert(Schedule::kRowsPerWarp % RowsPerWarp == 0);
+    constexpr int kValuesPerPhase = kWarpSize * Schedule::kValuesPerLane;
+    static_assert((Geometry::kInputRows % kValuesPerPhase) == 0);
+    constexpr int kPhases = Geometry::kInputRows / kValuesPerPhase;
+    using Pack            = Bf16GemvPack<Schedule::kValuesPerLane>;
+
+    const int lane   = static_cast<int>(threadIdx.x) & (kWarpSize - 1);
+    const int warp   = static_cast<int>(threadIdx.x) / kWarpSize;
+    const int row0   = (static_cast<int>(blockIdx.x) * Schedule::kWarpsPerCta + warp) * RowsPerWarp;
+    const int first  = static_cast<int>(blockIdx.y) * Columns;
+    const int active = columns - first < Columns ? columns - first : Columns;
+    // The phase order of the T=1 kernel depends on the row's group of Schedule::kRowsPerWarp.
+    const int group_row0 = row0 - row0 % Schedule::kRowsPerWarp;
+
+    float accumulators[Columns][RowsPerWarp][Schedule::kAccumulatorChains] = {};
+    for (int iteration = 0; iteration < kPhases; ++iteration) {
+        const int phase = bf16_phase_index<Schedule, kPhases>(iteration, group_row0);
+        Pack w_values[RowsPerWarp];
+#pragma unroll
+        for (int local_row = 0; local_row < RowsPerWarp; ++local_row) {
+            w_values[local_row] = load_bf16_weight_phase<Geometry, Schedule>(
+                weight, row0 + local_row, phase, 0, lane);
+        }
+#pragma unroll
+        for (int column = 0; column < Columns; ++column) {
+            if (column < active) {
+                const Pack x_values = load_bf16_activation_phase<Geometry, Schedule>(
+                    x + static_cast<std::int64_t>(first + column) * Geometry::kInputRows, phase, 0,
+                    lane);
+#pragma unroll
+                for (int local_row = 0; local_row < RowsPerWarp; ++local_row) {
+                    accumulate_bf16_packs(w_values[local_row], x_values,
+                                          accumulators[column][local_row]);
+                }
+            }
+        }
+    }
+#pragma unroll
+    for (int column = 0; column < Columns; ++column) {
+        if (column < active) {
+#pragma unroll
+            for (int local_row = 0; local_row < RowsPerWarp; ++local_row) {
+                float total = 0.0F;
+#pragma unroll
+                for (int chain = 0; chain < Schedule::kAccumulatorChains; ++chain) {
+                    total += accumulators[column][local_row][chain];
+                }
+                total = warp_reduce_sum(total);
+                if (lane == 0) {
+                    out[static_cast<std::int64_t>(first + column) * Geometry::kOutputRows + row0 +
+                        local_row] = __float2bfloat16_rn(total);
+                }
+            }
+        }
+    }
+}
+
 } // namespace ninfer::ops::detail::flash_next

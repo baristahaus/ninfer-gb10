@@ -126,7 +126,7 @@ and ~1.5% on the 35B.
 | Prefill PLE reads its history from the fork source slot, not the destination (`flash_next_ple` takes source and destination states) | `11b180d2` | **Correctness bug fix for lkarlsund's Flash-Next.** Present on `lk/master`; PR branch `upstream/flash-next-ple-fork-source`. A prompt that continues past a context-cache capture point forks its state; layer 1's PLE then read stale history from a reused slot, so output depended on the slot pool (`max_concurrency`). Verified on GB10: C1/C4 outputs, with and without MTP, now identical |
 | QSA workspace sized for every call of ≤16 rows (fixes a `bad_alloc` on short chunk tails) | `eb9e87fa` | Bug fix for upstream Flash-Next (RTX PRO 6000) |
 | QSA skips index selection when all visible keys fit the budget | `d1efb24f` | Flash-Next speed: on GB10, attention −60% and decode +5.2% at C4 |
-| Fused HyperConnection gate mix in the FP8 up projection | `8630b6a1` | Flash-Next; speed-neutral, small favourable perplexity change |
+| Fused HyperConnection gate mix in the FP8 up projection | `8630b6a1` | Flash-Next; speed-neutral; perplexity change within run-to-run noise (no paired CI was measured, so no direction is claimed) |
 | Dense causal-cache split budgets from the device SM count | `097ad988` | No effect on a 5090; helps other SM counts |
 | Admission gate for unsettled StateImage forks, with re-arm | `a51fba6a`, `dc622216` | Repairs a fork regression. The underlying planner/Program mismatch ("selected pressure target could not be sealed", C=8) may exist upstream; reproduce first |
 | Blocked-admission counters in the request log | `aff11e8e` | Optional observability |

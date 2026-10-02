@@ -2,7 +2,7 @@
 """Aggregate and per-request throughput at N concurrent requests against a running ninfer-serve.
 
 Usage: concurrency_sweep.py BASE_URL OUT_JSON --n 1,2,4,8 [--max-tokens 512] [--prompt-chars 8000]
-                            [--shared]
+                            [--shared] [--ignore-eos]
 
 For each N, fires N greedy chat requests at once (one thread each) and waits for all of them.
 Prompts are the first PROMPT_CHARS characters of distinct perplexity-corpus streams, so no two
@@ -50,7 +50,7 @@ def prompts(count, chars, shared):
     return out
 
 
-def run_batch(base_url, model, batch, max_tokens):
+def run_batch(base_url, model, batch, max_tokens, ignore_eos=False):
     results = [None] * len(batch)
     start = threading.Barrier(len(batch))
 
@@ -63,6 +63,8 @@ def run_batch(base_url, model, batch, max_tokens):
             "reasoning_effort": "none",
             "messages": [{"role": "user", "content": text}],
         }
+        if ignore_eos:
+            payload["ignore_eos"] = True
         start.wait()
         t0 = time.time()
         try:
@@ -104,13 +106,15 @@ def main():
     ap.add_argument("--max-tokens", type=int, default=512)
     ap.add_argument("--prompt-chars", type=int, default=8000)
     ap.add_argument("--shared", action="store_true")
+    ap.add_argument("--ignore-eos", action="store_true",
+                    help="decode exactly --max-tokens per request (serving ignore_eos extension)")
     args = ap.parse_args()
     with urllib.request.urlopen(args.base_url + "/v1/models", timeout=60) as resp:
         model = json.load(resp)["data"][0]["id"]
     runs = []
     for n in (int(x) for x in args.n.split(",")):
         batch = prompts(n, args.prompt_chars, args.shared)
-        run = run_batch(args.base_url, model, batch, args.max_tokens)
+        run = run_batch(args.base_url, model, batch, args.max_tokens, args.ignore_eos)
         runs.append(run)
         per = run["per_request_tok_s"]
         print(f"N={n}: aggregate {run['aggregate_tok_s']:.1f} tok/s"

@@ -132,6 +132,10 @@ class PerformanceReportTest(unittest.TestCase):
         self.assertAlmostEqual(m["wall_ms"], .00198)
         self.assertEqual(sum(r["calls"] for r in report["stages"]), 3)
         self.assertIn("ms/round", markdown(report))
+        graph = next(r for r in report["stages"] if r["role"] == "target.verify")
+        self.assertEqual([k["activities"] for k in graph["kernels"]], [4])
+        self.assertAlmostEqual(graph["kernels"][0]["gpu_work_ms"], .002)
+        self.assertIn("Kernels per stage", markdown(report))
 
     def test_serve_rounds_trim_drops_ramp_and_drain_rounds(self):
         self.add_rounds((1100, 1260), (2900, 3060), (6000, 6060), (6990, 7020))

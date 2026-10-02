@@ -2,8 +2,9 @@
 # Block L item 1: where a steady-state MTP decode round's GPU time goes at a fixed concurrency.
 # Builds an annotated ninfer-serve in build-trace/ (NINFER_PERFORMANCE_TRACE=ON), runs it under
 # Nsight Systems from launch (graph construction must be in the trace), drives CONC simultaneous
-# greedy requests twice, and attributes the GPU work launched inside decode.mtp_round ranges with
-# exactly CONC active rows. Writes profiles/bench/gb10/round-attribution/summary.md.
+# greedy requests twice (ignore_eos, so every request decodes MAX_TOKENS), and attributes the
+# GPU work launched inside decode.mtp_round ranges with exactly CONC active rows, per stage and
+# per kernel. Writes profiles/bench/gb10/round-attribution/summary.md.
 #
 #   CONC=4 DRAFT=1 MAX_TOKENS=256 tools/gb10/round_attribution.sh
 #
@@ -41,7 +42,8 @@ until curl -sf "$BASE_URL/health" >/dev/null 2>&1; do
     sleep 5; waited=$((waited + 5))
 done
 "$PYTHON" tools/gb10/concurrency_sweep.py "$BASE_URL" "$dir/load.json" \
-    --n "$CONC,$CONC" --max-tokens "$MAX_TOKENS" --prompt-chars 2000 >"$dir/load.log" 2>&1 ||
+    --n "$CONC,$CONC" --max-tokens "$MAX_TOKENS" --prompt-chars 2000 --ignore-eos \
+    >"$dir/load.log" 2>&1 ||
     log "load driver reported errors; see $dir/load.log"
 # SIGTERM the server (not nsys) so it drains; nsys then finalizes the trace and exports SQLite.
 # nsys re-execs the target with an absolute path, so match the process name, not the cmdline prefix.
@@ -62,7 +64,7 @@ done
     echo
     machine_summary
     echo "- nsys: $(nsys --version 2>/dev/null | head -1)"
-    echo "- Load: two batches of $CONC simultaneous greedy requests, $MAX_TOKENS output tokens each"
+    echo "- Load: two batches of $CONC simultaneous greedy requests, $MAX_TOKENS output tokens each (ignore_eos)"
     echo "- Request log totals: $("$PYTHON" tools/gb10/request_log_summary.py "$dir/requests.jsonl" 2>&1 | awk '/^Totals/')"
     echo
     sed '1d' "$dir/report.md"

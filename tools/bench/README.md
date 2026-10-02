@@ -295,7 +295,8 @@ fresh paired **unprofiled** runs to claim an inference speed improvement.
 
 A serving capture has no measured repetition. `--serve-rounds decode.mtp_round` (in place of
 `--benchmark`) attributes the GPU work launched inside those per-round host ranges and adds a
-per-round table that also lists unattributed kernels by name. `--batch N` keeps only rounds whose
+per-round table that also lists unattributed kernels by name. Every report also breaks each
+stage down by kernel (launches and GPU work), so a stage's time can be traced to its launches. `--batch N` keeps only rounds whose
 NVTX payload (the number of active rows) is N, and `--trim F` drops a fraction of the rounds at
 each end. The serve process must run under `nsys profile` from launch with a
 `NINFER_PERFORMANCE_TRACE=ON` build, so that graph construction is in the trace.

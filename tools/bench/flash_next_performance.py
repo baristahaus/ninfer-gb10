@@ -321,7 +321,14 @@ def read_report(path: Path, hardware: Hardware, sample: int = 0,
             key = (group["phase"], group["role"], work)
             row = result_rows.setdefault(key, {"phase": group["phase"], "role": group["role"],
                 **asdict(work), "calls": 0, "gpu_work_ms": 0.0, "gpu_busy_ms": 0.0,
-                "estimated_ms_min": 0.0, "estimated_ms_max": 0.0, "partial_calls": 0})
+                "estimated_ms_min": 0.0, "estimated_ms_max": 0.0, "partial_calls": 0,
+                "kernels": {}})
+            for activity in group["activities"]:
+                name = strings.get(activity.get("shortName"), activity["kind"])
+                entry = row["kernels"].setdefault(name, {"name": name, "activities": 0,
+                                                         "gpu_work_ms": 0.0})
+                entry["activities"] += 1
+                entry["gpu_work_ms"] += (activity["end"] - activity["start"]) / 1e6
             duration = sum(a["end"] - a["start"] for a in group["activities"]) / 1e6
             row["gpu_work_ms"] += duration
             row["gpu_busy_ms"] += union_ns([(a["start"], a["end"]) for a in group["activities"]]) / 1e6
@@ -336,6 +343,8 @@ def read_report(path: Path, hardware: Hardware, sample: int = 0,
         total_work = sum(a["end"] - a["start"] for a in activities) / 1e6
         output_rows = []
         for row in result_rows.values():
+            # Kernels (and copies) inside the stage, largest first: which launch carries its time.
+            row["kernels"] = sorted(row["kernels"].values(), key=lambda k: -k["gpu_work_ms"])
             row["gpu_work_share_pct"] = 100 * row["gpu_work_ms"] / total_work
             row["phase_gpu_work_share_pct"] = 100 * row["gpu_work_ms"] / (
                 sum(end - start for start, end in phase_intervals[row["phase"]]) / 1e6)
@@ -419,6 +428,17 @@ def markdown(report: dict) -> str:
                      f"{r['bytes_min']}–{r['bytes_max']} | {r['bf16_flops']} / {r['nvfp4_flops']} / {r['fp32_flops']} | "
                      f"{estimate} | {efficiency} |")
     lines += ["", f"Unattributed GPU work: {m['unattributed_gpu_work_ms']:.3f} ms.", ""]
+    n = m.get("rounds") or 1
+    unit = "ms/round" if m.get("rounds") else "ms"
+    lines += [f"Kernels per stage ({unit}, launches per {'round' if m.get('rounds') else 'capture'}):",
+              "", f"| Phase / role | Stage | Kernel | Launches | GPU work {unit} | Stage share |",
+              "|---|---|---|---:|---:|---:|"]
+    for r in report["stages"]:
+        for k in r["kernels"]:
+            lines.append(f"| {r['phase']} / {r['role']} | {r['stage']} | {k['name']} | "
+                         f"{k['activities'] / n:.1f} | {k['gpu_work_ms'] / n:.3f} | "
+                         f"{100 * k['gpu_work_ms'] / r['gpu_work_ms']:.1f}% |")
+    lines.append("")
     if m.get("rounds"):
         n = m["rounds"]
         lines += [f"Per round over {n} rounds: host wall {m['wall_ms'] / n:.3f} ms, "

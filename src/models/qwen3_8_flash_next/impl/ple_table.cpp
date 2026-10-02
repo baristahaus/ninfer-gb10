@@ -83,15 +83,26 @@ void gather_ple_fp8(const artifact::MappedRange& table, std::span<const PleIds> 
     if (output.size() != required) {
         throw std::invalid_argument("PLE gathered output has the wrong byte length");
     }
-    for (std::size_t token = 0; token < ids.size(); ++token) {
-        for (std::size_t head = 0; head < kPleHeads; ++head) {
-            const std::uint64_t row = ids[token][head];
-            if (row >= kPleRows) { throw std::out_of_range("PLE row ID is outside the table"); }
-            const std::uint64_t source = row * kPleHeadWidth;
-            const std::uint64_t destination =
-                static_cast<std::uint64_t>(token) * kPleEmbeddingDim + head * kPleHeadWidth;
-            table.copy(source, output.subspan(destination, kPleHeadWidth));
+    // The table does not fit in page cache next to the weights on a unified-memory device, and
+    // hashed rows are scattered, so an uncached row is one page fault. Copying row by row would
+    // serve those faults one at a time. Instead the reads of the next kPrefetchRows rows are
+    // started ahead of the copy, so their I/O overlaps; the window bounds the advice calls in
+    // flight for a long prefill chunk.
+    constexpr std::size_t kPrefetchRows = 512;
+    const std::size_t rows              = ids.size() * kPleHeads;
+    const auto row_id                   = [&ids](std::size_t index) -> std::uint64_t {
+        const std::uint64_t row = ids[index / kPleHeads][index % kPleHeads];
+        if (row >= kPleRows) { throw std::out_of_range("PLE row ID is outside the table"); }
+        return row;
+    };
+    std::size_t prefetched = 0;
+    for (std::size_t index = 0; index < rows; ++index) {
+        for (const std::size_t end = std::min(rows, index + kPrefetchRows); prefetched < end;
+             ++prefetched) {
+            table.prefetch(row_id(prefetched) * kPleHeadWidth, kPleHeadWidth);
         }
+        const std::uint64_t destination = static_cast<std::uint64_t>(index) * kPleHeadWidth;
+        table.copy(row_id(index) * kPleHeadWidth, output.subspan(destination, kPleHeadWidth));
     }
 }
 

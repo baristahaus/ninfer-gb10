@@ -64,11 +64,15 @@ void mapped_shards() {
     mapped.copy(0, actual);
     require(std::equal(actual.begin(), actual.end(), fixture.payload.begin() + 256),
             "mapped parent crossing an unaligned shard boundary changed bytes");
+    // Page-cache advice never changes contents, including across a shard boundary.
+    mapped.advise_random();
+    mapped.prefetch(200, 160);
     std::array<std::byte, 160> row{};
     mapped.copy(200, row);
     require(std::equal(row.begin(), row.end(), fixture.payload.begin() + 456),
             "mapped PLE-width row crossing a shard boundary changed bytes");
     rejects([&] { mapped.copy(400, row); }, "mapped read beyond range accepted");
+    rejects([&] { mapped.prefetch(400, 160); }, "mapped prefetch beyond range accepted");
     const auto raw = weight_geometry(QType::FP8_E4M3FN, QuantLayout::Contiguous,
                                     std::array<std::uint64_t, 2>{320001536, 160});
     require(raw.bytes == 51200245760ULL, "PLE FP8 geometry changed");

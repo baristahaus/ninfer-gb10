@@ -1,0 +1,87 @@
+From 1737b647f60897c26e3f7e5fb2819b499d7a751c Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 2 Oct 2026 01:29:38 +0000
+Subject: [PATCH] fix(ops): size the QSA workspace for every call up to its row
+ count
+
+flash_next_qsa_workspace_capacity_bytes reserved the hierarchical top-k
+scratch and the split-attention partials only when its own row count was
+at most 16, but a workspace sized for a longer chunk also serves calls of
+at most 16 rows (a prefill chunk's short tail and decode), which take
+exactly that path. Size both terms for min(tokens, 16) rows. A
+full-context 8192-row prefill workspace grows by 28.2 MiB
+(2,879,492,096 -> 2,909,048,832 bytes).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01PB8TNZ3p817zVAp6aH4yrz
+---
+ include/ninfer/ops/flash_next_qsa.h           |  2 ++
+ .../softmax_attention/qsa/flash_next_qsa.cu   | 22 ++++++++++---------
+ tests/ops/test_flash_next_qsa.cpp             |  2 +-
+ 3 files changed, 15 insertions(+), 11 deletions(-)
+
+diff --git a/include/ninfer/ops/flash_next_qsa.h b/include/ninfer/ops/flash_next_qsa.h
+index 2fc1f5c3..7a8c309d 100644
+--- a/include/ninfer/ops/flash_next_qsa.h
++++ b/include/ninfer/ops/flash_next_qsa.h
+@@ -40,6 +40,8 @@ struct FlashNextQsaWeights {
+     Tensor index_key_norm;
+ };
+ 
++// Workspace for any call of 1..tokens rows whose cache holds at most max_context keys: a
++// workspace sized for a prefill chunk also serves the chunk's short tail and decode calls.
+ [[nodiscard]] std::size_t flash_next_qsa_workspace_capacity_bytes(std::int32_t tokens,
+                                                                   std::uint32_t max_context);
+ 
+diff --git a/src/ops/softmax_attention/qsa/flash_next_qsa.cu b/src/ops/softmax_attention/qsa/flash_next_qsa.cu
+index dbe47539..61fe4831 100644
+--- a/src/ops/softmax_attention/qsa/flash_next_qsa.cu
++++ b/src/ops/softmax_attention/qsa/flash_next_qsa.cu
+@@ -1487,19 +1487,21 @@ std::size_t flash_next_qsa_workspace_capacity_bytes(std::int32_t tokens,
+     const std::uint64_t bf16 = static_cast<std::uint64_t>(tokens) * 39552ULL *
+                                sizeof(__nv_bfloat16);
+     const std::uint64_t groups = (static_cast<std::uint64_t>(max_context) + kRatio - 1) / kRatio;
+-    const std::uint64_t hierarchy = tokens <= 16
+-        ? 2 * ((groups + kTopkBlockItems - 1) / kTopkBlockItems) * kTopGroups *
+-              (sizeof(float) + sizeof(std::int32_t))
+-        : 0;
++    // The capacity covers every call of up to `tokens` rows. Calls of at most 16 rows take the
++    // decode route (hierarchical top-k scratch and split-attention partials), so those terms are
++    // sized for min(tokens, 16) rows, including in a workspace sized for a longer prefill chunk.
++    const std::uint64_t decode_rows = static_cast<std::uint64_t>(std::min<std::int32_t>(tokens, 16));
++    const std::uint64_t hierarchy = decode_rows * 2 *
++                                    ((groups + kTopkBlockItems - 1) / kTopkBlockItems) *
++                                    kTopGroups * (sizeof(float) + sizeof(std::int32_t));
+     const std::uint64_t selection = static_cast<std::uint64_t>(tokens) *
+-                                    (groups * sizeof(float) +
+-                                     kTopGroups * sizeof(std::int32_t) + hierarchy);
++                                        (groups * sizeof(float) +
++                                         kTopGroups * sizeof(std::int32_t)) +
++                                    hierarchy;
+     const std::uint64_t indices = static_cast<std::uint64_t>(tokens) * kOutputWidth *
+                                   sizeof(std::int32_t);
+-    const std::uint64_t split_partials = tokens <= 16
+-        ? static_cast<std::uint64_t>(tokens) * kMaxDecodeAttentionSplits * kQueryHeads *
+-              (kHeadDim + 2) * sizeof(float)
+-        : 0;
++    const std::uint64_t split_partials = decode_rows * kMaxDecodeAttentionSplits * kQueryHeads *
++                                         (kHeadDim + 2) * sizeof(float);
+     const std::uint64_t total = bf16 + indices + selection + split_partials + 16 * 256;
+     if (total > std::numeric_limits<std::size_t>::max()) {
+         throw std::overflow_error("Flash-Next QSA workspace size overflow");
+diff --git a/tests/ops/test_flash_next_qsa.cpp b/tests/ops/test_flash_next_qsa.cpp
+index 9b404e6d..7f8aca08 100644
+--- a/tests/ops/test_flash_next_qsa.cpp
++++ b/tests/ops/test_flash_next_qsa.cpp
+@@ -37,7 +37,7 @@ void store_bf16(DeviceBuffer& storage, std::size_t element, float value) {
+ }
+ 
+ int run(int kPrefillTokens) {
+-    constexpr std::size_t kFullContextPrefillWorkspace = 2879492096ULL;
++    constexpr std::size_t kFullContextPrefillWorkspace = 2909048832ULL;
+     if (ops::flash_next_qsa_workspace_capacity_bytes(8192, 262144) !=
+         kFullContextPrefillWorkspace) {
+         std::cerr << "Flash-Next QSA full-context prefill workspace regressed\n";
+-- 
+2.43.0
+

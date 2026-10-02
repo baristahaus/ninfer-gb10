@@ -177,15 +177,73 @@ int run() {
     return failures;
 }
 
-// The production NVFP4 W4A4 routes against the FP64 MoE on the decoded expert weights: one row
-// (the per-assignment route), 2..16 rows (the expert-grouped decode tile) and 17 rows (the
-// grouped prefill tile). The two NVFP4 activation quantizations are the routes' arithmetic
-// profile, so the criterion is distribution-level, as for the A4 linear Ops. Routing is exact:
-// each token's 10 experts score distinct BF16 values on a dedicated input dimension, and tokens
-// share experts from a pool of 12, as decode rows do.
+// The production NVFP4 W4A4 routes against an FP64 oracle: one row (the per-assignment route),
+// 2..16 rows (the expert-grouped decode tile) and 17 rows (the grouped prefill tile). W4A4 has
+// two explicit activation quantizations, the expert input and the down-projection input, each
+// NVFP4 per 16 values with an E4M3 scale RNE(divisor * max|x| / 6) and E2M1 codes RNE(x *
+// divisor / scale), both saturating. The oracle applies them to the BF16 values they quantize
+// (the input, and the BF16 SiLU(gate) * up activation) and evaluates everything else in FP64 on
+// the decoded weights. Routing is exact: each token's 10 experts score distinct BF16 values on a
+// dedicated input dimension, and tokens share experts from a pool of 12, as decode rows do.
 constexpr int kRoutingDim = 2544;
 constexpr std::array<int, 12> kPool{3, 41, 88, 130, 177, 211, 260, 305, 349, 402, 455, 509};
-constexpr ReductionCriterion kNvfp4MoeCriterion{0.25, 0.0, 0.5};
+// Residual differences are FP32 accumulation order against FP64, BF16 rounding of the gate, up
+// and down outputs, and the rare activation block whose BF16 value lands on the other side of a
+// code boundary because of them.
+constexpr ReductionCriterion kNvfp4MoeCriterion{2.0e-2, 0.0, 5.0e-2};
+
+std::uint8_t encode_e4m3_rne_satfinite(float value) {
+    // Nearest positive E4M3FN value, ties to the even code; values above 448 saturate.
+    if (value >= 448.0F) { return 0x7e; }
+    std::uint8_t best = 0;
+    double best_error = std::abs(static_cast<double>(value));
+    for (int code = 1; code < 0x7f; ++code) {
+        const double error =
+            std::abs(quantized_weight::detail::decode_e4m3fn(static_cast<std::uint8_t>(code)) -
+                     static_cast<double>(value));
+        if (error < best_error || (error == best_error && (code & 1) == 0)) {
+            best       = static_cast<std::uint8_t>(code);
+            best_error = error;
+        }
+    }
+    return best;
+}
+
+double quantize_e2m1_rne_satfinite(float value) {
+    constexpr std::array<double, 8> kMagnitudes{0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0};
+    const double magnitude = std::min(std::abs(static_cast<double>(value)), 6.0);
+    int best               = 0;
+    for (int code = 1; code < 8; ++code) {
+        const double error = std::abs(kMagnitudes[code] - magnitude);
+        const double held  = std::abs(kMagnitudes[best] - magnitude);
+        if (error < held || (error == held && (code & 1) == 0)) { best = code; }
+    }
+    return value < 0.0F ? -kMagnitudes[best] : kMagnitudes[best];
+}
+
+// The logical value the W4A4 product sees for each element of a BF16 vector: code * scale /
+// divisor, per 16-element block.
+std::vector<double> nvfp4_activation(const std::vector<float>& bf16_values, float divisor) {
+    std::vector<double> out(bf16_values.size());
+    for (std::size_t block = 0; block < bf16_values.size(); block += 16) {
+        float max_abs = 0.0F;
+        for (std::size_t i = 0; i < 16; ++i) {
+            max_abs = std::max(max_abs, std::abs(bf16_values[block + i]));
+        }
+        const std::uint8_t scale_code = encode_e4m3_rne_satfinite(divisor * max_abs / 6.0F);
+        const auto scale = static_cast<float>(quantized_weight::detail::decode_e4m3fn(scale_code));
+        for (std::size_t i = 0; i < 16; ++i) {
+            out[block + i] =
+                scale_code == 0
+                    ? 0.0
+                    : quantize_e2m1_rne_satfinite(bf16_values[block + i] * divisor / scale) *
+                          static_cast<double>(scale) / static_cast<double>(divisor);
+        }
+    }
+    return out;
+}
+
+float bf16_round(double value) { return bf16_to_f32(f32_to_bf16(static_cast<float>(value))); }
 
 struct Nvfp4Bank {
     DeviceBuffer device;
@@ -313,8 +371,11 @@ int run_nvfp4() {
             const int rank = static_cast<int>(
                 std::find(selected[t].begin(), selected[t].end(), expert) - selected[t].begin());
             const double alpha = std::exp(4.0 + 0.25 * rank - maximum) / denominator;
-            const float* x     = input.data() + static_cast<std::size_t>(t) * kHidden;
-            std::vector<double> hidden(kIntermediate);
+            const std::vector<float> row(input.begin() + static_cast<std::ptrdiff_t>(t) * kHidden,
+                                         input.begin() +
+                                             static_cast<std::ptrdiff_t>(t + 1) * kHidden);
+            const std::vector<double> x = nvfp4_activation(row, gate_up.input_divisors[expert]);
+            std::vector<float> activation(kIntermediate);
             for (int r = 0; r < kIntermediate; ++r) {
                 double gate = 0.0, up = 0.0;
                 for (int k = 0; k < kHidden; ++k) {
@@ -324,8 +385,12 @@ int run_nvfp4() {
                               w1[static_cast<std::size_t>(r + kIntermediate) * kHidden + k]) *
                           x[k];
                 }
-                hidden[r] = gate / (1.0 + std::exp(-gate)) * up;
+                // The quantizer reads the BF16 activation built from the BF16 gate and up outputs.
+                const double g = bf16_round(gate);
+                activation[r]  = bf16_round(g / (1.0 + std::exp(-g)) * bf16_round(up));
             }
+            const std::vector<double> hidden =
+                nvfp4_activation(activation, down.input_divisors[expert]);
             for (int r = 0; r < kHidden; ++r) {
                 double value = 0.0;
                 for (int k = 0; k < kIntermediate; ++k) {

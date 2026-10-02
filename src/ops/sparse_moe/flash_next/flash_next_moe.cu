@@ -799,7 +799,11 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
     linear(shared_activation, weights.shared_down, destination, stream, bf16_gemm);
     Tensor routed_activation = workspace.alloc(DType::BF16, {kIntermediate, kTop, tokens});
     if (weights.routed_gate_up.qtype == QType::NVFP4 && tokens >= kGroupedFirstToken) {
-        if (tokens <= kDecodeGroupedTokenTile) {
+        // One row reads each of its experts once on either route. With two or more rows the
+        // rows share experts; the per-assignment route streams an expert once per (row, path),
+        // while the expert-grouped route below streams each distinct expert once for all of its
+        // rows.
+        if (tokens == 1) {
             run_nvfp4_decode_routes(input, weights, ids, alpha, shared_alpha, destination,
                                     routed_activation, workspace, stream, tokens, wide_decode_gate);
             return;

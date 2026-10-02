@@ -1,0 +1,11 @@
+### profiles/bench/gb10/qsa-verify/abba-c4-1-1-base/requests.jsonl
+
+| req | prompt | queue wait s | TTFT s | computed prefill | completion | prefill s | decode s | decode tok/s | rounds | tok/round | device wait ms/round | host exposed ms/round |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 2 | 524 | 593 ms | 1.12 | 524 | 512 | 0.52 | 16.25 | 31.5 | 270 | 1.90 | 60.2 | 0.02 |
+| 1 | 468 | 1241 ms | 1.76 | 468 | 512 | 0.52 | 17.10 | 29.9 | 284 | 1.80 | 60.2 | 0.02 |
+| 4 | 571 | 1 ms | 0.55 | 571 | 512 | 0.55 | 18.81 | 27.2 | 320 | 1.60 | 58.8 | 0.02 |
+| 3 | 539 | 18016 ms | 18.57 | 539 | 512 | 0.55 | 11.28 | 45.4 | 281 | 1.82 | 40.1 | 0.02 |
+
+Totals: 2048 tokens, decode 63.4 s (32.3 tok/s), prefill 2.1 s, rounds 1155, 1.77 tok/round, device wait 54.9 ms/round, queue wait mean 4963 ms, host exposed 0.02 ms/round
+

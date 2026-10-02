@@ -1,0 +1,32 @@
+2026-10-02 23:13:00.830  INFO  starting engine
+2026-10-02 23:13:01.687  INFO  loading weights | 70.2 GiB
+2026-10-02 23:13:11.699  INFO    loading weights 52.6% | 37.0 GiB/70.2 GiB | 4.96 GiB/s | ETA 6.7s
+2026-10-02 23:13:18.390  INFO  weights ready | 70.2 GiB | 16.7s | 4.21 GiB/s
+2026-10-02 23:13:18.965  INFO  pinning host state | 882.5 MiB
+2026-10-02 23:13:19.332  INFO  host state pinned | 882.5 MiB | 368 ms
+2026-10-02 23:13:19.335  INFO  pinning host KV | 8.00 GiB
+2026-10-02 23:13:22.333  INFO  host KV pinned | 8.00 GiB | 3.0s
+ninfer: persistent grids sized for 48 SMs
+2026-10-02 23:13:24.270  INFO  CUDA graphs ready | 1.9s
+2026-10-02 23:13:24.273  INFO  engine ready | qwen3.8-flash-next-125b-a6b | total 23.4s | weights 70.2 GiB | CUDA sync yield
+2026-10-02 23:13:24.273  INFO  capacity | KV 73,728 tokens, fp8, explicit | pages 1,152/4,608 | runtime 3.73 GiB | free 23.1 GiB
+2026-10-02 23:13:24.273  INFO  context cache | 4 active + 4 cached device states | host 8 states, 8.00 GiB KV | private 8 | shared 4 | anchors 2
+2026-10-02 23:13:24.547  INFO  warmup complete | 274 ms
+2026-10-02 23:13:24.548  INFO  listening on http://127.0.0.1:18087 | model qwen3.8-flash-next-125b-a6b | auth disabled
+2026-10-02 23:13:24.594  INFO  req#3 started | openai-chat non-stream | 1 message | max output 512 | thinking off | preserve thinking
+2026-10-02 23:13:24.594  INFO  req#4 started | openai-chat non-stream | 1 message | max output 512 | thinking off | preserve thinking
+2026-10-02 23:13:24.594  INFO  req#2 started | openai-chat non-stream | 1 message | max output 512 | thinking off | preserve thinking
+2026-10-02 23:13:24.594  INFO  req#1 started | openai-chat non-stream | 1 message | max output 512 | thinking off | preserve thinking
+2026-10-02 23:13:29.549  INFO  throughput | 5.0s | prefill 326.8 tok/s (1,634 tok) | decode 65.6 tok/s (328 tok) | running 3 (decode-ready 3) | waiting 1 | batch 2.79 | host 13.2% (662 ms)
+2026-10-02 23:13:34.549  INFO  throughput | 5.0s | decode 99.4 tok/s (497 tok) | running 3 (decode-ready 3) | waiting 1 | batch 3.00 | host 0.0% (1.15 ms)
+2026-10-02 23:13:37.671  INFO  req#3 done | openai-chat | output limit | prompt 524 | output 512 | cache 0 (0.0%) | TTFT 529 ms | total 13.1s | prefill 997.5 tok/s | decode 44.7 tok/s | mtp accepted 364/438 (83.1%)
+2026-10-02 23:13:39.549  INFO  throughput | 5.0s | prefill 93.6 tok/s (468 tok) | decode 94.2 tok/s (471 tok) | running 3 (decode-ready 3) | batch 2.95 | host 4.3% (214 ms)
+2026-10-02 23:13:42.196  INFO  req#2 done | openai-chat | output limit | prompt 539 | output 512 | cache 0 (0.0%) | TTFT 2.0s | total 17.6s | queue 1.3s | prefill 963.0 tok/s | decode 33.9 tok/s | mtp accepted 320/571 (56.0%)
+2026-10-02 23:13:44.549  INFO  throughput | 5.0s | decode 70.6 tok/s (353 tok) | running 2 (decode-ready 2) | batch 2.47 | host 0.0% (1.23 ms)
+2026-10-02 23:13:45.871  INFO  req#4 done | openai-chat | output limit | prompt 571 | output 512 | cache 0 (0.0%) | TTFT 1.2s | total 21.3s | queue 578 ms | prefill 1.05k tok/s | decode 27.0 tok/s | mtp accepted 258/758 (34.0%)
+2026-10-02 23:13:49.549  INFO  throughput | 5.0s | decode 54.8 tok/s (274 tok) | running 1 (decode-ready 1) | batch 1.23 | host 0.0% (1.55 ms)
+2026-10-02 23:13:52.072  INFO  req#1 done | openai-chat | output limit | prompt 468 | output 512 | cache 0 (0.0%) | TTFT 13.8s | total 27.5s | queue 13.2s | prefill 864.3 tok/s | decode 37.5 tok/s | mtp accepted 280/691 (40.5%)
+2026-10-02 23:13:52.103  INFO  shutdown requested | draining 0 in-flight request(s) | timeout 30 s
+2026-10-02 23:13:52.103  INFO  drain complete in 0.0 s
+2026-10-02 23:13:53.981  INFO  engine released in 1.9 s
+2026-10-02 23:13:53.981  INFO  server stopped

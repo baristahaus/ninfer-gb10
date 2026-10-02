@@ -1,0 +1,26 @@
+{
+ "shared": false,
+ "max_tokens": 512,
+ "runs": [
+  {
+   "n": 1,
+   "failed": 0,
+   "wall_seconds": 13.631144046783447,
+   "completion_tokens": 512,
+   "aggregate_tok_s": 37.56104390378129,
+   "per_request_tok_s": [
+    37.56104390378129
+   ],
+   "requests": [
+    {
+     "stream": "wikitext-00",
+     "start": 1790982607.294415,
+     "end": 1790982620.925559,
+     "seconds": 13.631144046783447,
+     "completion_tokens": 512,
+     "finish_reason": "length"
+    }
+   ]
+  }
+ ]
+}

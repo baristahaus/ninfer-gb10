@@ -18,6 +18,7 @@ Per-request HTTP errors are recorded in the result JSON instead of aborting the 
 the sweep exits nonzero only when every request in a batch failed.
 """
 import argparse
+import hashlib
 import json
 import threading
 import time
@@ -75,9 +76,13 @@ def run_batch(base_url, model, batch, max_tokens, ignore_eos=False):
                           "error": str(error)}
             return
         t1 = time.time()
+        content = resp["choices"][0]["message"].get("content") or ""
         results[i] = {"stream": stream_id, "start": t0, "end": t1, "seconds": t1 - t0,
                       "completion_tokens": resp["usage"]["completion_tokens"],
-                      "finish_reason": resp["choices"][0]["finish_reason"]}
+                      "finish_reason": resp["choices"][0]["finish_reason"],
+                      # Greedy runs of one binary should match output for output; the hash lets
+                      # legs and arms be compared without storing the text.
+                      "content_sha256": hashlib.sha256(content.encode("utf-8")).hexdigest()}
 
     threads = [threading.Thread(target=worker, args=(i, sid, text))
                for i, (sid, text) in enumerate(batch)]

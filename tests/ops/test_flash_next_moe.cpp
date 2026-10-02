@@ -295,18 +295,6 @@ struct Nvfp4Bank {
 
 int run_nvfp4() {
     constexpr int kMaxTokens = 17;
-    // Token t selects pool[(3t + j) % 12] for j in [0,10) with router score 4 + j/4 (exact BF16).
-    std::vector<std::array<int, kTop>> selected(kMaxTokens);
-    std::vector<std::uint16_t> router(static_cast<std::size_t>(kExperts) * kHidden,
-                                      f32_to_bf16(0.0F));
-    for (int t = 0; t < kMaxTokens; ++t) {
-        for (int j = 0; j < kTop; ++j) {
-            const int expert = kPool[(3 * t + j) % kPool.size()];
-            selected[t][j]   = expert;
-            router[static_cast<std::size_t>(expert) * kHidden + kRoutingDim + t] =
-                f32_to_bf16(4.0F + 0.25F * static_cast<float>(j));
-        }
-    }
     std::vector<float> input(static_cast<std::size_t>(kHidden) * kMaxTokens);
     fill_uniform(input, 4101, -1.0F, 1.0F);
     for (int t = 0; t < kMaxTokens; ++t) {
@@ -320,8 +308,8 @@ int run_nvfp4() {
     const Nvfp4Bank down(kHidden, kIntermediate, 4300);
     DeviceBuffer d_gate_divisors = to_device(gate_up.input_divisors);
     DeviceBuffer d_down_divisors = to_device(down.input_divisors);
-    DeviceBuffer d_router        = to_device(router);
-    DeviceBuffer d_input         = to_device_bf16(input);
+    DeviceBuffer d_router(static_cast<std::size_t>(kExperts) * kHidden * sizeof(std::uint16_t));
+    DeviceBuffer d_input = to_device_bf16(input);
     // Zero shared expert: shared_alpha * shared(x) is exactly zero, isolating the routed paths.
     DeviceBuffer d_shared_gate(static_cast<std::size_t>(kIntermediate) * kHidden * 2);
     DeviceBuffer d_shared_up(static_cast<std::size_t>(kIntermediate) * kHidden * 2);
@@ -344,76 +332,130 @@ int run_nvfp4() {
         .routed_down    = down.view(d_down_divisors, kHidden, kIntermediate),
     };
 
-    // FP64 oracle: softmax over the selected scores, SiLU(gate) * up, down projection.
-    std::vector<double> expected(static_cast<std::size_t>(kHidden) * kMaxTokens, 0.0);
-    for (std::size_t slot = 0; slot < kPool.size(); ++slot) {
-        const int expert = kPool[slot];
-        std::vector<int> users;
-        for (int t = 0; t < kMaxTokens; ++t) {
-            if (std::find(selected[t].begin(), selected[t].end(), expert) != selected[t].end()) {
-                users.push_back(t);
+    // Each token's 10 experts (pool slots) and their router scores (exact BF16 values on the
+    // token's routing dimension; every other expert scores 0).
+    using Selection          = std::vector<std::array<std::pair<int, float>, kTop>>;
+    const auto upload_router = [&](const Selection& selection) {
+        std::vector<std::uint16_t> router(static_cast<std::size_t>(kExperts) * kHidden,
+                                          f32_to_bf16(0.0F));
+        for (std::size_t t = 0; t < selection.size(); ++t) {
+            for (const auto& [slot, score] : selection[t]) {
+                router[static_cast<std::size_t>(kPool[slot]) * kHidden + kRoutingDim + t] =
+                    f32_to_bf16(score);
             }
         }
-        if (users.empty()) { continue; }
-        std::vector<std::int32_t> all_rows(2 * kIntermediate);
-        for (int r = 0; r < 2 * kIntermediate; ++r) { all_rows[r] = r; }
-        const std::vector<float> w1 = quantized_weight::materialize_rows_fp32(
-            gate_up.experts[slot], std::span<const std::int32_t>(all_rows));
+        d_router.copy_from_host(router.data(), router.size() * sizeof(std::uint16_t));
+    };
+
+    // FP64 oracle with the two explicit activation quantizations.
+    const auto oracle = [&](const Selection& selection) {
+        std::vector<double> expected(static_cast<std::size_t>(kHidden) * selection.size(), 0.0);
+        std::vector<std::int32_t> gate_up_rows(2 * kIntermediate);
+        for (int r = 0; r < 2 * kIntermediate; ++r) { gate_up_rows[r] = r; }
         std::vector<std::int32_t> down_rows(kHidden);
         for (int r = 0; r < kHidden; ++r) { down_rows[r] = r; }
-        const std::vector<float> w2 = quantized_weight::materialize_rows_fp32(
-            down.experts[slot], std::span<const std::int32_t>(down_rows));
-        for (const int t : users) {
-            double maximum = 0.0;
-            for (int j = 0; j < kTop; ++j) { maximum = std::max(maximum, 4.0 + 0.25 * j); }
-            double denominator = 0.0;
-            for (int j = 0; j < kTop; ++j) { denominator += std::exp(4.0 + 0.25 * j - maximum); }
-            const int rank = static_cast<int>(
-                std::find(selected[t].begin(), selected[t].end(), expert) - selected[t].begin());
-            const double alpha = std::exp(4.0 + 0.25 * rank - maximum) / denominator;
-            const std::vector<float> row(input.begin() + static_cast<std::ptrdiff_t>(t) * kHidden,
-                                         input.begin() +
-                                             static_cast<std::ptrdiff_t>(t + 1) * kHidden);
-            const std::vector<double> x = nvfp4_activation(row, gate_up.input_divisors[expert]);
-            std::vector<float> activation(kIntermediate);
-            for (int r = 0; r < kIntermediate; ++r) {
-                double gate = 0.0, up = 0.0;
-                for (int k = 0; k < kHidden; ++k) {
-                    gate +=
-                        static_cast<double>(w1[static_cast<std::size_t>(r) * kHidden + k]) * x[k];
-                    up += static_cast<double>(
-                              w1[static_cast<std::size_t>(r + kIntermediate) * kHidden + k]) *
-                          x[k];
+        for (std::size_t slot = 0; slot < kPool.size(); ++slot) {
+            std::vector<std::pair<std::size_t, double>> users; // token, alpha
+            for (std::size_t t = 0; t < selection.size(); ++t) {
+                double maximum = -1.0e30;
+                for (const auto& entry : selection[t]) {
+                    maximum = std::max(maximum, static_cast<double>(entry.second));
                 }
-                // The quantizer reads the BF16 activation built from the BF16 gate and up outputs.
-                const double g = bf16_round(gate);
-                activation[r]  = bf16_round(g / (1.0 + std::exp(-g)) * bf16_round(up));
+                double denominator = 0.0;
+                for (const auto& entry : selection[t]) {
+                    denominator += std::exp(static_cast<double>(entry.second) - maximum);
+                }
+                for (const auto& [chosen, score] : selection[t]) {
+                    if (chosen == static_cast<int>(slot)) {
+                        users.emplace_back(t, std::exp(static_cast<double>(score) - maximum) /
+                                                  denominator);
+                    }
+                }
             }
-            const std::vector<double> hidden =
-                nvfp4_activation(activation, down.input_divisors[expert]);
-            for (int r = 0; r < kHidden; ++r) {
-                double value = 0.0;
-                for (int k = 0; k < kIntermediate; ++k) {
-                    value +=
-                        static_cast<double>(w2[static_cast<std::size_t>(r) * kIntermediate + k]) *
-                        hidden[k];
+            if (users.empty()) { continue; }
+            const int expert            = kPool[slot];
+            const std::vector<float> w1 = quantized_weight::materialize_rows_fp32(
+                gate_up.experts[slot], std::span<const std::int32_t>(gate_up_rows));
+            const std::vector<float> w2 = quantized_weight::materialize_rows_fp32(
+                down.experts[slot], std::span<const std::int32_t>(down_rows));
+            for (const auto& [t, alpha] : users) {
+                const std::vector<float> row(
+                    input.begin() + static_cast<std::ptrdiff_t>(t) * kHidden,
+                    input.begin() + static_cast<std::ptrdiff_t>(t + 1) * kHidden);
+                const std::vector<double> x = nvfp4_activation(row, gate_up.input_divisors[expert]);
+                std::vector<float> activation(kIntermediate);
+                for (int r = 0; r < kIntermediate; ++r) {
+                    double gate = 0.0, up = 0.0;
+                    for (int k = 0; k < kHidden; ++k) {
+                        gate += static_cast<double>(w1[static_cast<std::size_t>(r) * kHidden + k]) *
+                                x[k];
+                        up += static_cast<double>(
+                                  w1[static_cast<std::size_t>(r + kIntermediate) * kHidden + k]) *
+                              x[k];
+                    }
+                    // The quantizer reads the BF16 activation built from the BF16 gate and up.
+                    const double g = bf16_round(gate);
+                    activation[r]  = bf16_round(g / (1.0 + std::exp(-g)) * bf16_round(up));
                 }
-                expected[static_cast<std::size_t>(t) * kHidden + r] += alpha * value;
+                const std::vector<double> hidden =
+                    nvfp4_activation(activation, down.input_divisors[expert]);
+                for (int r = 0; r < kHidden; ++r) {
+                    double value = 0.0;
+                    for (int k = 0; k < kIntermediate; ++k) {
+                        value += static_cast<double>(
+                                     w2[static_cast<std::size_t>(r) * kIntermediate + k]) *
+                                 hidden[k];
+                    }
+                    expected[t * kHidden + static_cast<std::size_t>(r)] += alpha * value;
+                }
             }
         }
-    }
+        return expected;
+    };
 
-    int failures = 0;
-    std::vector<double> one_row_outputs;
-    for (const int tokens : {1, 2, 8, 16, 17}) {
+    const auto run_rows = [&](int tokens) {
         GuardedDeviceBuffer d_output(static_cast<std::size_t>(kHidden) * tokens * 2);
         Tensor in(d_input.p, DType::BF16, {kHidden, tokens});
         Tensor out(d_output.data(), DType::BF16, {kHidden, tokens});
         WorkspaceArena workspace(ops::flash_next_moe_workspace_capacity_bytes(tokens));
         ops::flash_next_moe(in, weights, out, workspace, nullptr);
         cuda_synchronize();
-        const std::vector<double> got =
+        std::vector<double> got =
             from_device_bf16(d_output.data(), static_cast<std::size_t>(kHidden) * tokens);
+        return std::pair{std::move(got), d_output.verify_guards("Flash-Next NVFP4 MoE output")};
+    };
+
+    // Per-token error, with the token's pool slots, so a fault can be tied to an expert.
+    const auto report_tokens = [&](const std::string& label, const Selection& selection,
+                                   const std::vector<double>& got,
+                                   const std::vector<double>& want) {
+        for (std::size_t t = 0; t * kHidden < got.size(); ++t) {
+            const ReductionStats stats = compute_reduction_stats(
+                got.data() + t * kHidden, want.data() + t * kHidden, kHidden);
+            std::cout << "  " << label << " token " << t << ": relative L2 " << std::setprecision(4)
+                      << stats.relative_l2 << ", max |err| " << stats.maximum_absolute_error
+                      << " at row " << stats.maximum_error_index << " (" << stats.actual_at_maximum
+                      << " vs " << stats.reference_at_maximum << "), slots";
+            for (const auto& entry : selection[t]) { std::cout << ' ' << entry.first; }
+            std::cout << '\n';
+        }
+    };
+
+    int failures = 0;
+
+    // Shared experts: token t selects slots (3t + j) % 12 with score 4 + j/4.
+    Selection shared(kMaxTokens);
+    for (int t = 0; t < kMaxTokens; ++t) {
+        for (int j = 0; j < kTop; ++j) {
+            shared[t][j] = {(3 * t + j) % static_cast<int>(kPool.size()),
+                            4.0F + 0.25F * static_cast<float>(j)};
+        }
+    }
+    upload_router(shared);
+    const std::vector<double> expected = oracle(shared);
+    for (const int tokens : {1, 2, 8, 16, 17}) {
+        auto [got, guard_failures] = run_rows(tokens);
+        failures += guard_failures;
         const std::vector<double> want(expected.begin(),
                                        expected.begin() + static_cast<std::ptrdiff_t>(got.size()));
         const std::string label = "Flash-Next NVFP4 MoE T=" + std::to_string(tokens);
@@ -422,9 +464,30 @@ int run_nvfp4() {
         std::cout << label << ": relative L2 " << std::setprecision(4) << stats.relative_l2
                   << ", max |err| " << stats.maximum_absolute_error << " of max |ref| "
                   << stats.maximum_absolute_reference << '\n';
+        if (tokens == kMaxTokens) { report_tokens(label, shared, got, want); }
         failures += verify_reduction(label, got, want, kNvfp4MoeCriterion);
-        failures += d_output.verify_guards(label);
     }
+
+    // One dominant expert per token: token t gives slot t score 30 and nine other slots
+    // 4 + j/4, so the others weigh about e^-26 and token t's error is slot t's.
+    constexpr int kIsolated = static_cast<int>(kPool.size());
+    Selection isolated(kIsolated);
+    for (int t = 0; t < kIsolated; ++t) {
+        isolated[t][0] = {t, 30.0F};
+        for (int j = 1; j < kTop; ++j) {
+            isolated[t][j] = {(t + j) % kIsolated, 4.0F + 0.25F * static_cast<float>(j)};
+        }
+    }
+    upload_router(isolated);
+    {
+        const std::vector<double> want = oracle(isolated);
+        auto [got, guard_failures]     = run_rows(kIsolated);
+        failures += guard_failures;
+        report_tokens("isolated expert", isolated, got, want);
+        failures += verify_reduction("Flash-Next NVFP4 MoE isolated experts", got, want,
+                                     kNvfp4MoeCriterion);
+    }
+    upload_router(shared);
 
     // Each of 8 rows alone (the per-assignment route) against the same rows batched (the
     // expert-grouped route): both production routes, same quantized arithmetic per (row, expert).

@@ -1,0 +1,24 @@
+OK   rank 0 (127.0.0.1) platform: Linux aarch64; supported target is Linux/aarch64 GB10
+OK   rank 0 (127.0.0.1) Python: 3.12.3; Python 3.10+ is required
+OK   rank 0 (127.0.0.1) commands: python3, timeout, ldd, ssh, scp, curl, jq
+OK   rank 0 (127.0.0.1) node address: rank 0 address 127.0.0.1 belongs to this host
+OK   rank 0 (127.0.0.1) GPU: NVIDIA GB10, 12.1, [N/A]
+OK   rank 0 (127.0.0.1) logs/staging: /home/apollo11/dgpp/log/deployments/6d8f9a3383cc662e: parent /home/apollo11/dgpp/log/deployments/6d8f9a3383cc662e, 248.7 GiB free
+OK   rank 0 (127.0.0.1) resident cache: ~/.cache/dgpp/resident: parent /home/apollo11/.cache/dgpp/resident, 248.7 GiB free
+OK   rank 0 (127.0.0.1) model cache: /home/apollo11: parent /home/apollo11, 248.7 GiB free
+OK   rank 0 (127.0.0.1) checkpoint: /home/apollo11/models--RadixArk--Qwen3.8-Flash-Next-NVFP4/snapshots/7b719225242aacd3dbd3f9407468c2ee9a9d2594: 125.9 GiB; all indexed shards have consistent lengths (not a content hash check)
+OK   rank 0 (127.0.0.1) available memory: 113.1 GiB; startup enforces the exact model memory plan
+OK   rank 0 (127.0.0.1) HTTP port: 127.0.0.1:18080 is available
+OK   rank 0 (127.0.0.1) runtime libraries: all binary dependencies resolve
+OK   rank 0 (127.0.0.1) server version: dgpp-serve 0.1.0+gdd58d6d3b9ff (git dd58d6d3b9ff, cuda 13.0)
+Preflight: 0 failed check(s). No files were installed and no services were started or stopped.
+2026-10-02 14:09:28.458 === staging dgpp-serve and the config to the peers
+2026-10-02 14:09:28.459 === rank 0 on 127.0.0.1 (HTTP :18080, fabric :29970, journal :29971)
+2026-10-02 14:09:28.461 head pid 1799875
+2026-10-02 14:11:04.480 rank 0 serving: ok (96s)
+2026-10-02 14:11:04.482 READY — curl http://127.0.0.1:18080/v1/models  (stop: python3 /home/apollo11/dgpp/scripts/dgpp-cluster down --config /home/apollo11/dgpp/deploy/cluster_qwen-3.8-flash-next_nvfp4_w1.json --log-dir /home/apollo11/dgpp/log/deployments/6d8f9a3383cc662e)
+2026-10-02 14:17:14.831 === SIGINT rank 0 (1799875) — the stop record releases the peers
+2026-10-02 14:17:17.832 === op-stream identity (every rank)
+2026-10-02 14:17:17.834 aef473c2932f688d9960bf2d1447197c  /home/apollo11/dgpp/log/deployments/6d8f9a3383cc662e/serve_rank0.ops
+2026-10-02 14:17:17.834 op streams: identical across 1 ranks
+2026-10-02 14:17:17.834 === logs in /home/apollo11/dgpp/log/deployments/6d8f9a3383cc662e

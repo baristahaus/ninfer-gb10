@@ -499,12 +499,41 @@ __launch_bounds__(64, 4) __global__ void score_groups_mma_kernel(
     }
 }
 
+// Inclusive block scan over the 256 threads of a top-k block; returns the block total.
+__device__ __forceinline__ int topk_block_inclusive_scan(int& value, int* warp_totals) {
+    const int lane = static_cast<int>(threadIdx.x) & 31;
+    const int warp = static_cast<int>(threadIdx.x) >> 5;
+#pragma unroll
+    for (int offset = 1; offset < 32; offset <<= 1) {
+        const int add = __shfl_up_sync(0xffffffffU, value, offset);
+        if (lane >= offset) { value += add; }
+    }
+    if (lane == 31) { warp_totals[warp] = value; }
+    __syncthreads();
+    int base = 0;
+    int total = 0;
+#pragma unroll
+    for (int w = 0; w < kTopkBlockThreads / 32; ++w) {
+        const int count = warp_totals[w];
+        base += w < warp ? count : 0;
+        total += count;
+    }
+    value += base;
+    __syncthreads();
+    return total;
+}
+
+constexpr int kSelectStagedGroups = 8192;
+
 // Exact radix selection of the 512 greatest non-negative QSA scores.  Keeping
 // only the threshold lets one block select a token without materializing a
-// second score buffer or capturing CUB's size-dependent graph topology.
-__global__ void select_top_groups_kernel(const float* scores, const int* cache_positions,
-                                         int score_stride, int group_extent, int* selected) {
+// second score buffer or capturing CUB's size-dependent graph topology. Scores are staged in
+// shared memory when they fit; digits are located with a block scan.
+__global__ void __launch_bounds__(kTopkBlockThreads) select_top_groups_kernel(
+    const float* scores, const int* cache_positions, int score_stride, int group_extent,
+    int* selected) {
     const int token = static_cast<int>(blockIdx.x);
+    const int tid = static_cast<int>(threadIdx.x);
     const int groups = min((cache_positions[token] + 1) / kRatio, group_extent);
     int* output = selected + static_cast<std::int64_t>(kTopGroups) * token;
     // Every visible group is selected before the compressed history exceeds the budget.  Emit
@@ -513,89 +542,80 @@ __global__ void select_top_groups_kernel(const float* scores, const int* cache_p
     // reduction consequently changed between CUDA Graph replays even though the selected set was
     // identical.
     if (groups <= kTopGroups) {
-        for (int item = static_cast<int>(threadIdx.x); item < kTopGroups;
-             item += static_cast<int>(blockDim.x)) {
+        for (int item = tid; item < kTopGroups; item += kTopkBlockThreads) {
             output[item] = item < groups ? item : -1;
         }
         return;
     }
-    for (int item = static_cast<int>(threadIdx.x); item < kTopGroups;
-         item += static_cast<int>(blockDim.x)) {
-        output[item] = -1;
-    }
+    __shared__ unsigned staged[kSelectStagedGroups];
     __shared__ int histogram[256];
+    __shared__ int warp_totals[kTopkBlockThreads / 32];
     __shared__ unsigned prefix;
     __shared__ int rank;
-    __shared__ int write_count;
-    if (threadIdx.x == 0) {
-        prefix = 0;
-        rank = min(kTopGroups, groups);
+    const float* row = scores + static_cast<std::int64_t>(score_stride) * token;
+    const bool use_staged = groups <= kSelectStagedGroups;
+    if (use_staged) {
+        for (int group = tid; group < groups; group += kTopkBlockThreads) {
+            staged[group] = __float_as_uint(row[group]);
+        }
     }
-    __syncthreads();
+    const auto bits_at = [&](int group) {
+        return use_staged ? staged[group] : __float_as_uint(row[group]);
+    };
+    if (tid == 0) {
+        prefix = 0;
+        rank = kTopGroups;
+    }
     for (int shift = 24; shift >= 0; shift -= 8) {
-        histogram[threadIdx.x] = 0;
+        histogram[tid] = 0;
         __syncthreads();
         const unsigned mask = shift == 24 ? 0U : (0xffffffffU << (shift + 8));
-        for (int group = static_cast<int>(threadIdx.x); group < groups;
-             group += static_cast<int>(blockDim.x)) {
-            const unsigned bits = __float_as_uint(
-                scores[group + static_cast<std::int64_t>(score_stride) * token]);
-            if ((bits & mask) == prefix) { atomicAdd(histogram + ((bits >> shift) & 255U), 1); }
+        const unsigned current_prefix = prefix;
+        for (int group = tid; group < groups; group += kTopkBlockThreads) {
+            const unsigned bits = bits_at(group);
+            if ((bits & mask) == current_prefix) {
+                atomicAdd(histogram + ((bits >> shift) & 255U), 1);
+            }
         }
         __syncthreads();
-        if (threadIdx.x == 0) {
-            int above = 0;
-            for (int digit = 255; digit >= 0; --digit) {
-                if (above + histogram[digit] >= rank) {
-                    prefix |= static_cast<unsigned>(digit) << shift;
-                    rank -= above;
-                    break;
-                }
-                above += histogram[digit];
-            }
+        // Thread i owns digit 255 - i, so the inclusive scan counts the groups at or above it.
+        const int own = histogram[255 - tid];
+        int at_or_above = own;
+        const int current_rank = rank;
+        topk_block_inclusive_scan(at_or_above, warp_totals);
+        if (at_or_above >= current_rank && at_or_above - own < current_rank) {
+            prefix = current_prefix | (static_cast<unsigned>(255 - tid) << shift);
+            rank = current_rank - (at_or_above - own);
         }
         __syncthreads();
     }
-    if (threadIdx.x == 0) { write_count = 0; }
-    __syncthreads();
-    // Compact in fixed 256-group chunks.  Atomically reserving one slot per selected group makes
-    // both output order and the chosen subset of threshold ties scheduler-dependent.  The block
-    // prefix below emits all scores above the threshold first, then the lowest-id equal scores.
-    // This is the exact (score descending, group id ascending) top-k contract used by the
-    // hierarchical selector as well.
-    for (int pass = 0; pass < 2; ++pass) {
-        for (int begin = 0; begin < groups && write_count < kTopGroups;
-             begin += static_cast<int>(blockDim.x)) {
-            const int group = begin + static_cast<int>(threadIdx.x);
-            const unsigned bits = group < groups
-                ? __float_as_uint(
-                      scores[group + static_cast<std::int64_t>(score_stride) * token])
-                : 0U;
-            const bool take = group < groups && (pass == 0 ? bits > prefix : bits == prefix);
-            const int lane = static_cast<int>(threadIdx.x) & 31;
-            const int warp = static_cast<int>(threadIdx.x) >> 5;
-            const unsigned mask = __ballot_sync(0xffffffffU, take);
-            const int local = __popc(mask & ((1U << lane) - 1U));
-            if (lane == 0) { histogram[warp] = __popc(mask); }
-            __syncthreads();
-            if (warp == 0) {
-                int count = lane < 8 ? histogram[lane] : 0;
-#pragma unroll
-                for (int offset = 1; offset < 8; offset <<= 1) {
-                    const int add = __shfl_up_sync(0xffffffffU, count, offset);
-                    if (lane >= offset && lane < 8) { count += add; }
-                }
-                if (lane < 8) { histogram[lane] = count; }
-            }
-            __syncthreads();
-            const int warp_base = warp == 0 ? 0 : histogram[warp - 1];
-            const int slot = write_count + warp_base + local;
-            if (take && slot < kTopGroups) { output[slot] = group; }
-            __syncthreads();
-            if (threadIdx.x == 0) {
-                write_count = min(kTopGroups, write_count + histogram[7]);
-            }
-            __syncthreads();
+    // Emit every score above the threshold, then the lowest-id equal scores, each in ascending
+    // group order: the exact (score descending, group id ascending) top-k contract used by the
+    // hierarchical selector as well. Threads own contiguous group ranges.
+    const unsigned threshold = prefix;
+    const int per_thread = (groups + kTopkBlockThreads - 1) / kTopkBlockThreads;
+    const int begin = min(groups, tid * per_thread);
+    const int end = min(groups, begin + per_thread);
+    int above = 0;
+    int equal = 0;
+    for (int group = begin; group < end; ++group) {
+        const unsigned bits = bits_at(group);
+        above += bits > threshold;
+        equal += bits == threshold;
+    }
+    int above_end = above;
+    const int above_total = topk_block_inclusive_scan(above_end, warp_totals);
+    int equal_end = equal;
+    topk_block_inclusive_scan(equal_end, warp_totals);
+    int above_slot = above_end - above;
+    int equal_slot = above_total + equal_end - equal;
+    for (int group = begin; group < end; ++group) {
+        const unsigned bits = bits_at(group);
+        if (bits > threshold) {
+            output[above_slot++] = group;
+        } else if (bits == threshold) {
+            if (equal_slot < kTopGroups) { output[equal_slot] = group; }
+            ++equal_slot;
         }
     }
 }
@@ -1400,57 +1420,67 @@ __global__ void selected_attention_split_fp8_kernel(
         partial_denominator, partial_numerator, num_splits);
 }
 
-__global__ void reduce_selected_attention_splits_kernel(
+// One CTA per (query head, token), one thread per head dimension. Every element combines the
+// splits in ascending order, so the result does not depend on the launch shape.
+__global__ void __launch_bounds__(kHeadDim) reduce_selected_attention_splits_kernel(
     const float* partial_maximum, const float* partial_denominator,
     const float* partial_numerator, const int* valid_columns, int width, int tokens,
     __nv_bfloat16* output, int num_splits) {
-    const int head_group = static_cast<int>(blockIdx.x);
-    const int head = head_group * kSplitHeadsPerBlock +
-                     (static_cast<int>(threadIdx.x) >> 5);
+    const int head = static_cast<int>(blockIdx.x);
     const int token = static_cast<int>(blockIdx.y);
-    const int lane_id = static_cast<int>(threadIdx.x) & 31;
+    const int d = static_cast<int>(threadIdx.x);
     const int batch_lane = token / width;
     const int column = token - batch_lane * width;
+    const std::int64_t output_index =
+        d + kHeadDim * (head + static_cast<std::int64_t>(kQueryHeads) * token);
     if (column >= valid_columns[batch_lane]) {
-#pragma unroll
-        for (int item = 0; item < 8; ++item) {
-            output[lane_id + 32 * item + kHeadDim *
-                (head + static_cast<std::int64_t>(kQueryHeads) * token)] =
-                __float2bfloat16_rn(0.0F);
-        }
+        output[output_index] = __float2bfloat16_rn(0.0F);
         return;
     }
     constexpr float kLog2E = 1.4426950408889634F;
-    float maximum = -INFINITY;
-#pragma unroll
-    for (int split = 0; split < num_splits; ++split) {
-        const std::int64_t stats_offset = head + static_cast<std::int64_t>(kQueryHeads) *
-            (token + static_cast<std::int64_t>(tokens) * split);
-        maximum = fmaxf(maximum, partial_maximum[stats_offset]);
-    }
-    float denominator = 0.0F;
-    float numerator[8] = {};
-#pragma unroll
-    for (int split = 0; split < num_splits; ++split) {
-        const std::int64_t stats_offset = head + static_cast<std::int64_t>(kQueryHeads) *
-            (token + static_cast<std::int64_t>(tokens) * split);
-        const float split_denominator = partial_denominator[stats_offset];
-        if (split_denominator == 0.0F) { continue; }
-        const float scale = exp2_approx(__fmaf_rn(
-            partial_maximum[stats_offset], kLog2E, -maximum * kLog2E));
-        denominator += split_denominator * scale;
-        const std::int64_t numerator_base = kHeadDim * stats_offset;
-#pragma unroll
-        for (int item = 0; item < 8; ++item) {
-            numerator[item] += partial_numerator[numerator_base + lane_id + 32 * item] * scale;
+    const std::int64_t split_stride = static_cast<std::int64_t>(kQueryHeads) * tokens;
+    const std::int64_t stats_base = head + static_cast<std::int64_t>(kQueryHeads) * token;
+    // Per-split rescale factors are shared by the head's 256 dimensions; empty splits get 0.
+    __shared__ float split_scale[kMaxDecodeAttentionSplits];
+    __shared__ float shared_denominator;
+    if (d < 32) {
+        float maximum = -INFINITY;
+        for (int split = d; split < num_splits; split += 32) {
+            maximum = fmaxf(maximum, partial_maximum[stats_base + split_stride * split]);
+        }
+        for (int offset = 16; offset != 0; offset >>= 1) {
+            maximum = fmaxf(maximum, __shfl_xor_sync(0xffffffffU, maximum, offset));
+        }
+        for (int split = d; split < num_splits; split += 32) {
+            const std::int64_t stats_offset = stats_base + split_stride * split;
+            split_scale[split] = partial_denominator[stats_offset] == 0.0F
+                ? 0.0F
+                : exp2_approx(__fmaf_rn(partial_maximum[stats_offset], kLog2E,
+                                        -maximum * kLog2E));
+        }
+        __syncwarp();
+        if (d == 0) {
+            float denominator = 0.0F;
+            for (int split = 0; split < num_splits; ++split) {
+                const float scale = split_scale[split];
+                if (scale != 0.0F) {
+                    denominator +=
+                        partial_denominator[stats_base + split_stride * split] * scale;
+                }
+            }
+            shared_denominator = denominator;
         }
     }
-#pragma unroll
-    for (int item = 0; item < 8; ++item) {
-        output[lane_id + 32 * item + kHeadDim *
-            (head + static_cast<std::int64_t>(kQueryHeads) * token)] =
-            __float2bfloat16_rn(numerator[item] / denominator);
+    __syncthreads();
+    float numerator = 0.0F;
+#pragma unroll 16
+    for (int split = 0; split < num_splits; ++split) {
+        const float value = partial_numerator[kHeadDim * (stats_base + split_stride * split) + d];
+        const float scale = split_scale[split];
+        if (scale != 0.0F) { numerator += value * scale; }
     }
+    const float denominator = shared_denominator;
+    output[output_index] = __float2bfloat16_rn(numerator / denominator);
 }
 
 void require_weight(const Weight& weight, int n, int k, const char* label) {
@@ -1933,9 +1963,8 @@ void flash_next_qsa(const Tensor& input, const Tensor& cache_positions,
                                  static_cast<float*>(partial_numerator.data),
                                  static_cast<__nv_bfloat16*>(attention.data));
             }
-            reduce_selected_attention_splits_kernel<<<
-                dim3(kQueryHeads / kSplitHeadsPerBlock, tokens),
-                kSplitHeadsPerBlock * 32, 0, stream>>>(
+            reduce_selected_attention_splits_kernel<<<dim3(kQueryHeads, tokens), kHeadDim, 0,
+                                                      stream>>>(
                 static_cast<const float*>(partial_maximum.data),
                 static_cast<const float*>(partial_denominator.data),
                 static_cast<const float*>(partial_numerator.data),

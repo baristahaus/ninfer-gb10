@@ -313,6 +313,9 @@ ArtifactLoadPlan plan_artifact(artifact::Binder& binder,
             const auto& binding = target.ple.embedding_table.binding;
             const auto& object  = binder.reader().directory().tensor(binding.parts.front().object);
             out.bindings.ple_mapping = binder.reader().map_range(object.offset, object.bytes);
+            // PLE rows are hashed n-gram lookups scattered over the 51 GB table: readahead
+            // around a faulting row only evicts other rows. The gather prefetches what it reads.
+            out.bindings.ple_mapping.advise_random();
         }
         target.mlp_hc = bind_hc(binder, prefix + "mlp_hyper_connection.");
         target.moe    = bind_main_moe(binder, prefix + "mlp.");

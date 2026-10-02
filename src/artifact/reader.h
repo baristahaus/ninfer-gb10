@@ -24,6 +24,12 @@ public:
         return segments.empty() ? 0 : segments.back().begin + segments.back().bytes;
     }
     void copy(std::uint64_t offset, std::span<std::byte> destination) const;
+    // Page-cache advice for the mapped file pages; both are best effort and never change
+    // contents. advise_random() stops fault readahead around scattered reads. prefetch() starts
+    // asynchronous reads of the pages covering [offset, offset + bytes) without waiting, so a
+    // caller that prefetches many scattered rows before copying them overlaps their I/O.
+    void advise_random() const;
+    void prefetch(std::uint64_t offset, std::uint64_t bytes) const;
 };
 
 struct ReadSegment {

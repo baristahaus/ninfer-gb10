@@ -69,8 +69,10 @@ bounded split route.
 Each GDN layer retains three previous BF16 convolution columns and 48 FP32 recurrent matrices of
 shape `[128,128]`. PLE retains nine previous BF16 convolution columns. QSA KV/index state, GDN
 state, PLE state, HyperConnection state, and MTP state participate together in prefix snapshots,
-speculative replay/fold, commit, rollback, and restore. A generated token is public only after the
-target transaction commits it.
+speculative replay/fold, commit, rollback, and restore. An execution that continues a StateImage
+fork reads every persistent component, GDN and PLE alike, from the source checkpoint slot and
+writes the destination slot; it never reads the destination's prior content. A generated token is
+public only after the target transaction commits it.
 
 ## MTP and Vision
 

@@ -565,7 +565,7 @@ void TextContext::mtp_forward_flash_next(const Tensor& ids, const Tensor& hidden
     ops::hyperconnection_combine_mix(hyper, block_output, injection, mtp_.payload->mlp_hc,
                                      block_input, &injection, work_, stream);
     ops::flash_next_moe(block_input, mtp_.payload->post_mixer, block_output, work_, stream,
-                        bf16_gemm_, envelope.max_visible_keys > ops::kFlashNextQsaSelectedTokens);
+                        bf16_gemm_);
     ops::hyperconnection_combine(hyper, block_output, injection, stream);
     CUDA_CHECK(cudaMemcpyAsync(predictor_hidden.data, hyper.data, hyper.bytes(),
                                cudaMemcpyDeviceToDevice, stream));
@@ -1458,9 +1458,8 @@ void TextContext::run_flash_next_layers(Tensor& x, Phase ph) {
 
         ops::hyperconnection_combine_mix(hyper, block_output, injection, source.mlp_hc, block_input,
                                          &injection, work_, stream);
-        ops::flash_next_moe(block_input, source.post_mixer, block_output, work_, stream, bf16_gemm_,
-                            active_causal_attention_envelope_->max_visible_keys >
-                                ops::kFlashNextQsaSelectedTokens);
+        ops::flash_next_moe(block_input, source.post_mixer, block_output, work_, stream,
+                            bf16_gemm_);
         pending = true;
     };
     for (int layer = 0; layer < TextConfig::layers; ++layer) {

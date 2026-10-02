@@ -22,9 +22,9 @@
 //   ceiling for this footprint;
 // - rows: the same code bytes read the way the W4A4 kernel walks them (128-row items, S bytes
 //   of every row per step), isolating the cost of the row-strided access pattern;
-// - gate/down: the production W4A4 kernel on the same experts at its current schedule and at
-//   alternative BlockN/BlockK/stage/grid choices, each phase alone and the current pair back to
-//   back.
+// - gate/down: the production W4A4 kernel on the same experts at its former decode schedule and at
+//   alternative BlockN/BlockK/stage/grid choices, each phase alone, and the former and production
+//   pairs back to back.
 
 #include "core/device.h"
 #include "core/weight.h"
@@ -49,6 +49,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -442,13 +443,14 @@ struct Variant {
     Launch launch;
 };
 
-// <BlockM tokens, BlockN rows, BlockK, WarpsM, WarpsN, Stages, MinBlocksPerSm>; the first entry
-// of each list is the production decode schedule.
+// <BlockM tokens, BlockN rows, BlockK, WarpsM, WarpsN, Stages, MinBlocksPerSm>. The first entry
+// of each list is the schedule production used until 2026-10-02 (kept as the baseline); the
+// production decode schedules are now BN64 BK512 S2 (gate/up) and BN64 BK128 S4 (down).
 template <int N, int K, int S>
 using Decode = fn::Nvfp4W4a4MmaSchedule<16, N, K, 1, 8, S, 1>;
 
 const std::array<Variant, 8> kGateVariants{{
-    {"BN128 BK128 S2 (current)", &launch_gate<Decode<128, 128, 2>>},
+    {"BN128 BK128 S2 (former)", &launch_gate<Decode<128, 128, 2>>},
     {"BN128 BK128 S3", &launch_gate<Decode<128, 128, 3>>},
     {"BN128 BK128 S4", &launch_gate<Decode<128, 128, 4>>},
     {"BN128 BK256 S2", &launch_gate<Decode<128, 256, 2>>},
@@ -460,7 +462,7 @@ const std::array<Variant, 8> kGateVariants{{
 
 // The down rows hold 640 inputs (320 bytes), so BlockK is 128 at most for this kernel.
 const std::array<Variant, 5> kDownVariants{{
-    {"BN128 BK128 S2 (current)", &launch_down<Decode<128, 128, 2>>},
+    {"BN128 BK128 S2 (former)", &launch_down<Decode<128, 128, 2>>},
     {"BN128 BK128 S3", &launch_down<Decode<128, 128, 3>>},
     {"BN128 BK128 S4", &launch_down<Decode<128, 128, 4>>},
     {"BN64 BK128 S4", &launch_down<Decode<64, 128, 4>>},
@@ -615,11 +617,14 @@ void run(const Options& options, const std::vector<Bank>& gate_up, const std::ve
                        });
             }
         }
-        report("gate+down current, back to back", 3 * sms, gate_bytes + down_bytes,
-               [&](int layer, cudaStream_t s) {
-                   kGateVariants[0].launch(jobs, gate_views[layer], input_divisors, 3 * sms, s);
-                   kDownVariants[0].launch(jobs, down_views[layer], input_divisors, 3 * sms, s);
-               });
+        for (const auto& [name, gate, down] :
+             {std::tuple{"gate+down former, back to back", 0, 0},
+              std::tuple{"gate+down production, back to back", 6, 3}}) {
+            report(name, 3 * sms, gate_bytes + down_bytes, [&](int layer, cudaStream_t s) {
+                kGateVariants[gate].launch(jobs, gate_views[layer], input_divisors, 3 * sms, s);
+                kDownVariants[down].launch(jobs, down_views[layer], input_divisors, 3 * sms, s);
+            });
+        }
     }
 }
 
@@ -692,47 +697,41 @@ int main(int argc, char** argv) {
                     options.tokens, options.layers,
                     static_cast<double>(gate_up[0].geometry.bytes + down[0].geometry.bytes) / 1e9,
                     expert_bytes / 1e6);
-        std::printf("%-10s %-9s %12s %12s %14s\n", "wide_gate", "distinct", "us/layer", "min us",
-                    "routed GB/s");
+        std::printf("%-9s %12s %12s %14s\n", "distinct", "us/layer", "min us", "routed GB/s");
 
-        for (const bool wide : {false, true}) {
-            std::vector<std::pair<double, double>> points;
-            for (const int requested : options.distinct) {
-                const auto [host_router, distinct] = router_for(options.tokens, requested);
-                router.copy_from_host(host_router.data(),
-                                      host_router.size() * sizeof(std::uint16_t));
-                bench::TimedGraph graph;
-                graph.capture(stream, [&](cudaStream_t s) {
-                    for (const auto& weights : layers) {
-                        ops::flash_next_moe(input_tensor, weights, output_tensor, workspace, s,
-                                            nullptr, wide);
-                    }
-                });
-                const auto timing =
-                    bench::measure_graph(graph, stream, options.warmup, options.repeat);
-                const double per_layer = timing.median_us / options.layers;
-                const double gbs       = distinct * expert_bytes / (per_layer * 1e3);
-                points.emplace_back(distinct, per_layer);
-                std::printf("%-10s %-9d %12.1f %12.1f %14.1f\n", wide ? "on" : "off", distinct,
-                            per_layer, timing.min_us / options.layers, gbs);
-            }
-            if (points.size() >= 2) {
-                double sx = 0, sy = 0, sxx = 0, sxy = 0;
-                for (const auto& [x, y] : points) {
-                    sx += x;
-                    sy += y;
-                    sxx += x * x;
-                    sxy += x * y;
+        std::vector<std::pair<double, double>> points;
+        for (const int requested : options.distinct) {
+            const auto [host_router, distinct] = router_for(options.tokens, requested);
+            router.copy_from_host(host_router.data(), host_router.size() * sizeof(std::uint16_t));
+            bench::TimedGraph graph;
+            graph.capture(stream, [&](cudaStream_t s) {
+                for (const auto& weights : layers) {
+                    ops::flash_next_moe(input_tensor, weights, output_tensor, workspace, s);
                 }
-                const double n         = static_cast<double>(points.size());
-                const double slope     = (n * sxy - sx * sy) / (n * sxx - sx * sx);
-                const double intercept = (sy - slope * sx) / n;
-                const double slope_gbs = expert_bytes / (slope * 1e3);
-                std::printf("fit wide_gate=%s: %.2f us per distinct expert (%.0f GB/s, %.0f%% of "
-                            "%.0f GB/s), %.1f us fixed per layer\n",
-                            wide ? "on" : "off", slope, slope_gbs, 100.0 * slope_gbs / kDramGBs,
-                            kDramGBs, intercept);
+            });
+            const auto timing = bench::measure_graph(graph, stream, options.warmup, options.repeat);
+            const double per_layer = timing.median_us / options.layers;
+            const double gbs       = distinct * expert_bytes / (per_layer * 1e3);
+            points.emplace_back(distinct, per_layer);
+            std::printf("%-9d %12.1f %12.1f %14.1f\n", distinct, per_layer,
+                        timing.min_us / options.layers, gbs);
+        }
+        if (points.size() >= 2) {
+            double sx = 0, sy = 0, sxx = 0, sxy = 0;
+            for (const auto& [x, y] : points) {
+                sx += x;
+                sy += y;
+                sxx += x * x;
+                sxy += x * y;
             }
+            const double n         = static_cast<double>(points.size());
+            const double slope     = (n * sxy - sx * sy) / (n * sxx - sx * sx);
+            const double intercept = (sy - slope * sx) / n;
+            const double slope_gbs = expert_bytes / (slope * 1e3);
+            std::printf(
+                "fit: %.2f us per distinct expert (%.0f GB/s, %.0f%% of %.0f GB/s), %.1f us "
+                "fixed per layer\n",
+                slope, slope_gbs, 100.0 * slope_gbs / kDramGBs, kDramGBs, intercept);
         }
 
         if (options.profile) {

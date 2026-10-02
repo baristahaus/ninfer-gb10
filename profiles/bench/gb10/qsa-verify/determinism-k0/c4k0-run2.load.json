@@ -1,0 +1,57 @@
+{
+ "shared": false,
+ "max_tokens": 512,
+ "runs": [
+  {
+   "n": 4,
+   "failed": 0,
+   "wall_seconds": 26.56936025619507,
+   "completion_tokens": 2048,
+   "aggregate_tok_s": 77.08126880934125,
+   "per_request_tok_s": [
+    19.427467565222756,
+    19.336345876421937,
+    19.270576587400146,
+    19.36290453822421
+   ],
+   "requests": [
+    {
+     "stream": "wikitext-00",
+     "start": 1790984068.5645308,
+     "end": 1790984094.9189694,
+     "seconds": 26.354438543319702,
+     "completion_tokens": 512,
+     "finish_reason": "length",
+     "content_sha256": "23a10753fbf29951fa32b2e972524655ba5f06cca187c01aabb3424167979243"
+    },
+    {
+     "stream": "wikitext-01",
+     "start": 1790984068.5651724,
+     "end": 1790984095.0438051,
+     "seconds": 26.47863268852234,
+     "completion_tokens": 512,
+     "finish_reason": "length",
+     "content_sha256": "9bb2ff4c7b94e8d6889b8d2fd6d05c641299c3797d2ac11274c050b251401778"
+    },
+    {
+     "stream": "wikitext-02",
+     "start": 1790984068.5647542,
+     "end": 1790984095.1337569,
+     "seconds": 26.569002628326416,
+     "completion_tokens": 512,
+     "finish_reason": "length",
+     "content_sha256": "d72ed094c0f6366f127f5bd1f5d45c49fb69f4b9c85b3a6ce383507540b7a5d5"
+    },
+    {
+     "stream": "wikitext-03",
+     "start": 1790984068.5643966,
+     "end": 1790984095.0067105,
+     "seconds": 26.44231390953064,
+     "completion_tokens": 512,
+     "finish_reason": "length",
+     "content_sha256": "bbe1a1313a0738126f485137457b9bc42baecf596729785e0223cf57452b11b3"
+    }
+   ]
+  }
+ ]
+}

@@ -1,0 +1,27 @@
+{
+ "shared": false,
+ "max_tokens": 512,
+ "runs": [
+  {
+   "n": 1,
+   "failed": 0,
+   "wall_seconds": 13.62268352508545,
+   "completion_tokens": 512,
+   "aggregate_tok_s": 37.58437161497433,
+   "per_request_tok_s": [
+    37.58437161497433
+   ],
+   "requests": [
+    {
+     "stream": "wikitext-00",
+     "start": 1790983941.6398149,
+     "end": 1790983955.2624984,
+     "seconds": 13.62268352508545,
+     "completion_tokens": 512,
+     "finish_reason": "length",
+     "content_sha256": "1d232e98dd63ff55c78f621190971dc21fbc17e5d91c2b2ef0eb4e7f8d6a48e9"
+    }
+   ]
+  }
+ ]
+}

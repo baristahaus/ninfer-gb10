@@ -1,0 +1,59 @@
+NVFP4 MoE oracle test after the routing-buffer fix, exp/moe-grouped-decode (93a3491e), 2026-10-02, twoFour:
+
+ninfer: persistent grids sized for 48 SMs
+Flash-Next NVFP4 MoE T=1: relative L2 0.002548, max |err| 0.665 of max |ref| 180
+Flash-Next NVFP4 MoE T=2: relative L2 0.002887, max |err| 0.665 of max |ref| 180
+Flash-Next NVFP4 MoE T=8: relative L2 0.002506, max |err| 0.9976 of max |ref| 249.8
+Flash-Next NVFP4 MoE T=16: relative L2 0.001558, max |err| 1.799 of max |ref| 1928
+Flash-Next NVFP4 MoE T=17: relative L2 0.00156, max |err| 1.799 of max |ref| 1928
+  Flash-Next NVFP4 MoE T=17 token 0: relative L2 0.002548, max |err| 0.665 at row 7 (-135 vs -134.3), slots 0 1 2 3 4 5 6 7 8 9
+  Flash-Next NVFP4 MoE T=17 token 1: relative L2 0.004034, max |err| 0.4127 at row 7 (95 vs 95.41), slots 3 4 5 6 7 8 9 10 11 0
+  Flash-Next NVFP4 MoE T=17 token 2: relative L2 0.002063, max |err| 0.5795 at row 6 (-194 vs -194.6), slots 6 7 8 9 10 11 0 1 2 3
+  Flash-Next NVFP4 MoE T=17 token 3: relative L2 0.002241, max |err| 0.351 at row 7 (-140 vs -140.4), slots 9 10 11 0 1 2 3 4 5 6
+  Flash-Next NVFP4 MoE T=17 token 4: relative L2 0.002155, max |err| 0.2511 at row 6 (31.75 vs 31.5), slots 0 1 2 3 4 5 6 7 8 9
+  Flash-Next NVFP4 MoE T=17 token 5: relative L2 0.002893, max |err| 0.9976 at row 6 (-216 vs -215), slots 3 4 5 6 7 8 9 10 11 0
+  Flash-Next NVFP4 MoE T=17 token 6: relative L2 0.002301, max |err| 0.1719 at row 4 (-41.75 vs -41.92), slots 6 7 8 9 10 11 0 1 2 3
+  Flash-Next NVFP4 MoE T=17 token 7: relative L2 0.002887, max |err| 0.4389 at row 0 (126 vs 125.6), slots 9 10 11 0 1 2 3 4 5 6
+  Flash-Next NVFP4 MoE T=17 token 8: relative L2 0.002352, max |err| 0.7495 at row 0 (-239 vs -239.7), slots 0 1 2 3 4 5 6 7 8 9
+  Flash-Next NVFP4 MoE T=17 token 9: relative L2 0.001667, max |err| 0.5836 at row 7 (284 vs 283.4), slots 3 4 5 6 7 8 9 10 11 0
+  Flash-Next NVFP4 MoE T=17 token 10: relative L2 0.002012, max |err| 0.1003 at row 3 (-39.5 vs -39.4), slots 6 7 8 9 10 11 0 1 2 3
+  Flash-Next NVFP4 MoE T=17 token 11: relative L2 0.003096, max |err| 0.2151 at row 4 (-43.75 vs -43.97), slots 9 10 11 0 1 2 3 4 5 6
+  Flash-Next NVFP4 MoE T=17 token 12: relative L2 0.0024, max |err| 0.9584 at row 7 (-258 vs -259), slots 0 1 2 3 4 5 6 7 8 9
+  Flash-Next NVFP4 MoE T=17 token 13: relative L2 0.00129, max |err| 1.799 at row 5 (-470 vs -471.8), slots 3 4 5 6 7 8 9 10 11 0
+  Flash-Next NVFP4 MoE T=17 token 14: relative L2 0.002396, max |err| 1.144 at row 3 (360 vs 361.1), slots 6 7 8 9 10 11 0 1 2 3
+  Flash-Next NVFP4 MoE T=17 token 15: relative L2 0.002391, max |err| 0.4009 at row 1 (110 vs 110.4), slots 9 10 11 0 1 2 3 4 5 6
+  Flash-Next NVFP4 MoE T=17 token 16: relative L2 0.002767, max |err| 0.2102 at row 5 (-18.38 vs -18.16), slots 0 1 2 3 4 5 6 7 8 9
+  isolated expert token 0: relative L2 0.001941, max |err| 1.849 at row 3 (-640 vs -638.2), slots 0 1 2 3 4 5 6 7 8 9
+  isolated expert token 1: relative L2 0.002623, max |err| 0.4643 at row 7 (129 vs 129.5), slots 1 2 3 4 5 6 7 8 9 10
+  isolated expert token 2: relative L2 0.001683, max |err| 0.9443 at row 6 (-392 vs -392.9), slots 2 3 4 5 6 7 8 9 10 11
+  isolated expert token 3: relative L2 0.0008628, max |err| 0.2895 at row 5 (348 vs 347.7), slots 3 4 5 6 7 8 9 10 11 0
+  isolated expert token 4: relative L2 0.002315, max |err| 1.514 at row 4 (-516 vs -514.5), slots 4 5 6 7 8 9 10 11 0 1
+  isolated expert token 5: relative L2 0.002672, max |err| 1.941 at row 1 (520 vs 518.1), slots 5 6 7 8 9 10 11 0 1 2
+  isolated expert token 6: relative L2 0.001549, max |err| 0.2383 at row 2 (-156 vs -155.8), slots 6 7 8 9 10 11 0 1 2 3
+  isolated expert token 7: relative L2 0.001521, max |err| 0.4693 at row 5 (-162 vs -161.5), slots 7 8 9 10 11 0 1 2 3 4
+  isolated expert token 8: relative L2 0.0008792, max |err| 1.359 at row 1 (-1392 vs -1393), slots 8 9 10 11 0 1 2 3 4 5
+  isolated expert token 9: relative L2 0.001603, max |err| 0.9113 at row 7 (274 vs 273.1), slots 9 10 11 0 1 2 3 4 5 6
+  isolated expert token 10: relative L2 0.001803, max |err| 0.3099 at row 3 (-191 vs -190.7), slots 10 11 0 1 2 3 4 5 6 7
+  isolated expert token 11: relative L2 0.001496, max |err| 0.2409 at row 7 (80 vs 80.24), slots 11 0 1 2 3 4 5 6 7 8
+Flash-Next NVFP4 MoE 8 rows batched vs one by one: relative L2 0, max |diff| 0
+OK Flash-Next MoE
+
+Notes (twoFour):
+- PASS. Every T and every token at 0.13-0.40% relative L2, as predicted. The
+  earlier residual was the test's 17th routing dimension spilling past the
+  2560-wide row; production routes are cleared.
+- Route parity (8 rows batched vs one by one) still bitwise exact.
+
+Host-time delta from the two committed attribution traces (sqlite analysis):
+- Kernel executions: 524/round (working) vs 584/round (branch) = +59/round.
+- cudaLaunchKernel host time: 0.856 -> 0.985 ms/round (+0.129), +9.9 calls/round
+  at ~13.3 us/call.
+- cudaGraphLaunch host time: 0.917 -> 1.150 ms/round (+0.233); per-call 2.26 ->
+  2.96 ms (larger graph instance: the grouped tile set replaces the per-row
+  kernel set, most of the +59/round land inside the graph).
+- Other APIs flat (cudaStreamSynchronize -1.35 ms/round is blocking wait, not
+  launch cost).
+- Mechanism: the grouped route's extra kernels cost host-side launch work
+  (~0.36 ms/round from the two launch APIs), consistent with the +0.67
+  ms/round host-exposed delta in the request logs. Intrinsic to the grouped
+  kernel set; absent at C1/C2 (per-row route below the threshold).

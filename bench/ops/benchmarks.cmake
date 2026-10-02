@@ -64,3 +64,4 @@ ninfer_add_op_bench(ninfer_context_kv_materialize_bench
 ninfer_add_op_bench(ninfer_mtp_pack_bench SOURCES "${CMAKE_CURRENT_LIST_DIR}/mtp_pack_bench.cu")
 ninfer_add_op_bench(ninfer_proposal_remap_bench SOURCES "${CMAKE_CURRENT_LIST_DIR}/proposal_remap_bench.cu")
 ninfer_add_op_bench(ninfer_flash_next_moe_bench SOURCES "${CMAKE_CURRENT_LIST_DIR}/flash_next_moe_bench.cu")
+ninfer_add_op_bench(ninfer_flash_next_hc_bench SOURCES "${CMAKE_CURRENT_LIST_DIR}/flash_next_hc_bench.cu")

@@ -74,6 +74,26 @@ class Range:
     end: int
     tid: int
     text: str
+    payload: int | None = None
+
+
+@dataclass(frozen=True)
+class RoundSelection:
+    """Serve-mode window: GPU work launched inside the named per-round host ranges.
+
+    A serving process has no measured repetition. Each decode round is a host range (for example
+    `decode.mtp_round`); the leading and trailing `trim` fraction of rounds is dropped so ramp-up
+    and drain rounds do not dilute the steady state. `batch` keeps only rounds whose payload (the
+    number of active rows) matches.
+    """
+    name: str
+    trim: float = 0.1
+    batch: int | None = None
+
+    def __post_init__(self) -> None:
+        if not self.name or not 0 <= self.trim < 0.5 or (self.batch is not None and self.batch < 1):
+            raise ValueError("round selection needs a range name, a trim fraction in [0, 0.5) "
+                             "and a positive batch")
 
 
 class RangeIndex:
@@ -120,7 +140,8 @@ def union_ns(intervals: list[tuple[int, int]]) -> int:
     return total
 
 
-def read_report(path: Path, hardware: Hardware, sample: int = 0) -> dict:
+def read_report(path: Path, hardware: Hardware, sample: int = 0,
+                rounds: RoundSelection | None = None) -> dict:
     with sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True) as db:
         db.row_factory = sqlite3.Row
         tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
@@ -135,12 +156,41 @@ def read_report(path: Path, hardware: Hardware, sample: int = 0) -> dict:
         for row in rows("NVTX_EVENTS"):
             text = row.get("text") or strings.get(row.get("textId"), "")
             if row.get("end") is not None and row["end"] > row["start"]:
-                ranges.append(Range(row["_id"], row["start"], row["end"], row["globalTid"], text))
-        measurements = sorted((r for r in ranges if r.text == MEASURED), key=lambda r: r.start)
-        if sample < 0 or sample >= len(measurements):
-            raise ValueError("no selected measured range; build with NINFER_PERFORMANCE_TRACE=ON "
-                             "and capture a ninfer_bench measured repetition")
-        measured = measurements[sample]
+                payload = row.get("uint64Value")
+                if payload is None:
+                    payload = row.get("int64Value")
+                ranges.append(Range(row["_id"], row["start"], row["end"], row["globalTid"], text,
+                                    payload))
+        selected_rounds = []
+        if rounds is None:
+            measurements = sorted((r for r in ranges if r.text == MEASURED), key=lambda r: r.start)
+            if sample < 0 or sample >= len(measurements):
+                raise ValueError("no selected measured range; build with NINFER_PERFORMANCE_TRACE=ON "
+                                 "and capture a ninfer_bench measured repetition")
+            measured = measurements[sample]
+        else:
+            all_rounds = sorted((r for r in ranges if r.text == rounds.name and
+                                 (rounds.batch is None or r.payload == rounds.batch)),
+                                key=lambda r: r.start)
+            drop = int(len(all_rounds) * rounds.trim)
+            selected_rounds = all_rounds[drop:len(all_rounds) - drop]
+            if not selected_rounds:
+                raise ValueError(f"no {rounds.name} ranges in the trace"
+                                 + (f" with batch {rounds.batch}" if rounds.batch else "")
+                                 + "; capture decode rounds")
+            if len({process_id(r.tid) for r in selected_rounds}) != 1:
+                raise ValueError("round ranges come from more than one process")
+            # The window spans the selected rounds; work is selected by launch, not by time.
+            measured = Range(0, selected_rounds[0].start, selected_rounds[-1].end,
+                             selected_rounds[0].tid, rounds.name)
+        round_starts = [r.start for r in selected_rounds]
+
+        def launched_in_round(api: dict | None) -> bool:
+            if api is None:
+                return False
+            i = bisect_right(round_starts, api["start"]) - 1
+            return i >= 0 and api["start"] <= selected_rounds[i].end
+
         pid = process_id(measured.tid)
         ranges = [r for r in ranges if process_id(r.tid) == pid]
         work_ranges = {r.id: r for r in ranges if r.text.startswith(WORK_PREFIX)}
@@ -190,6 +240,12 @@ def read_report(path: Path, hardware: Hardware, sample: int = 0) -> dict:
             if owner:
                 expected_nodes[owner.id].add(origin)
 
+        def launching_api(activity: dict) -> dict | None:
+            candidates = [a for a in by_correlation.get(activity.get("correlationId"), [])
+                          if a["start"] <= activity["start"]]
+            # A runtime call may enclose a driver call. Prefer the innermost matching API.
+            return max(candidates, key=lambda a: a["start"]) if candidates else None
+
         activities = []
         for table, kind in (("CUPTI_ACTIVITY_KIND_KERNEL", "kernel"),
                             ("CUPTI_ACTIVITY_KIND_MEMCPY", "memcpy"),
@@ -197,10 +253,14 @@ def read_report(path: Path, hardware: Hardware, sample: int = 0) -> dict:
             for activity in rows(table):
                 if process_id(activity.get("globalPid") or 0) != pid:
                     continue
-                if activity["end"] <= measured.start or activity["start"] >= measured.end:
-                    continue
-                if activity["start"] < measured.start or activity["end"] > measured.end:
-                    raise ValueError("GPU activity crosses the measured boundary; capture a complete repetition")
+                if rounds is not None:
+                    if not launched_in_round(launching_api(activity)):
+                        continue
+                else:
+                    if activity["end"] <= measured.start or activity["start"] >= measured.end:
+                        continue
+                    if activity["start"] < measured.start or activity["end"] > measured.end:
+                        raise ValueError("GPU activity crosses the measured boundary; capture a complete repetition")
                 activity["kind"] = kind
                 activities.append(activity)
         node_launches = {a.get("correlationId") for a in activities if a.get("graphNodeId")}
@@ -218,10 +278,7 @@ def read_report(path: Path, hardware: Hardware, sample: int = 0) -> dict:
         unattributed = []
         phase_intervals = defaultdict(list)
         for activity in activities:
-            candidates = [a for a in by_correlation.get(activity.get("correlationId"), [])
-                          if a["start"] <= activity["start"]]
-            # A runtime call may enclose a driver call. Prefer the innermost matching API.
-            api = max(candidates, key=lambda a: a["start"]) if candidates else None
+            api = launching_api(activity)
             phases = phase_index.containing(api["globalTid"], api["start"], api["end"]) if api else []
             if api and not phases:
                 # Engine and Program may run on different host threads. Only use a process
@@ -294,7 +351,8 @@ def read_report(path: Path, hardware: Hardware, sample: int = 0) -> dict:
         host_rows = []
         for label in sorted({r.text for r in ranges if r.text.startswith("ninfer.host/1|")}):
             selected = [r for r in ranges if r.text == label and measured.start <= r.start
-                        and r.end <= measured.end]
+                        and r.end <= measured.end
+                        and (rounds is None or launched_in_round({"start": r.start}))]
             host_rows.append({"stage": label.split("|")[1], "calls": len(selected),
                               "host_work_ms": sum(r.end - r.start for r in selected) / 1e6})
         unknown_ms = sum(a["end"] - a["start"] for a in unattributed) / 1e6
@@ -316,11 +374,20 @@ def read_report(path: Path, hardware: Hardware, sample: int = 0) -> dict:
             warnings.append("Incomplete graph Op instances have no estimate; collect graph construction and all nodes.")
         if unknown_ms:
             warnings.append("Unattributed GPU work is retained; no whole-model efficiency is reported.")
+        if rounds is not None:
+            warnings.append(f"Serve window: GPU work launched inside {len(selected_rounds)} "
+                            f"{rounds.name} ranges"
+                            + (f" with batch {rounds.batch}" if rounds.batch else "")
+                            + f" (trim {rounds.trim:.2f} of rounds at each end); "
+                            "work from other host threads launched during a round is included.")
         if any((r["estimate_efficiency_pct_max"] or 0) > 100 for r in output_rows):
             warnings.append("An estimate exceeds measured time: inspect cache reuse, envelope work and hardware rates; percentages are not clamped.")
         return {"artifact_type": "ninfer_flash_next_performance", "schema_version": 1,
                 "trace": str(path), "sample": sample, "hardware": asdict(hardware),
-                "measurement": {"wall_ms": (measured.end - measured.start) / 1e6,
+                "measurement": {"wall_ms": (sum(r.end - r.start for r in selected_rounds)
+                                            if rounds is not None
+                                            else measured.end - measured.start) / 1e6,
+                                "rounds": len(selected_rounds) if rounds is not None else None,
                                 "gpu_work_ms": total_work,
                                 "gpu_busy_ms": union_ns([(a["start"], a["end"]) for a in activities]) / 1e6,
                                 "attributed_gpu_work_pct": 100 * (total_work - unknown_ms) / total_work,
@@ -352,6 +419,16 @@ def markdown(report: dict) -> str:
                      f"{r['bytes_min']}–{r['bytes_max']} | {r['bf16_flops']} / {r['nvfp4_flops']} / {r['fp32_flops']} | "
                      f"{estimate} | {efficiency} |")
     lines += ["", f"Unattributed GPU work: {m['unattributed_gpu_work_ms']:.3f} ms.", ""]
+    if m.get("rounds"):
+        n = m["rounds"]
+        lines += [f"Per round over {n} rounds: host wall {m['wall_ms'] / n:.3f} ms, "
+                  f"GPU work {m['gpu_work_ms'] / n:.3f} ms, GPU busy {m['gpu_busy_ms'] / n:.3f} ms.", "",
+                  "| Phase / role | Stage | GPU work ms/round | Share |", "|---|---|---:|---:|"]
+        lines += [f"| {r['phase']} / {r['role']} | {r['stage']} | {r['gpu_work_ms'] / n:.3f} | "
+                  f"{r['gpu_work_share_pct']:.1f}% |" for r in report["stages"]]
+        lines += [f"| unattributed | {u['kind']} {u['name']} | {u['gpu_work_ms'] / n:.3f} | "
+                  f"{100 * u['gpu_work_ms'] / m['gpu_work_ms']:.1f}% |" for u in report["unattributed"]]
+        lines.append("")
     if report["host"]:
         lines += ["Host lookup work (may overlap GPU execution):", ""]
         lines += [f"- {r['stage']}: {r['host_work_ms']:.3f} ms across {r['calls']} calls."
@@ -365,23 +442,35 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("trace", type=Path, help="Nsight Systems SQLite export, including graph construction")
     parser.add_argument("--hardware", required=True, type=Path, help="explicit theoretical or sustained rate profile JSON")
-    parser.add_argument("--benchmark", required=True, type=Path, help="ninfer_bench JSON from the same capture")
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--benchmark", type=Path, help="ninfer_bench JSON from the same capture")
+    mode.add_argument("--serve-rounds", metavar="RANGE",
+                      help="serving capture: attribute GPU work launched inside these per-round "
+                           "host ranges, for example decode.mtp_round")
+    parser.add_argument("--trim", default=0.1, type=float,
+                        help="with --serve-rounds: fraction of rounds dropped at each end")
+    parser.add_argument("--batch", type=int,
+                        help="with --serve-rounds: keep only rounds with this many active rows")
     parser.add_argument("--sample", default=0, type=int, help="zero-based measured repetition in the trace")
     parser.add_argument("--output", required=True, type=Path, help="JSON output; sibling .md is also written")
     args = parser.parse_args()
     try:
         hardware = Hardware(**json.loads(args.hardware.read_text()))
-        benchmark = json.loads(args.benchmark.read_text())
-        if (benchmark.get("artifact_type") != "ninfer_bench_report" or
-                benchmark.get("schema_version") != 16 or
-                benchmark.get("load", {}).get("architecture") != "Qwen3_8FlashNextForCausalLM" or
-                "nvfp4" not in benchmark.get("load", {}).get("formats", []) or
-                len(benchmark.get("tests", [])) != 1):
-            raise ValueError("benchmark must contain one v3 Flash-Next NVFP4 benchmark test")
-        if hardware.name != benchmark.get("environment", {}).get("gpu_name"):
-            raise ValueError("hardware profile name does not match benchmark GPU")
-        report = read_report(args.trace, hardware, args.sample)
-        report["benchmark"] = benchmark
+        if args.serve_rounds:
+            report = read_report(args.trace, hardware,
+                                 rounds=RoundSelection(args.serve_rounds, args.trim, args.batch))
+        else:
+            benchmark = json.loads(args.benchmark.read_text())
+            if (benchmark.get("artifact_type") != "ninfer_bench_report" or
+                    benchmark.get("schema_version") != 16 or
+                    benchmark.get("load", {}).get("architecture") != "Qwen3_8FlashNextForCausalLM" or
+                    "nvfp4" not in benchmark.get("load", {}).get("formats", []) or
+                    len(benchmark.get("tests", [])) != 1):
+                raise ValueError("benchmark must contain one v3 Flash-Next NVFP4 benchmark test")
+            if hardware.name != benchmark.get("environment", {}).get("gpu_name"):
+                raise ValueError("hardware profile name does not match benchmark GPU")
+            report = read_report(args.trace, hardware, args.sample)
+            report["benchmark"] = benchmark
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(report, indent=2, allow_nan=False) + "\n")
         args.output.with_suffix(".md").write_text(markdown(report))

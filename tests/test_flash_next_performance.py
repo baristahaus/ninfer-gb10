@@ -6,7 +6,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from tools.bench.flash_next_performance import Hardware, Work, main, markdown, read_report, union_ns
+from tools.bench.flash_next_performance import (Hardware, RoundSelection, Work, main, markdown,
+                                                read_report, union_ns)
 
 PID = 17 << 24
 TID = PID + 3
@@ -18,13 +19,13 @@ def make_trace(path):
     db = sqlite3.connect(path)
     db.executescript('''
         CREATE TABLE StringIds(id INTEGER, value TEXT);
-        CREATE TABLE NVTX_EVENTS(start INTEGER, end INTEGER, globalTid INTEGER, text TEXT, textId INTEGER);
+        CREATE TABLE NVTX_EVENTS(start INTEGER, end INTEGER, globalTid INTEGER, text TEXT, textId INTEGER, uint64Value INTEGER);
         CREATE TABLE CUPTI_ACTIVITY_KIND_RUNTIME(start INTEGER, end INTEGER, globalTid INTEGER, correlationId INTEGER);
         CREATE TABLE CUDA_GRAPH_NODE_EVENTS(start INTEGER, end INTEGER, globalTid INTEGER, graphNodeId INTEGER, originalGraphNodeId INTEGER);
         CREATE TABLE CUPTI_ACTIVITY_KIND_KERNEL(start INTEGER, end INTEGER, globalPid INTEGER, deviceId INTEGER, correlationId INTEGER, graphNodeId INTEGER);
     ''')
     db.execute("INSERT INTO StringIds VALUES (1, ?)", (TAG,))
-    db.executemany("INSERT INTO NVTX_EVENTS VALUES (?, ?, ?, ?, ?)", [
+    db.executemany("INSERT INTO NVTX_EVENTS(start, end, globalTid, text, textId) VALUES (?, ?, ?, ?, ?)", [
         (10, 100, TID, None, 1),  # graph construction, outside measurement
         (5, 105, TID, "ninfer.region/1|target.verify", None),
         (1000, 10000, TID, "ninfer.region/1|measured", None),
@@ -111,6 +112,47 @@ class PerformanceReportTest(unittest.TestCase):
         self.db.execute("INSERT INTO CUPTI_ACTIVITY_KIND_GRAPH_TRACE VALUES (8500, 9000, ?, 99)", (PID,))
         with self.assertRaisesRegex(ValueError, "graph-only"):
             self.report()
+
+    def add_rounds(self, *intervals, batch=4):
+        self.db.executemany("INSERT INTO NVTX_EVENTS VALUES (?, ?, ?, ?, ?, ?)",
+                            [(start, end, TID, "decode.mtp_round", None, batch)
+                             for start, end in intervals])
+
+    def test_serve_rounds_select_work_by_launch_and_report_per_round(self):
+        # The graph launch at 1200 and 3000 and the eager Op at 6020/6040 fall in rounds; the
+        # unscoped launch at 7000 does not. Async execution past a round's end still counts.
+        self.add_rounds((1100, 3020), (6000, 6060))
+        self.db.execute("DELETE FROM NVTX_EVENTS WHERE text='ninfer.region/1|measured'")
+        self.db.commit()
+        report = read_report(self.path, HARDWARE, rounds=RoundSelection("decode.mtp_round", 0))
+        m = report["measurement"]
+        self.assertEqual(m["rounds"], 2)
+        self.assertAlmostEqual(m["gpu_work_ms"], .0022)
+        self.assertAlmostEqual(m["unattributed_gpu_work_ms"], 0)
+        self.assertAlmostEqual(m["wall_ms"], .00198)
+        self.assertEqual(sum(r["calls"] for r in report["stages"]), 3)
+        self.assertIn("ms/round", markdown(report))
+
+    def test_serve_rounds_trim_drops_ramp_and_drain_rounds(self):
+        self.add_rounds((1100, 1260), (2900, 3060), (6000, 6060), (6990, 7020))
+        self.db.commit()
+        report = read_report(self.path, HARDWARE, rounds=RoundSelection("decode.mtp_round", .25))
+        self.assertEqual(report["measurement"]["rounds"], 2)
+        # Kept: the launch at 3000 (two graph nodes) and the eager launches at 6020/6040.
+        self.assertAlmostEqual(report["measurement"]["gpu_work_ms"], .0012)
+
+    def test_serve_rounds_batch_filter_excludes_other_concurrency(self):
+        self.add_rounds((1100, 3020), batch=1)
+        self.add_rounds((6000, 6060), batch=4)
+        self.db.commit()
+        report = read_report(self.path, HARDWARE,
+                             rounds=RoundSelection("decode.mtp_round", 0, batch=4))
+        self.assertEqual(report["measurement"]["rounds"], 1)
+        self.assertAlmostEqual(report["measurement"]["gpu_work_ms"], .0002)
+
+    def test_serve_rounds_require_round_ranges(self):
+        with self.assertRaisesRegex(ValueError, "no decode.mtp_round ranges"):
+            read_report(self.path, HARDWARE, rounds=RoundSelection("decode.mtp_round"))
 
     def test_compute_floor_and_expert_traffic_interval(self):
         work = Work.parse(TAG)

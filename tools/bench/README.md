@@ -293,6 +293,14 @@ report carries the complete supplied benchmark metadata, including configuration
 committed output throughput and speculative counts. Profiled throughput is diagnostic: use
 fresh paired **unprofiled** runs to claim an inference speed improvement.
 
+A serving capture has no measured repetition. `--serve-rounds decode.mtp_round` (in place of
+`--benchmark`) attributes the GPU work launched inside those per-round host ranges and adds a
+per-round table that also lists unattributed kernels by name. `--batch N` keeps only rounds whose
+NVTX payload (the number of active rows) is N, and `--trim F` drops a fraction of the rounds at
+each end. The serve process must run under `nsys profile` from launch with a
+`NINFER_PERFORMANCE_TRACE=ON` build, so that graph construction is in the trace.
+`tools/gb10/round_attribution.sh` runs the complete C4 capture.
+
 The full capture command above is deliberate. Narrowing collection to `cudaProfilerApi` without
 also collecting graph-construction metadata loses replay ownership. Newer Nsight versions offer
 `node:nvtx-precapture`, but the qualified command collects construction directly. Export existing

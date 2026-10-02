@@ -36,6 +36,12 @@ constexpr int kGroupedFirstToken      = 1;
 constexpr int kGroupedTokenTile       = 32;
 constexpr int kLargeGroupedTokenTile  = 128;
 constexpr int kDecodeGroupedTokenTile = 16;
+// Below this many rows the per-assignment decode route is used. The per-assignment route streams
+// a selected expert once per (row, path); the expert-grouped route streams each distinct expert
+// once for all of its rows but adds route counting, packing and a larger graph. On GB10 decode,
+// where a round's rows come from independent requests and share few experts, grouping measured
+// -1.8% end to end at 2 rows, flat at 4 and +3.1% at 8 (2026-10-02).
+constexpr int kGroupedDecodeMinTokens = 8;
 constexpr int kPrefillBlocksPerSm     = 3;
 
 using GroupedGateGeometry = detail::Nvfp4Geometry<2 * kIntermediate, kHidden>;
@@ -799,7 +805,7 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
     linear(shared_activation, weights.shared_down, destination, stream, bf16_gemm);
     Tensor routed_activation = workspace.alloc(DType::BF16, {kIntermediate, kTop, tokens});
     if (weights.routed_gate_up.qtype == QType::NVFP4 && tokens >= kGroupedFirstToken) {
-        if (tokens <= kDecodeGroupedTokenTile) {
+        if (tokens < kGroupedDecodeMinTokens) {
             run_nvfp4_decode_routes(input, weights, ids, alpha, shared_alpha, destination,
                                     routed_activation, workspace, stream, tokens, wide_decode_gate);
             return;

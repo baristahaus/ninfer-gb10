@@ -177,8 +177,9 @@ int run() {
     return failures;
 }
 
-// The production NVFP4 W4A4 routes against an FP64 oracle: 1..16 rows (the per-assignment
-// decode route) and 17 rows (the expert-grouped prefill tile). W4A4 has
+// The production NVFP4 W4A4 routes against an FP64 oracle: 1 and 2 rows (the per-assignment
+// decode route), 8 and 16 rows (the expert-grouped decode tile) and 17 rows (the grouped prefill
+// tile). W4A4 has
 // two explicit activation quantizations, the expert input and the down-projection input, each
 // NVFP4 per 16 values with an E4M3 scale RNE(divisor * max|x| / 6) and E2M1 codes RNE(x *
 // divisor / scale), both saturating. The oracle applies them to the BF16 values they quantize

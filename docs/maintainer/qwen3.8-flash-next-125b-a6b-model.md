@@ -39,8 +39,14 @@ token dropping, or stochastic routing applies at inference.
 The residual state is four BF16 streams of width 2560. Each attention/GDN and MoE sub-block first
 forms its learned normalized input mix and injection weights, evaluates the block, and commits the
 block result back into the four streams. The fused combine-and-mix implementation preserves the
-same materialized BF16 combine boundary before grouped RMSNorm. The final learned mixer reduces the
-four streams to the decoder output.
+same materialized BF16 combine boundary before grouped RMSNorm. Up to eight tokens without capture
+run the whole mix as one cooperative kernel with one grid barrier: lane-owned CTAs commit, steer
+and fold the RMSNorm weight into BF16 activations, Down/injection lane-segment dots run on BF16 MMA
+and take the inverse RMS factor after the barrier, and column-owned CTAs rebuild the BF16 low-rank
+activation, apply Up on MMA and gate-mix in FP32. Normalized rows and gate logits are not
+materialized on that route, and its fixed reduction order is bitwise reproducible. Larger token
+counts and capture use the materializing route. The final learned mixer reduces the four streams to
+the decoder output.
 
 Layer 1 additionally applies PLE between its token mixer and MoE. PLE selects sixteen 160-element
 FP8 rows per token: eight bigram heads and eight trigram heads. Hashes reset at EOS. The selected
@@ -129,8 +135,8 @@ capacity participate in the physical sequence reservation and `activation_capaci
 summary. The direction arena is always allocated so admin activation can use its original addresses;
 capture storage is allocated only on a capture server.
 
-Attention hyper-connection steering runs inside the fused combine/grouped-RMSNorm kernel: each
-(lane, token) block forms the represented BF16 combine of the preceding branch in registers, adjusts
+Attention hyper-connection steering runs inside the fused combine/grouped-RMSNorm kernel, or the
+lane-owned phase of the small-token mix kernel: each (lane, token) block forms the represented BF16 combine of the preceding branch in registers, adjusts
 selected residual lanes, writes the steered BF16 state once and normalizes it. Rows, ranks and lane
 masks are device data, so inactive blocks run the unsteered arithmetic bit for bit, in prefill,
 ordinary decode and MTP verification alike. MLP and MTP hyper-connections are unchanged.

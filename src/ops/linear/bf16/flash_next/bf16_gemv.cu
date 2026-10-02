@@ -10,15 +10,6 @@
 namespace ninfer::ops::detail::flash_next {
 namespace {
 
-struct HcDownSiluEpilogue {
-    template <class Output>
-    __device__ __forceinline__ void operator()(const Output& output, std::int32_t row,
-                                               float value) const {
-        const float represented = __bfloat162float(__float2bfloat16_rn(value)) * 0.25F;
-        output.store(row, __float2bfloat16_rn(represented / (1.0F + expf(-represented))));
-    }
-};
-
 struct Bf16QueryGateOutput {
     __nv_bfloat16* query;
     __nv_bfloat16* gate;
@@ -50,23 +41,6 @@ void launch_geometry(const Tensor& x, const Weight& weight, Tensor& out, cudaStr
 }
 
 } // namespace
-
-void launch_bf16_hc_down_silu_decode(const Tensor& x, const Weight& weight, Tensor& out,
-                                     cudaStream_t stream) {
-    using Geometry = Bf16GemvGeometry<320, 10240>;
-    using Schedule = Bf16LinearDecodeSchedule<Geometry>;
-    if (x.ne[1] != 1 || weight.n != Geometry::kOutputRows ||
-        weight.k != Geometry::kInputRows) {
-        throw std::invalid_argument("BF16 HyperConnection decode down-SiLU: invalid exact problem");
-    }
-    constexpr int kBlocks = Geometry::kOutputRows / Schedule::kRowsPerCta;
-    const Bf16ContiguousOutput output{static_cast<__nv_bfloat16*>(out.data)};
-    bf16_gemv_kernel<Geometry, Schedule>
-        <<<kBlocks, Schedule::kThreads, 0, stream>>>(
-            static_cast<const __nv_bfloat16*>(x.data),
-            static_cast<const __nv_bfloat16*>(weight.qdata), output, HcDownSiluEpilogue{});
-    CUDA_CHECK(cudaGetLastError());
-}
 
 void launch_bf16_query_gate_decode(const Tensor& x, const Weight& weight, Tensor& query,
                                    Tensor& gate, cudaStream_t stream) {

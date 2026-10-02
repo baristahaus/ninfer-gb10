@@ -18,8 +18,6 @@ inline constexpr std::int32_t kBf16LinearSmallTDispatchEnd = 27;
 using Bf16Launch = void (*)(const Tensor&, const Weight&, Tensor&, cudaStream_t);
 
 void launch_bf16_decode(const Tensor& x, const Weight& weight, Tensor& out, cudaStream_t stream);
-void launch_bf16_hc_down_silu_decode(const Tensor& x, const Weight& weight, Tensor& out,
-                                     cudaStream_t stream);
 void launch_bf16_query_gate_decode(const Tensor& x, const Weight& weight, Tensor& query,
                                    Tensor& gate, cudaStream_t stream);
 void launch_bf16_shared_swiglu_decode(const Tensor& x, const Weight& gate_weight,

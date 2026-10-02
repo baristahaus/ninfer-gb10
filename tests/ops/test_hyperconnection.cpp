@@ -16,7 +16,6 @@ constexpr int kStreams = 4;
 constexpr int kHidden = 2560;
 constexpr int kHyper = kStreams * kHidden;
 constexpr int kRank = 320;
-constexpr int kTokens = 2;
 
 std::vector<std::uint16_t> encode(const std::vector<float>& values) {
     std::vector<std::uint16_t> bits(values.size());
@@ -39,19 +38,23 @@ Weight bf16_weight(const DeviceBuffer& storage, int rows, int columns) {
     return out;
 }
 
-int run() {
+// Dense weights exercise the small-token cooperative route (tokens <= 8) and the general route.
+int run(int kTokens) {
     std::vector<float> hyper(kHyper * kTokens), norm(kHyper);
     fill_uniform(hyper, 913, -0.75F, 0.75F);
     fill_uniform(norm, 914, -0.125F, 0.125F);
     round_to_bf16(hyper);
     round_to_bf16(norm);
 
-    std::vector<float> down(static_cast<std::size_t>(kRank) * kHyper, 0.0F);
-    std::vector<float> up(static_cast<std::size_t>(kHyper) * kRank, 0.0F);
-    std::vector<float> inject(static_cast<std::size_t>(kStreams) * kHyper, 0.0F);
-    for (int row = 0; row < kRank; ++row) { down[static_cast<std::size_t>(row) * kHyper + (37 * row) % kHyper] = 0.25F; }
-    for (int row = 0; row < kHyper; ++row) { up[static_cast<std::size_t>(row) * kRank + row % kRank] = (row & 1) ? -0.5F : 0.5F; }
-    for (int row = 0; row < kStreams; ++row) { inject[static_cast<std::size_t>(row) * kHyper + 777 * (row + 1)] = 0.75F; }
+    std::vector<float> down(static_cast<std::size_t>(kRank) * kHyper);
+    std::vector<float> up(static_cast<std::size_t>(kHyper) * kRank);
+    std::vector<float> inject(static_cast<std::size_t>(kStreams) * kHyper);
+    fill_uniform(down, 916, -0.04F, 0.04F);
+    fill_uniform(up, 917, -0.25F, 0.25F);
+    fill_uniform(inject, 918, -0.02F, 0.02F);
+    round_to_bf16(down);
+    round_to_bf16(up);
+    round_to_bf16(inject);
 
     std::vector<double> normalized(hyper.size());
     std::vector<double> block_reference(kHidden * kTokens);
@@ -172,7 +175,8 @@ int run() {
 int main() {
     if (ninfer::test::cuda_unavailable()) { return 77; }
     try {
-        const int failures = run();
+        int failures = 0;
+        for (const int tokens : {1, 2, 8, 17}) { failures += run(tokens); }
         std::cout << (failures == 0 ? "OK" : "FAIL") << " HyperConnection\n";
         return failures == 0 ? 0 : 1;
     } catch (const std::exception& error) {

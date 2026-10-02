@@ -482,18 +482,19 @@ TrafficBytes running_traffic(const Problem& problem) {
 
     const Problem full{problem.qk_heads, problem.value_heads, full_tokens};
     const std::int32_t tail_tokens = problem.tokens - full_tokens;
-    const double qk_all            = qk_tensor_bytes(problem);
-    const double normalization     = 4.0 * qk_all;
-    const TrafficBytes chunked     = chunked_pipeline_traffic(full);
+    // The chunked prefix reads raw q/k once to write two FP32 [H_qk, T] normalization factor
+    // tables, which its stages read back; the recurrent tail normalizes in-kernel.
+    const double factor_tables = 2.0 * problem.qk_heads * full_tokens * sizeof(float);
+    const double normalization = 2.0 * qk_tensor_bytes(full) + factor_tables;
+    const TrafficBytes chunked = chunked_pipeline_traffic(full);
 
     TrafficBytes traffic{
-        normalization + chunked.total,
-        2.0 * qk_all + 4.0 * qk_tensor_bytes(full) + chunked.intermediate,
+        normalization + factor_tables + chunked.total,
+        2.0 * factor_tables + chunked.intermediate,
     };
     if (tail_tokens > 0) {
         const Problem tail{problem.qk_heads, problem.value_heads, tail_tokens};
         traffic.total += running_logical_bytes(tail);
-        traffic.intermediate += 2.0 * qk_tensor_bytes(tail);
     }
     return traffic;
 }
@@ -512,8 +513,8 @@ std::string running_implementation(std::int32_t tokens) {
     const std::int32_t full_tokens =
         (tokens / gated_delta_net_detail::kChunkSize) * gated_delta_net_detail::kChunkSize;
     if (full_tokens == 0) { return "public.recurrent.qk_fused"; }
-    if (full_tokens == tokens) { return "public.l2norm_x2+chunked"; }
-    return "public.l2norm_x2+chunked+recurrent_tail";
+    if (full_tokens == tokens) { return "public.qk_norms+chunked"; }
+    return "public.qk_norms+chunked+recurrent_tail";
 }
 
 BenchRow run_running(const Options& options, std::int32_t tokens, DeviceBuffer& flush,
@@ -701,7 +702,8 @@ std::vector<BenchRow> run_chunked(const Options& options, std::int32_t tokens, D
     if (!options.breakdown) { return rows; }
 
     const chunked_detail::workspace_layout layout =
-        chunked_detail::compute_workspace_layout(problem.value_heads, tokens);
+        chunked_detail::compute_workspace_layout(problem.qk_heads, problem.value_heads, tokens,
+                                                 false);
     const DeviceSpan backing{workspace.p, workspace.bytes};
     const Tensor g_cumsum = layout.g_cumsum.bind(backing);
     const Tensor W        = layout.W.bind(backing);
@@ -718,7 +720,7 @@ std::vector<BenchRow> run_chunked(const Options& options, std::int32_t tokens, D
     prepare.g_in         = static_cast<const float*>(g.data);
     prepare.beta         = static_cast<const float*>(beta.data);
     prepare.W            = static_cast<__nv_bfloat16*>(W.data);
-    prepare.U            = static_cast<__nv_bfloat16*>(U.data);
+    prepare.U            = static_cast<__half*>(U.data);
     prepare.g_cumsum_out = static_cast<float*>(g_cumsum.data);
 
     chunked_detail::state_passing_config state{};
@@ -726,11 +728,11 @@ std::vector<BenchRow> run_chunked(const Options& options, std::int32_t tokens, D
     state.H_v       = problem.value_heads;
     state.L         = tokens;
     state.W         = static_cast<const __nv_bfloat16*>(W.data);
-    state.U         = static_cast<const __nv_bfloat16*>(U.data);
+    state.U         = static_cast<const __half*>(U.data);
     state.k         = static_cast<const __nv_bfloat16*>(k.data);
     state.g_cumsum  = static_cast<const float*>(g_cumsum.data);
     state.state_in  = static_cast<const float*>(ssm_in.data);
-    state.v_new     = static_cast<__nv_bfloat16*>(v_new.data);
+    state.v_new     = static_cast<__half*>(v_new.data);
     state.h_chunk   = static_cast<__nv_bfloat16*>(h_chunk.data);
     state.state_out = static_cast<float*>(ssm_out.data);
 
@@ -740,7 +742,7 @@ std::vector<BenchRow> run_chunked(const Options& options, std::int32_t tokens, D
     output.L        = tokens;
     output.q        = static_cast<const __nv_bfloat16*>(q.data);
     output.k        = static_cast<const __nv_bfloat16*>(k.data);
-    output.v_new    = static_cast<const __nv_bfloat16*>(v_new.data);
+    output.v_new    = static_cast<const __half*>(v_new.data);
     output.g_cumsum = static_cast<const float*>(g_cumsum.data);
     output.h_chunk  = static_cast<const __nv_bfloat16*>(h_chunk.data);
     output.attn_out = static_cast<__nv_bfloat16*>(out.data);

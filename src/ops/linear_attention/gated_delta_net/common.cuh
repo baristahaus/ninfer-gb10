@@ -18,6 +18,7 @@
 #    include "ops/common/memory.cuh"
 #    include "ops/common/warp.cuh"
 #    include <cuda_bf16.h>
+#    include <cuda_fp16.h>
 #    define NINFER_KERNELS_HOST_DEVICE __host__ __device__
 #else
 #    define NINFER_KERNELS_HOST_DEVICE
@@ -91,6 +92,55 @@ issue_load_bf16_to_float_vec4(View view, const __nv_bfloat16* __restrict__ gmem_
         const float2 hi             = bf16x2_to_float2(packed.pair[1]);
         view.vec4_at(row, col4 * 4) = make_float4(lo.x, lo.y, hi.x, hi.y);
     }
+}
+
+// The chunked route stores U and v_new as FP16: both are delta-rule corrections whose BF16
+// rounding dominated its error, while FP16 carries three more mantissa bits at the same width.
+// The conversion saturates: finite values beyond the FP16 range become +-65504 instead of
+// infinity, and NaN stays NaN.
+static __device__ __forceinline__ __half2 float2_to_f16x2_clamped(float low, float high) {
+    std::uint32_t bits;
+    asm("cvt.rn.satfinite.f16x2.f32 %0, %1, %2;" : "=r"(bits) : "f"(high), "f"(low));
+    return *reinterpret_cast<const __half2*>(&bits);
+}
+
+template <int ROWS, int STRIDE, int THREADS, class View>
+static __device__ __forceinline__ void
+issue_load_f16_to_float_vec4(View view, const __half* __restrict__ gmem_base_row0,
+                             std::int64_t gmem_row_stride_elems, int tid) {
+    static_assert(STRIDE % 4 == 0, "issue_load_f16_to_float_vec4: STRIDE must be a multiple of 4");
+    constexpr int VEC_PER_ROW = STRIDE / 4;
+    constexpr int N_VEC       = ROWS * VEC_PER_ROW;
+#    pragma unroll
+    for (int v = tid; v < N_VEC; v += THREADS) {
+        const int row  = v / VEC_PER_ROW;
+        const int col4 = v - row * VEC_PER_ROW;
+        const __half* gmem_ptr =
+            gmem_base_row0 + static_cast<std::int64_t>(row) * gmem_row_stride_elems + col4 * 4;
+        const uint2 packed          = load_vec<uint2>(gmem_ptr);
+        const float2 lo             = __half22float2(*reinterpret_cast<const __half2*>(&packed.x));
+        const float2 hi             = __half22float2(*reinterpret_cast<const __half2*>(&packed.y));
+        view.vec4_at(row, col4 * 4) = make_float4(lo.x, lo.y, hi.x, hi.y);
+    }
+}
+
+// mma.tf32 ignores the low 13 mantissa bits of an FP32 operand, truncating it toward zero. The
+// chunked route rounds to nearest where that bias measurably matters: the WY inverse T^-1 and the
+// scaled V/K panels it multiplies (shared by every U/W entry), plus the output's decayed A matrix.
+// State-passing operands stay truncated; rounding them changes nothing measurable.
+static __device__ __forceinline__ float round_to_tf32(float value) {
+    std::uint32_t bits;
+    asm("cvt.rna.tf32.f32 %0, %1;" : "=r"(bits) : "f"(value));
+    return __uint_as_float(bits);
+}
+
+// Per-token q/k L2 normalization factors rsqrt(sum(x^2) + 1e-6), stored head-major [H_qk, T] so
+// one chunk's factors are contiguous. A null table means the caller's q/k are already in their
+// final form (factor 1).
+static __device__ __forceinline__ float inverse_norm_at(const float* __restrict__ table,
+                                                        std::int64_t token, std::int64_t tokens,
+                                                        int qk_head) {
+    return table == nullptr ? 1.0f : table[qk_head * tokens + token];
 }
 
 inline constexpr float kLog2E = 1.4426950408889634f;

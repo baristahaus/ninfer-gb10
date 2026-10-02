@@ -1,6 +1,5 @@
 #include "ninfer/ops/gated_delta_net.h"
 
-#include "ninfer/ops/l2norm.h"
 
 #include "core/device.h"
 #include "core/layout.h"
@@ -170,11 +169,10 @@ void validate_chunked(const Tensor& q, const Tensor& k, const Tensor& v, const T
 }
 
 struct ChunkedWorkspace {
-    Tensor normalized_q;
-    Tensor normalized_k;
     DeviceSpan stage;
 };
 
+// The chunked route consumes raw q/k and owns its FP32 normalization factors inside `stage`.
 template <class Allocator>
 ChunkedWorkspace allocate_chunked_workspace(Allocator& allocator, std::int32_t qk_heads,
                                             std::int32_t value_heads, std::int32_t tokens,
@@ -183,15 +181,8 @@ ChunkedWorkspace allocate_chunked_workspace(Allocator& allocator, std::int32_t q
     const std::int32_t full =
         (tokens / detail::gated_delta_net::kChunkSize) * detail::gated_delta_net::kChunkSize;
     if (full == 0) { return out; }
-    // Normalized staging serves only the chunked route; the recurrent tail normalizes raw q/k.
-    if (normalize_qk) {
-        out.normalized_q =
-            allocator.alloc(DType::BF16, {detail::gated_delta_net::kStateDim, qk_heads, full});
-        out.normalized_k =
-            allocator.alloc(DType::BF16, {detail::gated_delta_net::kStateDim, qk_heads, full});
-    }
-    out.stage =
-        allocator.alloc_bytes(detail::gated_delta_net::chunked_workspace_bytes(value_heads, full));
+    out.stage = allocator.alloc_bytes(
+        detail::gated_delta_net::chunked_workspace_bytes(qk_heads, value_heads, full, normalize_qk));
     return out;
 }
 
@@ -251,29 +242,24 @@ void gated_delta_net(const Tensor& q, const Tensor& k, const Tensor& v, const Te
         (T / detail::gated_delta_net::kChunkSize) * detail::gated_delta_net::kChunkSize;
     ChunkedWorkspace scratch = allocate_chunked_workspace(ws, q.ne[1], v.ne[1], T, normalize_qk);
     if (T_full > 0) {
-        Tensor q_full = q.slice(2, 0, T_full);
-        Tensor k_full = k.slice(2, 0, T_full);
-        if (normalize_qk) {
-            l2norm(q_full, 1.0e-6f, scratch.normalized_q, stream);
-            l2norm(k_full, 1.0e-6f, scratch.normalized_k, stream);
-            q_full = scratch.normalized_q;
-            k_full = scratch.normalized_k;
-        }
+        Tensor q_full    = q.slice(2, 0, T_full);
+        Tensor k_full    = k.slice(2, 0, T_full);
         Tensor v_full    = v.slice(2, 0, T_full);
         Tensor g_full    = g.slice(1, 0, T_full);
         Tensor beta_full = beta.slice(1, 0, T_full);
         Tensor out_full  = out.slice(2, 0, T_full);
         detail::gated_delta_net::launch_chunked(q_full, k_full, v_full, g_full, beta_full, scale,
-                                                ssm_state_in, ssm_state_out, out_full,
-                                                scratch.stage.data, scratch.stage.bytes, stream);
+                                                normalize_qk, ssm_state_in, ssm_state_out,
+                                                out_full, scratch.stage.data,
+                                                scratch.stage.bytes, stream);
     }
 
     const std::int32_t tail = T - T_full;
     if (tail > 0) {
-        // The tail always consumes raw q/k and normalizes in-kernel, exactly as a tail-only call
-        // or one-token decode does. Its arithmetic therefore does not depend on whether full
-        // chunks precede it in this call, so splitting a prompt at chunk-aligned boundaries
-        // reproduces a single call bit-exactly.
+        // The tail consumes raw q/k and normalizes in-kernel, exactly as a tail-only call or
+        // one-token decode does. Its arithmetic therefore does not depend on whether full chunks
+        // precede it in this call, so splitting a prompt at chunk-aligned boundaries reproduces a
+        // single call bit-exactly.
         Tensor q_tail    = q.slice(2, T_full, tail);
         Tensor k_tail    = k.slice(2, T_full, tail);
         Tensor v_tail    = v.slice(2, T_full, tail);

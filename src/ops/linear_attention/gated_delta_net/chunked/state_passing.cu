@@ -20,8 +20,8 @@ cudaError_t launch_fixed(const state_passing_config& cfg, head_map qk_map, int N
     const dim3 block(D::THREADS, 1, 1);
 
     kernel::state_passing_kernel<NStrip><<<grid, block, smem_bytes, cfg.stream>>>(
-        cfg.W, cfg.U, cfg.k, cfg.g_cumsum, cfg.state_in, cfg.v_new, cfg.h_chunk, cfg.state_out,
-        qk_map, NT);
+        cfg.W, cfg.U, cfg.k, cfg.k_inv_norm, cfg.g_cumsum, cfg.state_in, cfg.v_new, cfg.h_chunk,
+        cfg.state_out, qk_map, NT);
     return cudaGetLastError();
 }
 

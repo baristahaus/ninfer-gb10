@@ -19,7 +19,8 @@ cudaError_t launch_fixed(const prepare_wy_wu_config& cfg, dim3 grid, head_map qk
 
     kernel::prepare_wy_wu_kernel<KPanelCols, WuPanelCols, BlockWarps>
         <<<grid, dim3(threads, 1, 1), smem_bytes, cfg.stream>>>(
-            cfg.k, cfg.v, cfg.g_in, cfg.beta, cfg.W, cfg.U, cfg.g_cumsum_out, qk_map);
+            cfg.k, cfg.k_inv_norm, cfg.v, cfg.g_in, cfg.beta, cfg.W, cfg.U, cfg.g_cumsum_out,
+            qk_map);
     return cudaGetLastError();
 }
 

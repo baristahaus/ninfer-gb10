@@ -10,10 +10,11 @@
 //   A[t,s] = (s <= t) ? dot(q[t], k[s]) * exp(g[t] - g[s]) : 0
 //   out    = scale * (exp(g) * q @ h_chunk^T + A @ v_new)
 //
-// Q/K/H/V are represented BF16 inputs. Q @ K^T and Q @ H^T therefore use
-// native BF16 MMA with FP32 accumulation. The decayed A matrix is FP32 and
-// remains on the existing TF32-MMA/FP32-accumulation path for A @ V; no FP32
-// intermediate is down-cast to BF16.
+// Q/K/H are represented BF16 inputs. Q @ K^T and Q @ H^T therefore use native
+// BF16 MMA with FP32 accumulation on the raw q/k; their L2 normalization factors
+// are applied in FP32 to the products (A rows/columns and the exp(g) row scale).
+// The decayed A matrix is FP32 and stays on the TF32-MMA/FP32-accumulation path
+// for A @ V, with v_new read from its FP16 workspace.
 //
 // Shared memory: persistent BF16 Q (16 KiB) and two 4 KiB BF16 staging
 // buffers, for 24 KiB total. FP32 g reuses the K buffer that becomes dead
@@ -125,6 +126,7 @@ mma_bf16_panel(float (&D)[N_TILES][4], Bf16SmemTile<A_STRIDE> A,
     }
 }
 
+// V holds FP16 v_new; the tile is only a 16-bit staging container.
 template <int N_TILES>
 __device__ __forceinline__ void mma_av_panel(float (&D)[N_TILES][4],
                                               const float A_a[K_TILES_BT][4],
@@ -140,27 +142,32 @@ __device__ __forceinline__ void mma_av_panel(float (&D)[N_TILES][4],
 #pragma unroll
         for (int nt = 0; nt < N_TILES; ++nt) {
             const int col  = nt * MMA_N + lane_g;
-            const float b0 = __bfloat162float(*V.ptr(k_off + lane_t, col));
-            const float b1 = __bfloat162float(*V.ptr(k_off + lane_t + 4, col));
+            const float b0 = __half2float(*reinterpret_cast<const __half*>(V.ptr(k_off + lane_t, col)));
+            const float b1 =
+                __half2float(*reinterpret_cast<const __half*>(V.ptr(k_off + lane_t + 4, col)));
             mma_tf32(D[nt][0], D[nt][1], D[nt][2], D[nt][3], a0, a1, a2, a3, b0, b1);
         }
     }
 }
 
 __device__ __forceinline__ void
-output_job(const __nv_bfloat16* __restrict__ q_in,
-           const __nv_bfloat16* __restrict__ k_in,
-           const __nv_bfloat16* __restrict__ v_new_in,
+output_job(const __nv_bfloat16* __restrict__ q_in, const float* __restrict__ q_inv_norm,
+           const __nv_bfloat16* __restrict__ k_in, const float* __restrict__ k_inv_norm,
+           const __half* __restrict__ v_new_in,
            const float* __restrict__ g_cumsum_in,
            const __nv_bfloat16* __restrict__ h_chunk_in,
            __nv_bfloat16* __restrict__ attn_out, head_map qk_map, float scale, int chunk, int h_v,
-           float* smem) {
+           std::int64_t tokens, float* smem) {
     auto* const bf16_smem = reinterpret_cast<__nv_bfloat16*>(smem);
     auto* const q_smem    = bf16_smem;
     auto* const stage0    = q_smem + kernel_dims::Q_BF16;
     auto* const stage1    = stage0 + kernel_dims::STAGE_BF16;
     float* const g_smem =
         reinterpret_cast<float*>(stage0 + kernel_dims::V_PANEL_BF16);
+    // q/k normalization factors share the dead K tail with g; all three are consumed into
+    // registers by the decay step, before stage0 becomes the H panel.
+    float* const qinv_smem = g_smem + BT;
+    float* const kinv_smem = qinv_smem + BT;
 
     Bf16SmemTile<kStateDim> q_view{q_smem};
     Bf16SmemTile<K_PANEL> k_stage0{stage0};
@@ -209,8 +216,11 @@ output_job(const __nv_bfloat16* __restrict__ q_in,
         } else if (tid < BT) {
             // stage0 was consumed by panel 2 and is now dead. Reuse its
             // otherwise-idle tail for g while panel 3 consumes stage1.
-            g_smem[tid] =
-                g_cumsum_in[(cs + static_cast<std::int64_t>(tid)) * H_v + h_v];
+            const std::int64_t token = cs + static_cast<std::int64_t>(tid);
+            const int qk_head        = qk_map.qk_head(h_v);
+            g_smem[tid]              = g_cumsum_in[token * H_v + h_v];
+            qinv_smem[tid]           = inverse_norm_at(q_inv_norm, token, tokens, qk_head);
+            kinv_smem[tid]           = inverse_norm_at(k_inv_norm, token, tokens, qk_head);
         }
 
         mma_bf16_panel<N_TILES_BT, K_PANEL / BF16_MMA_K>(
@@ -230,8 +240,10 @@ output_job(const __nv_bfloat16* __restrict__ q_in,
     const int row_g1   = row_g0 + 8;
     const float g_r0   = g_smem[row_g0];
     const float g_r1   = g_smem[row_g1];
-    const float gamma0 = exp2_approx(g_r0 * kLog2E);
-    const float gamma1 = exp2_approx(g_r1 * kLog2E);
+    const float qinv0  = qinv_smem[row_g0];
+    const float qinv1  = qinv_smem[row_g1];
+    const float gamma0 = exp2_approx(g_r0 * kLog2E) * qinv0;
+    const float gamma1 = exp2_approx(g_r1 * kLog2E) * qinv1;
 
 #pragma unroll
     for (int nt = 0; nt < N_TILES_BT; ++nt) {
@@ -240,15 +252,19 @@ output_job(const __nv_bfloat16* __restrict__ q_in,
         const float g_s0 = g_smem[s0];
         const float g_s1 = g_smem[s1];
 
-        const float dec00 = exp2_approx((g_r0 - g_s0) * kLog2E);
-        const float dec01 = exp2_approx((g_r0 - g_s1) * kLog2E);
-        const float dec10 = exp2_approx((g_r1 - g_s0) * kLog2E);
-        const float dec11 = exp2_approx((g_r1 - g_s1) * kLog2E);
+        const float kinv_s0 = kinv_smem[s0];
+        const float kinv_s1 = kinv_smem[s1];
 
-        A_strip[nt][0] = (s0 <= row_g0) ? A_strip[nt][0] * dec00 : 0.0f;
-        A_strip[nt][1] = (s1 <= row_g0) ? A_strip[nt][1] * dec01 : 0.0f;
-        A_strip[nt][2] = (s0 <= row_g1) ? A_strip[nt][2] * dec10 : 0.0f;
-        A_strip[nt][3] = (s1 <= row_g1) ? A_strip[nt][3] * dec11 : 0.0f;
+        const float dec00 = exp2_approx((g_r0 - g_s0) * kLog2E) * (qinv0 * kinv_s0);
+        const float dec01 = exp2_approx((g_r0 - g_s1) * kLog2E) * (qinv0 * kinv_s1);
+        const float dec10 = exp2_approx((g_r1 - g_s0) * kLog2E) * (qinv1 * kinv_s0);
+        const float dec11 = exp2_approx((g_r1 - g_s1) * kLog2E) * (qinv1 * kinv_s1);
+
+        // A is the TF32 A operand of A @ V: round once here rather than let the MMA truncate.
+        A_strip[nt][0] = (s0 <= row_g0) ? round_to_tf32(A_strip[nt][0] * dec00) : 0.0f;
+        A_strip[nt][1] = (s1 <= row_g0) ? round_to_tf32(A_strip[nt][1] * dec01) : 0.0f;
+        A_strip[nt][2] = (s0 <= row_g1) ? round_to_tf32(A_strip[nt][2] * dec10) : 0.0f;
+        A_strip[nt][3] = (s1 <= row_g1) ? round_to_tf32(A_strip[nt][3] * dec11) : 0.0f;
     }
 
     // Convert the m16n8 accumulator layout into the TF32 A-operand layout
@@ -292,7 +308,10 @@ output_job(const __nv_bfloat16* __restrict__ q_in,
         const int d_off = panel * D_PANEL;
 
         issue_cp_bf16<BT, D_PANEL, THREADS>(
-            v_view, v_new_in + vn_base + static_cast<std::int64_t>(d_off), value_row_stride, tid);
+            v_view,
+            reinterpret_cast<const __nv_bfloat16*>(v_new_in + vn_base +
+                                                   static_cast<std::int64_t>(d_off)),
+            value_row_stride, tid);
         cp_commit();
 
         float D_frag[D_PANEL / MMA_N][4] = {};
@@ -344,9 +363,9 @@ output_job(const __nv_bfloat16* __restrict__ q_in,
 
 template <bool MULTI_JOB>
 __launch_bounds__(THREADS, 4) __global__
-    void output_kernel(const __nv_bfloat16* __restrict__ q_in,
-                       const __nv_bfloat16* __restrict__ k_in,
-                       const __nv_bfloat16* __restrict__ v_new_in,
+    void output_kernel(const __nv_bfloat16* __restrict__ q_in, const float* __restrict__ q_inv_norm,
+                       const __nv_bfloat16* __restrict__ k_in, const float* __restrict__ k_inv_norm,
+                       const __half* __restrict__ v_new_in,
                        const float* __restrict__ g_cumsum_in,
                        const __nv_bfloat16* __restrict__ h_chunk_in,
                        __nv_bfloat16* __restrict__ attn_out, head_map qk_map, float scale,
@@ -357,13 +376,15 @@ __launch_bounds__(THREADS, 4) __global__
     if constexpr (MULTI_JOB) {
         const int chunk_stride = static_cast<int>(gridDim.x);
         for (int chunk = static_cast<int>(blockIdx.x); chunk < chunks; chunk += chunk_stride) {
-            output_job(q_in, k_in, v_new_in, g_cumsum_in, h_chunk_in, attn_out, qk_map, scale,
-                       chunk, h_v, smem);
+            output_job(q_in, q_inv_norm, k_in, k_inv_norm, v_new_in, g_cumsum_in, h_chunk_in,
+                       attn_out, qk_map, scale, chunk, h_v, static_cast<std::int64_t>(chunks) * BT,
+                       smem);
             if (chunk + chunk_stride < chunks) { __syncthreads(); }
         }
     } else {
-        output_job(q_in, k_in, v_new_in, g_cumsum_in, h_chunk_in, attn_out, qk_map, scale,
-                   static_cast<int>(blockIdx.x), h_v, smem);
+        output_job(q_in, q_inv_norm, k_in, k_inv_norm, v_new_in, g_cumsum_in, h_chunk_in,
+                   attn_out, qk_map, scale, static_cast<int>(blockIdx.x), h_v,
+                   static_cast<std::int64_t>(chunks) * BT, smem);
     }
 }
 

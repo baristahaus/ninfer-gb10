@@ -4,6 +4,7 @@
 #include "ops/linear_attention/gated_delta_net/chunked/common.cuh"
 
 #include <cmath>
+#include <type_traits>
 
 // Stage 2 (fused): build T_inv in smem, immediately consume it to produce
 // W and U. T_inv never crosses HBM or occupies workspace.
@@ -70,8 +71,9 @@ struct kernel_dims {
     static constexpr int g_floats    = BT;
     static constexpr int beta_floats = BT;
     static constexpr int bg_floats   = BT;
-    static constexpr int SMEM_FLOATS =
-        T_inv_floats + stage_floats + output_stage_floats + g_floats + beta_floats + bg_floats;
+    static constexpr int kinv_floats = BT;
+    static constexpr int SMEM_FLOATS = T_inv_floats + stage_floats + output_stage_floats +
+                                       g_floats + beta_floats + bg_floats + kinv_floats;
 };
 
 template <int STRIDE>
@@ -125,15 +127,17 @@ __device__ __forceinline__ void mma16_raw_x_swiz(float D[8], int lane,
 #pragma unroll
     for (int kt = 0; kt < 2; ++kt) {
         const int k_off = kt * MMA_K;
-        const float a0  = A_buf[lane_g * SCR_STRIDE + (k_off + lane_t)];
-        const float a1  = A_buf[(lane_g + 8) * SCR_STRIDE + (k_off + lane_t)];
-        const float a2  = A_buf[lane_g * SCR_STRIDE + (k_off + lane_t + 4)];
-        const float a3  = A_buf[(lane_g + 8) * SCR_STRIDE + (k_off + lane_t + 4)];
+        const float a0  = round_to_tf32(A_buf[lane_g * SCR_STRIDE + (k_off + lane_t)]);
+        const float a1  = round_to_tf32(A_buf[(lane_g + 8) * SCR_STRIDE + (k_off + lane_t)]);
+        const float a2  = round_to_tf32(A_buf[lane_g * SCR_STRIDE + (k_off + lane_t + 4)]);
+        const float a3  = round_to_tf32(A_buf[(lane_g + 8) * SCR_STRIDE + (k_off + lane_t + 4)]);
 #pragma unroll
         for (int nt = 0; nt < 2; ++nt) {
             const int n_off = nt * MMA_N;
-            const float b0  = M_view.at(M_row_off + k_off + lane_t, M_col_off + n_off + lane_g);
-            const float b1  = M_view.at(M_row_off + k_off + lane_t + 4, M_col_off + n_off + lane_g);
+            const float b0 =
+                round_to_tf32(M_view.at(M_row_off + k_off + lane_t, M_col_off + n_off + lane_g));
+            const float b1 =
+                round_to_tf32(M_view.at(M_row_off + k_off + lane_t + 4, M_col_off + n_off + lane_g));
             mma_tf32(D[nt * 4 + 0], D[nt * 4 + 1], D[nt * 4 + 2], D[nt * 4 + 3], a0, a1, a2, a3, b0,
                      b1);
         }
@@ -149,15 +153,19 @@ __device__ __forceinline__ void mma16_swiz_x_raw(float D[8], int lane, SmemTile<
 #pragma unroll
     for (int kt = 0; kt < 2; ++kt) {
         const int k_off = kt * MMA_K;
-        const float a0  = M_view.at(M_row_off + lane_g, M_col_off + k_off + lane_t);
-        const float a1  = M_view.at(M_row_off + lane_g + 8, M_col_off + k_off + lane_t);
-        const float a2  = M_view.at(M_row_off + lane_g, M_col_off + k_off + lane_t + 4);
-        const float a3  = M_view.at(M_row_off + lane_g + 8, M_col_off + k_off + lane_t + 4);
+        const float a0 = round_to_tf32(M_view.at(M_row_off + lane_g, M_col_off + k_off + lane_t));
+        const float a1 =
+            round_to_tf32(M_view.at(M_row_off + lane_g + 8, M_col_off + k_off + lane_t));
+        const float a2 =
+            round_to_tf32(M_view.at(M_row_off + lane_g, M_col_off + k_off + lane_t + 4));
+        const float a3 =
+            round_to_tf32(M_view.at(M_row_off + lane_g + 8, M_col_off + k_off + lane_t + 4));
 #pragma unroll
         for (int nt = 0; nt < 2; ++nt) {
             const int n_off = nt * MMA_N;
-            const float b0  = B_buf[(k_off + lane_t) * SCR_STRIDE + (n_off + lane_g)];
-            const float b1  = B_buf[(k_off + lane_t + 4) * SCR_STRIDE + (n_off + lane_g)];
+            const float b0 = round_to_tf32(B_buf[(k_off + lane_t) * SCR_STRIDE + (n_off + lane_g)]);
+            const float b1 =
+                round_to_tf32(B_buf[(k_off + lane_t + 4) * SCR_STRIDE + (n_off + lane_g)]);
             mma_tf32(D[nt * 4 + 0], D[nt * 4 + 1], D[nt * 4 + 2], D[nt * 4 + 3], a0, a1, a2, a3, b0,
                      b1);
         }
@@ -247,7 +255,8 @@ load_scaled_wu_panel(SmemTile<WU_PANEL_COLS> panel, const __nv_bfloat16* __restr
         const float2 lo          = bf16x2_to_float2(packed.pair[0]);
         const float2 hi          = bf16x2_to_float2(packed.pair[1]);
         const float s            = scale[row];
-        panel.vec4_at(row, col4) = make_float4(lo.x * s, lo.y * s, hi.x * s, hi.y * s);
+        panel.vec4_at(row, col4) = make_float4(round_to_tf32(lo.x * s), round_to_tf32(lo.y * s),
+                                               round_to_tf32(hi.x * s), round_to_tf32(hi.y * s));
     }
 }
 
@@ -265,16 +274,25 @@ load_scaled_wu_panel_from_smem(SmemTile<WU_PANEL_COLS> panel, Bf16SmemTile<WU_PA
         const float2 lo          = bf16x2_to_float2(packed.pair[0]);
         const float2 hi          = bf16x2_to_float2(packed.pair[1]);
         const float s            = scale[row];
-        panel.vec4_at(row, col4) = make_float4(lo.x * s, lo.y * s, hi.x * s, hi.y * s);
+        panel.vec4_at(row, col4) = make_float4(round_to_tf32(lo.x * s), round_to_tf32(lo.y * s),
+                                               round_to_tf32(hi.x * s), round_to_tf32(hi.y * s));
     }
 }
 
-template <bool InterleaveOutput, int WU_PANEL_COLS, int BLOCK_WARPS>
+// Out is the 16-bit storage type: BF16 for W (consumed as exact TF32 bit patterns), FP16 for U.
+template <bool InterleaveOutput, int WU_PANEL_COLS, int BLOCK_WARPS, class Out>
 __device__ __forceinline__ void
 compute_store_wu_panel(SmemTile<BT> T_view, SmemTile<WU_PANEL_COLS> panel,
-                       __nv_bfloat16* __restrict__ output_smem,
-                       __nv_bfloat16* __restrict__ output_row0, std::int64_t output_row_stride,
-                       int panel_col, int warp, int lane) {
+                       Out* __restrict__ output_smem, Out* __restrict__ output_row0,
+                       std::int64_t output_row_stride, int panel_col, int warp, int lane) {
+    static_assert(sizeof(Out) == 2);
+    const auto pack = [](float low, float high) {
+        if constexpr (std::is_same_v<Out, __half>) {
+            return float2_to_f16x2_clamped(low, high);
+        } else {
+            return __floats2bfloat162_rn(low, high);
+        }
+    };
     static_assert(BLOCK_WARPS == 4 || BLOCK_WARPS == 8);
     constexpr int WARPS_PER_ROW   = BLOCK_WARPS / N_SUB;
     constexpr int WARP_PANEL_COLS = WU_PANEL_COLS / WARPS_PER_ROW;
@@ -294,10 +312,10 @@ compute_store_wu_panel(SmemTile<BT> T_view, SmemTile<WU_PANEL_COLS> panel,
         const int k_off  = k_tile * MMA_K;
         const int col_t0 = k_off + lane_t;
         const int col_t1 = col_t0 + 4;
-        const float a0   = T_view.at(row_g0, col_t0);
-        const float a1   = T_view.at(row_g1, col_t0);
-        const float a2   = T_view.at(row_g0, col_t1);
-        const float a3   = T_view.at(row_g1, col_t1);
+        const float a0   = round_to_tf32(T_view.at(row_g0, col_t0));
+        const float a1   = round_to_tf32(T_view.at(row_g1, col_t0));
+        const float a2   = round_to_tf32(T_view.at(row_g0, col_t1));
+        const float a3   = round_to_tf32(T_view.at(row_g1, col_t1));
 
         const int row_t0 = k_off + lane_t;
         const int row_t1 = row_t0 + 4;
@@ -310,16 +328,16 @@ compute_store_wu_panel(SmemTile<BT> T_view, SmemTile<WU_PANEL_COLS> panel,
         }
     }
 
-    __nv_bfloat16* const warp_output = output_smem + warp * MMA_M * WARP_PANEL_COLS;
+    Out* const warp_output = output_smem + warp * MMA_M * WARP_PANEL_COLS;
 #pragma unroll
     for (int n = 0; n < WU_N_TILES; ++n) {
         const int col = n * MMA_N + col_pair;
         store_vec(&warp_output[lane_g * WARP_PANEL_COLS +
                                wu_output_swizzled_col<WARP_PANEL_COLS>(lane_g, col)],
-                  __floats2bfloat162_rn(D[n][0], D[n][1]));
+                  pack(D[n][0], D[n][1]));
         store_vec(&warp_output[(lane_g + 8) * WARP_PANEL_COLS +
                                wu_output_swizzled_col<WARP_PANEL_COLS>(lane_g + 8, col)],
-                  __floats2bfloat162_rn(D[n][2], D[n][3]));
+                  pack(D[n][2], D[n][3]));
     }
     __syncwarp();
 
@@ -352,10 +370,10 @@ compute_store_wu_panel(SmemTile<BT> T_view, SmemTile<WU_PANEL_COLS> panel,
 
 template <int K_PANEL_COLS, int WU_PANEL_COLS, int BLOCK_WARPS>
 __global__ void
-prepare_wy_wu_kernel(const __nv_bfloat16* __restrict__ k_in, const __nv_bfloat16* __restrict__ v_in,
-                     const float* __restrict__ g_in, const float* __restrict__ beta_in,
-                     __nv_bfloat16* __restrict__ W, __nv_bfloat16* __restrict__ U,
-                     float* __restrict__ g_cumsum_out, head_map qk_map) {
+prepare_wy_wu_kernel(const __nv_bfloat16* __restrict__ k_in, const float* __restrict__ k_inv_norm,
+                     const __nv_bfloat16* __restrict__ v_in, const float* __restrict__ g_in,
+                     const float* __restrict__ beta_in, __nv_bfloat16* __restrict__ W,
+                     __half* __restrict__ U, float* __restrict__ g_cumsum_out, head_map qk_map) {
     static_assert(BLOCK_WARPS == 4 || BLOCK_WARPS == 8);
     static_assert(BLOCK_WARPS % N_SUB == 0);
     static_assert(WU_PANEL_COLS % (BLOCK_WARPS / N_SUB) == 0);
@@ -372,6 +390,7 @@ prepare_wy_wu_kernel(const __nv_bfloat16* __restrict__ k_in, const __nv_bfloat16
     float* const g_smem     = stage_smem + dims::stage_floats + dims::output_stage_floats;
     float* const beta_smem  = g_smem + BT;
     float* const bg_smem    = beta_smem + BT;
+    float* const kinv_smem  = bg_smem + BT;
 
     // stage_smem aliases BF16 K (WY-B), FP32 Schur scratch (WY-D), and one
     // pre-scaled FP32 V/K panel (WU). All handovers are block-barrier guarded.
@@ -412,6 +431,9 @@ prepare_wy_wu_kernel(const __nv_bfloat16* __restrict__ k_in, const __nv_bfloat16
     if (tid < BT) {
         const int64_t boff = (cs + tid) * H_v + h_v;
         beta_smem[tid]     = beta_in[boff];
+        kinv_smem[tid]     = inverse_norm_at(k_inv_norm, cs + tid,
+                                             static_cast<std::int64_t>(gridDim.x) * BT,
+                                             qk_map.qk_head(h_v));
     }
 
     if (warp == 0) {
@@ -548,8 +570,9 @@ prepare_wy_wu_kernel(const __nv_bfloat16* __restrict__ k_in, const __nv_bfloat16
         const float beta_r1  = beta_smem[r_g1];
         const float g_r0     = g_smem[r_g0];
         const float g_r1     = g_smem[r_g1];
-        const float nbeta_r0 = -beta_r0;
-        const float nbeta_r1 = -beta_r1;
+        // Raw K enters the BF16 KKT; both rows' normalization factors join the FP32 scaling.
+        const float nbeta_r0 = -beta_r0 * kinv_smem[r_g0];
+        const float nbeta_r1 = -beta_r1 * kinv_smem[r_g1];
 
 #pragma unroll
         for (int j_sub = 0; j_sub < N_SUB; ++j_sub) {
@@ -565,6 +588,10 @@ prepare_wy_wu_kernel(const __nv_bfloat16* __restrict__ k_in, const __nv_bfloat16
             const float g_c1 = g_smem[c1];
             const float g_c2 = g_smem[c2];
             const float g_c3 = g_smem[c3];
+            const float n_c0 = kinv_smem[c0];
+            const float n_c1 = kinv_smem[c1];
+            const float n_c2 = kinv_smem[c2];
+            const float n_c3 = kinv_smem[c3];
 
             const bool is_diag = (j_sub == warp);
 
@@ -578,21 +605,21 @@ prepare_wy_wu_kernel(const __nv_bfloat16* __restrict__ k_in, const __nv_bfloat16
             // bad product with 0.0f instead, so no NaN escapes (same pattern as
             // stage_chunk_output.cu Phase C).
             A_reg[j_sub][0] =
-                (!is_diag || r_g0 > c0) ? nbeta_r0 * A_reg[j_sub][0] * expf(g_r0 - g_c0) : 0.0f;
+                (!is_diag || r_g0 > c0) ? nbeta_r0 * A_reg[j_sub][0] * n_c0 * expf(g_r0 - g_c0) : 0.0f;
             A_reg[j_sub][1] =
-                (!is_diag || r_g0 > c1) ? nbeta_r0 * A_reg[j_sub][1] * expf(g_r0 - g_c1) : 0.0f;
+                (!is_diag || r_g0 > c1) ? nbeta_r0 * A_reg[j_sub][1] * n_c1 * expf(g_r0 - g_c1) : 0.0f;
             A_reg[j_sub][2] =
-                (!is_diag || r_g1 > c0) ? nbeta_r1 * A_reg[j_sub][2] * expf(g_r1 - g_c0) : 0.0f;
+                (!is_diag || r_g1 > c0) ? nbeta_r1 * A_reg[j_sub][2] * n_c0 * expf(g_r1 - g_c0) : 0.0f;
             A_reg[j_sub][3] =
-                (!is_diag || r_g1 > c1) ? nbeta_r1 * A_reg[j_sub][3] * expf(g_r1 - g_c1) : 0.0f;
+                (!is_diag || r_g1 > c1) ? nbeta_r1 * A_reg[j_sub][3] * n_c1 * expf(g_r1 - g_c1) : 0.0f;
             A_reg[j_sub][4] =
-                (!is_diag || r_g0 > c2) ? nbeta_r0 * A_reg[j_sub][4] * expf(g_r0 - g_c2) : 0.0f;
+                (!is_diag || r_g0 > c2) ? nbeta_r0 * A_reg[j_sub][4] * n_c2 * expf(g_r0 - g_c2) : 0.0f;
             A_reg[j_sub][5] =
-                (!is_diag || r_g0 > c3) ? nbeta_r0 * A_reg[j_sub][5] * expf(g_r0 - g_c3) : 0.0f;
+                (!is_diag || r_g0 > c3) ? nbeta_r0 * A_reg[j_sub][5] * n_c3 * expf(g_r0 - g_c3) : 0.0f;
             A_reg[j_sub][6] =
-                (!is_diag || r_g1 > c2) ? nbeta_r1 * A_reg[j_sub][6] * expf(g_r1 - g_c2) : 0.0f;
+                (!is_diag || r_g1 > c2) ? nbeta_r1 * A_reg[j_sub][6] * n_c2 * expf(g_r1 - g_c2) : 0.0f;
             A_reg[j_sub][7] =
-                (!is_diag || r_g1 > c3) ? nbeta_r1 * A_reg[j_sub][7] * expf(g_r1 - g_c3) : 0.0f;
+                (!is_diag || r_g1 > c3) ? nbeta_r1 * A_reg[j_sub][7] * n_c3 * expf(g_r1 - g_c3) : 0.0f;
         }
     }
 
@@ -674,11 +701,12 @@ prepare_wy_wu_kernel(const __nv_bfloat16* __restrict__ k_in, const __nv_bfloat16
     // === Phase WY-E: +I on diagonal of T_inv (no HBM write; sync fused into WU-A) ===
     if (tid < BT) { M_view.at(tid, tid) += 1.0f; }
 
-    // W/U preserve the former precision path. BF16 inputs are converted to
-    // FP32, multiplied by their FP32 row scale, stored as FP32, and consumed by
-    // TF32 MMA with FP32 accumulation. In particular, T_inv and scaled V/K are
-    // never down-cast to BF16.
-    if (tid < BT) { bg_smem[tid] = beta_smem[tid] * expf(g_smem[tid]); }
+    // BF16 inputs are converted to FP32, multiplied by their FP32 row scale
+    // (beta, and beta * exp(g) * k_inv_norm for W), stored as FP32, and consumed
+    // by TF32 MMA with FP32 accumulation; T_inv and scaled V/K are never
+    // down-cast. W is stored BF16 (exact TF32 bit patterns for state passing);
+    // U is stored FP16, whose precision its later cancellation in v_new needs.
+    if (tid < BT) { bg_smem[tid] = beta_smem[tid] * expf(g_smem[tid]) * kinv_smem[tid]; }
 
     const int64_t out_base       = cs * H_v * kStateDim + static_cast<int64_t>(h_v) * kStateDim;
     const int64_t out_row_stride = H_v * kStateDim;
@@ -704,7 +732,8 @@ prepare_wy_wu_kernel(const __nv_bfloat16* __restrict__ k_in, const __nv_bfloat16
         }
         __syncthreads();
         compute_store_wu_panel<false, WU_PANEL_COLS, BLOCK_WARPS>(
-            T_view, WU_view, output_smem, U + out_base, out_row_stride, panel_col, warp, lane);
+            T_view, WU_view, reinterpret_cast<__half*>(output_smem), U + out_base,
+            out_row_stride, panel_col, warp, lane);
     }
 
     // === Phase WU-C/D: W = T_inv @ (beta * exp(g) * K), same FP32 panel path ===

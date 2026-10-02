@@ -21,8 +21,8 @@ cudaError_t launch_fixed(const chunk_output_config& cfg, dim3 grid, head_map qk_
     const dim3 block(kernel::THREADS, 1, 1);
 
     kernel::output_kernel<MULTI_JOB><<<grid, block, smem_bytes, cfg.stream>>>(
-        cfg.q, cfg.k, cfg.v_new, cfg.g_cumsum, cfg.h_chunk, cfg.attn_out, qk_map, cfg.scale,
-        chunks);
+        cfg.q, cfg.q_inv_norm, cfg.k, cfg.k_inv_norm, cfg.v_new, cfg.g_cumsum, cfg.h_chunk,
+        cfg.attn_out, qk_map, cfg.scale, chunks);
     return cudaGetLastError();
 }
 

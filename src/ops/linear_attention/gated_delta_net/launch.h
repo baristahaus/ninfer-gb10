@@ -54,11 +54,14 @@ void launch_replay_fold(const GdnReplayRecords& records, LinearAttentionStateAll
                         const GdnReplayFoldKernelRows& rows, std::int32_t active_rows,
                         cudaStream_t stream);
 
-std::size_t chunked_workspace_bytes(std::int32_t value_heads, std::int32_t tokens);
+std::size_t chunked_workspace_bytes(std::int32_t qk_heads, std::int32_t value_heads,
+                                    std::int32_t tokens, bool normalize_qk);
 
+// Chunked route over T % 64 == 0 tokens. With normalize_qk, q/k stay raw BF16 operands and their
+// per-row L2 normalization factors are applied in FP32 inside every stage.
 void launch_chunked(const Tensor& q, const Tensor& k, const Tensor& v, const Tensor& g,
-                    const Tensor& beta, float scale, const Tensor& ssm_state_in,
-                    Tensor& ssm_state_out, Tensor& out, void* workspace,
-                    std::size_t workspace_bytes, cudaStream_t stream);
+                    const Tensor& beta, float scale, bool normalize_qk,
+                    const Tensor& ssm_state_in, Tensor& ssm_state_out, Tensor& out,
+                    void* workspace, std::size_t workspace_bytes, cudaStream_t stream);
 
 } // namespace ninfer::ops::detail::gated_delta_net

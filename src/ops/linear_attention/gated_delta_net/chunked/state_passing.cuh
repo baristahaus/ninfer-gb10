@@ -65,8 +65,9 @@ struct smem_layout {
     // chunk start (Phase A) and then read from any sit's buffer in the unified
     // matmul1 / coop_write paths without per-sit re-scatter+sync.
     static constexpr int N_SNAP_BUF = N_SNAP_ITERS;
+    // Trailing 2*BT: cumulative g, then the k normalization factors of the chunk.
     static constexpr int SMEM_FLOATS =
-        W_STORAGE_FLT + UVD_FLT + K_STORAGE_FLT + SNAP_FLT * N_SNAP_BUF + BT;
+        W_STORAGE_FLT + UVD_FLT + K_STORAGE_FLT + SNAP_FLT * N_SNAP_BUF + 2 * BT;
 };
 
 // Snapshot stores the FP32 state operand as [value, state] with a stride-32
@@ -170,10 +171,11 @@ __device__ __forceinline__ void unpack_bf16x2_to_fp32_bits(unsigned packed, unsi
 template <int NStrip>
 __launch_bounds__(kernel_dims<NStrip>::THREADS, kernel_dims<NStrip>::MIN_BLOCKS) __global__
     void state_passing_kernel(const __nv_bfloat16* __restrict__ W_in,
-                              const __nv_bfloat16* __restrict__ U_in,
+                              const __half* __restrict__ U_in,
                               const __nv_bfloat16* __restrict__ k_in,
+                              const float* __restrict__ k_inv_norm,
                               const float* __restrict__ g_cumsum, const float* state_in,
-                              __nv_bfloat16* __restrict__ v_new,
+                              __half* __restrict__ v_new,
                               __nv_bfloat16* __restrict__ h_chunk, float* state_out,
                               head_map qk_map, int chunks) {
     using D                         = kernel_dims<NStrip>;
@@ -217,6 +219,7 @@ __launch_bounds__(kernel_dims<NStrip>::THREADS, kernel_dims<NStrip>::MIN_BLOCKS)
     auto* const k_smem     = reinterpret_cast<__nv_bfloat16*>(uvd_smem + UVD_FLT);
     float* const snap_smem = uvd_smem + UVD_FLT + K_STORAGE_FLT; // SNAP_FLT * N_SNAP_BUF
     float* const g_smem    = snap_smem + SNAP_FLT * N_SNAP_BUF;  // BT
+    float* const kinv_smem = g_smem + BT;                        // BT
 
     Bf16WView W_view{W_smem};
     SmemTile<N_STRIP_PER_BLOCK> vd_view{uvd_smem};
@@ -292,15 +295,29 @@ __launch_bounds__(kernel_dims<NStrip>::THREADS, kernel_dims<NStrip>::MIN_BLOCKS)
     const int64_t g_block_base  = h_v;
     const int64_t g_thread_base = g_block_base + (int64_t)tid * H_v;
 
-    // W/K stay native BF16 in shared memory. W is committed first for MM1;
-    // K is the later group and remains in flight until MM2. U is expanded
-    // synchronously while both async groups make progress.
+    // One chunk's k normalization factors are 64 contiguous floats of the head-major table. They
+    // travel in W's async group, one chunk ahead; without normalization they are a constant 1.
+    const int64_t kinv_head_base =
+        static_cast<int64_t>(qk_map.qk_head(h_v)) * chunks * BT;
+    if (k_inv_norm == nullptr && tid < BT) { kinv_smem[tid] = 1.0f; }
+    const auto issue_kinv = [&](int chunk_index) {
+        constexpr int kVecs = BT / 4;
+        if (k_inv_norm != nullptr && tid < kVecs) {
+            cp_async<16>(&kinv_smem[tid * 4], k_inv_norm + kinv_head_base +
+                                                  static_cast<int64_t>(chunk_index) * BT + tid * 4);
+        }
+    };
+
+    // W/K stay native BF16 in shared memory. W (with the k factors) is committed
+    // first for MM1; K is the later group and remains in flight until MM2. U is
+    // expanded synchronously while both async groups make progress.
     {
         issue_load_w_bf16<THREADS_K>(W_view, W_in + W_block_base, W_stride, tid);
+        issue_kinv(0);
         cp_commit();
         issue_load_k_bf16<THREADS_K>(k_view, k_in + k_block_base, k_stride, tid);
         cp_commit();
-        issue_load_bf16_to_float_vec4<BT, N_STRIP_PER_BLOCK, THREADS_K>(
+        issue_load_f16_to_float_vec4<BT, N_STRIP_PER_BLOCK, THREADS_K>(
             U_view, U_in + W_block_base + d_off, W_stride, tid);
     }
 
@@ -330,6 +347,9 @@ __launch_bounds__(kernel_dims<NStrip>::THREADS, kernel_dims<NStrip>::MIN_BLOCKS)
                 const int k_g1    = k_g0 + 8;
                 const int d0      = warp_d_local + 2 * lane_t;
                 const int d1      = d0 + 1;
+                // MM1 and MM2 keep their state-side operands as raw FP32 bits (TF32
+                // truncation): rounding them measurably changes neither the outputs nor
+                // the state, and this is the sequential critical path.
                 snap.at(d0, k_g0) = h_frag[m][0];
                 snap.at(d1, k_g0) = h_frag[m][1];
                 snap.at(d0, k_g1) = h_frag[m][2];
@@ -337,8 +357,8 @@ __launch_bounds__(kernel_dims<NStrip>::THREADS, kernel_dims<NStrip>::MIN_BLOCKS)
             }
         }
 
-        cp_wait<1>();    // drain W; leave K in flight
-        __syncthreads(); // gates W/U/g_smem STS and scatter visibility
+        cp_wait<1>();    // drain W and the k factors; leave K in flight
+        __syncthreads(); // gates W/U/g/kinv smem and scatter visibility
 
         // === Phase B: per-sit coop_write + matmul1 (no per-sit scatter sync) ===
         //
@@ -349,6 +369,15 @@ __launch_bounds__(kernel_dims<NStrip>::THREADS, kernel_dims<NStrip>::MIN_BLOCKS)
         // crucial latency-hiding pattern in the per-sit baseline -- moving
         // all coop_writes ahead of all mmas costs ~15 us on L=4096.
         float vnew_frag[M_TILES_MM1_PW][4] = {};
+
+        // Phase D's per-row k normalization factors, read here so MM1 hides their latency.
+        float kinv_rows[M_TILES_MM1_PW][2];
+#pragma unroll
+        for (int m_mm1 = 0; m_mm1 < M_TILES_MM1_PW; ++m_mm1) {
+            const int row_g0    = s_idx * BT_PER_WARP + m_mm1 * MMA_M + lane_g;
+            kinv_rows[m_mm1][0] = kinv_smem[row_g0];
+            kinv_rows[m_mm1][1] = kinv_smem[row_g0 + 8];
+        }
 
 #pragma unroll
         for (int sit = 0; sit < N_SNAP_ITERS; ++sit) {
@@ -408,7 +437,7 @@ __launch_bounds__(kernel_dims<NStrip>::THREADS, kernel_dims<NStrip>::MIN_BLOCKS)
             }
         }
 
-        // === Phase C: subtract converted FP32 U ===
+        // === Phase C: subtract converted FP32 U (stored FP16) ===
 #pragma unroll
         for (int m_mm1 = 0; m_mm1 < M_TILES_MM1_PW; ++m_mm1) {
             const int row_g0    = s_idx * BT_PER_WARP + m_mm1 * MMA_M + lane_g;
@@ -422,7 +451,7 @@ __launch_bounds__(kernel_dims<NStrip>::THREADS, kernel_dims<NStrip>::MIN_BLOCKS)
             vnew_frag[m_mm1][3] = u_bot.y - vnew_frag[m_mm1][3];
         }
 
-        // === Phase D: STG vnew (UNDECAYED), STS v_decay -> vd_view, scale h_frag ===
+        // === Phase D: STG vnew (UNDECAYED, FP16), STS v_decay -> vd_view, scale h_frag ===
         const float g_C = g_smem[BT - 1];
         float gamma_C   = 0.0f;
         if (lane == 0) { gamma_C = exp2_approx(g_C * kLog2E); }
@@ -434,11 +463,13 @@ __launch_bounds__(kernel_dims<NStrip>::THREADS, kernel_dims<NStrip>::MIN_BLOCKS)
             const int row_g1 = row_g0 + 8;
             const int col_d0 = warp_d_global + 2 * lane_t;
 
+            // Raw K enters MM2, so each token's k normalization factor scales its
+            // decayed v_new row (k_t (x) v_t is linear in both).
             float dec_top = 0.0f;
             float dec_bot = 0.0f;
             if (lane_t == 0) {
-                dec_top = exp2_approx((g_C - g_smem[row_g0]) * kLog2E);
-                dec_bot = exp2_approx((g_C - g_smem[row_g1]) * kLog2E);
+                dec_top = exp2_approx((g_C - g_smem[row_g0]) * kLog2E) * kinv_rows[m_mm1][0];
+                dec_bot = exp2_approx((g_C - g_smem[row_g1]) * kLog2E) * kinv_rows[m_mm1][1];
             }
             const int decay_src_lane = lane & ~3;
             dec_top                  = __shfl_sync(0xffffffffU, dec_top, decay_src_lane);
@@ -449,8 +480,8 @@ __launch_bounds__(kernel_dims<NStrip>::THREADS, kernel_dims<NStrip>::MIN_BLOCKS)
             const float v2 = vnew_frag[m_mm1][2];
             const float v3 = vnew_frag[m_mm1][3];
 
-            const __nv_bfloat162 out0 = __floats2bfloat162_rn(v0, v1);
-            const __nv_bfloat162 out1 = __floats2bfloat162_rn(v2, v3);
+            const __half2 out0 = float2_to_f16x2_clamped(v0, v1);
+            const __half2 out1 = float2_to_f16x2_clamped(v2, v3);
             store_vec(&v_new[vn_base + (int64_t)row_g0 * vn_stride + col_d0], out0);
             store_vec(&v_new[vn_base + (int64_t)row_g1 * vn_stride + col_d0], out1);
 
@@ -504,10 +535,11 @@ __launch_bounds__(kernel_dims<NStrip>::THREADS, kernel_dims<NStrip>::MIN_BLOCKS)
         // prologue. Its Phase A drains W only; Phase E drains K.
         if (chunk + 1 < chunks) {
             issue_load_w_bf16<THREADS_K>(W_view, W_in + W_base_next, W_stride, tid);
+            issue_kinv(chunk + 1);
             cp_commit();
             issue_load_k_bf16<THREADS_K>(k_view, k_in + k_base_next, k_stride, tid);
             cp_commit();
-            issue_load_bf16_to_float_vec4<BT, N_STRIP_PER_BLOCK, THREADS_K>(
+            issue_load_f16_to_float_vec4<BT, N_STRIP_PER_BLOCK, THREADS_K>(
                 U_view, U_in + W_base_next + d_off, W_stride, tid);
         }
 

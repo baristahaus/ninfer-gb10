@@ -258,6 +258,80 @@ int distinct_state_case(const Case& test_case, std::uint32_t seed) {
     return failures;
 }
 
+// Chunked-route accuracy in the regime real text produces: strongly correlated keys and slow
+// decay, where the delta rule's corrections cancel. BF16 storage of U/v_new, BF16-normalized q/k,
+// and truncated TF32 operands once gave 1.9e-2 relative L2 error here; the qualified route stays
+// near the BF16 output floor.
+int correlated_chunked_accuracy_case(const char* name, int qk_heads, int value_heads, int tokens,
+                                     std::uint32_t seed) {
+    constexpr float kCorrelation = 0.95f;
+    constexpr double kMaxRelativeL2 = 6.0e-3;
+    gdn_ref::Inputs in;
+    in.head_dim    = kStateDim;
+    in.qk_heads    = qk_heads;
+    in.value_heads = value_heads;
+    in.tokens      = tokens;
+    std::mt19937 generator(seed);
+    const std::size_t qk_size = static_cast<std::size_t>(kStateDim) * qk_heads * tokens;
+    std::vector<float> shared_q(static_cast<std::size_t>(kStateDim) * qk_heads);
+    std::vector<float> shared_k(shared_q.size());
+    fill_uniform(shared_q, generator, -1.0f, 1.0f);
+    fill_uniform(shared_k, generator, -1.0f, 1.0f);
+    in.q.resize(qk_size);
+    in.k.resize(qk_size);
+    fill_uniform(in.q, generator, -1.0f, 1.0f);
+    fill_uniform(in.k, generator, -1.0f, 1.0f);
+    for (std::size_t i = 0; i < qk_size; ++i) {
+        const std::size_t j = i % shared_q.size();
+        in.q[i]             = kCorrelation * shared_q[j] + (1.0f - kCorrelation) * in.q[i];
+        in.k[i]             = kCorrelation * shared_k[j] + (1.0f - kCorrelation) * in.k[i];
+    }
+    in.v.resize(static_cast<std::size_t>(kStateDim) * value_heads * tokens);
+    in.g.resize(static_cast<std::size_t>(value_heads) * tokens);
+    in.beta.resize(in.g.size());
+    in.state.assign(static_cast<std::size_t>(kStateDim) * kStateDim * value_heads, 0.0f);
+    fill_uniform(in.v, generator, -0.5f, 0.5f);
+    fill_uniform(in.g, generator, -0.002f, -0.0005f);
+    fill_uniform(in.beta, generator, 0.05f, 0.95f);
+    round_to_bf16(in.q);
+    round_to_bf16(in.k);
+    round_to_bf16(in.v);
+
+    const float scale         = 1.0f / std::sqrt(static_cast<float>(kStateDim));
+    const gdn_ref::Result ref = gdn_ref::evaluate(in, static_cast<double>(scale), true);
+    DeviceInputs device(in);
+    DeviceBuffer state(in.state.size() * sizeof(float));
+    DeviceBuffer out(in.v.size() * sizeof(std::uint16_t));
+    state.copy_from_host(in.state.data(), state.bytes);
+    Tensor q(device.q.p, DType::BF16, {kStateDim, qk_heads, tokens});
+    Tensor k(device.k.p, DType::BF16, {kStateDim, qk_heads, tokens});
+    Tensor v(device.v.p, DType::BF16, {kStateDim, value_heads, tokens});
+    Tensor g(device.g.p, DType::FP32, {value_heads, tokens});
+    Tensor beta(device.beta.p, DType::FP32, {value_heads, tokens});
+    Tensor state_tensor(state.p, DType::FP32, {kStateDim, kStateDim, value_heads});
+    Tensor out_tensor(out.p, DType::BF16, {kStateDim, value_heads, tokens});
+    WorkspaceArena workspace(std::max<std::size_t>(
+        ops::gated_delta_net_workspace_capacity_bytes(qk_heads, value_heads, true, tokens, tokens),
+        256));
+    ops::gated_delta_net(q, k, v, g, beta, scale, true, workspace, state_tensor, out_tensor,
+                         nullptr);
+    cuda_synchronize();
+
+    const std::vector<double> got = from_device_bf16(out.p, in.v.size());
+    double error = 0.0, norm = 0.0;
+    for (std::size_t i = 0; i < got.size(); ++i) {
+        error += (got[i] - ref.out[i]) * (got[i] - ref.out[i]);
+        norm += ref.out[i] * ref.out[i];
+    }
+    const double relative = std::sqrt(error / norm);
+    if (!(relative <= kMaxRelativeL2)) {
+        std::cerr << name << " correlated chunked accuracy: relative L2 " << relative << " > "
+                  << kMaxRelativeL2 << '\n';
+        return 1;
+    }
+    return 0;
+}
+
 // Prefill chunking must not change results. A single call and the same sequence split into
 // 64-aligned calls (the final call carrying the tail) evaluate every token with the same route,
 // so outputs and final state are bit-identical. Reproduces a Flash-Next prompt whose one-pass
@@ -531,6 +605,8 @@ int main() {
                                       {128, 256, 313}, 12313u);
     failures += split_invariance_case({"35b chunk-tail fused-qk-norm", 16, 32, 200, true},
                                       {64, 200}, 12200u);
+    failures += correlated_chunked_accuracy_case("48-value-head", 16, 48, 384, 12384u);
+    failures += correlated_chunked_accuracy_case("32-value-head", 16, 32, 384, 12484u);
 
     // The production decode path updates selected state-pool slots in place at width one.
     failures += batch_update_case({"27b selected-slot fused-qk-norm", 16, 48, 1, true}, {7}, {7}, 8,

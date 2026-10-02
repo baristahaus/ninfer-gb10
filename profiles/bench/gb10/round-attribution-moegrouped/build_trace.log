@@ -1,0 +1,7 @@
+-- Configuring done (0.0s)
+-- Generating done (0.0s)
+-- Build files have been written to: /home/apollo11/ninfer-gb10/build-trace
+[1/4] Building CUDA object src/ops/CMakeFiles/ninfer_ops.dir/sparse_moe/flash_next/flash_next_moe.cu.o
+[2/4] Linking CXX static library CMakeFiles/ninfer_ops.dir/cmake_device_link.o
+[3/4] Linking CXX static library src/ops/libninfer_ops.a
+[4/4] Linking CXX executable apps/ninfer-serve

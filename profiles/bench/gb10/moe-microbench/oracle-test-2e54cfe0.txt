@@ -1,0 +1,19 @@
+Corrected NVFP4 MoE oracle (both W4A4 activation quantizations modeled) on exp/moe-grouped-decode (2e54cfe0), 2026-10-02, twoFour:
+
+ninfer: persistent grids sized for 48 SMs
+Flash-Next NVFP4 MoE T=1: relative L2 0.003553, max |err| 0.8615 of max |ref| 177.5
+Flash-Next NVFP4 MoE T=2: relative L2 0.07385, max |err| 18.05 of max |ref| 177.5
+Flash-Next NVFP4 MoE T=2: reduction criterion failed at index 2567 actual=63.25 reference=81.2972
+Flash-Next NVFP4 MoE T=8: relative L2 0.1216, max |err| 54.31 of max |ref| 255
+Flash-Next NVFP4 MoE T=8: reduction criterion failed at index 5127 actual=-191 reference=-245.308
+Flash-Next NVFP4 MoE T=16: relative L2 0.03635, max |err| 54.31 of max |ref| 1846
+Flash-Next NVFP4 MoE T=16: reduction criterion failed at index 5127 actual=-191 reference=-245.308
+Flash-Next NVFP4 MoE T=17: relative L2 0.05048, max |err| 54.31 of max |ref| 1846
+Flash-Next NVFP4 MoE T=17: reduction criterion failed at index 5127 actual=-191 reference=-245.308
+Flash-Next NVFP4 MoE 8 rows batched vs one by one: relative L2 0, max |diff| 0
+FAIL Flash-Next MoE
+
+Notes: bulk deviation is now explained by the quantizations (T=1 at 0.36%). T>=2 still fails
+the reduction criterion at isolated deterministic elements, identical on both routes
+(per-row and grouped are bitwise equal), so it belongs to the per-row route or a
+remaining T>=2 modeling gap in the oracle. Same element (index 5127) at T=8/16/17.

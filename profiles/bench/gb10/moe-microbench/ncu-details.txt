@@ -1,0 +1,489 @@
+[1821099] ninfer_flash_next_moe_bench@127.0.0.1
+  unnamed>::quantize_decode_routes_kernel(const __nv_bfloat16 *, const int *, const float *, unsigned char *, unsigned char *, int, int) (50, 1, 1)x(256, 1, 1), Context 1, Stream 13, Device 0, CC 12.1
+    Section: GPU Speed Of Light Throughput
+    ----------------------- ----------- ----------------
+    Metric Name             Metric Unit     Metric Value
+    ----------------------- ----------- ----------------
+    SM Frequency                     hz 2,139,517,839.32
+    Elapsed Cycles                cycle           34,304
+    Memory Throughput                 %             1.46
+    Duration                         ns           16,032
+    L1/TEX Cache Throughput           %             2.06
+    L2 Cache Throughput               %             1.46
+    SM Active Cycles              cycle         8,919.58
+    Compute (SM) Throughput           %             1.84
+    ----------------------- ----------- ----------------
+
+    OPT   This kernel grid is too small to fill the available resources on this device, resulting in only 0.2 full      
+          waves across all SMs. Look at Launch Statistics for more details.                                             
+
+    Section: Memory Workload Analysis
+    -------------------------------------- ----------- ------------
+    Metric Name                            Metric Unit Metric Value
+    -------------------------------------- ----------- ------------
+    Local Memory Spilling Requests                                0
+    Local Memory Spilling Request Overhead           %            0
+    Mem Busy                                         %         1.46
+    Max Bandwidth                                    %         1.22
+    L1/TEX Hit Rate                                  %        60.51
+    L2 Persisting Size                            byte    4,718,592
+    L2 Compression Success Rate                      %            0
+    L2 Compression Ratio                                          0
+    L2 Compression Input Sectors                sector            0
+    L2 Hit Rate                                      %        61.35
+    Mem Pipes Busy                                   %         0.60
+    -------------------------------------- ----------- ------------
+
+    Section: Occupancy
+    ------------------------------- ----------- ------------
+    Metric Name                     Metric Unit Metric Value
+    ------------------------------- ----------- ------------
+    Max Active Clusters                 cluster            0
+    Max Cluster Size                      block            8
+    Overall GPU Occupancy                     %            0
+    Cluster Occupancy                         %            0
+    Block Limit Barriers                  block           24
+    Block Limit SM                        block           24
+    Block Limit Registers                 block            5
+    Block Limit Shared Mem                block           16
+    Block Limit Warps                     block            6
+    Theoretical Active Warps per SM        warp           40
+    Theoretical Occupancy                     %        83.33
+    Achieved Occupancy                        %        51.42
+    Achieved Active Warps Per SM           warp        24.68
+    ------------------------------- ----------- ------------
+
+    OPT   Est. Speedup: 38.3%                                                                                           
+          The difference between calculated theoretical (83.3%) and measured achieved occupancy (51.4%) can be the      
+          result of warp scheduling overheads or workload imbalances during the kernel execution. Load imbalances can   
+          occur between warps within a block as well as across blocks of the same kernel. See the CUDA Best Practices   
+          Guide (https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#occupancy) for more details on     
+          optimizing occupancy.                                                                                         
+
+  void detail::nvfp4_w4a4_mma_kernel<detail::Nvfp4Geometry<1280, 2560>, detail::Nvfp4W4a4MmaSchedule<16, 256, 128, 1, 8, 2, 1>, detail::Nvfp4IdentityEpilogue, unnamed>::GroupedSiluQuantizedOutput, unnamed>::GroupedGateRows, 1, unnamed>::DecodeRouteWork>(detail::Nvfp4W4a4MaterializedActivation, const unsigned char *, const unsigned char *, int, float, T3, T4, T5, T7) (400, 1, 1)x(256, 1, 1), Context 1, Stream 13, Device 0, CC 12.1
+    Section: GPU Speed Of Light Throughput
+    ----------------------- ----------- ----------------
+    Metric Name             Metric Unit     Metric Value
+    ----------------------- ----------- ----------------
+    SM Frequency                     hz 2,150,266,356.54
+    Elapsed Cycles                cycle        1,604,902
+    Memory Throughput                 %            11.14
+    Duration                         ns          746,368
+    L1/TEX Cache Throughput           %             7.60
+    L2 Cache Throughput               %            20.02
+    SM Active Cycles              cycle     1,605,535.42
+    Compute (SM) Throughput           %             7.61
+    ----------------------- ----------- ----------------
+
+    OPT   This workload exhibits low compute throughput and memory bandwidth utilization relative to the peak           
+          performance of this device. Achieved compute throughput and/or memory bandwidth below 60.0% of peak           
+          typically indicate latency issues. Look at Scheduler Statistics and Warp State Statistics for potential       
+          reasons.                                                                                                      
+
+    Section: Memory Workload Analysis
+    -------------------------------------- ----------- ------------
+    Metric Name                            Metric Unit Metric Value
+    -------------------------------------- ----------- ------------
+    Local Memory Spilling Requests                                0
+    Local Memory Spilling Request Overhead           %            0
+    Mem Busy                                         %        11.14
+    Max Bandwidth                                    %        10.05
+    L1/TEX Hit Rate                                  %        25.27
+    L2 Persisting Size                            byte    4,718,592
+    L2 Compression Success Rate                      %            0
+    L2 Compression Ratio                                          0
+    L2 Compression Input Sectors                sector            0
+    L2 Hit Rate                                      %         0.66
+    Mem Pipes Busy                                   %         7.61
+    -------------------------------------- ----------- ------------
+
+    Section: Occupancy
+    ------------------------------- ----------- ------------
+    Metric Name                     Metric Unit Metric Value
+    ------------------------------- ----------- ------------
+    Max Active Clusters                 cluster            0
+    Max Cluster Size                      block            8
+    Overall GPU Occupancy                     %            0
+    Cluster Occupancy                         %            0
+    Block Limit Barriers                  block           24
+    Block Limit SM                        block           24
+    Block Limit Registers                 block            2
+    Block Limit Shared Mem                block            2
+    Block Limit Warps                     block            6
+    Theoretical Active Warps per SM        warp           16
+    Theoretical Occupancy                     %        33.33
+    Achieved Occupancy                        %        31.94
+    Achieved Active Warps Per SM           warp        15.33
+    ------------------------------- ----------- ------------
+
+    OPT   Est. Speedup: 66.67%                                                                                          
+          The 4.00 theoretical warps per scheduler this kernel can issue according to its occupancy are below the       
+          hardware maximum of 12. This kernel's theoretical occupancy (33.3%) is limited by the number of required      
+          registers, and the required amount of shared memory.                                                          
+
+  void detail::nvfp4_w4a4_mma_kernel<detail::Nvfp4Geometry<2560, 640>, detail::Nvfp4W4a4MmaSchedule<16, 128, 128, 1, 8, 2, 1>, detail::Nvfp4IdentityEpilogue, unnamed>::GroupedOutput, unnamed>::GroupedDownRows, 0, unnamed>::DecodeRouteWork>(detail::Nvfp4W4a4MaterializedActivation, const unsigned char *, const unsigned char *, int, float, T3, T4, T5, T7) (1600, 1, 1)x(256, 1, 1), Context 1, Stream 13, Device 0, CC 12.1
+    Section: GPU Speed Of Light Throughput
+    ----------------------- ----------- ----------------
+    Metric Name             Metric Unit     Metric Value
+    ----------------------- ----------- ----------------
+    SM Frequency                     hz 2,149,607,540.44
+    Elapsed Cycles                cycle          790,954
+    Memory Throughput                 %            11.73
+    Duration                         ns          367,936
+    L1/TEX Cache Throughput           %             9.84
+    L2 Cache Throughput               %            20.30
+    SM Active Cycles              cycle       771,481.31
+    Compute (SM) Throughput           %             9.56
+    ----------------------- ----------- ----------------
+
+    OPT   This workload exhibits low compute throughput and memory bandwidth utilization relative to the peak           
+          performance of this device. Achieved compute throughput and/or memory bandwidth below 60.0% of peak           
+          typically indicate latency issues. Look at Scheduler Statistics and Warp State Statistics for potential       
+          reasons.                                                                                                      
+
+    Section: Memory Workload Analysis
+    -------------------------------------- ----------- ------------
+    Metric Name                            Metric Unit Metric Value
+    -------------------------------------- ----------- ------------
+    Local Memory Spilling Requests                                0
+    Local Memory Spilling Request Overhead           %            0
+    Mem Busy                                         %        11.73
+    Max Bandwidth                                    %        10.24
+    L1/TEX Hit Rate                                  %        25.74
+    L2 Persisting Size                            byte    4,718,592
+    L2 Compression Success Rate                      %            0
+    L2 Compression Ratio                                          0
+    L2 Compression Input Sectors                sector            0
+    L2 Hit Rate                                      %         0.91
+    Mem Pipes Busy                                   %         9.56
+    -------------------------------------- ----------- ------------
+
+    Section: Occupancy
+    ------------------------------- ----------- ------------
+    Metric Name                     Metric Unit Metric Value
+    ------------------------------- ----------- ------------
+    Max Active Clusters                 cluster            0
+    Max Cluster Size                      block            8
+    Overall GPU Occupancy                     %            0
+    Cluster Occupancy                         %            0
+    Block Limit Barriers                  block           24
+    Block Limit SM                        block           24
+    Block Limit Registers                 block            3
+    Block Limit Shared Mem                block            4
+    Block Limit Warps                     block            6
+    Theoretical Active Warps per SM        warp           24
+    Theoretical Occupancy                     %           50
+    Achieved Occupancy                        %        49.53
+    Achieved Active Warps Per SM           warp        23.78
+    ------------------------------- ----------- ------------
+
+    OPT   Est. Speedup: 50%                                                                                             
+          The 6.00 theoretical warps per scheduler this kernel can issue according to its occupancy are below the       
+          hardware maximum of 12. This kernel's theoretical occupancy (50.0%) is limited by the number of required      
+          registers.                                                                                                    
+
+  unnamed>::reduce_decode_routes_kernel(const __nv_bfloat16 *, const float *, const float *, __nv_bfloat16 *, int) (10, 8, 1)x(256, 1, 1), Context 1, Stream 13, Device 0, CC 12.1
+    Section: GPU Speed Of Light Throughput
+    ----------------------- ----------- ----------------
+    Metric Name             Metric Unit     Metric Value
+    ----------------------- ----------- ----------------
+    SM Frequency                     hz 2,144,638,480.39
+    Elapsed Cycles                cycle           17,507
+    Memory Throughput                 %             3.66
+    Duration                         ns            8,160
+    L1/TEX Cache Throughput           %            11.03
+    L2 Cache Throughput               %             5.69
+    SM Active Cycles              cycle         5,800.02
+    Compute (SM) Throughput           %             3.66
+    ----------------------- ----------- ----------------
+
+    OPT   This kernel grid is too small to fill the available resources on this device, resulting in only 0.3 full      
+          waves across all SMs. Look at Launch Statistics for more details.                                             
+
+    Section: Memory Workload Analysis
+    -------------------------------------- ----------- ------------
+    Metric Name                            Metric Unit Metric Value
+    -------------------------------------- ----------- ------------
+    Local Memory Spilling Requests                                0
+    Local Memory Spilling Request Overhead           %            0
+    Mem Busy                                         %         3.36
+    Max Bandwidth                                    %         3.66
+    L1/TEX Hit Rate                                  %        35.88
+    L2 Persisting Size                            byte    4,718,592
+    L2 Compression Success Rate                      %            0
+    L2 Compression Ratio                                          0
+    L2 Compression Input Sectors                sector            0
+    L2 Hit Rate                                      %        13.46
+    Mem Pipes Busy                                   %         3.66
+    -------------------------------------- ----------- ------------
+
+    Section: Occupancy
+    ------------------------------- ----------- ------------
+    Metric Name                     Metric Unit Metric Value
+    ------------------------------- ----------- ------------
+    Max Active Clusters                 cluster            0
+    Max Cluster Size                      block            8
+    Overall GPU Occupancy                     %            0
+    Cluster Occupancy                         %            0
+    Block Limit Barriers                  block           24
+    Block Limit SM                        block           24
+    Block Limit Registers                 block            6
+    Block Limit Shared Mem                block           16
+    Block Limit Warps                     block            6
+    Theoretical Active Warps per SM        warp           48
+    Theoretical Occupancy                     %          100
+    Achieved Occupancy                        %        53.75
+    Achieved Active Warps Per SM           warp        25.80
+    ------------------------------- ----------- ------------
+
+    OPT   Est. Speedup: 46.25%                                                                                          
+          The difference between calculated theoretical (100.0%) and measured achieved occupancy (53.8%) can be the     
+          result of warp scheduling overheads or workload imbalances during the kernel execution. Load imbalances can   
+          occur between warps within a block as well as across blocks of the same kernel. See the CUDA Best Practices   
+          Guide (https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#occupancy) for more details on     
+          optimizing occupancy.                                                                                         
+
+  unnamed>::quantize_decode_routes_kernel(const __nv_bfloat16 *, const int *, const float *, unsigned char *, unsigned char *, int, int) (50, 1, 1)x(256, 1, 1), Context 1, Stream 13, Device 0, CC 12.1
+    Section: GPU Speed Of Light Throughput
+    ----------------------- ----------- ----------------
+    Metric Name             Metric Unit     Metric Value
+    ----------------------- ----------- ----------------
+    SM Frequency                     hz 2,139,225,746.27
+    Elapsed Cycles                cycle           22,943
+    Memory Throughput                 %             2.17
+    Duration                         ns           10,720
+    L1/TEX Cache Throughput           %             1.93
+    L2 Cache Throughput               %             2.17
+    SM Active Cycles              cycle         9,504.75
+    Compute (SM) Throughput           %             2.75
+    ----------------------- ----------- ----------------
+
+    OPT   This kernel grid is too small to fill the available resources on this device, resulting in only 0.2 full      
+          waves across all SMs. Look at Launch Statistics for more details.                                             
+
+    Section: Memory Workload Analysis
+    -------------------------------------- ----------- ------------
+    Metric Name                            Metric Unit Metric Value
+    -------------------------------------- ----------- ------------
+    Local Memory Spilling Requests                                0
+    Local Memory Spilling Request Overhead           %            0
+    Mem Busy                                         %         2.17
+    Max Bandwidth                                    %         1.83
+    L1/TEX Hit Rate                                  %        60.51
+    L2 Persisting Size                            byte    4,718,592
+    L2 Compression Success Rate                      %            0
+    L2 Compression Ratio                                          0
+    L2 Compression Input Sectors                sector            0
+    L2 Hit Rate                                      %        62.64
+    Mem Pipes Busy                                   %         0.94
+    -------------------------------------- ----------- ------------
+
+    Section: Occupancy
+    ------------------------------- ----------- ------------
+    Metric Name                     Metric Unit Metric Value
+    ------------------------------- ----------- ------------
+    Max Active Clusters                 cluster            0
+    Max Cluster Size                      block            8
+    Overall GPU Occupancy                     %            0
+    Cluster Occupancy                         %            0
+    Block Limit Barriers                  block           24
+    Block Limit SM                        block           24
+    Block Limit Registers                 block            5
+    Block Limit Shared Mem                block           16
+    Block Limit Warps                     block            6
+    Theoretical Active Warps per SM        warp           40
+    Theoretical Occupancy                     %        83.33
+    Achieved Occupancy                        %        28.34
+    Achieved Active Warps Per SM           warp        13.60
+    ------------------------------- ----------- ------------
+
+    OPT   Est. Speedup: 65.99%                                                                                          
+          The difference between calculated theoretical (83.3%) and measured achieved occupancy (28.3%) can be the      
+          result of warp scheduling overheads or workload imbalances during the kernel execution. Load imbalances can   
+          occur between warps within a block as well as across blocks of the same kernel. See the CUDA Best Practices   
+          Guide (https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#occupancy) for more details on     
+          optimizing occupancy.                                                                                         
+
+  void detail::nvfp4_w4a4_mma_kernel<detail::Nvfp4Geometry<1280, 2560>, detail::Nvfp4W4a4MmaSchedule<16, 256, 128, 1, 8, 2, 1>, detail::Nvfp4IdentityEpilogue, unnamed>::GroupedSiluQuantizedOutput, unnamed>::GroupedGateRows, 1, unnamed>::DecodeRouteWork>(detail::Nvfp4W4a4MaterializedActivation, const unsigned char *, const unsigned char *, int, float, T3, T4, T5, T7) (400, 1, 1)x(256, 1, 1), Context 1, Stream 13, Device 0, CC 12.1
+    Section: GPU Speed Of Light Throughput
+    ----------------------- ----------- ----------------
+    Metric Name             Metric Unit     Metric Value
+    ----------------------- ----------- ----------------
+    SM Frequency                     hz 2,149,814,666.97
+    Elapsed Cycles                cycle        1,696,474
+    Memory Throughput                 %            10.62
+    Duration                         ns          789,120
+    L1/TEX Cache Throughput           %             7.55
+    L2 Cache Throughput               %            18.94
+    SM Active Cycles              cycle     1,617,225.23
+    Compute (SM) Throughput           %             7.20
+    ----------------------- ----------- ----------------
+
+    OPT   This workload exhibits low compute throughput and memory bandwidth utilization relative to the peak           
+          performance of this device. Achieved compute throughput and/or memory bandwidth below 60.0% of peak           
+          typically indicate latency issues. Look at Scheduler Statistics and Warp State Statistics for potential       
+          reasons.                                                                                                      
+
+    Section: Memory Workload Analysis
+    -------------------------------------- ----------- ------------
+    Metric Name                            Metric Unit Metric Value
+    -------------------------------------- ----------- ------------
+    Local Memory Spilling Requests                                0
+    Local Memory Spilling Request Overhead           %            0
+    Mem Busy                                         %        10.62
+    Max Bandwidth                                    %         9.51
+    L1/TEX Hit Rate                                  %        25.27
+    L2 Persisting Size                            byte    4,718,592
+    L2 Compression Success Rate                      %            0
+    L2 Compression Ratio                                          0
+    L2 Compression Input Sectors                sector            0
+    L2 Hit Rate                                      %         0.66
+    Mem Pipes Busy                                   %         7.20
+    -------------------------------------- ----------- ------------
+
+    Section: Occupancy
+    ------------------------------- ----------- ------------
+    Metric Name                     Metric Unit Metric Value
+    ------------------------------- ----------- ------------
+    Max Active Clusters                 cluster            0
+    Max Cluster Size                      block            8
+    Overall GPU Occupancy                     %            0
+    Cluster Occupancy                         %            0
+    Block Limit Barriers                  block           24
+    Block Limit SM                        block           24
+    Block Limit Registers                 block            2
+    Block Limit Shared Mem                block            2
+    Block Limit Warps                     block            6
+    Theoretical Active Warps per SM        warp           16
+    Theoretical Occupancy                     %        33.33
+    Achieved Occupancy                        %        33.66
+    Achieved Active Warps Per SM           warp        16.16
+    ------------------------------- ----------- ------------
+
+    OPT   Est. Speedup: 66.67%                                                                                          
+          The 4.00 theoretical warps per scheduler this kernel can issue according to its occupancy are below the       
+          hardware maximum of 12. This kernel's theoretical occupancy (33.3%) is limited by the number of required      
+          registers, and the required amount of shared memory.                                                          
+
+  void detail::nvfp4_w4a4_mma_kernel<detail::Nvfp4Geometry<2560, 640>, detail::Nvfp4W4a4MmaSchedule<16, 128, 128, 1, 8, 2, 1>, detail::Nvfp4IdentityEpilogue, unnamed>::GroupedOutput, unnamed>::GroupedDownRows, 0, unnamed>::DecodeRouteWork>(detail::Nvfp4W4a4MaterializedActivation, const unsigned char *, const unsigned char *, int, float, T3, T4, T5, T7) (1600, 1, 1)x(256, 1, 1), Context 1, Stream 13, Device 0, CC 12.1
+    Section: GPU Speed Of Light Throughput
+    ----------------------- ----------- ----------------
+    Metric Name             Metric Unit     Metric Value
+    ----------------------- ----------- ----------------
+    SM Frequency                     hz 2,149,713,293.06
+    Elapsed Cycles                cycle          814,292
+    Memory Throughput                 %            11.50
+    Duration                         ns          378,784
+    L1/TEX Cache Throughput           %             9.84
+    L2 Cache Throughput               %            19.72
+    SM Active Cycles              cycle       771,500.48
+    Compute (SM) Throughput           %             9.28
+    ----------------------- ----------- ----------------
+
+    OPT   This workload exhibits low compute throughput and memory bandwidth utilization relative to the peak           
+          performance of this device. Achieved compute throughput and/or memory bandwidth below 60.0% of peak           
+          typically indicate latency issues. Look at Scheduler Statistics and Warp State Statistics for potential       
+          reasons.                                                                                                      
+
+    Section: Memory Workload Analysis
+    -------------------------------------- ----------- ------------
+    Metric Name                            Metric Unit Metric Value
+    -------------------------------------- ----------- ------------
+    Local Memory Spilling Requests                                0
+    Local Memory Spilling Request Overhead           %            0
+    Mem Busy                                         %        11.50
+    Max Bandwidth                                    %         9.95
+    L1/TEX Hit Rate                                  %        25.74
+    L2 Persisting Size                            byte    4,718,592
+    L2 Compression Success Rate                      %            0
+    L2 Compression Ratio                                          0
+    L2 Compression Input Sectors                sector            0
+    L2 Hit Rate                                      %         0.91
+    Mem Pipes Busy                                   %         9.28
+    -------------------------------------- ----------- ------------
+
+    Section: Occupancy
+    ------------------------------- ----------- ------------
+    Metric Name                     Metric Unit Metric Value
+    ------------------------------- ----------- ------------
+    Max Active Clusters                 cluster            0
+    Max Cluster Size                      block            8
+    Overall GPU Occupancy                     %            0
+    Cluster Occupancy                         %            0
+    Block Limit Barriers                  block           24
+    Block Limit SM                        block           24
+    Block Limit Registers                 block            3
+    Block Limit Shared Mem                block            4
+    Block Limit Warps                     block            6
+    Theoretical Active Warps per SM        warp           24
+    Theoretical Occupancy                     %           50
+    Achieved Occupancy                        %        50.30
+    Achieved Active Warps Per SM           warp        24.15
+    ------------------------------- ----------- ------------
+
+    OPT   Est. Speedup: 50%                                                                                             
+          The 6.00 theoretical warps per scheduler this kernel can issue according to its occupancy are below the       
+          hardware maximum of 12. This kernel's theoretical occupancy (50.0%) is limited by the number of required      
+          registers.                                                                                                    
+
+  unnamed>::reduce_decode_routes_kernel(const __nv_bfloat16 *, const float *, const float *, __nv_bfloat16 *, int) (10, 8, 1)x(256, 1, 1), Context 1, Stream 13, Device 0, CC 12.1
+    Section: GPU Speed Of Light Throughput
+    ----------------------- ----------- ----------------
+    Metric Name             Metric Unit     Metric Value
+    ----------------------- ----------- ----------------
+    SM Frequency                     hz 2,146,260,245.90
+    Elapsed Cycles                cycle           25,148
+    Memory Throughput                 %             2.55
+    Duration                         ns           11,712
+    L1/TEX Cache Throughput           %            11.43
+    L2 Cache Throughput               %             3.95
+    SM Active Cycles              cycle         5,598.48
+    Compute (SM) Throughput           %             2.55
+    ----------------------- ----------- ----------------
+
+    OPT   This kernel grid is too small to fill the available resources on this device, resulting in only 0.3 full      
+          waves across all SMs. Look at Launch Statistics for more details.                                             
+
+    Section: Memory Workload Analysis
+    -------------------------------------- ----------- ------------
+    Metric Name                            Metric Unit Metric Value
+    -------------------------------------- ----------- ------------
+    Local Memory Spilling Requests                                0
+    Local Memory Spilling Request Overhead           %            0
+    Mem Busy                                         %         2.33
+    Max Bandwidth                                    %         2.55
+    L1/TEX Hit Rate                                  %        36.12
+    L2 Persisting Size                            byte    4,718,592
+    L2 Compression Success Rate                      %            0
+    L2 Compression Ratio                                          0
+    L2 Compression Input Sectors                sector            0
+    L2 Hit Rate                                      %        13.45
+    Mem Pipes Busy                                   %         2.55
+    -------------------------------------- ----------- ------------
+
+    Section: Occupancy
+    ------------------------------- ----------- ------------
+    Metric Name                     Metric Unit Metric Value
+    ------------------------------- ----------- ------------
+    Max Active Clusters                 cluster            0
+    Max Cluster Size                      block            8
+    Overall GPU Occupancy                     %            0
+    Cluster Occupancy                         %            0
+    Block Limit Barriers                  block           24
+    Block Limit SM                        block           24
+    Block Limit Registers                 block            6
+    Block Limit Shared Mem                block           16
+    Block Limit Warps                     block            6
+    Theoretical Active Warps per SM        warp           48
+    Theoretical Occupancy                     %          100
+    Achieved Occupancy                        %        81.58
+    Achieved Active Warps Per SM           warp        39.16
+    ------------------------------- ----------- ------------
+
+    OPT   Est. Speedup: 18.42%                                                                                          
+          The difference between calculated theoretical (100.0%) and measured achieved occupancy (81.6%) can be the     
+          result of warp scheduling overheads or workload imbalances during the kernel execution. Load imbalances can   
+          occur between warps within a block as well as across blocks of the same kernel. See the CUDA Best Practices   
+          Guide (https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#occupancy) for more details on     
+          optimizing occupancy.                                                                                         
+

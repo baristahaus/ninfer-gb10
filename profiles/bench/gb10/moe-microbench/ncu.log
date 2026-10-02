@@ -1,0 +1,17 @@
+==PROF== Connected to process 1821099 (/home/apollo11/ninfer-gb10/build/bench/ninfer_flash_next_moe_bench)
+ninfer: persistent grids sized for 48 SMs
+==PROF== Profiling "quantize_decode_routes_kernel": 0%....50%....100% - 38 passes
+==PROF== Profiling "nvfp4_w4a4_mma_kernel": 0%....50%....100% - 38 passes
+==PROF== Profiling "nvfp4_w4a4_mma_kernel": 0%....50%....100% - 38 passes
+==PROF== Profiling "reduce_decode_routes_kernel": 0%....50%....100% - 38 passes
+==PROF== Profiling "quantize_decode_routes_kernel": 0%....50%....100% - 38 passes
+==PROF== Profiling "nvfp4_w4a4_mma_kernel": 0%....50%....100% - 38 passes
+==PROF== Profiling "nvfp4_w4a4_mma_kernel": 0%....50%....100% - 38 passes
+==PROF== Profiling "reduce_decode_routes_kernel": 0%....50%....100% - 37 passes
+flash_next_moe NVFP4 decode route: T=8 rows, 2 layer banks of 1.42 GB, 2.765 MB streamed per selected expert
+wide_gate  distinct      us/layer       min us    routed GB/s
+off        80              1178.8       1178.8          187.6
+on         80              1182.7       1182.7          187.0
+profiled one eager pass over 2 layers at 80 distinct experts
+==PROF== Disconnected from process 1821099
+==PROF== Report: /home/apollo11/ninfer-gb10/profiles/bench/gb10/moe-microbench/moe-ncu.ncu-rep

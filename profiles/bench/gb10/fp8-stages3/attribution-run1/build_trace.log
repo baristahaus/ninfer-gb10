@@ -1,0 +1,45 @@
+-- Configuring done (0.0s)
+-- Generating done (0.0s)
+-- Build files have been written to: /home/apollo11/ninfer-gb10/build-trace
+[1/36] Building CUDA object src/ops/CMakeFiles/ninfer_ops.dir/linear/fp8/fp8_a8.cu.o
+[2/36] Building CUDA object src/ops/CMakeFiles/ninfer_ops.dir/gdn_input_proj/fp8/fp8_gdn_input_a8.cu.o
+[3/36] Building CUDA object src/ops/CMakeFiles/ninfer_ops.dir/attn_input_proj/fp8/fp8_attn_input_small_t.cu.o
+[4/36] Building CUDA object src/ops/CMakeFiles/ninfer_ops.dir/linear/fp8/shapes/n6144_k2560.cu.o
+[5/36] Building CUDA object src/ops/CMakeFiles/ninfer_ops.dir/linear/fp8/shapes/n10240_k2560.cu.o
+[6/36] Building CUDA object src/ops/CMakeFiles/ninfer_ops.dir/gdn_input_proj/fp8/fp8_gdn_input_decode.cu.o
+[7/36] Building CUDA object src/ops/CMakeFiles/ninfer_ops.dir/attn_input_proj/fp8/fp8_attn_input_decode.cu.o
+[8/36] Building CUDA object src/ops/CMakeFiles/ninfer_ops.dir/attn_input_proj/fp8/fp8_attn_input_a16_small_t.cu.o
+[9/36] Building CUDA object src/ops/CMakeFiles/ninfer_ops.dir/linear/fp8/shapes/n2560_k6144.cu.o
+[10/36] Building CUDA object src/ops/CMakeFiles/ninfer_ops.dir/linear/fp8/shapes/n12288_k2560.cu.o
+[11/36] Building CUDA object src/ops/CMakeFiles/ninfer_ops.dir/attn_input_proj/fp8/fp8_attn_input_a8.cu.o
+[12/36] Building CUDA object src/ops/CMakeFiles/ninfer_ops.dir/linear/fp8/shapes/n16384_k5120.cu.o
+[13/36] Building CUDA object src/ops/CMakeFiles/ninfer_ops.dir/linear/fp8/shapes/n10240_k320.cu.o
+[14/36] Building CUDA object src/ops/CMakeFiles/ninfer_ops.dir/attn_input_proj/fp8/fp8_attn_input_a16_gemm.cu.o
+[15/36] Building CUDA object src/ops/CMakeFiles/ninfer_ops.dir/linear/fp8/shapes/n5120_k6144.cu.o
+[16/36] Building CUDA object src/ops/CMakeFiles/ninfer_ops.dir/gdn_input_proj/fp8/fp8_gdn_input_matrix.cu.o
+[17/36] Building CUDA object src/ops/CMakeFiles/ninfer_ops.dir/linear_add/fp8/fp8_linear_add_decode.cu.o
+[18/36] Building CUDA object src/ops/CMakeFiles/ninfer_ops.dir/linear/fp8/shapes/n248320_k5120.cu.o
+[19/36] Building CUDA object src/ops/CMakeFiles/ninfer_ops.dir/linear/fp8/shapes/n248320_k2560.cu.o
+[20/36] Building CUDA object src/ops/CMakeFiles/ninfer_ops.dir/linear/fp8/shapes/n320_k10240.cu.o
+[21/36] Building CUDA object src/ops/CMakeFiles/ninfer_ops.dir/linear/fp8/shapes/n14336_k5120.cu.o
+[22/36] Building CUDA object src/ops/CMakeFiles/ninfer_ops.dir/linear/fp8/shapes/n2560_k640.cu.o
+[23/36] Building CUDA object src/ops/CMakeFiles/ninfer_ops.dir/linear_swiglu/fp8/fp8_linear_swiglu_decode.cu.o
+[24/36] Building CUDA object src/ops/CMakeFiles/ninfer_ops.dir/linear_add/fp8/fp8_linear_add_a8.cu.o
+[25/36] Building CUDA object src/ops/CMakeFiles/ninfer_ops.dir/linear_swiglu/fp8/fp8_linear_swiglu_a8.cu.o
+[26/36] Building CUDA object src/ops/CMakeFiles/ninfer_ops.dir/linear/fp8/shapes/n5120_k17408.cu.o
+[27/36] Building CUDA object src/ops/CMakeFiles/ninfer_ops.dir/linear/fp8/fp8_flash_next.cu.o
+[28/36] Building CUDA object src/ops/CMakeFiles/ninfer_ops.dir/linear_swiglu/fp8/fp8_linear_swiglu_flash_next.cu.o
+[29/36] Building CUDA object src/ops/CMakeFiles/ninfer_ops.dir/linear_swiglu/fp8/fp8_linear_swiglu_a16.cu.o
+[30/36] Building CUDA object src/ops/CMakeFiles/ninfer_ops.dir/linear/fp8/shapes/n34816_k5120.cu.o
+[31/36] Building CUDA object src/ops/CMakeFiles/ninfer_ops.dir/gdn_input_proj/fp8/fp8_gdn_conv_fused.cu.o
+/home/apollo11/ninfer-gb10/src/ops/gdn_input_proj/fp8/fp8_gdn_conv_fused.cu(21): warning #177-D: member "ninfer::ops::detail::<unnamed>::Fp8GdnConvEpilogue<Tokens, Publish>::kRowTokens [with Tokens=1, Publish=ninfer::ops::detail::SnapshotHistoryPublish]" was declared but never referenced
+      [[maybe_unused]] static constexpr int kRowTokens = Tokens;
+                                            ^
+
+Remark: The warnings can be suppressed with "-diag-suppress <warning-number>"
+
+[32/36] Building CUDA object src/ops/CMakeFiles/ninfer_ops.dir/linear_topk/fp8.cu.o
+[33/36] Building CUDA object src/ops/CMakeFiles/ninfer_ops.dir/linear_add/fp8/fp8_linear_add_a16.cu.o
+[34/36] Linking CXX static library CMakeFiles/ninfer_ops.dir/cmake_device_link.o
+[35/36] Linking CXX static library src/ops/libninfer_ops.a
+[36/36] Linking CXX executable apps/ninfer-serve

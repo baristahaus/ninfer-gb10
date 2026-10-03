@@ -1,0 +1,15 @@
+-- Configuring done (0.0s)
+-- Generating done (0.0s)
+-- Build files have been written to: /home/apollo11/ninfer-gb10/build-trace
+[1/12] Building CUDA object src/ops/CMakeFiles/ninfer_ops.dir/linear/fp8/shapes/n10240_k320.cu.o
+[2/12] Building CUDA object src/ops/CMakeFiles/ninfer_ops.dir/linear/fp8/shapes/n2560_k640.cu.o
+[3/12] Building CUDA object src/ops/CMakeFiles/ninfer_ops.dir/linear/fp8/shapes/n6144_k2560.cu.o
+[4/12] Building CUDA object src/ops/CMakeFiles/ninfer_ops.dir/linear/fp8/shapes/n12288_k2560.cu.o
+[5/12] Building CUDA object src/ops/CMakeFiles/ninfer_ops.dir/linear/fp8/shapes/n10240_k2560.cu.o
+[6/12] Building CUDA object src/ops/CMakeFiles/ninfer_ops.dir/linear/fp8/shapes/n248320_k2560.cu.o
+[7/12] Building CUDA object src/ops/CMakeFiles/ninfer_ops.dir/linear/fp8/shapes/n2560_k6144.cu.o
+[8/12] Building CUDA object src/ops/CMakeFiles/ninfer_ops.dir/linear/fp8/shapes/n320_k10240.cu.o
+[9/12] Building CUDA object src/ops/CMakeFiles/ninfer_ops.dir/linear/fp8/fp8_flash_next.cu.o
+[10/12] Linking CXX static library CMakeFiles/ninfer_ops.dir/cmake_device_link.o
+[11/12] Linking CXX static library src/ops/libninfer_ops.a
+[12/12] Linking CXX executable apps/ninfer-serve

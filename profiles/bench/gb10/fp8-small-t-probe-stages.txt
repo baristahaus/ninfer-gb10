@@ -1,0 +1,162 @@
+flash_next FP8 small-T probe: 48 SMs, 384 MB of weight copies per shape
+shape        T   schedule                                       us/call      GB/s   % 246  vs production
+gdn.qkv      8   contiguous read, grid 96                        106.67     246.0   100.0  
+gdn.qkv      8   contiguous read, grid 144                       107.11     244.9    99.6  
+gdn.qkv      8   contiguous read, grid 192                       107.81     243.3    98.9  
+gdn.qkv      8   production S2 (256 thr, 32 KB)                  109.44     239.7    97.4  reference
+gdn.qkv      8   stages 1 (256 thr, 16 KB)                       109.47     239.7    97.4  bitwise
+gdn.qkv      8   S2 min blocks 1 (256 thr, 32 KB)                109.53     239.5    97.4  bitwise
+gdn.qkv      8   S2 activations cg (256 thr, 32 KB)              109.47     239.7    97.4  bitwise
+gdn.qkv      8   stages 3 (256 thr, 48 KB)                       109.13     240.4    97.7  bitwise
+gdn.qkv      8   stages 4 (256 thr, 64 KB)                       109.35     239.9    97.5  bitwise
+gdn.qkv      8   summary                                      best read 246.0 GB/s, 15 calls of 26.23 MB
+gdn.z        8   contiguous read, grid 96                         63.95     246.2   100.1  
+gdn.z        8   contiguous read, grid 144                        64.14     245.4    99.8  
+gdn.z        8   contiguous read, grid 192                        65.13     241.7    98.2  
+gdn.z        8   production S2 (256 thr, 32 KB)                   65.86     239.0    97.2  reference
+gdn.z        8   stages 1 (256 thr, 16 KB)                        65.73     239.5    97.3  bitwise
+gdn.z        8   S2 min blocks 1 (256 thr, 32 KB)                 65.90     238.9    97.1  bitwise
+gdn.z        8   S2 activations cg (256 thr, 32 KB)               66.49     236.7    96.2  bitwise
+gdn.z        8   stages 3 (256 thr, 48 KB)                        65.81     239.2    97.2  bitwise
+gdn.z        8   stages 4 (256 thr, 64 KB)                        66.87     235.4    95.7  bitwise
+gdn.z        8   summary                                      best read 246.2 GB/s, 24 calls of 15.74 MB
+qsa.q_gate   8   contiguous read, grid 96                        129.48     243.1    98.8  
+qsa.q_gate   8   contiguous read, grid 144                       128.96     244.1    99.2  
+qsa.q_gate   8   contiguous read, grid 192                       130.15     241.9    98.3  
+qsa.q_gate   8   production S2 (256 thr, 32 KB)                  132.46     237.7    96.6  reference
+qsa.q_gate   8   stages 1 (256 thr, 16 KB)                       132.30     238.0    96.7  bitwise
+qsa.q_gate   8   S2 min blocks 1 (256 thr, 32 KB)                132.30     238.0    96.7  bitwise
+qsa.q_gate   8   S2 activations cg (256 thr, 32 KB)              133.47     235.9    95.9  bitwise
+qsa.q_gate   8   stages 3 (256 thr, 48 KB)                       132.04     238.4    96.9  bitwise
+qsa.q_gate   8   stages 4 (256 thr, 64 KB)                       131.71     239.0    97.2  bitwise
+qsa.q_gate   8   summary                                      best read 244.1 GB/s, 12 calls of 31.48 MB
+out[gdn,qsa] 8   contiguous read, grid 96                         63.44     248.0   100.8  
+out[gdn,qsa] 8   contiguous read, grid 144                        64.11     245.4    99.8  
+out[gdn,qsa] 8   contiguous read, grid 192                        64.35     244.5    99.4  
+out[gdn,qsa] 8   production S2 (256 thr, 32 KB)                   67.96     231.5    94.1  reference
+out[gdn,qsa] 8   stages 1 (256 thr, 16 KB)                        70.94     221.8    90.2  bitwise
+out[gdn,qsa] 8   S2 min blocks 1 (256 thr, 32 KB)                 67.98     231.4    94.1  bitwise
+out[gdn,qsa] 8   S2 activations cg (256 thr, 32 KB)               68.79     228.7    93.0  bitwise
+out[gdn,qsa] 8   stages 3 (256 thr, 48 KB)                        66.59     236.3    96.1  bitwise
+out[gdn,qsa] 8   stages 4 (256 thr, 64 KB)                        67.60     232.7    94.6  bitwise
+out[gdn,qsa] 8   summary                                      best read 248.0 GB/s, 24 calls of 15.73 MB
+hc.down      8   contiguous read, grid 96                         13.47     243.4    98.9  
+hc.down      8   contiguous read, grid 144                        13.59     241.2    98.1  
+hc.down      8   contiguous read, grid 192                        13.74     238.6    97.0  
+hc.down      8   production S2 (256 thr, 32 KB)                   17.88     183.3    74.5  reference
+hc.down      8   stages 1 (256 thr, 16 KB)                        23.80     137.7    56.0  bitwise
+hc.down      8   S2 min blocks 1 (256 thr, 32 KB)                 17.88     183.3    74.5  bitwise
+hc.down      8   S2 activations cg (256 thr, 32 KB)               17.87     183.4    74.6  bitwise
+hc.down      8   stages 3 (256 thr, 48 KB)                        16.97     193.2    78.5  bitwise
+hc.down      8   stages 4 (256 thr, 64 KB)                        16.63     197.1    80.1  bitwise
+hc.down      8   summary                                      best read 243.4 GB/s, 117 calls of 3.28 MB
+hc.up        8   contiguous read, grid 96                         13.53     243.8    99.1  
+hc.up        8   contiguous read, grid 144                        13.60     242.5    98.6  
+hc.up        8   contiguous read, grid 192                        13.79     239.1    97.2  
+hc.up        8   production S2 (64 thr, 8 KB)                     16.36     201.5    81.9  reference
+hc.up        8   stages 1 (64 thr, 4 KB)                          16.10     204.8    83.3  bitwise
+hc.up        8   S2 min blocks 1 (64 thr, 8 KB)                   16.34     201.8    82.1  bitwise
+hc.up        8   S2 activations cg (64 thr, 8 KB)                 16.28     202.5    82.3  bitwise
+hc.up        8   stages 3 (64 thr, 12 KB)                         16.19     203.7    82.8  bitwise
+hc.up        8   stages 4 (64 thr, 16 KB)                         16.23     203.2    82.6  bitwise
+hc.up        8   summary                                      best read 243.8 GB/s, 117 calls of 3.30 MB
+shared.gu    8   contiguous read, grid 96                         13.58     241.4    98.1  
+shared.gu    8   contiguous read, grid 144                        13.50     242.9    98.7  
+shared.gu    8   contiguous read, grid 192                        13.73     238.9    97.1  
+shared.gu    8   production S2 (256 thr, 32 KB)                   15.65     209.5    85.2  reference
+shared.gu    8   stages 1 (256 thr, 16 KB)                        15.71     208.8    84.9  bitwise
+shared.gu    8   S2 min blocks 1 (256 thr, 32 KB)                 15.64     209.6    85.2  bitwise
+shared.gu    8   S2 activations cg (256 thr, 32 KB)               15.65     209.5    85.2  bitwise
+shared.gu    8   stages 3 (256 thr, 48 KB)                        15.98     205.3    83.4  bitwise
+shared.gu    8   stages 4 (256 thr, 64 KB)                        17.03     192.6    78.3  bitwise
+shared.gu    8   summary                                      best read 242.9 GB/s, 117 calls of 3.28 MB
+shared.down  8   contiguous read, grid 96                          6.81     241.4    98.1  
+shared.down  8   contiguous read, grid 144                         6.80     241.8    98.3  
+shared.down  8   contiguous read, grid 192                         6.89     238.4    96.9  
+shared.down  8   production S2 (64 thr, 8 KB)                      9.11     180.5    73.4  reference
+shared.down  8   stages 1 (64 thr, 4 KB)                           9.63     170.6    69.4  bitwise
+shared.down  8   S2 min blocks 1 (64 thr, 8 KB)                    9.11     180.5    73.4  bitwise
+shared.down  8   S2 activations cg (64 thr, 8 KB)                  9.11     180.4    73.3  bitwise
+shared.down  8   stages 3 (64 thr, 12 KB)                          9.27     177.2    72.0  bitwise
+shared.down  8   stages 4 (64 thr, 16 KB)                          9.50     173.0    70.3  bitwise
+shared.down  8   summary                                      best read 241.8 GB/s, 234 calls of 1.64 MB
+gdn.qkv      16  contiguous read, grid 96                        105.85     247.8   100.7  
+gdn.qkv      16  contiguous read, grid 144                       106.67     246.0   100.0  
+gdn.qkv      16  contiguous read, grid 192                       107.62     243.8    99.1  
+gdn.qkv      16  production S2 (256 thr, 48 KB)                  110.20     238.1    96.8  reference
+gdn.qkv      16  stages 1 (256 thr, 24 KB)                       111.04     236.3    96.0  bitwise
+gdn.qkv      16  S2 min blocks 1 (256 thr, 48 KB)                109.74     239.1    97.2  bitwise
+gdn.qkv      16  S2 activations cg (256 thr, 48 KB)              110.08     238.3    96.9  bitwise
+gdn.qkv      16  stages 3 (256 thr, 72 KB)                       109.32     240.0    97.6  bitwise
+gdn.qkv      16  stages 4 (256 thr, 96 KB)                       109.88     238.8    97.1  bitwise
+gdn.qkv      16  summary                                      best read 247.8 GB/s, 15 calls of 26.23 MB
+gdn.z        16  contiguous read, grid 96                         63.50     247.9   100.8  
+gdn.z        16  contiguous read, grid 144                        64.04     245.8    99.9  
+gdn.z        16  contiguous read, grid 192                        64.83     242.8    98.7  
+gdn.z        16  production S2 (256 thr, 48 KB)                   65.64     239.8    97.5  reference
+gdn.z        16  stages 1 (256 thr, 24 KB)                        66.32     237.3    96.5  bitwise
+gdn.z        16  S2 min blocks 1 (256 thr, 48 KB)                 65.36     240.8    97.9  bitwise
+gdn.z        16  S2 activations cg (256 thr, 48 KB)               66.20     237.8    96.7  bitwise
+gdn.z        16  stages 3 (256 thr, 72 KB)                        65.64     239.8    97.5  bitwise
+gdn.z        16  stages 4 (256 thr, 96 KB)                        66.23     237.7    96.6  bitwise
+gdn.z        16  summary                                      best read 247.9 GB/s, 24 calls of 15.74 MB
+qsa.q_gate   16  contiguous read, grid 96                        127.95     246.0   100.0  
+qsa.q_gate   16  contiguous read, grid 144                       129.53     243.1    98.8  
+qsa.q_gate   16  contiguous read, grid 192                       129.67     242.8    98.7  
+qsa.q_gate   16  production S2 (256 thr, 48 KB)                  132.46     237.7    96.6  reference
+qsa.q_gate   16  stages 1 (256 thr, 24 KB)                       132.68     237.3    96.5  bitwise
+qsa.q_gate   16  S2 min blocks 1 (256 thr, 48 KB)                132.14     238.3    96.9  bitwise
+qsa.q_gate   16  S2 activations cg (256 thr, 48 KB)              132.31     237.9    96.7  bitwise
+qsa.q_gate   16  stages 3 (256 thr, 72 KB)                       131.02     240.3    97.7  bitwise
+qsa.q_gate   16  stages 4 (256 thr, 96 KB)                       131.53     239.4    97.3  bitwise
+qsa.q_gate   16  summary                                      best read 246.0 GB/s, 12 calls of 31.48 MB
+out[gdn,qsa] 16  contiguous read, grid 96                         63.90     246.2   100.1  
+out[gdn,qsa] 16  contiguous read, grid 144                        63.78     246.7   100.3  
+out[gdn,qsa] 16  contiguous read, grid 192                        64.85     242.6    98.6  
+out[gdn,qsa] 16  production S2 (256 thr, 48 KB)                   67.55     232.9    94.7  reference
+out[gdn,qsa] 16  stages 1 (256 thr, 24 KB)                        72.38     217.4    88.4  bitwise
+out[gdn,qsa] 16  S2 min blocks 1 (256 thr, 48 KB)                 67.07     234.6    95.4  bitwise
+out[gdn,qsa] 16  S2 activations cg (256 thr, 48 KB)               66.86     235.3    95.7  bitwise
+out[gdn,qsa] 16  stages 3 (256 thr, 72 KB)                        67.24     234.0    95.1  bitwise
+out[gdn,qsa] 16  stages 4 (256 thr, 96 KB)                        67.51     233.0    94.7  bitwise
+out[gdn,qsa] 16  summary                                      best read 246.7 GB/s, 24 calls of 15.73 MB
+hc.down      16  contiguous read, grid 96                         13.65     240.2    97.6  
+hc.down      16  contiguous read, grid 144                        13.48     243.2    98.9  
+hc.down      16  contiguous read, grid 192                        13.68     239.7    97.4  
+hc.down      16  production S2 (256 thr, 48 KB)                   18.14     180.7    73.5  reference
+hc.down      16  stages 1 (256 thr, 24 KB)                        24.26     135.1    54.9  bitwise
+hc.down      16  S2 min blocks 1 (256 thr, 48 KB)                 18.12     180.9    73.5  bitwise
+hc.down      16  S2 activations cg (256 thr, 48 KB)               18.09     181.2    73.7  bitwise
+hc.down      16  stages 3 (256 thr, 72 KB)                        17.36     188.8    76.7  bitwise
+hc.down      16  stages 4 (256 thr, 96 KB)                        17.43     188.0    76.4  bitwise
+hc.down      16  summary                                      best read 243.2 GB/s, 117 calls of 3.28 MB
+hc.up        16  contiguous read, grid 96                         13.46     245.0    99.6  
+hc.up        16  contiguous read, grid 144                        13.58     242.9    98.7  
+hc.up        16  contiguous read, grid 192                        13.74     239.9    97.5  
+hc.up        16  production S2 (64 thr, 12 KB)                    16.27     202.7    82.4  reference
+hc.up        16  stages 1 (64 thr, 6 KB)                          16.24     203.1    82.6  bitwise
+hc.up        16  S2 min blocks 1 (64 thr, 12 KB)                  16.27     202.6    82.4  bitwise
+hc.up        16  S2 activations cg (64 thr, 12 KB)                16.53     199.4    81.1  bitwise
+hc.up        16  stages 3 (64 thr, 18 KB)                         16.45     200.4    81.5  bitwise
+hc.up        16  stages 4 (64 thr, 24 KB)                         17.37     189.8    77.2  bitwise
+hc.up        16  summary                                      best read 245.0 GB/s, 117 calls of 3.30 MB
+shared.gu    16  contiguous read, grid 96                         13.58     241.5    98.2  
+shared.gu    16  contiguous read, grid 144                        13.59     241.3    98.1  
+shared.gu    16  contiguous read, grid 192                        13.66     240.1    97.6  
+shared.gu    16  production S2 (256 thr, 48 KB)                   15.82     207.3    84.3  reference
+shared.gu    16  stages 1 (256 thr, 24 KB)                        15.85     206.9    84.1  bitwise
+shared.gu    16  S2 min blocks 1 (256 thr, 48 KB)                 15.79     207.6    84.4  bitwise
+shared.gu    16  S2 activations cg (256 thr, 48 KB)               15.82     207.3    84.3  bitwise
+shared.gu    16  stages 3 (256 thr, 72 KB)                        16.54     198.3    80.6  bitwise
+shared.gu    16  stages 4 (256 thr, 96 KB)                        17.07     192.1    78.1  bitwise
+shared.gu    16  summary                                      best read 241.5 GB/s, 117 calls of 3.28 MB
+shared.down  16  contiguous read, grid 96                          6.77     242.6    98.6  
+shared.down  16  contiguous read, grid 144                         6.83     240.7    97.8  
+shared.down  16  contiguous read, grid 192                         6.89     238.6    97.0  
+shared.down  16  production S2 (64 thr, 12 KB)                     9.22     178.3    72.5  reference
+shared.down  16  stages 1 (64 thr, 6 KB)                           9.76     168.4    68.5  bitwise
+shared.down  16  S2 min blocks 1 (64 thr, 12 KB)                   9.19     178.8    72.7  bitwise
+shared.down  16  S2 activations cg (64 thr, 12 KB)                 9.21     178.4    72.5  bitwise
+shared.down  16  stages 3 (64 thr, 18 KB)                          9.34     176.0    71.5  bitwise
+shared.down  16  stages 4 (64 thr, 24 KB)                          9.64     170.5    69.3  bitwise
+shared.down  16  summary                                      best read 242.6 GB/s, 234 calls of 1.64 MB

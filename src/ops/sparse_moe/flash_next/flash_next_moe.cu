@@ -24,6 +24,15 @@
 #include <stdexcept>
 #include <variant>
 
+#ifdef NINFER_PERFORMANCE_TRACE
+#    include <chrono>
+#    include <cstdio>
+#    include <cstdlib>
+#    include <cstring>
+#    include <string>
+#    include <thread>
+#endif
+
 namespace ninfer::ops {
 namespace {
 
@@ -240,6 +249,60 @@ __global__ void __launch_bounds__(kRouteWarps * 32)
         out.packed_expert[packed] = expert;
     }
 }
+
+#ifdef NINFER_PERFORMANCE_TRACE
+// Trace builds only: how many distinct experts each grouped decode/verify call selects, the
+// quantity its routed weight bytes scale with (the work envelope cannot know it). With
+// NINFER_MOE_ROUTE_STATS=<path>, a one-thread kernel after the routing tallies (tokens, distinct
+// experts) into host-mapped memory, and a host thread rewrites <path> every two seconds as
+// "tokens distinct calls" lines. Increments are not atomic; calls on concurrent streams may
+// rarely lose a count.
+struct RouteStats {
+    unsigned long long calls[kFusedRouteTokens + 1][kFusedRouteTokens * kTop + 1];
+};
+
+__global__ void route_stats_kernel(const int* job_count, int tokens, RouteStats* stats) {
+    volatile unsigned long long* slot = &stats->calls[tokens][*job_count];
+    *slot                             = *slot + 1;
+}
+
+RouteStats* route_stats() {
+    static RouteStats* const device_stats = []() -> RouteStats* {
+        const char* path = std::getenv("NINFER_MOE_ROUTE_STATS");
+        if (path == nullptr || *path == '\0') return nullptr;
+        // The first call may come during graph capture; the mapped allocation is not a stream op.
+        cudaStreamCaptureMode mode = cudaStreamCaptureModeRelaxed;
+        CUDA_CHECK(cudaThreadExchangeStreamCaptureMode(&mode));
+        void* host = nullptr;
+        CUDA_CHECK(cudaHostAlloc(&host, sizeof(RouteStats), cudaHostAllocMapped));
+        std::memset(host, 0, sizeof(RouteStats));
+        void* device = nullptr;
+        CUDA_CHECK(cudaHostGetDevicePointer(&device, host, 0));
+        CUDA_CHECK(cudaThreadExchangeStreamCaptureMode(&mode));
+        std::thread([output = std::string(path), host] {
+            const auto* stats = static_cast<const volatile RouteStats*>(host);
+            const std::string partial = output + ".tmp";
+            for (;;) {
+                std::this_thread::sleep_for(std::chrono::seconds(2));
+                std::FILE* file = std::fopen(partial.c_str(), "w");
+                if (file == nullptr) continue;
+                std::fprintf(file, "tokens distinct calls\n");
+                for (int tokens = 0; tokens <= kFusedRouteTokens; ++tokens) {
+                    for (int distinct = 0; distinct <= kFusedRouteTokens * kTop; ++distinct) {
+                        const unsigned long long calls = stats->calls[tokens][distinct];
+                        if (calls != 0)
+                            std::fprintf(file, "%d %d %llu\n", tokens, distinct, calls);
+                    }
+                }
+                std::fclose(file);
+                std::rename(partial.c_str(), output.c_str());
+            }
+        }).detach();
+        return static_cast<RouteStats*>(device);
+    }();
+    return device_stats;
+}
+#endif
 
 // Pack each expert in token-major order. Besides making the packed representation reproducible,
 // scanning tokens (whose top-k expert ids are unique) avoids contended global atomics.
@@ -942,6 +1005,12 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
                 assignments);
         }
 
+#ifdef NINFER_PERFORMANCE_TRACE
+        if (RouteStats* stats = route_stats(); stats != nullptr && tokens <= kFusedRouteTokens) {
+            route_stats_kernel<<<1, 1, 0, stream>>>(static_cast<const int*>(job_count.data),
+                                                    tokens, stats);
+        }
+#endif
         Tensor gate_codes  = workspace.alloc(DType::U8, {kHidden / 2, assignments});
         Tensor gate_scales = workspace.alloc(DType::U8, {kHidden / 16, assignments});
         gather_quantize_routes_kernel<<<(assignments * (kHidden / 16) + 255) / 256, 256, 0,

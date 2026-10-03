@@ -7,6 +7,7 @@
 # per kernel. Writes profiles/bench/gb10/round-attribution/summary.md.
 #
 #   CONC=4 DRAFT=1 MAX_TOKENS=256 tools/gb10/round_attribution.sh
+#   ROUTE_STATS=1 ...   # also tally distinct routed experts per MoE call (moe_route_stats.txt)
 #
 # Timings carry profiler overhead: use them for shares, not for speed claims.
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
@@ -14,6 +15,7 @@ CONC=${CONC:-4}
 DRAFT=${DRAFT:-1}
 MAX_TOKENS=${MAX_TOKENS:-256}
 dir=$(step_dir round-attribution)
+if [[ ${ROUTE_STATS:-0} == 1 ]]; then export NINFER_MOE_ROUTE_STATS="$(realpath "$dir")/moe_route_stats.txt"; fi
 command -v nsys >/dev/null || { echo "nsys not found" >&2; exit 2; }
 if [[ -n $(nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null) ]]; then
     echo "GPU busy; one device-allocating job at a time." >&2

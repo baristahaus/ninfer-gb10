@@ -115,25 +115,14 @@ __global__ void __launch_bounds__(kRouteWarps * 32)
         // Shared gate: virtual thread v*32+lane of the former 256-thread block accumulates
         // k = v*32+lane, +256, ... in order; each virtual warp reduces by shuffle-down and the
         // eight warp sums reduce the same way from lanes 0..7.
-        // The loads of a virtual warp are issued before its chain of fmaf.
-        constexpr int kSharedSteps = kHidden / 256;
-        static_assert(kHidden % 256 == 0);
         const __nv_bfloat16* row = input + static_cast<std::int64_t>(kHidden) * token;
         float gathered           = 0.0F;
 #pragma unroll
         for (int v = 0; v < 8; ++v) {
-            __nv_bfloat16 inputs[kSharedSteps];
-            __nv_bfloat16 weights[kSharedSteps];
-#pragma unroll
-            for (int step = 0; step < kSharedSteps; ++step) {
-                inputs[step]  = row[v * 32 + lane + step * 256];
-                weights[step] = shared_scale_weight[v * 32 + lane + step * 256];
-            }
             float value = 0.0F;
-#pragma unroll
-            for (int step = 0; step < kSharedSteps; ++step) {
-                value = fmaf(__bfloat162float(inputs[step]), __bfloat162float(weights[step]),
-                             value);
+            for (int k = v * 32 + lane; k < kHidden; k += 256) {
+                value =
+                    fmaf(__bfloat162float(row[k]), __bfloat162float(shared_scale_weight[k]), value);
             }
             for (int offset = 16; offset != 0; offset >>= 1) {
                 value += __shfl_down_sync(kFull, value, offset);

@@ -3,6 +3,8 @@
 #include "ops/common/memory.cuh"
 #include <cuda_bf16.h>
 
+#include <cstddef>
+
 namespace ninfer::ops::detail {
 enum class Fp8CodeCache : std::uint8_t {
     Default,
@@ -169,14 +171,27 @@ struct Fp8A8MmaSchedule {
 
 enum class Fp8ActivationStage : std::uint8_t { ActiveOnly, PaddedZero };
 
+// KWarps fixes each output's arithmetic: warp w accumulates K chunks w, w + KWarps, ... of 64
+// columns, odd warps fold into even ones, and the even-warp pair sums fold left to right.
+// RowTiles (sixteen-row tiles per CTA, sharing the staged activations) and PairSplit (CTAs that
+// share one row tile, each with KWarps / PairSplit warps; the tile's last CTA folds the pair sums
+// from scratch in the same order) change only where that arithmetic runs.
 template <int KWarps, int TileTokens, int MinBlocksPerSm, Cache ActivationCache = Cache::ca,
           Cache WeightCache                  = Cache::cg,
-          Fp8ActivationStage ActivationStage = Fp8ActivationStage::ActiveOnly, int Stages = 1>
+          Fp8ActivationStage ActivationStage = Fp8ActivationStage::ActiveOnly, int Stages = 1,
+          int RowTiles = 1, int PairSplit = 1>
 struct Fp8A16SlicedKMmaSchedule {
     static_assert(KWarps == 2 || KWarps == 4 || KWarps == 8 || KWarps == 16);
     static_assert(TileTokens > 0 && TileTokens % 8 == 0);
     static_assert(Stages == 1 || Stages == 2);
     static_assert(MinBlocksPerSm > 0);
+    static_assert(RowTiles == 1 || RowTiles == 2 || RowTiles == 4);
+    static_assert(PairSplit >= 1 && KWarps % (2 * PairSplit) == 0);
+    static_assert(RowTiles == 1 || PairSplit == 1);
+    static constexpr int kRowTiles          = RowTiles;
+    static constexpr int kPairSplit         = PairSplit;
+    static constexpr int kLocalWarps        = KWarps / PairSplit;
+    static constexpr int kLocalBlockK       = kLocalWarps * 64;
     static constexpr int kStaticK           = 0;
     static constexpr int kTokenCapacity     = TileTokens;
     static constexpr bool kExactTokens      = false;
@@ -187,17 +202,33 @@ struct Fp8A16SlicedKMmaSchedule {
     static constexpr auto kWeightCache      = WeightCache;
     static constexpr auto kActivationStage  = ActivationStage;
     static constexpr int kStages            = Stages;
-    static constexpr int kThreads           = KWarps * 32;
+    static constexpr int kThreads           = RowTiles * kLocalWarps * 32;
     static constexpr int kTileKPerWarp      = 64;
     static constexpr int kBlockK            = KWarps * kTileKPerWarp;
     static constexpr int kBlockRows         = 16;
     static constexpr int kRowsPerLoaderWarp = 16 / KWarps;
-    static constexpr int kStagingBytes = Stages * (16 * kBlockK + KWarps * TileTokens * 64 * 2);
-    static constexpr int kPartialBytes = KWarps * (TileTokens / 8) * 32 * 4 * 4;
+    static constexpr int kStagingBytes =
+        Stages * (RowTiles * 16 * kLocalBlockK + kLocalWarps * TileTokens * 64 * 2);
+    static constexpr int kPartialBytes = RowTiles * kLocalWarps * (TileTokens / 8) * 32 * 4 * 4;
     static constexpr int kSharedBytes =
         kStagingBytes > kPartialBytes ? kStagingBytes : kPartialBytes;
     static_assert(kSharedBytes <= 99 * 1024);
+    static_assert(kThreads <= 1024);
 };
+
+// Scratch for a PairSplit sliced-K launch: per row tile and token tile, the KWarps / 2 pair sums
+// in fragment order and one arrival counter. Counters start at zero and the last arriving CTA
+// returns its counter to zero, so one zeroed buffer serves any number of ordered launches.
+struct Fp8SlicedSplitScratch {
+    float* pairs       = nullptr;
+    unsigned* counters = nullptr;
+};
+
+template <class Schedule>
+constexpr std::size_t fp8_sliced_split_pair_floats(int rows, int token_tiles) {
+    return static_cast<std::size_t>(rows / 16) * token_tiles * (Schedule::kKWarps / 2) *
+           (Schedule::kBlockTokens / 8) * 32 * 4;
+}
 
 // Shape instances retain measured compile-time K and token extents; the templates also
 // accept dynamic dimensions when no specialization is selected.

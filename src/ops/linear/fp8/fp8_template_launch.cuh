@@ -66,20 +66,25 @@ void launch_fp8_a16_mma(const Fp8A16Operands& p, Output output, Epilogue epilogu
 
 template <class Schedule, class Output, class Epilogue, class Rows = Fp8IdentityRows>
 void launch_fp8_a16_sliced_k_mma(const Fp8A16Operands& p, Output output, Epilogue epilogue,
-                                 cudaStream_t stream, Rows rows = {}) {
+                                 cudaStream_t stream, Rows rows = {},
+                                 Fp8SlicedSplitScratch scratch = {}) {
     validate_fp8_operands<Schedule>(p);
     constexpr int capacity =
         Schedule::kTokenCapacity ? Schedule::kTokenCapacity : Schedule::kBlockTokens;
     static_assert(capacity > 0 && capacity <= Schedule::kBlockTokens);
-    if (p.rows % Schedule::kBlockRows || p.k % Schedule::kTileKPerWarp ||
+    constexpr int kCtaRows = Schedule::kBlockRows * Schedule::kRowTiles;
+    if (p.rows % kCtaRows || p.k % Schedule::kTileKPerWarp ||
         (Schedule::kExactTokens && p.tokens != capacity))
         throw std::invalid_argument(
             "FP8 sliced-K requires complete row tiles, whole warp K tiles and matching tokens");
+    if (Schedule::kPairSplit > 1 && (scratch.pairs == nullptr || scratch.counters == nullptr))
+        throw std::invalid_argument("FP8 sliced-K with split pairs requires scratch");
     constexpr auto kernel = fp8_a16_sliced_k_mma_kernel<Schedule, Output, Epilogue, Rows>;
     const int bytes       = fp8_prepare_shared<Schedule::kSharedBytes, kernel>();
     for_each_token_slice(p.tokens, capacity, [&](int offset, int count) {
-        const dim3 grid(p.rows / Schedule::kBlockRows, div_up(count, capacity));
-        kernel<<<grid, Schedule::kThreads, bytes, stream>>>(p, output, epilogue, rows, offset);
+        const dim3 grid(p.rows / kCtaRows * Schedule::kPairSplit, div_up(count, capacity));
+        kernel<<<grid, Schedule::kThreads, bytes, stream>>>(p, output, epilogue, rows, offset,
+                                                            scratch);
         CUDA_CHECK(cudaGetLastError());
     });
 }

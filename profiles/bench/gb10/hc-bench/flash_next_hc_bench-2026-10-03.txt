@@ -1,0 +1,28 @@
+flash_next_hc_bench output (GB10, 2026-10-03, twoFour)
+
+Commit: edc0e975 (bench target), run on the GB10 workstation.
+Build: cmake --build build -j --target ninfer_flash_next_hc_bench (CMAKE_CUDA_ARCHITECTURES=121a)
+Run:   build/bench/ninfer_flash_next_hc_bench (defaults: T=2,4,8,16; 48 layers; warmup 5, repeat 30)
+Wall: 2026-10-03, bench wall time 37.34 s including the incremental build.
+
+flash_next HyperConnection combine+mix, FP8 down/up: 48 layers, 6.57 MB of projection bytes per layer, 48 SMs
+T    case                                 us/layer       GB/s    % 246
+0    contig projection bytes, grid 96        26.63      246.9    100.4
+0    contig projection bytes, grid 144       26.59      247.3    100.5
+0    contig projection bytes, grid 192       26.85      244.9     99.6
+2    combine_mix (whole op)                  42.89      153.3     62.3
+2    fp8 down+SiLU alone                     18.59      176.3     71.7
+2    fp8 up+mix alone                        17.91      184.2     74.9
+2    remainder (norm + boundaries)            6.40
+4    combine_mix (whole op)                  42.95      153.1     62.2
+4    fp8 down+SiLU alone                     18.61      176.1     71.6
+4    fp8 up+mix alone                        17.93      183.9     74.8
+4    remainder (norm + boundaries)            6.41
+8    combine_mix (whole op)                  43.03      152.8     62.1
+8    fp8 down+SiLU alone                     18.62      176.0     71.6
+8    fp8 up+mix alone                        17.97      183.5     74.6
+8    remainder (norm + boundaries)            6.44
+16   combine_mix (whole op)                  45.54      144.4     58.7
+16   fp8 down+SiLU alone                     19.51      168.0     68.3
+16   fp8 up+mix alone                        19.30      170.9     69.5
+16   remainder (norm + boundaries)            6.73

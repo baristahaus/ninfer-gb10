@@ -175,11 +175,11 @@ __device__ __forceinline__ void bf16_small_t_compute_rows(
     }
 }
 
+// One CTA's rows [block * kRowsPerCta, +kRowsPerCta) of one projection.
 template <class Geometry, int ActiveTokens, class Schedule, class OutputPolicy>
-__global__
-__launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void bf16_small_t_inner_kernel(
-    const __nv_bfloat16* __restrict__ x, const __nv_bfloat16* __restrict__ weight,
-    OutputPolicy output) {
+__device__ __forceinline__ void bf16_small_t_inner_block(const __nv_bfloat16* __restrict__ x,
+                                                         const __nv_bfloat16* __restrict__ weight,
+                                                         const OutputPolicy& output, int block) {
     static_assert(ActiveTokens >= 2 && ActiveTokens <= 32);
     static_assert((Geometry::kOutputRows % Schedule::kRowsPerCta) == 0);
 
@@ -189,7 +189,7 @@ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void bf16_small
     const int warp        = static_cast<int>(threadIdx.x) / kWarpSize;
     const int row_group   = warp / Schedule::kWarpsPerRow;
     const int warp_in_row = warp % Schedule::kWarpsPerRow;
-    const int cta_row0    = static_cast<int>(blockIdx.x) * Schedule::kRowsPerCta;
+    const int cta_row0    = block * Schedule::kRowsPerCta;
     const int row0        = cta_row0 + row_group * Schedule::kRowsPerWarp;
     float accumulators[Schedule::kRowsPerWarp][ActiveTokens][Schedule::kAccumulatorChains] = {};
 
@@ -232,6 +232,28 @@ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void bf16_small
     }
 }
 
+template <class Geometry, int ActiveTokens, class Schedule, class OutputPolicy>
+__global__
+__launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void bf16_small_t_inner_kernel(
+    const __nv_bfloat16* __restrict__ x, const __nv_bfloat16* __restrict__ weight,
+    OutputPolicy output) {
+    bf16_small_t_inner_block<Geometry, ActiveTokens, Schedule>(x, weight, output,
+                                                               static_cast<int>(blockIdx.x));
+}
+
+// Several projections of one input with one geometry in one launch: blockIdx.y selects the
+// projection, and every CTA computes exactly the rows bf16_small_t_inner_kernel would.
+template <int Count>
+struct Bf16SmallTProjections {
+    const __nv_bfloat16* weight[Count];
+    __nv_bfloat16* out[Count];
+};
+
+template <class Geometry, int ActiveTokens, class Schedule, int Count>
+__global__
+__launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void bf16_small_t_group_kernel(
+    const __nv_bfloat16* __restrict__ x, const Bf16SmallTProjections<Count> projections);
+
 struct Bf16SmallTContiguousOutput {
     __nv_bfloat16* data;
     std::int32_t rows;
@@ -240,5 +262,16 @@ struct Bf16SmallTContiguousOutput {
         data[static_cast<std::int64_t>(token) * rows + row] = __float2bfloat16_rn(value);
     }
 };
+
+template <class Geometry, int ActiveTokens, class Schedule, int Count>
+__global__
+__launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void bf16_small_t_group_kernel(
+    const __nv_bfloat16* __restrict__ x, const Bf16SmallTProjections<Count> projections) {
+    const int index = static_cast<int>(blockIdx.y);
+    bf16_small_t_inner_block<Geometry, ActiveTokens, Schedule>(
+        x, projections.weight[index],
+        Bf16SmallTContiguousOutput{projections.out[index], Geometry::kOutputRows},
+        static_cast<int>(blockIdx.x));
+}
 
 } // namespace ninfer::ops::detail::flash_next

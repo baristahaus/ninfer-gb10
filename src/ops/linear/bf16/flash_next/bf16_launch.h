@@ -30,6 +30,11 @@ void launch_bf16_shared_swiglu_decode(const Tensor& x, const Weight& gate_weight
                                       const Weight& up_weight, Tensor& out,
                                       cudaStream_t stream);
 void launch_bf16_small_t(const Tensor& x, const Weight& weight, Tensor& out, cudaStream_t stream);
+// Three [512,2560] BF16 projections of one input at T = 2..16 in one launch, each output bitwise
+// as launch_bf16_small_t computes it alone. Returns false, launching nothing, outside that domain.
+bool launch_bf16_narrow_triple_small_t(const Tensor& x, const Weight& first, const Weight& second,
+                                       const Weight& third, Tensor& first_out, Tensor& second_out,
+                                       Tensor& third_out, cudaStream_t stream);
 void launch_bf16_hc_down_silu_small_t(const Tensor& x, const Weight& weight, Tensor& out,
                                       cudaStream_t stream);
 void launch_bf16_mma(const Tensor& x, const Weight& weight, Tensor& out, cudaStream_t stream);

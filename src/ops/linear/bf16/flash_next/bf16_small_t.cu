@@ -95,7 +95,56 @@ constexpr auto make_hc_down_silu_launchers(std::index_sequence<Offsets...>) {
 constexpr auto kHcDownSiluLaunchers = make_hc_down_silu_launchers(
     std::make_index_sequence<kFlashNextSmallTMax - kBf16SmallTMinTokens + 1>{});
 
+template <int ActiveTokens>
+void launch_narrow_triple_exact(const Tensor& x, const Weight* const (&weights)[3],
+                                Tensor* const (&outs)[3], cudaStream_t stream) {
+    using Geometry = NarrowProjectionGeometry;
+    using Schedule = typename Bf16LinearSmallTProductionSchedule<Geometry, ActiveTokens>::Type;
+    Bf16SmallTProjections<3> projections{};
+    for (int i = 0; i < 3; ++i) {
+        projections.weight[i] = static_cast<const __nv_bfloat16*>(weights[i]->qdata);
+        projections.out[i]    = static_cast<__nv_bfloat16*>(outs[i]->data);
+    }
+    const dim3 grid(Geometry::kOutputRows / Schedule::kRowsPerCta, 3);
+    bf16_small_t_group_kernel<Geometry, ActiveTokens, Schedule, 3>
+        <<<grid, Schedule::kThreads, 0, stream>>>(static_cast<const __nv_bfloat16*>(x.data),
+                                                   projections);
+    CUDA_CHECK(cudaGetLastError());
+}
+
+using NarrowTripleLaunch = void (*)(const Tensor&, const Weight* const (&)[3],
+                                    Tensor* const (&)[3], cudaStream_t);
+
+template <std::size_t... Offsets>
+constexpr auto make_narrow_triple_launchers(std::index_sequence<Offsets...>) {
+    return std::array<NarrowTripleLaunch, sizeof...(Offsets)>{
+        &launch_narrow_triple_exact<kBf16SmallTMinTokens + static_cast<int>(Offsets)>...};
+}
+
+constexpr auto kNarrowTripleLaunchers = make_narrow_triple_launchers(
+    std::make_index_sequence<kFlashNextSmallTMax - kBf16SmallTMinTokens + 1>{});
+
 } // namespace
+
+bool launch_bf16_narrow_triple_small_t(const Tensor& x, const Weight& first, const Weight& second,
+                                       const Weight& third, Tensor& first_out, Tensor& second_out,
+                                       Tensor& third_out, cudaStream_t stream) {
+    const int tokens = x.ne[1];
+    if (tokens < kBf16SmallTMinTokens || tokens > kFlashNextSmallTMax) return false;
+    const Weight* const weights[3]{&first, &second, &third};
+    Tensor* const outs[3]{&first_out, &second_out, &third_out};
+    for (int i = 0; i < 3; ++i) {
+        const Weight& w = *weights[i];
+        if (w.qtype != QType::BF16 || w.layout != QuantLayout::Contiguous ||
+            w.n != NarrowProjectionGeometry::kOutputRows ||
+            w.k != NarrowProjectionGeometry::kInputRows || outs[i]->ne[1] != tokens) {
+            return false;
+        }
+    }
+    kNarrowTripleLaunchers[static_cast<std::size_t>(tokens - kBf16SmallTMinTokens)](x, weights,
+                                                                                    outs, stream);
+    return true;
+}
 
 void launch_bf16_small_t(const Tensor& x, const Weight& weight, Tensor& out, cudaStream_t stream) {
     const std::size_t index = static_cast<std::size_t>(x.ne[1] - kBf16SmallTMinTokens);

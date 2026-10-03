@@ -312,6 +312,55 @@ int run_decode_columns_case(DeviceWeight& weight, std::int32_t tokens) {
     return failures;
 }
 
+// The grouped [512,2560] launch (QSA key, value and index-query projections) against each
+// projection run alone through linear(): every output bit must match.
+int run_narrow_triple_case(DeviceWeight (&weights)[3], std::int32_t tokens) {
+    constexpr std::int32_t rows   = 512;
+    constexpr std::int32_t hidden = 2560;
+    const std::vector<std::uint16_t> activation_bits = make_activation_bits(hidden, tokens);
+    DeviceBuffer device_activation                   = to_device(activation_bits);
+    const std::size_t outputs                        = static_cast<std::size_t>(rows) * tokens;
+    Tensor x(device_activation.p, DType::BF16, {hidden, tokens});
+    std::vector<GuardedDeviceBuffer> grouped;
+    std::vector<GuardedDeviceBuffer> single;
+    std::vector<Tensor> grouped_out;
+    grouped.reserve(3);
+    single.reserve(3);
+    for (int i = 0; i < 3; ++i) {
+        grouped.emplace_back(outputs * sizeof(std::uint16_t));
+        single.emplace_back(outputs * sizeof(std::uint16_t));
+        grouped.back().fill(0xff);
+        single.back().fill(0xff);
+    }
+    for (int i = 0; i < 3; ++i) {
+        grouped_out.push_back(Tensor(grouped[i].data(), DType::BF16, {rows, tokens}));
+    }
+    const bool launched = ops::detail::flash_next::launch_bf16_narrow_triple_small_t(
+        x, weights[0].view(), weights[1].view(), weights[2].view(), grouped_out[0],
+        grouped_out[1], grouped_out[2], nullptr);
+    DeviceArena workspace(256);
+    for (int i = 0; i < 3; ++i) {
+        Tensor out(single[i].data(), DType::BF16, {rows, tokens});
+        ops::linear(x, weights[i].view(), out, ops::LinearPolicy::A16Only, workspace, nullptr);
+    }
+    cuda_synchronize();
+    const std::string label = "BF16 narrow triple [512,2560] T=" + std::to_string(tokens);
+    int failures = 0;
+    if (!launched) {
+        std::cerr << label << ": grouped launch refused a supported problem\n";
+        return 1;
+    }
+    for (int i = 0; i < 3; ++i) {
+        failures += grouped[i].verify_guards(label) + single[i].verify_guards(label);
+        if (from_device<std::uint16_t>(grouped[i].data(), outputs) !=
+            from_device<std::uint16_t>(single[i].data(), outputs)) {
+            std::cerr << label << ": projection " << i << " differs from its separate launch\n";
+            ++failures;
+        }
+    }
+    return failures;
+}
+
 int run_bf16_linear() {
     int failures = 0;
     DeviceWeight attention_weight(make_patterned(14336, 5120, 401U));
@@ -336,6 +385,10 @@ int run_bf16_linear() {
             failures += run_decode_columns_case(*weight, tokens);
         }
     }
+    DeviceWeight narrow[3]{DeviceWeight(make_patterned(512, 2560, 431U)),
+                           DeviceWeight(make_patterned(512, 2560, 433U)),
+                           DeviceWeight(make_patterned(512, 2560, 439U))};
+    for (int tokens = 2; tokens <= 16; ++tokens) failures += run_narrow_triple_case(narrow, tokens);
     return failures;
 }
 

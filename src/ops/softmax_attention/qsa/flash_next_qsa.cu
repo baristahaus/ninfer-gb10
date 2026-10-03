@@ -1690,8 +1690,21 @@ void flash_next_qsa(const Tensor& input, const Tensor& cache_positions,
     Tensor value = workspace.alloc(DType::BF16, {512, tokens});
     flash_next_project_query_gate(input, weights.query_gate, query, gate, workspace, stream,
                                   bf16_gemm);
-    linear(input, weights.key, key, stream, bf16_gemm);
-    linear(input, weights.value, value, stream, bf16_gemm);
+    // Key, value and (when this layer selects its own indices) index-query projections share
+    // one launch on the BF16 small-T route; each output is bitwise its separate projection.
+    const bool select_indices = index_control.reused_indices == nullptr;
+    Tensor index_query_projected;
+    if (select_indices) { index_query_projected = workspace.alloc(DType::BF16, {512, tokens}); }
+    if (!select_indices ||
+        !detail::flash_next::launch_bf16_narrow_triple_small_t(
+            input, weights.key, weights.value, weights.index_query, key, value,
+            index_query_projected, stream)) {
+        linear(input, weights.key, key, stream, bf16_gemm);
+        linear(input, weights.value, value, stream, bf16_gemm);
+        if (select_indices) {
+            linear(input, weights.index_query, index_query_projected, stream, bf16_gemm);
+        }
+    }
     Tensor normalized_query = workspace.alloc(DType::BF16, {6144, tokens});
     Tensor normalized_key = workspace.alloc(DType::BF16, {512, tokens});
     Tensor query_heads = query.view({kHeadDim, kQueryHeads, tokens});
@@ -1709,9 +1722,7 @@ void flash_next_qsa(const Tensor& input, const Tensor& cache_positions,
     Tensor index_key = workspace.alloc(DType::BF16, {128, tokens});
     linear(input, weights.index_key, index_key, stream, bf16_gemm);
     Tensor index_query;
-    if (index_control.reused_indices == nullptr) {
-        Tensor index_query_projected = workspace.alloc(DType::BF16, {512, tokens});
-        linear(input, weights.index_query, index_query_projected, stream, bf16_gemm);
+    if (select_indices) {
         index_query = workspace.alloc(DType::BF16, {512, tokens});
         prepare_index_query_kernel<<<dim3(kIndexHeads, tokens), kIndexDim, 0, stream>>>(
             static_cast<const __nv_bfloat16*>(index_query_projected.data),

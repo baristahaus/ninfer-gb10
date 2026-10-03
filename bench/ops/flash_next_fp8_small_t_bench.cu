@@ -4,12 +4,13 @@
 // run, and which sliced-K schedule recovers the difference without changing any output bit? For
 // every Flash-Next FP8 shape on the T = 2..16 route, this times the production schedule
 // (Fp8SlicedInstance<T, W, 2>, W = the shape's K-warp count), schedules that keep W and therefore
-// every output's accumulation order (one stage, the other occupancy bound, activations in L1 or
-// not, two or four row tiles per CTA, the K-warp pairs split over two or four CTAs), and a 16-byte
-// read of the same bytes. Each variant's output is compared bitwise with the production
-// schedule's. Every call reads its own copy of the weight (--budget-mb of copies per shape), so
-// nothing is reused from L2. Outputs use the plain BF16 store: the production consumers' fused
-// epilogues (HyperConnection SiLU and gate mix, shared-expert SwiGLU) are not included.
+// every output's accumulation order (one, three or four pipeline stages, the other occupancy
+// bound, activations in L1 or not), and a 16-byte read of the same bytes. Each variant's output
+// is compared bitwise with the production schedule's. Every call reads its own copy of the weight
+// (--budget-mb of copies per shape), so nothing is reused from L2. Outputs use the plain BF16
+// store: the production consumers' fused epilogues (HyperConnection SiLU and gate mix,
+// shared-expert SwiGLU) are not included. The first probe (c1d51813) also tried several row
+// tiles per CTA and K-warp pairs split over CTAs; neither won on any shape.
 
 #include "core/device.h"
 #include "core/weight.h"
@@ -194,14 +195,6 @@ void probe_shape(const Context& context, const char* name) {
     CUDA_CHECK(cudaGetLastError());
     DeviceBuffer reference(static_cast<std::size_t>(Rows) * T * 2);
     DeviceBuffer out(static_cast<std::size_t>(Rows) * T * 2);
-    // Split-pair scratch, sized for the widest split (W / 2 pairs per row tile) and reused by
-    // every call: launches are stream ordered and each tile's last CTA re-zeroes its counter.
-    DeviceBuffer pairs(static_cast<std::size_t>(Rows / 16) * (W / 2) * (T / 8) * 32 * 4 *
-                       sizeof(float));
-    DeviceBuffer counters(static_cast<std::size_t>(Rows / 16) * sizeof(unsigned));
-    CUDA_CHECK(cudaMemsetAsync(counters.p, 0, counters.bytes, context.stream));
-    const Fp8SlicedSplitScratch scratch{static_cast<float*>(pairs.p),
-                                        static_cast<unsigned*>(counters.p)};
 
     const auto operands = [&](int copy) {
         auto p   = fp8_a16_operands(Tensor(x.p, DType::BF16, {K, T}), bank.copies[copy].weight);
@@ -242,7 +235,7 @@ void probe_shape(const Context& context, const char* name) {
         const auto launch = [&](int copy, void* destination, cudaStream_t s) {
             launch_fp8_a16_sliced_k_mma<S>(
                 operands(copy), LinearBf16Output{static_cast<__nv_bfloat16*>(destination), Rows},
-                LinearIdentityEpilogue{}, s, Fp8IdentityRows{}, scratch);
+                LinearIdentityEpilogue{}, s);
         };
         void* destination = have_reference ? out.p : reference.p;
         launch(0, destination, context.stream);
@@ -268,35 +261,21 @@ void probe_shape(const Context& context, const char* name) {
     constexpr int kOtherMin = Production::kMinBlocksPerSm == 1 ? 2 : 1;
     run.template operator()<Production>("production S2");
     run.template operator()<Fp8SlicedInstance<T, W, 1>>("stages 1");
-    run.template operator()<Fp8A16SlicedKMmaSchedule<W, T, kOtherMin, ops::Cache::ca, ops::Cache::cg,
+    run.template operator()<Fp8A16SlicedKMmaSchedule<W, T, kOtherMin, ops::Cache::ca,
+                                                     ops::Cache::cg,
                                                      Fp8ActivationStage::PaddedZero, 2>>(
         kOtherMin == 1 ? "S2 min blocks 1" : "S2 min blocks 2");
-    run.template operator()<Fp8A16SlicedKMmaSchedule<W, T, Production::kMinBlocksPerSm, ops::Cache::cg,
-                                                     ops::Cache::cg, Fp8ActivationStage::PaddedZero,
-                                                     2>>("S2 activations cg");
-    run.template operator()<Fp8A16SlicedKMmaSchedule<W, T, 1, ops::Cache::ca, ops::Cache::cg,
-                                                     Fp8ActivationStage::PaddedZero, 2, 2>>(
-        "S2 row tiles 2");
-    run.template operator()<Fp8A16SlicedKMmaSchedule<W, T, 1, ops::Cache::ca, ops::Cache::cg,
-                                                     Fp8ActivationStage::PaddedZero, 1, 2>>(
-        "S1 row tiles 2");
-    if constexpr (Fp8A16SlicedKMmaSchedule<W, T, 1, ops::Cache::ca, ops::Cache::cg,
-                                           Fp8ActivationStage::PaddedZero, 1, 4>::kSharedBytes <=
-                  99 * 1024) {
-        run.template operator()<Fp8A16SlicedKMmaSchedule<W, T, 1, ops::Cache::ca, ops::Cache::cg,
-                                                         Fp8ActivationStage::PaddedZero, 1, 4>>(
-            "S1 row tiles 4");
-    }
-    if constexpr (W % 4 == 0) {
-        run.template operator()<Fp8A16SlicedKMmaSchedule<W, T, 2, ops::Cache::ca, ops::Cache::cg,
-                                                         Fp8ActivationStage::PaddedZero, 2, 1,
-                                                         2>>("S2 pair split 2");
-    }
-    if constexpr (W % 8 == 0) {
-        run.template operator()<Fp8A16SlicedKMmaSchedule<W, T, 2, ops::Cache::ca, ops::Cache::cg,
-                                                         Fp8ActivationStage::PaddedZero, 2, 1,
-                                                         4>>("S2 pair split 4");
-    }
+    run.template operator()<Fp8A16SlicedKMmaSchedule<W, T, Production::kMinBlocksPerSm,
+                                                     ops::Cache::cg, ops::Cache::cg,
+                                                     Fp8ActivationStage::PaddedZero, 2>>(
+        "S2 activations cg");
+    const auto deeper = [&]<int Stages>(const char* label) {
+        using Schedule = Fp8A16SlicedKMmaSchedule<W, T, 1, ops::Cache::ca, ops::Cache::cg,
+                                                  Fp8ActivationStage::PaddedZero, Stages>;
+        run.template operator()<Schedule>(label);
+    };
+    deeper.template operator()<3>("stages 3");
+    deeper.template operator()<4>("stages 4");
     std::printf("%-12s %-3d %-44s best read %.1f GB/s, %d calls of %.2f MB\n", name, T, "summary",
                 best_read, calls, bank.bytes_per_call / 1e6);
 }

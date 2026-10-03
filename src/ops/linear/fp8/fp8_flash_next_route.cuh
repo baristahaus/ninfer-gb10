@@ -20,6 +20,7 @@
 #include "ops/linear/fp8/fp8_template_launch.cuh"
 
 #include <stdexcept>
+#include <type_traits>
 
 namespace ninfer::ops::detail::flash_next {
 
@@ -31,6 +32,18 @@ constexpr int sliced_k_warps() {
         if (K % (warps * 64) == 0) return warps;
     return 2;
 }
+
+// The T <= 16 sliced-K tiles. Long-K shapes (K >= 6144: the [2560,6144] mixer output and the
+// [320,10240] HyperConnection down) keep three K groups in flight, which their 15-20 groups per
+// tile can fill; shorter K stays at two stages. Stage depth changes no output bit (GB10
+// small-T probe, 2026-10-03: hc.down 74.5 -> 78.5% and out 94.1 -> 96.1% of a plain read at
+// T = 8; shared gate/up and shared down lose 1-4 points at three stages).
+template <int Tokens, int Warps, int K>
+using Fp8FlashNextDecodeTile =
+    std::conditional_t<(K >= 6144),
+                       Fp8A16SlicedKMmaSchedule<Warps, Tokens, 1, Cache::ca, Cache::cg,
+                                                Fp8ActivationStage::PaddedZero, 3>,
+                       Fp8SlicedInstance<Tokens, Warps, 2>>;
 
 template <class Geometry, class GemvSchedule, class Output, class Epilogue>
 void launch_fp8_dense_a16(const Tensor& x, const Weight& weight, Output output, Epilogue epilogue,
@@ -48,13 +61,13 @@ void launch_fp8_dense_a16(const Tensor& x, const Weight& weight, Output output, 
     }
     if (tokens <= 8) {
         return launch_fp8_a16_sliced_k_mma<
-            Fp8ScheduleInstance<Fp8SlicedInstance<8, kWideWarps, 2>, K>>(operands, output, epilogue,
-                                                                         stream);
+            Fp8ScheduleInstance<Fp8FlashNextDecodeTile<8, kWideWarps, K>, K>>(operands, output,
+                                                                               epilogue, stream);
     }
     if (tokens <= 16) {
         return launch_fp8_a16_sliced_k_mma<
-            Fp8ScheduleInstance<Fp8SlicedInstance<16, kWideWarps, 2>, K>>(operands, output,
-                                                                          epilogue, stream);
+            Fp8ScheduleInstance<Fp8FlashNextDecodeTile<16, kWideWarps, K>, K>>(operands, output,
+                                                                                epilogue, stream);
     }
     if (tokens <= 32) {
         return launch_fp8_a16_sliced_k_mma<

@@ -1,0 +1,11 @@
+kernel                                               grid block   smem   count   p10 us   median   p90 us  total ms
+combine_grouped_rmsnorm_kernel                      4x6x1   256      0   15485     2.88     3.17     6.34     63.77
+combine_grouped_rmsnorm_kernel                      4x8x1   256      0   11970     3.07     3.62     5.70     49.18
+combine_grouped_rmsnorm_kernel                      4x2x1   256      0   15105     2.66     2.75     3.46     44.23
+combine_grouped_rmsnorm_kernel                      4x4x1   256      0    4275     2.72     2.82     3.97     13.55
+combine_grouped_rmsnorm_kernel                    4x562x1   256      0      95   124.93   127.74   135.20     12.50
+combine_grouped_rmsnorm_kernel                    4x530x1   256      0      95   117.31   119.49   139.10     11.97
+combine_grouped_rmsnorm_kernel                    4x515x1   256      0      95   113.92   115.71   120.93     11.35
+combine_grouped_rmsnorm_kernel                    4x459x1   256      0      95    99.14   101.98   107.49      9.84
+combine_grouped_rmsnorm_kernel                      4x3x1   256      0     760     2.62     2.72     3.55      2.24
+combine_grouped_rmsnorm_kernel                     4x51x1   256      0      95     9.57    10.11    17.09      1.16

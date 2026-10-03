@@ -1,0 +1,13 @@
+flash_next HyperConnection combine+mix, FP8 down/up: 48 layers, 6.57 MB of projection bytes per layer, 48 SMs
+T    case                                 us/layer       GB/s    % 246
+0    contig projection bytes, grid 96        26.60      247.2    100.5
+0    contig projection bytes, grid 144       27.14      242.2     98.5
+0    contig projection bytes, grid 192       26.97      243.8     99.1
+8    combine_mix (whole op)                  38.56      170.5     69.3
+8    fp8 down+SiLU alone                     18.07      181.3     73.7
+8    fp8 up+mix alone                        18.05      182.6     74.2
+8    remainder (norm + boundaries)            2.43
+16   combine_mix (whole op)                  41.45      158.6     64.5
+16   fp8 down+SiLU alone                     18.89      173.5     70.5
+16   fp8 up+mix alone                        19.40      170.0     69.1
+16   remainder (norm + boundaries)            3.16

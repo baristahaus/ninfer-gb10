@@ -241,7 +241,7 @@ def main():
         json.dump(record, f, indent=1)
 
     print("\n| tokens | task | turn | n | TTFT s (median) | prefill tok/s | decode tok/s | max gap s "
-          "| facts named |")
+          "| facts named per rep (of 4) |")
     print("|---:|---|---:|---:|---:|---:|---:|---:|---|")
     for size in sizes:
         for task in tasks:
@@ -255,7 +255,7 @@ def main():
                 facts = ""
                 if turn == 1:
                     hits = [sum(r["facts"].values()) for r in rows if "facts" in r]
-                    facts = "/".join(str(h) for h in hits) + " of 4"
+                    facts = ", ".join(str(h) for h in hits)
                 print(f"| {size} | {task} | {turn} | {len(rows)} | {med('ttft_s'):.2f} | "
                       f"{med('prefill_tok_s'):.0f} | {med('decode_tok_s'):.1f} | "
                       f"{med('max_gap_s'):.2f} | {facts} |")

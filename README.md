@@ -155,7 +155,8 @@ The remaining levers are fewer bytes per token rather than faster kernels.
 with flat drift.
 
 **Open:**
-- long-prompt (15K–60K) behaviour on operations-style workloads;
+- long-prompt prefill: 60K prompts take 39 s to the first token at the default chunk, against
+  32 s on DGPP;
 - DGPP at draft depths 2–3;
 - whether greedy decode at four or more requests should be made batch-invariant.
 

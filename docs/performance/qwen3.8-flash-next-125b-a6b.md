@@ -435,6 +435,39 @@ of GPU work per round. Floors come from the attribution's byte model at 246 GB/s
 What remains is small latency work, about 0.1–0.2 ms per round per item. Fewer bytes per token
 (more accepted tokens per round, smaller formats) is the remaining large lever.
 
+### Long prompts: operations workload, October 4
+
+Method: `tools/gb10/long_context.sh` (tree `6cd02900`, `profiles/bench/gb10/long-context/`).
+- **Prompts:** synthetic incident bundles with one planted root-cause chain.
+- **Tasks:** a scripts task and a root-cause triage task, 1,536 output tokens, greedy, thinking
+  off, two reps, each with a prefix-reusing follow-up turn.
+- **Arms:** NInfer at its defaults (`--prefill-chunk 1024`, two lanes, KV pool equal to
+  `--max-context`, 73,728 tokens), and DGPP `dd58d6d3`.
+
+| | 15K | 30K | 60K |
+|---|---:|---:|---:|
+| NInfer TTFT, s (prefill tok/s) | 9.8 (1,590) | 18.8 (1,585) | 38.9 (1,550) |
+| DGPP TTFT, s (prefill tok/s) | 7.9 (1,960) | 15.6 (1,915) | 32.3 (1,867) |
+| NInfer decode tok/s, K=1 / K=3 | 48.7 / 60.5 | 48.8 / 62.3 | 48.8 / 61.0 |
+| DGPP decode tok/s | 46.6 | 46.8 | 46.4 |
+
+- **Prefill:** at these defaults NInfer prefills about 20% slower than DGPP, flat from 15K to
+  60K, and below the 2.5k tok/s of the `ninfer_bench` rows. Those rows used
+  `--prefill-chunk 8192` on a page-cached tiled corpus.
+- **Decode:** does not depend on prompt length. K=3 leads DGPP by 25–35% at every size.
+- **Acceptance:** 1.82 tokens per round at K=1 and 2.92 at K=3, the same as on short prompts.
+- **Follow-up turns** start in 0.2–0.8 s. 22 of 24 recomputed only 43–55 prompt tokens. Two
+  recomputed the previous answer as well (1,595 tokens, 1.3 s); that partial miss is not yet
+  explained.
+- **Planted facts:** every arm's answers named 3–4 of the 4.
+- **Interference** (a 60K prompt arriving while a 15K request decodes):
+  - DGPP stalled the running request for 32.9 s in total, with gaps up to 2.4 s.
+  - NInfer showed no stall, but only because the 60K prompt was not admitted: two lanes share the
+    73,728-token default pool, and the running request's reservation leaves no room for a 60K
+    prompt (`no_feasible_plan`). So it waited 22–28 s for the running request to finish. With a
+    pool that fits both, the two would share the GPU; that case is not yet measured.
+  - At the defaults, a newcomer waits for the running request whatever its length.
+
 ### Changes and their measured effect
 
 Each change kept outputs bitwise unless the row says otherwise. Gates: op oracle tests, the
@@ -500,19 +533,11 @@ drift gate below.
 
 - **DGPP at draft depth 2–3:** untested, so the depth-1 comparison is the like-for-like claim.
 - **Batch-invariant decode:** a product decision with a throughput cost.
-- **Long prompts:** time to first token and decode at 15K–60K prompts on operations-style workloads
-  are not yet measured. `tools/gb10/long_context.sh` is the method; its findings go in their own
-  subsection here.
-  - **Prompts:** synthetic incident bundles from `ops_corpus.py`: journald, nginx, Kubernetes
-    events, stack traces, manifests, shell history and metrics, with one planted root-cause chain
-    40–70% of the way in.
-  - **Tasks:** a scripts task and a root-cause triage task, each with a follow-up turn that
-    reuses the prefix.
-  - **Interference:** one probe with a 60K prompt arriving while a 15K request decodes.
-  - **Arms:** NInfer K=1 and K=3 with two lanes, and DGPP.
-  - **Prior data:** the only prefill rates so far are the bench curve (about 2.5k tok/s at 8K–64K,
-    so a cold 60K prompt is about 25 s to first token) and the 2.1× slower cold-page-cache prefill
-    measured in September.
+- **Long-prompt follow-ups:**
+  - the prefill-chunk sweep;
+  - the interference probe with `--kv-capacity auto`, so that both requests are admitted;
+  - the cause of the two follow-up partial misses;
+  - then the prefill path itself: about 20% behind DGPP at the default chunk.
 - **MTP at 32K and 128K:** K=3 measured 37.7 tok/s at 32K and 60.8 at 128K against 56–57 at
   1K–8K. Each row continues different natural text, so do not cite 32K/128K MTP rates until that
   is separated from a context effect.

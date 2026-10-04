@@ -46,6 +46,11 @@ plus selected fixes cherry-picked from giveen/ninfer-ext (see below).
 Each cherry-picked commit keeps its original author and records its source commit
 (`git cherry-pick -x`).
 
+The working "GB10 plan" several rows mention was retired on 2026-10-04. Its results, measurement
+rules and rejected approaches are now in the
+[GB10 record](docs/performance/qwen3.8-flash-next-125b-a6b.md#gb10-sm_121a), and the MTP round
+design is in the [model reference](docs/maintainer/qwen3.8-flash-next-125b-a6b-model.md).
+
 | PR | Change | Provenance |
 |---|---|---|
 | [#1](https://github.com/baristahaus/ninfer-gb10/pull/1) | Streamed JSON `response_format` output sent as one cleaned chunk; parse-first `json_output::extract`; port-note corrections; GB10 plan | This fork (Claude Code session) |
@@ -69,6 +74,50 @@ Each cherry-picked commit keeps its original author and records its source commi
 | [#20](https://github.com/baristahaus/ninfer-gb10/pull/20) | Plan step 7a, second pass: HyperConnection up and shared-expert projections in FP8 (recipe `..._fp8_projections-v3`, shared gate/up as one packed parent per layer), about 0.55 GB less per decoded token; upstream's FP8 GEMV and sliced-K templates take any K that is a whole number of lane packs / 64-column warp tiles; new FP8 Linear shapes `[10240,320]`, `[2560,640]` and a LinearSwiGLU profile `[1280,2560]` | This fork (Claude Code session) |
 | [#22](https://github.com/baristahaus/ninfer-gb10/pull/22) | Lands #20 on `master` (it merged into the #19 branch after #19 had merged); `ninfer_bench --sampling <greedy\|model> --temperature --seed` (report schema 16) and step 2 sampled rows for MTP off and `DRAFT_TOKENS` beside the greedy ones | This fork (Claude Code session) |
 | Upstream sync | Neroued/ninfer master `e31bc99b` merged: unified Q4–Q8/FP8/NVFP4 templates with A16 MMA routes, BF16 template expansion, two-stage GDN, KDA, `NINFER_CUDA_SYNC` (unset: yield on integrated GPUs, spin elsewhere); 7a FP8 route moved onto the unified FP8 templates (SIMT at T=2..4, HyperConnection down+SiLU fused at every width); Flash-Next keeps its own NVFP4 W4A4 expert kernel and grouped BF16 GEMM | Upstream work by Neroued; merge and ports by this fork (Claude Code session) |
+| [#24](https://github.com/baristahaus/ninfer-gb10/pull/24) | Token log-probabilities: `ops::target_logprobs` through the Flash-Next Program and Chat Completions (`--token-logprobs`), reporting the model's raw distribution | mtdphn (Daphne) |
+| [#25](https://github.com/baristahaus/ninfer-gb10/pull/25) | MTP startup at `--max-concurrency` 3 and above: the predictor decides its RoPE layout by element count; verification campaign record | This fork (Claude Code session); campaign by the GB10 workstation |
+| [#26](https://github.com/baristahaus/ninfer-gb10/pull/26) | Recipe `..._nvfp4_fp8_mtp-v3`: the MTP layer in the main layers' formats (NVFP4 expert banks from a new `nvfp4_maxabs` quantizer with an exact oracle, FP8 dense leaves); the adopted `fp8mtp` artifact | This fork (Claude Code session); quantization arithmetic after igorls/ninfer (`3ea24b4`, `3db1caee`) and cometkim |
+| [#27](https://github.com/baristahaus/ninfer-gb10/pull/27) | MTP startup at `--max-concurrency 8`: dense-QSA MTP profiles get their own graph class | This fork (Claude Code session) |
+| [#28](https://github.com/baristahaus/ninfer-gb10/pull/28) | Dense-QSA MTP crash at six or more lanes over a shared prefix: the dense route now publishes its complete causal selection for the draft steps | This fork (Claude Code session); found by the GB10 workstation's campaign |
+| [#29](https://github.com/baristahaus/ninfer-gb10/pull/29) | 7d gate record, `tools/gb10/k_sweep.sh` | This fork (Claude Code session) |
+| [#30](https://github.com/baristahaus/ninfer-gb10/pull/30) | Upstream `dev` causal-attention reorganization merged; `tools/gb10/block_i.sh` decision-facts campaign | Upstream work by Neroued; merge and campaign by this fork |
+| [#31](https://github.com/baristahaus/ninfer-gb10/pull/31), [#32](https://github.com/baristahaus/ninfer-gb10/pull/32) | First DGPP scoreboard (I9) and its harness | This fork (Claude Code session); runs by the GB10 workstation |
+| [#33](https://github.com/baristahaus/ninfer-gb10/pull/33) | Startup sizing on integrated devices from `MemAvailable` less a host reserve, instead of page-cache-inflated `cudaMemGetInfo` | This fork (Claude Code session); idea from igorls/ninfer `57a277c9` |
+| [#34](https://github.com/baristahaus/ninfer-gb10/pull/34) | Admission waits while a StateImage fork is unsettled (fixes an Engine failure at eight requests and under eviction) | This fork (Claude Code session) |
+| [#35](https://github.com/baristahaus/ninfer-gb10/pull/35) | DGPP source read for the C4 gap | This fork (Claude Code session); DGPP by Stephen Douglas Hawkins, no code taken |
+| [#36](https://github.com/baristahaus/ninfer-gb10/pull/36) | Dense QSA when every visible key fits the selection budget (C4 +5.2%); admission re-arm when a blocking fork settles | This fork (Claude Code session) |
+
+Not yet merged to `master`, on `claude/peaceful-cori-e9myku` (after #36). Every item kept the
+real-artifact goldens; the two that change numerics are noted; measured effects are in the [GB10 record](docs/performance/qwen3.8-flash-next-125b-a6b.md#gb10-sm_121a):
+
+- MTP round rework:
+  - the commit fold deferred into the next round's graph (K1);
+  - a device-resident round frame (K2);
+  - PLE rows hashed on the device and gathered by a Program thread during layer 0 (K3);
+  - the GDN fold fused into verify (K5).
+
+  Two rounds in flight (K4) was built, measured slower and removed.
+- Fixes:
+  - PLE history read from the fork source during prefill (concurrency-dependent output after a
+    context capture; this one changes outputs);
+  - the QSA workspace sized for every call;
+  - shutdown drain and integrated-memory startup wait.
+- Overlapped PLE row page-ins: C4 long generations +18%.
+- MoE decode:
+  - expert-grouped decode from 8 rows;
+  - routing and grouping in one kernel;
+  - schedules from a bandwidth probe (routed experts at 97–98% of the measured read).
+- Smaller passes:
+  - PLE replay record in one weight pass;
+  - QSA split decode staging each KV tile once;
+  - the HyperConnection gate mix fused into the FP8 up projection (the injection's reduction
+    order changed: 4K perplexity −1.35e-3, goldens held);
+  - the HyperConnection grouped RMSNorm with its loads issued up front;
+  - QSA narrow projections in one launch.
+- Probes and tools: MoE, HyperConnection and FP8 small-T benches; `round_attribution.sh` with a
+  distinct-expert counter; `kernel_shapes.py`.
+- Upstream drafts for lkarlslund/ninfer under `share/`: the MTP RoPE fix, the PLE fork fix, the PLE
+  page-in, and the QSA workspace sizing.
 
 Commits taken in #3 (source commit in giveen/ninfer-ext, then original author):
 
@@ -82,16 +131,38 @@ Commits taken in #3 (source commit in giveen/ninfer-ext, then original author):
 | Duplicate tool-call parameter keeps its last value (combined per ext `932c549a`) | `d3a44d21` | adubkov |
 | Engine worker recovers from OOM | `93165378` | Ian Ranson, porting David Oelfke's `3f3272d6` (Doelfke/ninfer-yarn, carried by gzenz/ninfer) |
 
-### Validated on GB10
+### Where the fork stands (2026-10-03)
 
-Clean build 728/728 (nvcc V13.0.88, `-DCMAKE_CUDA_ARCHITECTURES=121a`); op conformance
-36 pass / 4 skip / 0 fail; unit suites green; 11/11 live smoke; probe suite all 200, no
-early EOS. Serves the Qwen3.8 Flash-Next 125B-A6B v3 artifact (fp8 KV cache, MTP
-draft-tokens 2, max concurrency 2).
+On one GB10, the Flash-Next 125B-A6B `fp8mtp` artifact serves at:
 
-Open GB10 work — baseline measurement, decode attribution, `tool_choice: required`
-enforcement, and NVFP4 tuning — is tracked step by step in
-[`docs/maintainer/plan-2026-09-gb10.md`](docs/maintainer/plan-2026-09-gb10.md).
+- 59.9 tok/s single stream (MTP K=3);
+- 121.4 tok/s aggregate at four concurrent requests;
+- 32.6 tok/s decode without speculation;
+- about 2.5k tok/s prefill from 8K to 64K.
+
+**Against DGPP at the same draft depth (1), on DGPP's own load protocol:** NInfer is +2.4% at one
+request, +6.9% at two and +17.2% at four. With deeper drafts at four requests the lead is +33%.
+
+**Where the time goes:** every large decode stage now runs at its memory-bandwidth floor.
+- the routed experts at 98% of the measured 246 GB/s read;
+- the LM head;
+- the GDN/QSA projections;
+- the GDN state passes.
+
+The remaining levers are fewer bytes per token rather than faster kernels.
+
+**Quality:** the FP8 dense projections cost +0.6% perplexity at 4K and none measurable at 64K,
+with flat drift.
+
+**Open:**
+- long-prompt (15K–60K) behaviour on operations-style workloads;
+- DGPP at draft depths 2–3;
+- whether greedy decode at four or more requests should be made batch-invariant.
+
+The full record: [docs/performance/qwen3.8-flash-next-125b-a6b.md](docs/performance/qwen3.8-flash-next-125b-a6b.md#gb10-sm_121a).
+
+Build and tests: `tools/gb10/step0_build_test.sh` (ctest 139/139 plus the Flash-Next real-artifact
+tests).
 
 NInfer is a from-scratch C++/CUDA inference engine for Qwen3.5 Dense/MoE and Qwen3.8 Flash-Next
 on one Blackwell GPU. The 27B/35B models target RTX 5090; Flash-Next targets RTX PRO 6000. It runs text, image, and video prompts through a local CLI or

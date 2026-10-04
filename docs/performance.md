@@ -8,7 +8,7 @@ mean every workload or concurrency has a published measurement.
 Read the [measurement and publication rules](performance/methodology.md) for workload definitions,
 metric formulas, statistics, comparison requirements, and the standard result-page format.
 
-Flash-Next runs on RTX PRO 6000 Blackwell; its serving comparisons, v3 migration results and GB10 (`sm_121a`) fork baseline are documented separately.
+Flash-Next runs on RTX PRO 6000 Blackwell; its serving comparisons, v3 migration results and the GB10 (`sm_121a`) fork record are documented separately.
 
 ## Published coverage
 

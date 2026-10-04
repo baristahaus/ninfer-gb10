@@ -299,49 +299,232 @@ over the loopback OpenAI-compatible HTTP endpoint. Each reported corpus fixture 
 seeds. Values are arithmetic mean ± sample standard deviation, and server warm-up completes before
 the measured requests. The concurrent campaign has its own sustained-wave method below.
 
-## GB10 (`sm_121a`) baseline — 2026-09-28
+## GB10 (`sm_121a`)
 
-NInfer's GB10 fork (`ninfer-gb10`) compiles the engine — upstream master at `c95b021b`,
-including the GB10 launch-constant and 48-SM decode work merged through the fork's PR #18/#19
-— for `sm_121a`. Hardware: NVIDIA GB10 (Grace Blackwell), 48 SMs, 24.0 MiB L2, 121.6 GiB
-unified LPDDR5x (273 GB/s specification; in-run sustained probes 232–247 GB/s), and a 20-core
-Arm CPU (10× Cortex-X925 + 10× A725; campaigns pinned to the X925 half). Artifacts: the
-125B-A6B v3 NVFP4-experts package with the dense projections in BF16 or FP8 E4M3 (126/123 GB
-multi-volume totals including the file-backed PLE n-gram table); row-scaled FP8 E4M3 KV at a
-73,728-token capacity; MTP with the optimized proposal head; one request, greedy, CUDA Graph
-decode, context limit 73,728, prefill chunk 8,192.
+The GB10 fork (`baristahaus/ninfer-gb10`) builds the engine for `sm_121a`. This section is the
+record of its measurements, the changes they led to and the approaches it rejected. Raw reports
+live under `profiles/bench/gb10/`.
 
-Decode and prefill (8K/64K prompts, 512 outputs, one warmup + five measured; the bench corpus's
-acceptance is an upper bound, ~99–100%):
+### Platform and configuration
 
-| Dense projections | Decode 8K / 64K | MTP K=2 8K / 64K | MTP K=3 8K / 64K | 8K prefill |
+- **Hardware:** NVIDIA GB10 (Grace Blackwell) with 48 SMs and 24.0 MiB L2. It has 121.6 GiB of
+  unified LPDDR5X; the specification is 273 GB/s and the measured GPU streaming read is
+  232–247 GB/s, 246 in `tools/bench/hardware/gb10.json`. The CPU has 20 Arm cores (10 Cortex-X925
+  and 10 A725).
+- **Toolchain:** CUDA 13.0.88, driver 580.173.
+- **Artifact:** recipe `qwen3_8_flash_next_125b_a6b_nvfp4_fp8_mtp-v3` (`fp8mtp`, 119 GB):
+  - NVFP4 routed experts;
+  - FP8 E4M3 row-scaled dense projections: GDN qkv/z/out, QSA query-gate/output, HyperConnection
+    down and up, shared expert, and `lm_head`;
+  - an MTP layer in the main layers' formats;
+  - the file-backed FP8 PLE table, 51 GB.
+- **Serving settings:**
+  - `--kv-dtype fp8`: decode speed is identical to BF16 KV; FP8 KV halves the KV footprint and
+    gives up 7–9% prefill.
+  - `--spec mtp --draft-tokens 3 --lm-head-draft`: 1–3 is the package's limit, and K=3 is the
+    best or within 1% of the best on every measured class.
+  - `--host-kv-mib 0`: a Host tier on unified memory is a copy in the same pool. TEB score and
+    prefix hits are identical with and without it.
+- **Pinning:** pinning the server to the X925 cores measured neutral; campaigns pin for
+  repeatability.
+- **Memory:**
+  - On integrated devices, startup sizing uses `MemAvailable` less the pinned Host KV and a 6 GiB
+    reserve. `cudaMemGetInfo` counts reclaimable page cache as used.
+  - Load takes about 90 GiB with the default Host tier.
+  - Up to eight active requests start and serve.
+- **Synchronization:** `NINFER_CUDA_SYNC` unset selects `yield` on integrated devices. Blocking
+  synchronization cost about 1.4 ms per wake-up on GB10.
+
+### Results against DGPP, October 3
+
+Protocol: DGPP's `scripts/serve_load.py` with five prompt classes (prose, code, json, math, chat),
+256 output tokens, greedy, thinking off, three repetitions, and caches dropped before each server
+start. DGPP is `HawkBearPig/dgpp` at `dd58d6d3`: single-Spark template, NVFP4 experts, FP8 dense,
+MTP depth 1, rerun in the same campaign. NInfer is tree `05ed1f2a` with `fp8mtp`. Rates are wall
+tok/s including prefill, averaged over all classes (`profiles/bench/gb10/parity-2026-10-03/`).
+
+| C | NInfer K=1 | NInfer K=2 | NInfer K=3 | DGPP |
 |---|---:|---:|---:|---:|
-| BF16 | 20.2 / 19.8 | 44.2 / 42.9 | 52.0 / 50.6 | 1,528 |
-| FP8 | 29.8 / 28.9 | 56.8 / 55.5 | 65.5 / 63.4 | 2,449 |
+| 1 | 48.42 | 56.90 | 59.89 | 47.29 |
+| 2 | 72.94 | 82.37 | 91.53 | 68.24 |
+| 4 | 107.07 | 116.68 | 121.39 | 91.33 |
 
-Every configuration sits at 83–90% of the in-run memory probe (194–208 GB/s effective), with
-SM clock steady at ~2400–2470 MHz (floor 2392) and 70–76 °C: decode is memory-bound, not
-power- or thermally bound (peak draw 48–54 W, idle 8.4–8.6 W). Energy per emitted token,
-decode window with model load excluded: BF16 K=0 31.8 W / 1.59 J; FP8 K=0 35.2 W / 1.20 J —
-the FP8 dense route decodes 1.47× faster at K=0 at ~24% less energy per emitted token. The
-MTP telemetry rows decode a low-acceptance region of the bench corpus (effective draft
-acceptance ~52–70%), so their tok/s and energy figures are at a realistic-acceptance
-operating point, not the upper-bound corpus rows; the GB10 plan carries the derivation.
+- **Matched draft depth** (NInfer K=1 against DGPP's depth 1): +2.4% at C1, +6.9% at C2 and +17.2%
+  at C4.
+  - At C1 K=1 only code trails DGPP, by 1.0%.
+  - At C4 NInfer leads every class by 14.6–20.0%.
+- **Deeper drafts:** at C4, K=3 is +32.9%. Whether DGPP gains as much at depth 2–3 is untested.
+- **Acceptance:** 1.803 / 2.425 / 2.917 tokens per round at K=1/2/3.
+- **Decode-only rates, C1/C2/C4:**
 
-Real-text MTP acceptance (16 corpus streams × 1,024 greedy tokens, served, K=2): BF16 65.89%,
-FP8 66.36% — about 2.3 committed per round, so real-text committed throughput at K=2 is
-~0.78× the bench-corpus row (≈ 44 tok/s for FP8 K=2, derived). Quality gates (fixed-token
-perplexity, 1,044,557 tokens scored, plus 65,536/32,768-window drift runs): BF16 PPL 3.973
-(4K) / 3.754 (64K), FP8 3.9999 / 3.7527; TEB hard-mode tool-call scores BF16 87 (three trials,
-zero scatter), FP8 89 (one trial).
+  | K | C1 | C2 | C4 |
+  |---|---:|---:|---:|
+  | 1 | 50.5 | 39.5 | 30.2 |
+  | 2 | 59.6 | 45.2 | 34.1 |
+  | 3 | 63.6 | 50.9 | 36.0 |
 
-External reference points on one GB10/Spark (third-party boxes and runs): vLLM 43.9 tok/s with
-MTP, 15.4 eager; DGPP 24.3/32.7 (BF16/FP8 dense) and 44–61 with MTP; ExLlamaV3 EXL3 33 without
-drafting, up to 79 with MTP depth 5 on code; llama.cpp 24.5 without MTP, 47 on code with MTP 4.
+- **Per class at C4:**
+  - code, json and math are fastest at K=3 (130.8 / 143.0 / 130.8);
+  - prose and chat peak at K1–K2 (99.5 / 105.0), and K=3 is within 1% of that.
+- **Earlier scoreboards on the same protocol:**
 
-Reproduce on the GB10 fork: `tools/gb10/step0_build_test.sh` (build + tests),
-`step2_baseline.sh` (bandwidth probe, decode rows, GPU telemetry), `step7a_baseline.sh`
-(perplexity, acceptance, TEB), each with `ART=` set to the artifact; reports land under
-`profiles/bench/gb10/`. The GB10 work plan and its in-flight items (the pre-sync-build TEB
-attribution, the FP8 small-T family at the served MTP width) are in
-[maintainer/plan-2026-09-gb10.md](../maintainer/plan-2026-09-gb10.md).
+  | campaign | NInfer K=1 vs DGPP at C1 / C2 / C4 |
+  |---|---|
+  | 2026-09-30, before the QSA and MTP-round work | −10 / −9 / −10% |
+  | after the PLE page-in | at parity at C4 |
+  | after K5, 2026-10-02 | −3.2 / −0.3 / +5.1% |
+
+Single-stream bench rows (`ninfer_bench`, 8K/64K prompts, 512 outputs, `fp8mtp`):
+
+| | value |
+|---|---|
+| decode without speculation | 32.6 / 31.5 tok/s |
+| prefill | about 2.5k tok/s from 8K to 64K (1.7k at 1K, peaks at 8K) |
+| MTP rows on the fixture corpus | 63.2 (K=2), 72.1 (K=3) |
+
+The fixture corpus tiles one 3,442-token text, so drafts accept about 99% and its MTP rows are an
+upper bound. Speed claims use the served rates above or the natural-text corpus.
+
+### Measurement rules
+
+- **Greedy C4 decode is not run-to-run deterministic**, with or without MTP; C1 is bitwise.
+  - Several ops choose kernels or reduction trees by the call's token count: BF16 linear at T=1,
+    T=2..16 and above. So does the QSA split count, which depends on the visible-key envelope.
+  - Admission timing decides which rows share a round.
+  - Each output stays within its op's oracle criterion, but a row's bits depend on its
+    batch-mates. Batch invariance is not part of the product contract.
+  - C4 speed claims therefore use GPU work or device wait per round, or kernel medians; tok/s from
+    four-request legs is acceptance noise. C1 tok/s A/B comparisons remain valid.
+- **Profilers:**
+  - nsys with `--cuda-graph-trace=node` adds a fixed cost of about 1–3 µs to every launch and
+    inflates graph-launch host time. Compare kernel medians and shares, not absolute sums, and
+    treat a launch-count saving as unmeasured until it is.
+  - ncu cannot profile a model-size process on GB10: its replay cannot allocate in the shared
+    pool. A 70 GiB repro exhausted the pool and rebooted the node. Never point ncu at a process
+    without free memory of the model size plus about 30 GiB.
+  - GB10's ncu DRAM counters do not reflect streaming kernels. Bandwidth questions are answered by
+    timing against a plain read of the same bytes (`flash_next_moe_bench --probe`,
+    `flash_next_hc_bench`, `flash_next_fp8_small_t_bench`).
+- **Page cache:** a run that reads more than the page cache holds leaves it full. Drop it before a
+  benchmark that loads the model.
+
+### Where a C4 K=1 round goes
+
+Round attribution, nsys, tree `3b257c91` (`profiles/bench/gb10/latency-batch/`). There are 65 ms
+of GPU work per round. Floors come from the attribution's byte model at 246 GB/s.
+
+| stage | ms per round | status |
+|---|---:|---|
+| `moe.nvfp4` routed experts (96 launches) | 33.1 | at the read floor |
+| `moe.nvfp4` other: shared expert, router, routing, quantize, reduce | 3.2 | latency-bound pieces of 0.1–1.3 ms |
+| `gdn.record` | 13.5 | see below |
+| `hyper.combine_mix` | 4.6 | projections at 74–83% of a plain read; the norm is now 3.6 µs per launch |
+| `qsa.select` | 4.4 | FP8 projections near the floor; split attention 1.0 ms |
+| unscoped: FP8 `lm_head` | 2.6 | 636 MB, at the floor |
+| unscoped: Q4 draft head | 0.9 | |
+
+- **Routed experts:** a trace-build counter (`NINFER_MOE_ROUTE_STATS`) measured 60.07 distinct
+  experts per 8-row call, out of 80 assignments. That is 166 MB in 689 µs: 241 GB/s, 98% of the
+  measured read, equal to the microbench.
+- **`gdn.record`:**
+  - the projections run at 96–97% of a plain read (medians);
+  - the recurrent fold and record read and write each row's 3.15 MB of FP32 state per layer, a
+    103 µs floor that the kernel already beats in 78.5 µs, presumably from L2 hits;
+  - conv and gating take 0.54 ms.
+
+What remains is small latency work, about 0.1–0.2 ms per round per item. Fewer bytes per token
+(more accepted tokens per round, smaller formats) is the remaining large lever.
+
+### Changes and their measured effect
+
+Each change kept outputs bitwise unless the row says otherwise. Gates: op oracle tests, the
+real-artifact Engine test against per-recipe goldens, and for numerical changes the perplexity and
+drift gate below.
+
+| change | effect on GB10 |
+|---|---|
+| `yield` synchronize on integrated devices | decode +1.6–3.3% |
+| capture-safe valid columns re-enable no-speculation graphs | MTP-off +2.5–2.7 ms per token |
+| FP8 dense projections (7a, then HyperConnection up and shared expert) | MTP-off 20.4 → 32.2 tok/s, prefill 1.5k → 2.5k; numerical change, gate below |
+| T=2..4 FP8 on Tensor Cores, not SIMT, so verify and draft share one compute profile | acceptance 63.4 → 66.4% |
+| MTP layer in the main layers' formats (7d, `fp8mtp`) | tok/s up at every K, +5% at K=3 single stream; acceptance −0.15 / −0.22 / −0.59 points at K=1/2/3 |
+| dense QSA when every visible key fits the 2051-key budget | C4 +5.2% |
+| admission re-arm when a blocking StateImage fork settles | removes a multi-second admission hold on concurrent replays |
+| PLE history read from the fork source during prefill | correctness: concurrency-dependent output after a context capture |
+| deferred fold (K1), device-resident frame (K2), in-graph PLE stage (K3) | C4 host time 8.9 → 0.05 ms per round |
+| fused GDN fold inside verify (K5) | C4 +2.1%; one 108 MiB state pass per row and round removed |
+| overlapped PLE page-ins | C4 long generations +18%, 135 → 0.1 major faults per round |
+| expert-grouped NVFP4 MoE decode from 8 rows | C4 +3.1% |
+| MoE decode schedules from the bandwidth probe (BN64 BK512 S2 gate/up, BN64 BK128 S4 down) | routed experts 87 → 97% of the read, C4 +4.7%, C1 +1.7%; at T ≤ 4 the per-layer fixed cost rose 12–32 µs |
+| PLE replay record with one weight pass per 8 columns | `ple.record` 2.31 → 0.33 ms per round |
+| QSA split decode staging each KV tile once in 16-byte pieces | split kernel 2.89 → 1.01 ms per round at C4 K=1; −6.4% GPU work at K=3 |
+| HyperConnection grouped RMSNorm with loads issued up front | 14.0 → 3.6 µs per launch, −0.89 ms per C4 round |
+| QSA key, value and index-query projections in one launch | QSA BF16 0.70 → 0.59 ms per round |
+
+### Quality gate for numerical changes
+
+- **Perplexity and drift:** `ninfer-perplexity` over the 1,044,557-token corpus at 4K and 64K
+  windows, plus `tools/bench/compare_token_drift.py` on the 64K token scores. Drift is the slope of
+  the NLL difference over offsets.
+
+  | artifact | 4K PPL | 64K PPL | drift slope |
+  |---|---:|---:|---|
+  | BF16-projection reference | 3.9731 | 3.7540 | — |
+  | FP8 dense projections | 3.9999 | 3.7527 | −0.0007 nats per 10K tokens |
+  | `fp8proj` (also HyperConnection up and shared expert) | 3.9982 | 3.7581 | −0.0008 nats per 10K tokens |
+
+  `fp8mtp` has the same target weights as `fp8proj`, and its 4K PPL is identical. Both drift
+  slopes are flat: there is no GDN-state accumulation.
+- **Same-artifact run-to-run floor:** ΔPPL 1.3e-4.
+- **Draft acceptance** on the 16-stream natural corpus (`tools/gb10/k_sweep.sh`). Greedy and fixed,
+  it reproduces exactly across servers.
+- **TEB hard mode, seed 42:** a behavioural smoke check, not a score gate. `fp8proj` scored
+  87/88/91/91 against BF16's 87/87/87.
+
+### Evaluated and not adopted
+
+| approach | result |
+|---|---|
+| EXL3 3-bit trellis experts | about 10% fewer bytes than NVFP4 experts, but no FP4 tensor-core prefill, new GEMV and MoE kernels, and a lossy re-quantization source |
+| lossless 12-bit BF16 (DGPP `bf12`) | under 1% of a step's bytes are still BF16 in `fp8mtp` |
+| generic memory compression (`cuMemCreate`) | 1.00–1.01× on every real weight class; it pays only on zero-filled data |
+| two MTP rounds in flight (K4) | about 2% slower; after K3 the serial loop exposes 0.05 ms of host time per round, so there was nothing to hide. Removed |
+| grouped cold prefill | admission stagger is at most about 6% of a C4 wave on the parity protocol and does not arise under steady arrival |
+| FP8 sliced-K row tiles, K-warp pairs split across CTAs | no gain on any shape; split pairs were the slowest variant everywhere |
+| three-stage FP8 tiles for long-K shapes | hc.down +4 points of the read floor, but the attribution showed the MoE stage 0.7 ms per round slower on that tree, unexplained, against a gain of at most 0.06 ms. Reverted |
+| MoE route kernel load hoisting | median unchanged at 8.67 µs per launch. Reverted |
+| lower-bit KV (K4V2 and similar) | decode is flat from 1K to 128K (32.6 / 31.1 / 32.2 / 31.1 tok/s at K=0); only capacity would change |
+| ncu-driven MoE tuning | replaced by the timing probe above |
+
+### Open items
+
+- **DGPP at draft depth 2–3:** untested, so the depth-1 comparison is the like-for-like claim.
+- **Batch-invariant decode:** a product decision with a throughput cost.
+- **Long prompts:** time to first token and decode at 15K–60K prompts on realistic, operations-style
+  workloads are not yet measured.
+- **MTP at 32K and 128K:** K=3 measured 37.7 tok/s at 32K and 60.8 at 128K against 56–57 at
+  1K–8K. Each row continues different natural text, so do not cite 32K/128K MTP rates until that
+  is separated from a context effect.
+- **Not started, with estimates:**
+  - BF16 GDN recurrent state (needs the drift gate): about 1.5–2% of decode;
+  - NVFP4 for the remaining dense projections;
+  - an int6 PLE table (memory, not speed);
+  - constrained decoding for `tool_choice: required`: the measured format failure rate is 0/180
+    without it; one semantic miss.
+
+### Reproduce
+
+`tools/gb10/`, each script with `ART=` set to the artifact:
+
+| script | purpose |
+|---|---|
+| `step0_build_test.sh` | build and tests |
+| `step2_baseline.sh` | bench rows, telemetry, effective bandwidth |
+| `step7a_baseline.sh` | perplexity, acceptance, TEB |
+| `k_sweep.sh` | acceptance and served rate per K |
+| `block_i.sh` with `PHASES=I9` | the DGPP scoreboard |
+| `round_attribution.sh` | per-stage GPU work at a fixed concurrency; `ROUTE_STATS=1` adds the distinct-expert tally |
+| `kernel_shapes.py` | per-launch-shape medians from a trace |
+| `moe_microbench.sh` | MoE bandwidth probe |
+
+Reports land under `profiles/bench/gb10/`.

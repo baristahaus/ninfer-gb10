@@ -1,9 +1,8 @@
 // GB10 file-backed page probe.
 //
-// Answers the plan step 6.3 gate (docs/maintainer/plan-2026-09-gb10.md): can a device kernel
-// gather PLE rows — random 2560 B reads from a file-backed mmap — and what does the GPU pay
-// when the file page is resident in the page cache versus cold (page-cache miss, NVMe page-in
-// serviced by the fault path)?
+// Answers whether a device kernel can gather PLE rows (random 2560 B reads from a file-backed
+// mmap), and what the GPU pays when the file page is resident in the page cache versus cold
+// (page-cache miss, NVMe page-in serviced by the fault path).
 //
 // Phases run as separate invocations (`--phase`) so a hung cold-fault phase can be killed by a
 // timeout without taking the rest. The row offset sequence is deterministic (splitmix64, fixed

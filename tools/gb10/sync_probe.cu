@@ -1,7 +1,7 @@
 // GB10 host/GPU round-boundary probe.
 //
 // Separates the two host costs that fill the MTP decode round boundary on GB10
-// (docs/maintainer/plan-2026-09-gb10.md, step 6):
+// (results: docs/performance/qwen3.8-flash-next-125b-a6b.md, GB10):
 //
 // 1. Completion lag: how long after a kernel finishes does cudaStreamSynchronize return, under
 //    the CUDA device schedule given by --schedule (the engine sets blocking; src/core/device.cu)?

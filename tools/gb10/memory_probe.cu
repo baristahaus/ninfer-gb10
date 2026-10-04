@@ -1,7 +1,7 @@
 // GB10 unified-memory probe.
 //
-// Standalone measurements for the questions in docs/maintainer/plan-2026-09-gb10.md that driver
-// source cannot settle: what CUDA reports about the shared LPDDR5X pool, whether generic
+// Standalone measurements for the unified-memory questions that driver source cannot settle
+// (results: docs/performance/qwen3.8-flash-next-125b-a6b.md, GB10): what CUDA reports about the shared LPDDR5X pool, whether generic
 // ("compute data") compression is granted and changes effective read bandwidth, how fast the GPU
 // reads each kind of host-visible memory, and how CPU and GPU traffic contend. Prints Markdown.
 // --sample LABEL=PATH (repeatable; tools/gb10/weight_samples.py writes them from an artifact)

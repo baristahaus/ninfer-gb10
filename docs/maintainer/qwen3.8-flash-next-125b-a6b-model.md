@@ -80,8 +80,23 @@ non-MTP decode, and finishing.
 ## MTP and Vision
 
 The one-layer MTP predictor uses the same QSA, HyperConnection, and MoE mathematics with its own
-weights and state. Its expert tensors are BF16. Draft lengths 1 through 3 are supported; ordinary
-MTP0 and MTP3 use the same target model and publication rules.
+weights and state. Its expert banks are BF16 or NVFP4, as the artifact recipe records them; the
+NVFP4 banks take the main layers' routed-expert route. Draft lengths 1 through 3 are supported;
+ordinary MTP0 and MTP3 use the same target model and publication rules.
+
+An MTP round is one CUDA Graph: verify with on-device acceptance, the draft steps, and the egress
+copy. Its inputs are a device-resident frame. At the end of each round, `mtp_advance_round` writes
+the next round's anchors, frontiers, budgets, extents, drafts, RoPE positions, PLE history and
+pending folds for every row that continues with its whole licensed output. The host uploads a frame
+only when the rows, their order or a field differ from the round's echo: at admission, a fork
+settle, a request's end, and the explicit invalidations. The round hashes its own PLE row ids on the
+device and publishes them to a pinned mailbox. A Program-owned thread gathers the FP8 rows from the
+file-backed table into pinned staging while layer 0 runs. Before layer 1's PLE, the graph waits for
+the acknowledgement; a stage that misses its 5 s deadline raises a late flag, which the Program turns
+into an execution error. The host gather issues `MADV_RANDOM` once and prefetches the next rows
+before copying each, so a round's page faults overlap. Rounds are not pipelined: two rounds in
+flight measured slower on GB10, because the serial loop already exposes under 0.1 ms of host time
+per round.
 
 The Vision tower is the 27-layer Qwen multimodal backbone used by the registered Qwen3.6-family
 targets, with a checkpoint-specific merger that emits width 2560. Image/video preprocessing,

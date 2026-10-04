@@ -1,0 +1,13 @@
+model qwen3.8-flash-next-125b-a6b; 1.794 characters per token
+{"size": 15000, "task": "script", "rep": 0, "seed": 1001, "turn": 1, "prompt_tokens": 15638, "completion_tokens": 1536, "ttft_s": 8.229, "prefill_tok_s": 1900.3, "decode_tok_s": 63.68, "max_gap_s": 0.053, "finish": "length", "facts": {"service": true, "release": false, "pool": true, "change": true}}
+{"size": 15000, "task": "rca", "rep": 0, "seed": 1002, "turn": 1, "prompt_tokens": 15443, "completion_tokens": 1536, "ttft_s": 8.126, "prefill_tok_s": 1900.4, "decode_tok_s": 57.85, "max_gap_s": 0.053, "finish": "length", "facts": {"service": true, "release": true, "pool": true, "change": true}}
+{"size": 60000, "task": "script", "rep": 0, "seed": 1003, "turn": 1, "prompt_tokens": 60481, "completion_tokens": 1536, "ttft_s": 32.577, "prefill_tok_s": 1856.5, "decode_tok_s": 57.65, "max_gap_s": 0.054, "finish": "length", "facts": {"service": true, "release": false, "pool": true, "change": true}}
+{"size": 60000, "task": "rca", "rep": 0, "seed": 1004, "turn": 1, "prompt_tokens": 60453, "completion_tokens": 1536, "ttft_s": 32.585, "prefill_tok_s": 1855.2, "decode_tok_s": 63.38, "max_gap_s": 0.053, "finish": "length", "facts": {"service": true, "release": true, "pool": true, "change": true}}
+{"interference": {"small_tokens": 15000, "large_tokens": 60000, "arrival_ttft_s": 34.019, "decoder_gap_median_before_s": 0.0478, "decoder_gap_max_during_s": 1.191, "decoder_stall_s": 33.795, "decoder_gap_median_after_s": 0.048, "decoder_finished_before_arrival_prefill": false}}
+
+| tokens | task | turn | n | TTFT s (median) | prefill tok/s | decode tok/s | max gap s | facts named per rep (of 4) |
+|---:|---|---:|---:|---:|---:|---:|---:|---|
+| 15000 | script | 1 | 1 | 8.23 | 1900 | 63.7 | 0.05 | 3 |
+| 15000 | rca | 1 | 1 | 8.13 | 1900 | 57.9 | 0.05 | 4 |
+| 60000 | script | 1 | 1 | 32.58 | 1856 | 57.6 | 0.05 | 3 |
+| 60000 | rca | 1 | 1 | 32.59 | 1855 | 63.4 | 0.05 | 4 |

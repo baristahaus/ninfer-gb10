@@ -71,14 +71,22 @@ public:
           max_outstanding_(static_cast<std::size_t>(options.max_concurrency) +
                            options.max_pending_requests),
           pending_timeout_(std::chrono::milliseconds(options.pending_timeout_ms)),
+          prefill_chunk_(options.prefill_chunk),
+          long_prefill_wait_(std::chrono::milliseconds(options.long_prefill_wait_ms)),
           resources_(max_concurrency_, options.context_cache.max_private_continuations.value(),
                      options.context_cache.max_shared_prefixes.value(),
                      options.context_cache.enabled,
                      options.context_cache.max_long_anchors_per_continuation.value_or(0),
                      std::move(context_cost)) {
         if (max_concurrency_ == 0 || max_concurrency_ > kMaximumConcurrency ||
-            options.max_pending_requests == 0 || pending_timeout_.count() <= 0) {
+            options.max_pending_requests == 0 || pending_timeout_.count() <= 0 ||
+            prefill_chunk_ == 0) {
             throw std::invalid_argument("Engine core bounds are invalid");
+        }
+        if (long_prefill_wait_ >= pending_timeout_) {
+            throw std::invalid_argument(
+                "long_prefill_wait_ms must be shorter than pending_timeout_ms, or a deferred "
+                "request would expire in the queue");
         }
         if (!options.context_cache.max_private_continuations ||
             !options.context_cache.max_shared_prefixes) {
@@ -1767,6 +1775,25 @@ private:
         return progress_context_transaction(false);
     }
 
+    // A ready FIFO head whose prefill needs more than one chunk waits while another request runs:
+    // its prefill would take the GPU for its whole duration and leave the running request one
+    // decode round per chunk. It is admitted once nothing else runs (a completion re-arms
+    // admission) or once it has waited long_prefill_wait_ since submission (the worker re-arms
+    // admission at that time). Requests behind it keep FIFO order.
+    [[nodiscard]] bool defer_long_prefill(const std::shared_ptr<Request>& head,
+                                          std::uint32_t other_runnable,
+                                          const RequestPlanSummary& plan) {
+        if (long_prefill_wait_.count() == 0 || other_runnable == 0) { return false; }
+        if (plan.reusable_prompt_tokens > plan.prompt_tokens) {
+            throw std::logic_error("admission plan reuses more tokens than its prompt");
+        }
+        if (plan.prompt_tokens - plan.reusable_prompt_tokens <= prefill_chunk_) { return false; }
+        const Clock::time_point release = head->submitted + long_prefill_wait_;
+        if (Clock::now() >= release) { return false; }
+        long_prefill_release_ = release;
+        return true;
+    }
+
     AdmissionProgress try_admit_one() {
         const auto other_runnable = static_cast<std::uint32_t>(
             std::count_if(slots_.begin(), slots_.end(), [](const auto& request) {
@@ -1825,6 +1852,11 @@ private:
                 head_inspection.readiness == Readiness::NeedsTransfer) {
                 if (!head_inspection.choice) {
                     throw std::logic_error("ready resource inspection has no admission choice");
+                }
+                if (defer_long_prefill(head, other_runnable, head_inspection.choice->summary())) {
+                    ++cumulative_stats_.admission_deferred_long_prefill;
+                    return control_progress ? AdmissionProgress::ControlProgress
+                                            : AdmissionProgress::None;
                 }
                 AdmissionGrant grant = scheduler_.grant_head(
                     head->id, head_inspection.choice->summary().service_work_quanta);
@@ -2173,6 +2205,10 @@ private:
                     admission_waits_on_state_fork_ = false;
                     request_admission_check();
                 }
+                if (long_prefill_release_ && Clock::now() >= *long_prefill_release_) {
+                    long_prefill_release_.reset();
+                    request_admission_check();
+                }
                 const bool admission_check_pending =
                     admission_check_pending_.load(std::memory_order_acquire);
                 const bool skip_admission = oom_backoff_ > 0;
@@ -2320,6 +2356,8 @@ private:
     const bool reports_token_logprobs_;
     const std::size_t max_outstanding_;
     const std::chrono::milliseconds pending_timeout_;
+    const std::uint32_t prefill_chunk_;
+    const std::chrono::milliseconds long_prefill_wait_;
     ResourceManagement resources_;
 
     mutable std::mutex execution_mutex_;
@@ -2337,6 +2375,8 @@ private:
     // The FIFO head was blocked by an unsettled StateImage fork. The fork settles in its lane's
     // next prefill or decode round, which does not otherwise re-arm admission.
     bool admission_waits_on_state_fork_        = false;
+    // When a deferred long-prefill head reaches its wait limit; the worker re-arms admission then.
+    std::optional<Clock::time_point> long_prefill_release_;
     std::uint64_t worker_accounted_elapsed_ns_ = 0;
     HostWorkClass current_host_work_class_     = HostWorkClass::Control;
     std::array<std::uint32_t, kMaximumConcurrency> current_decode_lanes_{};

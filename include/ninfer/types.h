@@ -164,7 +164,16 @@ struct EngineOptions {
     std::uint32_t max_concurrency      = 1;
     std::uint32_t max_pending_requests = 16;
     std::uint32_t pending_timeout_ms   = 30000;
+    // Prefill tokens per execution unit. Zero selects the device default: 4096 on an integrated
+    // device (GB10, where the larger chunk prefills about 38% faster at 60K prompts) and 1024 on a
+    // discrete one.
     std::uint32_t prefill_chunk        = 1024;
+    // How long a request whose prefill needs more than one chunk waits, while another request is
+    // running, before it is admitted anyway. A long prefill takes the GPU for its whole duration
+    // and leaves a running request one decode round per chunk, so the running request finishes
+    // first unless the newcomer has waited this long. Must be shorter than pending_timeout_ms;
+    // zero admits long prefills at once.
+    std::uint32_t long_prefill_wait_ms = 20000;
     KvCacheStorage kv_cache            = KvCacheStorage::BFloat16;
     SpeculativeOptions speculative;
     std::size_t media_cache_bytes = kDefaultMediaCacheBytes;
@@ -952,6 +961,8 @@ struct RuntimeStats {
     std::uint64_t admission_blocked_unsettled_state_fork = 0;
     std::uint64_t admission_blocked_no_free_lane         = 0;
     std::uint64_t admission_blocked_no_feasible_plan     = 0;
+    // Admission attempts that held a ready multi-chunk prefill behind a running request.
+    std::uint64_t admission_deferred_long_prefill        = 0;
 
     std::uint64_t root_selections                    = 0;
     std::uint64_t private_endpoint_selections        = 0;
@@ -1045,6 +1056,8 @@ struct LoadSummary {
     std::string architecture;
     std::string model_name;
     std::string cuda_sync_mode;
+    // The prefill chunk in effect, after a zero EngineOptions::prefill_chunk took the device default.
+    std::uint32_t prefill_chunk = 0;
     std::vector<std::string> weight_formats;
     std::string prefill_signature;
     double load_seconds                = 0.0;

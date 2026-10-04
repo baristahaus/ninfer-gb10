@@ -12,6 +12,11 @@
 
 namespace ninfer::runtime {
 
+// EngineOptions::prefill_chunk zero resolves to these once the device is known. GB10 measured
+// 60K-token prefill at 1,549 tok/s with 1024-token chunks and 2,134 with 4096.
+inline constexpr std::uint32_t kDiscretePrefillChunk   = 1024;
+inline constexpr std::uint32_t kIntegratedPrefillChunk = 4096;
+
 [[nodiscard]] EngineOptions normalize_engine_options(EngineOptions options);
 
 struct ModelInstance {

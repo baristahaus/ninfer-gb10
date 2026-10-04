@@ -158,11 +158,16 @@ public:
     explicit Impl(EngineOptions engine_options)
         : options(runtime::normalize_engine_options(std::move(engine_options))),
           device(initialize_device(options)) {
+        if (options.prefill_chunk == 0) {
+            options.prefill_chunk = device.props.integrated ? runtime::kIntegratedPrefillChunk
+                                                            : runtime::kDiscretePrefillChunk;
+        }
         nvtx::ScopedRange load_range(nvtx::Name::EngineLoad, nvtx::Category::Runtime);
         auto constructed    = runtime::construct_model(options, device);
         active              = std::move(constructed.instance);
         load                = std::move(constructed.load);
         load.cuda_sync_mode = device.sync_mode();
+        load.prefill_chunk  = options.prefill_chunk;
         StartupPhaseScope finalize_phase(options.startup_observer, StartupPhase::EngineFinalize);
         std::visit(
             [&](auto& instance) {

@@ -823,7 +823,8 @@ The table lists executable defaults. The startup example selects a long-context 
 | `--max-concurrency N` | maximum admitted requests; valid range `1..8` | `1` |
 | `--max-pending-requests N` | additional requests allowed to wait for admission | `16` |
 | `--pending-timeout-ms N` | maximum preparation-plus-admission wait | `30000` |
-| `--prefill-chunk N` | text-prefill chunk | `1024` |
+| `--prefill-chunk N` | text-prefill chunk, a multiple of 128 | device default: `4096` on an integrated GPU (GB10), `1024` on a discrete one |
+| `--long-prefill-wait-ms N` | how long a request whose prefill needs more than one chunk waits for running requests to finish before it is admitted anyway; `0` admits it at once; must be shorter than `--pending-timeout-ms` | `20000` |
 | `--log-stats-interval-ms N` | aggregate throughput report interval; `0` disables it | `5000` |
 | `--shutdown-timeout-seconds N` | how long admitted requests may finish after SIGINT/SIGTERM before they are cancelled; `0` cancels at once | `30` |
 | `--log-level trace\|debug\|info\|warning\|error\|critical\|off` | pretty stderr verbosity | `info` |
@@ -989,7 +990,9 @@ owner degradation and eviction, checkpoint drop, pressure search, budget exhaust
 counters as interval deltas; `occupancy` and `last_selection` are end-of-interval gauges.
 `admission_blocked` counts, as interval deltas, admission attempts whose FIFO head stayed blocked,
 split by the gate that blocked it: `context_transaction`, `unsettled_state_fork`, `no_free_lane`,
-or `no_feasible_plan` (no materialization plan fits the current resources). Materialization predictions are
+or `no_feasible_plan` (no materialization plan fits the current resources).
+`admission_deferred_long_prefill` counts admission attempts that held a ready multi-chunk prefill
+behind a running request (`--long-prefill-wait-ms`). Materialization predictions are
 request-owned and appear only on the corresponding `request_done` event.
 `pressure.searches` counts plans accepted into Program resource transactions, including a transaction that later ends in
 request-local abort; committed victim counters likewise report the resulting stable cache changes.

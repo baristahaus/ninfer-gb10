@@ -69,7 +69,7 @@ std::string serve_usage_text(const char* argv0) {
            " <model.ninfer> [--host H] [--port N] [--api-key KEY] "
            "[--model-id ID] [--max-context N] [--kv-capacity N|auto] [--max-concurrency N] "
            "[--max-pending-requests N] [--pending-timeout-ms N] "
-           "[--prefill-chunk N] [--log-stats-interval-ms N] [--shutdown-timeout-seconds N] "
+           "[--prefill-chunk N] [--long-prefill-wait-ms N] [--log-stats-interval-ms N] [--shutdown-timeout-seconds N] "
            "[--device N] "
            "[--context-cost-presets FILE] "
            "[--max-request-mib N] [--media-cache-mib N] [--media-live-mib N] "
@@ -182,6 +182,9 @@ ServeOptions parse_serve_options(int argc, char** argv) {
         } else if (arg == "--prefill-chunk") {
             options.prefill_chunk = static_cast<std::uint32_t>(
                 parse_nonnegative_int(require_value("--prefill-chunk"), "prefill-chunk"));
+        } else if (arg == "--long-prefill-wait-ms") {
+            options.long_prefill_wait_ms = static_cast<std::uint32_t>(parse_nonnegative_int(
+                require_value("--long-prefill-wait-ms"), "long-prefill-wait-ms"));
         } else if (arg == "--context-cost-presets") {
             options.context_cost_presets = require_value("--context-cost-presets");
             if (options.context_cost_presets.empty()) {
@@ -370,8 +373,12 @@ ServeOptions parse_serve_options(int argc, char** argv) {
     if (options.max_request_bytes == 0) {
         throw std::invalid_argument("--max-request-mib must be positive");
     }
-    if (options.prefill_chunk == 0 || options.prefill_chunk % 128 != 0) {
+    if (options.prefill_chunk % 128 != 0) {
         throw std::invalid_argument("--prefill-chunk must be a positive multiple of 128");
+    }
+    if (options.long_prefill_wait_ms >= options.pending_timeout_ms) {
+        throw std::invalid_argument(
+            "--long-prefill-wait-ms must be shorter than --pending-timeout-ms");
     }
     product::validate_speculative_cli_options(options.speculative);
     if (default_max_tokens_explicit) {

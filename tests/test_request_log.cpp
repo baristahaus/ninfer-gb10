@@ -94,6 +94,7 @@ int main() {
     load.host_to_device_bytes = 900;
     load.peak_staging_bytes   = 128;
     load.device_object_count  = 42;
+    load.prefill_chunk        = 4096;
     load.host_object_count    = 6;
     load.context_cost         = {
                 .transfer_source   = ninfer::ContextCostPresetSource::External,
@@ -176,6 +177,9 @@ int main() {
     failures += check(server.at("server").at("default_thinking_budget") == 512,
                       "server thinking budget missing");
     failures += check(server.at("engine").at("kv_cache") == "fp8-e4m3-row256", "KV type missing");
+    failures += check(server.at("engine").at("prefill_chunk") == 4096 &&
+                          server.at("engine").at("long_prefill_wait_ms") == 20000,
+                      "resolved prefill chunk or long-prefill wait missing");
     options.kv_cache        = ninfer::KvCacheStorage::Nvfp4Group16;
     engine_options.kv_cache = options.kv_cache;
     memory.kv_cache         = options.kv_cache;

@@ -423,6 +423,26 @@ prefill，不创建另一条调度路径。
 
 普通 decode frontier 推进、输出发布和统计更新不扫描 cache catalog，也不重复运行 pressure planner。
 
+### 5.5 Long prefills wait for running requests
+
+A prefill is compute-bound, and the Scheduler runs one decode round per prefill chunk. A prefill
+of many chunks therefore leaves a running request one round per chunk for the whole prefill: on
+GB10 a 60K-token prompt froze a running stream for 28–42 s. The policy is to finish the running
+request first.
+- **The rule:** a FIFO head that is otherwise ready waits while another request is runnable
+  (prefilling or decode-ready), if its prefill after prefix reuse exceeds one prefill chunk.
+- **Release:** it is admitted once nothing else runs, or once it has waited
+  `long_prefill_wait_ms` since submission, so it cannot starve behind a long answer.
+- **Re-arming:** a lane release re-arms admission as in §5.4, and the worker re-arms it when the
+  wait limit passes.
+- **Queue order:** requests behind the waiting head keep FIFO order and are not backfilled around
+  it.
+- **Short prompts:** a prompt whose prefill fits one chunk is admitted at once; it costs a running
+  request one gap of one chunk.
+- **Startup check:** the wait limit must be shorter than `pending_timeout_ms`, so a deferred
+  request is admitted before its queue deadline.
+- **Counter:** `admission_deferred_long_prefill` in the throughput log counts the deferrals.
+
 ---
 
 ## 6. 两类提交事务

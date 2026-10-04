@@ -489,6 +489,21 @@ Method: `tools/gb10/long_context.sh` (tree `6cd02900`, `profiles/bench/gb10/long
   - How to divide the GPU between a long prefill and a running request is a scheduling policy the
     Engine does not have yet.
 
+**Defaults and the long-prefill policy** (`26822f6e`, `profiles/bench/gb10/long-context-policy/`;
+K=3, `--kv-capacity auto`):
+- **Prefill:** the device default resolves to a 4096-token chunk on GB10. 60K TTFT is 28.3 s and
+  15K is 7.2 s, as in the sweep's 4096 arm.
+- **Interference probe:** a 60K prompt arrives 3 s into a 15K request's 1,536-token answer, which
+  takes about 25 s. The answer outlasts the 20 s default wait (`--long-prefill-wait-ms`).
+  - The newcomer waited the full 20 s, then prefilled: TTFT 49.0 s, against 29.1 s without the
+    policy.
+  - The running request still stalled for the newcomer's whole prefill, 28.8 s with 2.0 s gaps.
+- **What the policy protects:** a running request only if it finishes within the wait. When it
+  does not, the newcomer pays the wait and the stall happens anyway.
+- **Choosing the wait:** cover the typical answer, for example `--long-prefill-wait-ms 60000`
+  with `--pending-timeout-ms 90000` for answers up to about 3,600 tokens at 60 tok/s.
+- **Counter:** `admission_deferred_long_prefill` counted exactly the one deferral.
+
 ### Changes and their measured effect
 
 Each change kept outputs bitwise unless the row says otherwise. Gates: op oracle tests, the
@@ -555,8 +570,8 @@ drift gate below.
 - **DGPP at draft depth 2–3:** untested, so the depth-1 comparison is the like-for-like claim.
 - **Batch-invariant decode:** a product decision with a throughput cost.
 - **Long-prompt follow-ups:**
-  - the default prefill chunk: 4096 gains 38% at 60K with a 2 s worst gap, against 0.75 s at 1024;
-  - a policy for sharing the GPU between a long prefill and a running decode;
+  - the zero-stall case of the long-prefill policy, with an answer that ends within the wait, is
+    not yet measured;
   - the two follow-up turns that recomputed the previous answer.
 - **MTP at 32K and 128K:** K=3 measured 37.7 tok/s at 32K and 60.8 at 128K against 56–57 at
   1K–8K. Each row continues different natural text, so do not cite 32K/128K MTP rates until that

@@ -468,6 +468,27 @@ Method: `tools/gb10/long_context.sh` (tree `6cd02900`, `profiles/bench/gb10/long
     pool that fits both, the two would share the GPU; that case is not yet measured.
   - At the defaults, a newcomer waits for the running request whatever its length.
 
+**Prefill chunk sweep** (`profiles/bench/gb10/long-context-chunks/`; K=3, one rep,
+`--kv-capacity auto`, which gives a 147,456-token pool so both requests fit):
+
+| `--prefill-chunk` | 15K TTFT s (tok/s) | 60K TTFT s (tok/s) | interference: newcomer TTFT s | running request stalled s | largest gap s |
+|---:|---:|---:|---:|---:|---:|
+| 1024 (default) | 9.76 (1,592) | 39.04 (1,549) | 41.8 | 41.6 | 0.75 |
+| 2048 | 8.18 (1,900) | 32.59 (1,856) | 34.0 | 33.8 | 1.19 |
+| 4096 | 7.20 (2,159) | 28.34 (2,134) | 29.1 | 28.9 | 2.03 |
+| 8192 | 6.85 (2,271) | 27.32 (2,214) | 27.7 | 27.5 | 3.81 |
+
+- **The 1024-token default is the whole prefill gap to DGPP.** At 2048 NInfer is at parity, at
+  4096 +10–14% and at 8192 +16–19%. Decode is unchanged.
+- **Interference:** with room in the pool, the newcomer is admitted at once (about 120 ms queue)
+  and its prefill takes the GPU.
+  - The running request gets one decode round per prefill chunk. Its stall equals the newcomer's
+    whole prefill at every chunk size, and its largest gap equals one chunk's prefill time.
+  - Prefill is compute-bound, about 0.46–0.66 s per 1,024 tokens against a 23 ms weight read, so
+    every decode round taken during it comes out of the newcomer's prefill time.
+  - How to divide the GPU between a long prefill and a running request is a scheduling policy the
+    Engine does not have yet.
+
 ### Changes and their measured effect
 
 Each change kept outputs bitwise unless the row says otherwise. Gates: op oracle tests, the
@@ -534,10 +555,9 @@ drift gate below.
 - **DGPP at draft depth 2–3:** untested, so the depth-1 comparison is the like-for-like claim.
 - **Batch-invariant decode:** a product decision with a throughput cost.
 - **Long-prompt follow-ups:**
-  - the prefill-chunk sweep;
-  - the interference probe with `--kv-capacity auto`, so that both requests are admitted;
-  - the cause of the two follow-up partial misses;
-  - then the prefill path itself: about 20% behind DGPP at the default chunk.
+  - the default prefill chunk: 4096 gains 38% at 60K with a 2 s worst gap, against 0.75 s at 1024;
+  - a policy for sharing the GPU between a long prefill and a running decode;
+  - the two follow-up turns that recomputed the previous answer.
 - **MTP at 32K and 128K:** K=3 measured 37.7 tok/s at 32K and 60.8 at 128K against 56–57 at
   1K–8K. Each row continues different natural text, so do not cite 32K/128K MTP rates until that
   is separated from a context effect.

@@ -155,8 +155,9 @@ The remaining levers are fewer bytes per token rather than faster kernels.
 with flat drift.
 
 **Open:**
-- long-prompt prefill: 60K prompts take 39 s to the first token at the default chunk, against
-  32 s on DGPP;
+- long prompts: at the default `--prefill-chunk 1024` a 60K prompt takes 39 s to the first token,
+  against 32 s on DGPP; at 4096 it takes 28 s. A long prefill stalls a running request for the
+  whole prefill;
 - DGPP at draft depths 2–3;
 - whether greedy decode at four or more requests should be made batch-invariant.
 

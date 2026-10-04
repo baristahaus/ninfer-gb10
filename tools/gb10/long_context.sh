@@ -12,7 +12,8 @@
 # The server's KV pool defaults to --max-context (73,728 tokens) shared by both lanes, so a 60K
 # prompt cannot be admitted beside a running 15K request (no_feasible_plan) and simply waits.
 # KV_CAPACITY=auto sizes the pool from free memory, so the interference probe measures the two
-# requests actually sharing the GPU. CHUNKS sets --prefill-chunk per arm (server default 1024).
+# requests actually sharing the GPU. CHUNKS sets --prefill-chunk per arm ("default" leaves the
+# server's device default, 4096 on GB10); LONG_PREFILL_WAIT_MS sets --long-prefill-wait-ms.
 #
 # NInfer runs with two lanes (the interference probe needs both) and a request log, so the
 # summaries carry server-side prefill seconds, recomputed prompt tokens on follow-ups and MTP
@@ -21,7 +22,7 @@
 # server start. Writes profiles/bench/gb10/long-context/summary.md.
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 KS=${KS:-1 3}
-CHUNKS=${CHUNKS:-1024}
+CHUNKS=${CHUNKS:-default}
 KV_CAPACITY=${KV_CAPACITY:-}
 DGPP=${DGPP:-1}
 SIZES=${SIZES:-15000,30000,60000}
@@ -41,9 +42,11 @@ driver_args=(--tokens "$SIZES" --reps "$REPS" --max-tokens "$MAX_TOKENS" "${extr
 for k in $KS; do
     for chunk in $CHUNKS; do
         arm=ninfer-k$k
-        [[ $CHUNKS == 1024 ]] || arm+=-c$chunk
+        [[ $CHUNKS == default ]] || arm+=-c$chunk
         SERVE_ARGS=(--max-context 73728 --max-concurrency 2 --kv-dtype "$KV_DTYPE" --preserve-thinking
-                    --spec mtp --draft-tokens "$k" --lm-head-draft --prefill-chunk "$chunk")
+                    --spec mtp --draft-tokens "$k" --lm-head-draft)
+        [[ $chunk == default ]] || SERVE_ARGS+=(--prefill-chunk "$chunk")
+        [[ -z ${LONG_PREFILL_WAIT_MS:-} ]] || SERVE_ARGS+=(--long-prefill-wait-ms "$LONG_PREFILL_WAIT_MS")
         [[ -z $KV_CAPACITY ]] || SERVE_ARGS+=(--kv-capacity "$KV_CAPACITY")
         drop_caches
         start_server "$dir/$arm.log" --request-log-jsonl "$dir/$arm.jsonl"

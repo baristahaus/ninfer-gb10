@@ -12329,7 +12329,7 @@ ProgramImplCore::decode_ordinary_batch(std::span<const std::uint32_t> lanes,
     }
 }
 
-static_assert(PromptLookup::kMaxDrafts >= qwen3_8_flash_next::kMtpDecodeMaximumDrafts,
+static_assert(kPromptLookupMaxDrafts >= qwen3_8_flash_next::kMtpDecodeMaximumDrafts,
               "prompt lookup must be able to fill the MTP draft window");
 
 runtime::BatchedGeneratedRound
@@ -12439,15 +12439,17 @@ ProgramImplCore::decode_mtp_batch(std::span<const std::uint32_t> lanes,
             // Prompt lookup replaces the MTP layer's drafts when it is expected to accept more;
             // the verify window is the same width either way.
             request.lookup_round = false;
-            PromptLookup::Proposal lookup;
+            PromptLookupProposal lookup;
             if (prompt_lookup && window_limit != 0) {
                 request.lookup.sync(sequence.ledger);
                 lookup = request.lookup.propose(sequence.ledger, window_limit);
-                if (request.lookup.prefer(lookup, extent)) {
+                if (lookup_policy.prefer(lookup, extent)) {
                     request.lookup_round = true;
                     request.lookup_match = lookup.match;
                     extent               = lookup.count;
                     drafts               = lookup.tokens.data();
+                } else if (lookup.count != 0) {
+                    lookup_policy.observe_skipped(lookup.match);
                 }
             }
             mtp_host_ingress->anchors[row]        = sequence.ledger.back();
@@ -12577,9 +12579,9 @@ ProgramImplCore::decode_mtp_batch(std::span<const std::uint32_t> lanes,
                     request.speculative_stats.lookup_rounds += 1;
                     request.speculative_stats.lookup_drafted_tokens += pcur;
                     request.speculative_stats.lookup_accepted_tokens += accepted;
-                    request.lookup.observe_lookup(request.lookup_match, pcur, accepted);
+                    lookup_policy.observe_lookup(request.lookup_match, pcur, accepted);
                 } else if (prompt_lookup) {
-                    request.lookup.observe_mtp(pcur, accepted);
+                    lookup_policy.observe_mtp(pcur, accepted);
                 }
             }
             request.pending = PendingCandidate{

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Long-prompt operations workload: 15K / 30K / 60K-token synthetic incident bundles (ops_corpus.py),
-# two tasks (scripts; root-cause triage), a prefix-reusing follow-up turn, and one interference
+# two tasks by default (scripts; root-cause triage; DRIVER_ARGS="--tasks script,rca,edit" adds the
+# script-review edit task), a prefix-reusing follow-up turn, and one interference
 # probe (a 60K prompt arriving while a 15K request decodes). Measures TTFT, prefill and decode
 # rates per size, follow-up TTFT, and the decode stall a new long prompt causes.
 #
@@ -104,6 +105,7 @@ fi
         sed -n '/^| tokens/,$p' "$f"
         grep -h '"interference"' "$f" | sed 's/^/interference: /'
         grep -h '"yield"' "$f" | sed 's/^/yield: /'
+        grep -h '"backfill"' "$f" | sed 's/^/backfill: /'
     done
 } >"$dir/summary.md"
 log "summary: $dir/summary.md"

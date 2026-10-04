@@ -14,9 +14,11 @@ a quality score.
 
     ops_corpus.py --chars 60000 --seed 3 > bundle.txt      # inspect one bundle
 
-Tasks (`TASKS`) are the two request shapes measured: write test/review/log scripts for the
-incident, and gather evidence for root-cause analysis and triage. `FOLLOWUPS` are the second turns
-that reuse the first turn's prefix.
+Tasks (`TASKS`) are the request shapes measured: write test/review/log scripts for the incident,
+gather evidence for root-cause analysis and triage, and review an existing collection script
+(`build(..., script=True)` adds it to the bundle with three planted bugs) and return it corrected.
+The edit task's answer repeats the script almost verbatim, the case prompt lookup drafting serves.
+`FOLLOWUPS` are the second turns that reuse the first turn's prefix.
 """
 import argparse
 import dataclasses
@@ -60,6 +62,11 @@ TASKS = {
         "most likely root cause and the evidence for it, the services and routes affected, what "
         "is noise, the immediate mitigation, and the follow-up actions. Quote the log lines you "
         "rely on."),
+    "edit": (
+        "You are on call. Review the script ops/collect_evidence.sh in the incident bundle above "
+        "against the bundle's own output: it should have collected the evidence for this "
+        "incident, but it has bugs. Return the complete corrected script in one code block, "
+        "keeping everything that is correct unchanged, then list each fix in one line."),
 }
 FOLLOWUPS = {
     "script": "Now add a check to the bash script that compares the live ConfigMap with the "
@@ -67,6 +74,8 @@ FOLLOWUPS = {
               "new function and where it is called.",
     "rca": "Write the incident summary for the status page (four sentences) and a list of the "
            "three log queries an engineer should save for the next occurrence.",
+    "edit": "Add a --since option (default 2h) to the corrected script and use it for every "
+            "journalctl and kubectl logs call. Return the complete script again.",
 }
 
 
@@ -88,8 +97,75 @@ def _fill(rng, template, svc):
                            ip=f"10.{rng.randint(0, 9)}.{rng.randint(0, 255)}.{rng.randint(2, 254)}")
 
 
-def build(chars, seed):
-    """One incident bundle of at most `chars` characters, ending on a whole line."""
+def collection_script(victim):
+    """The on-call team's evidence script with three planted bugs: the namespace `production`
+    (the cluster uses `prod`), the ConfigMap name `<service>-cfg` (it is `<service>-config`), and a
+    log written with `>` so every step overwrites the previous one."""
+    return f"""=== cat ops/collect_evidence.sh ===
+#!/usr/bin/env bash
+# Collect the evidence for a {victim} incident into a timestamped directory.
+# Usage: ops/collect_evidence.sh [output-root]
+set -euo pipefail
+
+SERVICE={victim}
+NAMESPACE=production
+OUT_ROOT=${{1:-/var/tmp/incidents}}
+STAMP=$(date -u +%Y%m%dT%H%M%SZ)
+OUT="$OUT_ROOT/$SERVICE-$STAMP"
+LOG="$OUT/collect.log"
+mkdir -p "$OUT"
+
+log() {{
+    echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $*" > "$LOG"
+}}
+
+collect_journal() {{
+    log "journald for $SERVICE"
+    journalctl --since "-2h" --no-pager -o short-iso | grep -F "$SERVICE[" > "$OUT/journal.txt" || true
+    log "journald lines: $(wc -l < "$OUT/journal.txt")"
+}}
+
+collect_nginx() {{
+    log "nginx 5xx for $SERVICE"
+    grep -F "upstream=$SERVICE" /var/log/nginx/access.log > "$OUT/nginx.txt" || true
+    awk '$9 >= 500 {{ print }}' "$OUT/nginx.txt" > "$OUT/nginx-5xx.txt"
+    log "nginx 5xx lines: $(wc -l < "$OUT/nginx-5xx.txt")"
+}}
+
+collect_kubernetes() {{
+    log "kubernetes state in $NAMESPACE"
+    kubectl -n "$NAMESPACE" get pods -o wide > "$OUT/pods.txt"
+    kubectl -n "$NAMESPACE" get events --sort-by=.lastTimestamp > "$OUT/events.txt"
+    kubectl -n "$NAMESPACE" get configmap "$SERVICE-cfg" -o yaml > "$OUT/configmap.yaml"
+    kubectl -n "$NAMESPACE" rollout history "deployment/$SERVICE" > "$OUT/rollout.txt"
+    kubectl -n "$NAMESPACE" logs "deploy/$SERVICE" --since=2h > "$OUT/app.log" || true
+}}
+
+check_pool() {{
+    log "pool errors"
+    grep -c "QueuePool limit" "$OUT/journal.txt" > "$OUT/pool-errors.txt" || true
+    log "pool errors: $(cat "$OUT/pool-errors.txt")"
+}}
+
+check_probes() {{
+    log "readiness probe failures"
+    grep -c "Readiness probe failed" "$OUT/events.txt" > "$OUT/probe-failures.txt" || true
+    log "probe failures: $(cat "$OUT/probe-failures.txt")"
+}}
+
+collect_journal
+collect_nginx
+collect_kubernetes
+check_pool
+check_probes
+log "done: $OUT"
+echo "$OUT"
+"""
+
+
+def build(chars, seed, script=False):
+    """One incident bundle of at most `chars` characters, ending on a whole line. With `script`,
+    the bundle also carries ops/collect_evidence.sh for the edit task."""
     rng = random.Random(seed)
     victim = rng.choice(list(ROUTES))
     release = f"v{rng.randint(2, 4)}.{rng.randint(1, 30)}.{rng.randint(0, 9)}"
@@ -118,6 +194,8 @@ def build(chars, seed):
         f"commit {rng.getrandbits(160):040x}\nDate:   {facts['change_time']}\n\n"
         f"    {victim}: pool tuning for {release}\n\n deploy/{victim}/configmap.yaml | 2 +-\n"
         f"-  DB_POOL_SIZE: \"{old_pool}\"\n+  DB_POOL_SIZE: \"{new_pool}\"\n")
+    if script:
+        sections.append(collection_script(victim))
 
     def journald(minutes):
         lines = []
@@ -261,12 +339,22 @@ def mentions(answer, facts):
     }
 
 
+def script_fixes(answer, facts):
+    """Which of collection_script's three planted bugs an edit answer fixed."""
+    return {
+        "namespace": "NAMESPACE=prod\n" in answer,
+        "configmap": f'"$SERVICE-config"' in answer or f"{facts['service']}-config" in answer,
+        "log_append": '>> "$LOG"' in answer,
+    }
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--chars", type=int, default=60000)
     ap.add_argument("--seed", type=int, default=1)
+    ap.add_argument("--script", action="store_true", help="include ops/collect_evidence.sh")
     args = ap.parse_args()
-    bundle = build(args.chars, args.seed)
+    bundle = build(args.chars, args.seed, args.script)
     print(bundle.text)
     print(f"\n# facts: {bundle.facts}")
 

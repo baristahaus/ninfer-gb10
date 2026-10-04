@@ -1,19 +1,21 @@
 #!/usr/bin/env python3
 """Long-prompt operations workload against an OpenAI-compatible server (NInfer or DGPP).
 
-Usage: long_context.py BASE_URL OUT_JSON [--tokens 15000,30000,60000] [--tasks script,rca]
+Usage: long_context.py BASE_URL OUT_JSON [--tokens 15000,30000,60000] [--tasks script,rca,edit]
                        [--reps 2] [--max-tokens 1536] [--no-followup] [--no-interference]
-                       [--no-yield] [--short-tokens 2000] [--thinking]
+                       [--no-yield] [--no-backfill] [--short-tokens 2000] [--thinking]
 
 Prompts are synthetic incident bundles (`ops_corpus.py`) sized to the requested prompt tokens,
-followed by one of two operations tasks: write test/review/log scripts, or gather evidence for a
-root-cause analysis and triage. Every (size, task, rep) uses its own bundle, so first turns never
+followed by one of three operations tasks: write test/review/log scripts, gather evidence for a
+root-cause analysis and triage, or review the bundle's ops/collect_evidence.sh and return it
+corrected (an answer that repeats its context, as prompt lookup drafting serves). Every (size, task, rep) uses its own bundle, so first turns never
 reuse a prefix. Measured per request, from the client's stream:
 - TTFT: send to the first streamed content or reasoning delta (queue, prefill, first round);
 - prefill rate: prompt tokens over TTFT, first turns only (a lower bound on the server's rate);
 - decode rate: completion tokens after the first, over first delta to last;
 - the largest gap between streamed deltas;
-- which planted incident facts the answer names (a smoke signal that the context was used).
+- which planted incident facts the answer names (a smoke signal that the context was used); for the
+  edit task, which of the script's three planted bugs it fixed.
 
 With follow-ups on, each first turn is followed by a second turn that appends the answer and a
 follow-up question: its TTFT measures prefix reuse (the server's request log says how many prompt
@@ -22,7 +24,9 @@ request on the largest size arrives; the decoding stream's delta gaps before and
 prefill show how long a new long prompt stalls a running one (needs a server with two lanes).
 With the yield probe on, a short prompt (--short-tokens, one prefill chunk or less) arrives 3 s into
 the largest prompt's prefill: its TTFT shows whether it went ahead of the long prefill, and the long
-request's TTFT what that cost it.
+request's TTFT what that cost it. With the backfill probe on, a short prompt arrives while a large
+prompt is held behind a running request (the server's --long-prefill-wait-ms must be nonzero): its
+TTFT shows whether it was admitted around the held request.
 
 Sizing: the first call sends a calibration bundle with max_tokens 1 and reads usage.prompt_tokens
 to set characters per token for this tokenizer; sizes are then exact to about 1%. Thinking is off
@@ -212,6 +216,54 @@ def yield_probe(base_url, model, short, large, cpt, thinking, seed):
     }
 
 
+def backfill_probe(base_url, model, small, short, large, cpt, max_tokens, thinking, seed):
+    """Run a small-prompt answer; 3 s in, send a large prompt (held behind it); 2 s later, a short
+    prompt. Times the short and the large first tokens and the running answer's end."""
+    small_bundle = ops_corpus.build(int(small * cpt), seed)
+    large_bundle = ops_corpus.build(int(large * cpt), seed + 1)
+    short_bundle = ops_corpus.build(int(short * cpt), seed + 2)
+    started = {}
+    trigger = threading.Event()
+    out = {}
+
+    def on_delta(now):
+        started.setdefault("first", now)
+        if now - started["first"] > 3.0:
+            trigger.set()
+
+    def running():
+        body = payload(model, [{"role": "user", "content": small_bundle.text + "\n\n" +
+                                ops_corpus.TASKS["script"]}], max_tokens, thinking, True)
+        out["running"] = stream_chat(base_url, body, on_delta)
+        trigger.set()
+
+    def held():
+        body = payload(model, [{"role": "user", "content": large_bundle.text + "\n\n" +
+                                ops_corpus.TASKS["rca"]}], 64, thinking, True)
+        out["held"] = stream_chat(base_url, body)
+
+    run_thread = threading.Thread(target=running)
+    run_thread.start()
+    trigger.wait()
+    held_thread = threading.Thread(target=held)
+    held_thread.start()
+    time.sleep(2.0)
+    body = payload(model, [{"role": "user", "content": short_bundle.text + "\n\n" +
+                            ops_corpus.TASKS["script"]}], 64, thinking, True)
+    out["short"] = stream_chat(base_url, body)
+    run_thread.join()
+    held_thread.join()
+    if any("error" in out[k] or out[k].get("first") is None for k in ("running", "held", "short")):
+        return {"error": next((out[k].get("error") for k in out if "error" in out[k]), "no delta")}
+    return {
+        "small_tokens": small, "short_tokens": short, "large_tokens": large,
+        "short_ttft_s": round(out["short"]["first"] - out["short"]["start"], 3),
+        "held_ttft_s": round(out["held"]["first"] - out["held"]["start"], 3),
+        "running_end_after_held_arrival_s": round(out["running"]["end"] - out["held"]["start"], 3),
+        "short_first_before_running_end": out["short"]["first"] < out["running"]["end"],
+    }
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("base_url")
@@ -224,6 +276,7 @@ def main():
     ap.add_argument("--no-followup", action="store_true")
     ap.add_argument("--no-interference", action="store_true")
     ap.add_argument("--no-yield", action="store_true")
+    ap.add_argument("--no-backfill", action="store_true")
     ap.add_argument("--short-tokens", type=int, default=2000)
     ap.add_argument("--thinking", action="store_true")
     ap.add_argument("--seed-base", type=int, default=1000)
@@ -235,7 +288,7 @@ def main():
     cpt, calibration_tokens = calibrate(args.base_url, model, args.thinking)
     record = {"model": model, "chars_per_token": round(cpt, 4), "calibration_prompt_tokens":
               calibration_tokens, "thinking": args.thinking, "max_tokens": args.max_tokens,
-              "requests": [], "interference": None, "yield": None}
+              "requests": [], "interference": None, "yield": None, "backfill": None}
     print(f"model {model}; {cpt:.3f} characters per token", flush=True)
 
     seed = args.seed_base
@@ -243,14 +296,15 @@ def main():
         for task in tasks:
             for rep in range(args.reps):
                 seed += 1
-                bundle = ops_corpus.build(int(size * cpt), seed)
+                bundle = ops_corpus.build(int(size * cpt), seed, script=task == "edit")
                 messages = [{"role": "user", "content": bundle.text + "\n\n" + ops_corpus.TASKS[task]}]
                 first = stream_chat(args.base_url,
                                     payload(model, messages, args.max_tokens, args.thinking, True))
                 row = {"size": size, "task": task, "rep": rep, "seed": seed, "turn": 1,
                        **summarize(first, cold=True)}
                 if "text" in first:
-                    row["facts"] = ops_corpus.mentions(first["text"], bundle.facts)
+                    row["facts"] = (ops_corpus.script_fixes if task == "edit"
+                                    else ops_corpus.mentions)(first["text"], bundle.facts)
                 record["requests"].append(row)
                 print(json.dumps(row), flush=True)
                 if args.no_followup or "text" not in first:
@@ -276,11 +330,17 @@ def main():
                                       args.thinking, seed)
         print(json.dumps({"yield": record["yield"]}), flush=True)
 
+    if not args.no_backfill and len(sizes) > 1:
+        seed += 10
+        record["backfill"] = backfill_probe(args.base_url, model, min(sizes), args.short_tokens,
+                                            max(sizes), cpt, args.max_tokens, args.thinking, seed)
+        print(json.dumps({"backfill": record["backfill"]}), flush=True)
+
     with open(args.out_json, "w", encoding="utf-8") as f:
         json.dump(record, f, indent=1)
 
     print("\n| tokens | task | turn | n | TTFT s (median) | prefill tok/s | decode tok/s | max gap s "
-          "| facts named per rep (of 4) |")
+          "| facts named (of 4) or bugs fixed (of 3, edit) per rep |")
     print("|---:|---|---:|---:|---:|---:|---:|---:|---|")
     for size in sizes:
         for task in tasks:

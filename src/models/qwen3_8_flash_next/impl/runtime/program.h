@@ -485,7 +485,7 @@ struct RequestControl {
     detail::PhysicalResources optional_resources;
     bool publish_continuation = true;
     // Prompt lookup over this request's ledger, and the round in flight's draft source.
-    PromptLookup lookup;
+    PromptLookupIndex lookup;
     bool lookup_round          = false;
     std::uint32_t lookup_match = 0;
 
@@ -658,6 +658,8 @@ public:
     const std::uint32_t prefill_chunk;
     const std::uint32_t draft_window;
     const bool prompt_lookup;
+    // Lookup and MTP acceptance learned over every request of this Program.
+    PromptLookupPolicy lookup_policy;
     const SpeculativeBackend speculative_backend;
     const KvCacheStorage kv_storage;
     const ProposalHead proposal_head;

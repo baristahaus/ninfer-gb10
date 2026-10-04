@@ -8,9 +8,12 @@ namespace {
 
 // Before a bucket has data: the longer the match, the likelier its continuation. Worth four
 // drafts, so a few real rounds override them.
-constexpr std::array<double, PromptLookup::kBuckets> kPriorRate{0.75, 0.88, 0.93, 0.96};
+constexpr std::array<double, PromptLookupPolicy::kBuckets> kPriorRate{0.75, 0.88, 0.93, 0.96};
 constexpr double kPriorWeight = 4.0;
 constexpr double kDecay       = 0.97; // older lookup rounds fade
+// A bucket's evidence fades by this per passed-over proposal (half-life about 70), so after a
+// workload change the prior wins again and the bucket is tried.
+constexpr double kSkippedDecay = 0.99;
 constexpr double kMtpAlpha    = 0.05; // EMA weight of a new MTP round
 // Before any MTP round: about the per-draft acceptance measured on GB10 at K=1..3.
 constexpr double kMtpPriorRate = 0.75;
@@ -36,18 +39,13 @@ constexpr double kMtpPriorRate = 0.75;
 
 } // namespace
 
-void PromptLookup::reset() {
-    table_.clear();
+void PromptLookupIndex::reset() {
+    std::vector<Slot>().swap(table_);
     used_    = 0;
     indexed_ = 0;
-    lookup_accepted_.fill(0.0);
-    lookup_rejected_.fill(0.0);
-    mtp_accepted_ = 0.0;
-    mtp_drafted_  = 0.0;
-    mtp_observed_ = false;
 }
 
-std::uint64_t PromptLookup::key_at(std::span<const std::int32_t> history, std::size_t end) {
+std::uint64_t PromptLookupIndex::key_at(std::span<const std::int32_t> history, std::size_t end) {
     const auto a = static_cast<std::uint32_t>(history[end - 2]);
     const auto b = static_cast<std::uint32_t>(history[end - 1]);
     const auto c = static_cast<std::uint32_t>(history[end]);
@@ -56,11 +54,11 @@ std::uint64_t PromptLookup::key_at(std::span<const std::int32_t> history, std::s
            1ULL;
 }
 
-std::size_t PromptLookup::bucket(std::uint32_t match) {
+std::size_t PromptLookupPolicy::bucket(std::uint32_t match) {
     return match < 6 ? 0 : match < 12 ? 1 : match < 24 ? 2 : 3;
 }
 
-const PromptLookup::Slot* PromptLookup::find(std::uint64_t key) const {
+const PromptLookupIndex::Slot* PromptLookupIndex::find(std::uint64_t key) const {
     if (table_.empty()) { return nullptr; }
     const std::size_t mask = table_.size() - 1;
     for (std::size_t i = key & mask;; i = (i + 1) & mask) {
@@ -70,7 +68,7 @@ const PromptLookup::Slot* PromptLookup::find(std::uint64_t key) const {
     }
 }
 
-PromptLookup::Slot& PromptLookup::insert(std::uint64_t key) {
+PromptLookupIndex::Slot& PromptLookupIndex::insert(std::uint64_t key) {
     if ((used_ + 1) * 2 > table_.size()) { grow(); }
     const std::size_t mask = table_.size() - 1;
     for (std::size_t i = key & mask;; i = (i + 1) & mask) {
@@ -84,7 +82,7 @@ PromptLookup::Slot& PromptLookup::insert(std::uint64_t key) {
     }
 }
 
-void PromptLookup::grow() {
+void PromptLookupIndex::grow() {
     std::vector<Slot> old = std::move(table_);
     table_.assign(std::max<std::size_t>(4096, old.size() * 2), Slot{});
     const std::size_t mask = table_.size() - 1;
@@ -96,7 +94,7 @@ void PromptLookup::grow() {
     }
 }
 
-void PromptLookup::sync(std::span<const std::int32_t> history) {
+void PromptLookupIndex::sync(std::span<const std::int32_t> history) {
     if (history.size() < indexed_) {
         throw std::logic_error("prompt lookup history shrank while its sequence lived");
     }
@@ -110,9 +108,9 @@ void PromptLookup::sync(std::span<const std::int32_t> history) {
     indexed_ = history.size();
 }
 
-PromptLookup::Proposal PromptLookup::propose(std::span<const std::int32_t> history,
-                                             std::uint32_t max_tokens) const {
-    Proposal proposal;
+PromptLookupProposal PromptLookupIndex::propose(std::span<const std::int32_t> history,
+                                               std::uint32_t max_tokens) const {
+    PromptLookupProposal proposal;
     if (history.size() != indexed_) {
         throw std::logic_error("prompt lookup proposes from an unsynchronized history");
     }
@@ -138,20 +136,20 @@ PromptLookup::Proposal PromptLookup::propose(std::span<const std::int32_t> histo
     proposal.match = best_size;
     // The continuation may run into the current suffix (periodic text); every token up to
     // `current` is history.
-    const std::uint32_t limit = std::min(max_tokens, kMaxDrafts);
+    const std::uint32_t limit = std::min(max_tokens, kPromptLookupMaxDrafts);
     for (std::size_t at = best_end + 1; at <= current && proposal.count < limit; ++at) {
         proposal.tokens[proposal.count++] = history[at];
     }
     return proposal;
 }
 
-double PromptLookup::lookup_rate(std::uint32_t match) const {
+double PromptLookupPolicy::lookup_rate(std::uint32_t match) const {
     const std::size_t b = bucket(match);
     return (lookup_accepted_[b] + kPriorWeight * kPriorRate[b]) /
            (lookup_accepted_[b] + lookup_rejected_[b] + kPriorWeight);
 }
 
-double PromptLookup::mtp_expected(std::uint32_t extent) const {
+double PromptLookupPolicy::mtp_expected(std::uint32_t extent) const {
     if (extent == 0) { return 0.0; }
     if (!mtp_observed_) { return geometric(kMtpPriorRate, extent); }
     // Rounds draft the full window except near the budget or context end; a shorter extent keeps
@@ -161,14 +159,15 @@ double PromptLookup::mtp_expected(std::uint32_t extent) const {
                : mtp_accepted_ * static_cast<double>(extent) / mtp_drafted_;
 }
 
-bool PromptLookup::prefer(const Proposal& proposal, std::uint32_t mtp_extent) const {
+bool PromptLookupPolicy::prefer(const PromptLookupProposal& proposal,
+                                std::uint32_t mtp_extent) const {
     if (proposal.count == 0) { return false; }
     return geometric(lookup_rate(proposal.match), proposal.count) >
            mtp_expected(mtp_extent) * (1.0 + kMargin);
 }
 
-void PromptLookup::observe_lookup(std::uint32_t match, std::uint32_t drafted,
-                                  std::uint32_t accepted) {
+void PromptLookupPolicy::observe_lookup(std::uint32_t match, std::uint32_t drafted,
+                                        std::uint32_t accepted) {
     if (drafted == 0 || accepted > drafted) {
         throw std::logic_error("prompt lookup observed an invalid round");
     }
@@ -177,7 +176,7 @@ void PromptLookup::observe_lookup(std::uint32_t match, std::uint32_t drafted,
     lookup_rejected_[b] = kDecay * lookup_rejected_[b] + (accepted < drafted ? 1.0 : 0.0);
 }
 
-void PromptLookup::observe_mtp(std::uint32_t drafted, std::uint32_t accepted) {
+void PromptLookupPolicy::observe_mtp(std::uint32_t drafted, std::uint32_t accepted) {
     if (drafted == 0 || accepted > drafted) {
         throw std::logic_error("prompt lookup observed an invalid MTP round");
     }
@@ -188,6 +187,12 @@ void PromptLookup::observe_mtp(std::uint32_t drafted, std::uint32_t accepted) {
     }
     mtp_accepted_ = (1.0 - kMtpAlpha) * mtp_accepted_ + kMtpAlpha * accepted;
     mtp_drafted_  = (1.0 - kMtpAlpha) * mtp_drafted_ + kMtpAlpha * drafted;
+}
+
+void PromptLookupPolicy::observe_skipped(std::uint32_t match) {
+    const std::size_t b  = bucket(match);
+    lookup_accepted_[b] *= kSkippedDecay;
+    lookup_rejected_[b] *= kSkippedDecay;
 }
 
 } // namespace ninfer::models::qwen3_8_flash_next

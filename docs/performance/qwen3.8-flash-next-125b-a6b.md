@@ -595,9 +595,10 @@ drift gate below.
 
 - **DGPP at draft depth 2–3:** untested, so the depth-1 comparison is the like-for-like claim.
 - **Batch-invariant decode:** a product decision with a throughput cost.
-- **Prompt lookup tuning:** the mechanism is measured and correct (greedy outputs unchanged) but
-  the default priors and 5% margin over-select on the two corpora measured (the block above); the
-  open work is per-corpus learning or a higher margin, not the mechanism.
+- **Prompt lookup tuning:** the over-selection above came from per-request rates that never left
+  their priors. The rates are now learned per Program, and the ops corpus has a script-review
+  edit task (`--tasks script,rca,edit`) for the copy-heavy case. If lookup does not win there,
+  it is removed.
 - **Long-prompt follow-ups:**
   - the zero-stall case of the long-prefill policy, with an answer that ends within the wait, is
     not yet measured;

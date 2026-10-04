@@ -14,7 +14,7 @@ int check(bool condition, const char* message) {
     return 1;
 }
 
-std::vector<std::int32_t> tokens(const q38::PromptLookup::Proposal& proposal) {
+std::vector<std::int32_t> tokens(const q38::PromptLookupProposal& proposal) {
     return {proposal.tokens.begin(), proposal.tokens.begin() + proposal.count};
 }
 
@@ -22,7 +22,8 @@ std::vector<std::int32_t> tokens(const q38::PromptLookup::Proposal& proposal) {
 
 int main() {
     int failures = 0;
-    using Lookup = q38::PromptLookup;
+    using Lookup = q38::PromptLookupIndex;
+    using Policy = q38::PromptLookupPolicy;
 
     {
         // The suffix 7 8 9 occurred once, followed by 10 11 12 13.
@@ -80,23 +81,44 @@ int main() {
     }
     {
         // Policy: a short match against the MTP prior is not worth it, a longer one is.
-        Lookup lookup;
-        Lookup::Proposal short_match;
+        Policy policy;
+        q38::PromptLookupProposal short_match;
         short_match.count = 3;
         short_match.match = 3;
-        Lookup::Proposal long_match = short_match;
-        long_match.match            = 8;
-        failures += check(!lookup.prefer(short_match, 3) && lookup.prefer(long_match, 3),
+        q38::PromptLookupProposal long_match = short_match;
+        long_match.match                     = 8;
+        failures += check(!policy.prefer(short_match, 3) && policy.prefer(long_match, 3),
                           "the lookup priors did not separate short and long matches");
-        failures += check(lookup.prefer(short_match, 0),
+        failures += check(policy.prefer(short_match, 0),
                           "a lookup proposal lost to a round without MTP drafts");
-        for (int round = 0; round < 40; ++round) { lookup.observe_lookup(8, 3, 0); }
-        failures += check(!lookup.prefer(long_match, 3),
-                          "rejected lookup drafts kept the lookup preferred");
-        Lookup confident;
+        Policy confident;
         for (int round = 0; round < 200; ++round) { confident.observe_mtp(3, 3); }
         failures += check(!confident.prefer(long_match, 3) && confident.mtp_expected(3) > 2.9,
                           "an MTP layer accepting every draft lost to a prior lookup rate");
+    }
+    {
+        // The measured ops workload: lookup drafts accepted at about 56% per draft against an MTP
+        // layer averaging 1.96 of 3. A few rounds of evidence stop the lookup; passed-over
+        // proposals then fade that evidence until the bucket is tried again.
+        q38::PromptLookupProposal proposal;
+        proposal.count = 3;
+        proposal.match = 8;
+        Policy policy;
+        for (int round = 0; round < 50; ++round) { policy.observe_mtp(3, round % 25 == 0 ? 1 : 2); }
+        int rounds = 0;
+        while (policy.prefer(proposal, 3) && rounds < 100) {
+            policy.observe_lookup(proposal.match, 3, rounds % 2 == 0 ? 1 : 2);
+            ++rounds;
+        }
+        failures += check(rounds > 0 && rounds <= 12,
+                          "the policy did not stop drafting from a losing lookup within a few rounds");
+        int skipped = 0;
+        while (!policy.prefer(proposal, 3) && skipped < 2000) {
+            policy.observe_skipped(proposal.match);
+            ++skipped;
+        }
+        failures += check(skipped >= 50 && skipped < 2000,
+                          "passed-over proposals did not fade the evidence at the designed pace");
     }
 
     if (failures == 0) { std::cout << "ok\n"; }

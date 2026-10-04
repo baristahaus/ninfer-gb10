@@ -100,14 +100,18 @@ per round.
 
 With `prompt_lookup` (`--prompt-lookup`), each row may take its drafts from the request's own
 history instead of the MTP layer (`impl/prompt_lookup.{h,cpp}`).
-- **Proposal:** an index of every 3-token key in the ledger (the newest four positions per key)
-  finds the longest earlier match of the row's last tokens, up to 32. The tokens that followed the
-  match are the proposal, as many as the round's draft extent allows.
+- **Proposal:** a per-request index of every 3-token key in the ledger (the newest four positions
+  per key) finds the longest earlier match of the row's last tokens, up to 32. The tokens that
+  followed the match are the proposal, as many as the round's draft extent allows.
 - **Choice:** the verify window has the same width with either source, so a round costs the same.
   The row takes the proposal when its expected accepted drafts, `q + q^2 + ... + q^k`, exceed
   the MTP layer's by 5%.
+  - The rates are learned per Program, over every request: a request drafts from lookup too
+    rarely to learn them alone. Per-request rates measured as over-selection on GB10 (about two
+    lookup rounds per request, decided by the priors).
   - `q` is learned per match-length bucket (under 6, 12, 24, and longer), with priors 0.75,
-    0.88, 0.93 and 0.96, each worth four drafts.
+    0.88, 0.93 and 0.96, each worth four drafts. A bucket's evidence fades by 1% per
+    passed-over proposal, so a workload that starts copying is tried again after about 100.
   - The MTP side is an EMA of its accepted drafts per round.
 - **Exactness:** drafts are one-hot under both sources and verification decides every token, so
   greedy output is unchanged and sampled output keeps its distribution.

@@ -1,0 +1,17 @@
+wikitext-00: 1024 tokens in 22.86s
+wikitext-01: 1024 tokens in 22.68s
+wikitext-02: 703 tokens in 15.95s
+wikitext-03: 1024 tokens in 22.13s
+pg19-00: 1024 tokens in 23.65s
+pg19-01: 1024 tokens in 23.16s
+pg19-02: 1024 tokens in 23.47s
+pg19-03: 1024 tokens in 23.59s
+zhwiki-00: 1024 tokens in 25.02s
+zhwiki-01: 1024 tokens in 24.66s
+zhwiki-02: 1024 tokens in 25.05s
+zhwiki-03: 598 tokens in 16.21s
+ninfer-00: 1024 tokens in 22.13s
+ninfer-01: 1024 tokens in 23.33s
+ninfer-02: 1024 tokens in 22.16s
+ninfer-03: 1024 tokens in 22.98s
+requests=16 rounds=8949 drafted=8949 accepted=6665 acceptance=0.744776 per-position-per-round={'0': 0.744776}

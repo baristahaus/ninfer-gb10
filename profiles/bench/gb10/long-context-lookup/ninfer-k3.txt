@@ -1,0 +1,14 @@
+model qwen3.8-flash-next-125b-a6b; 1.794 characters per token
+{"size": 15000, "task": "script", "rep": 0, "seed": 1001, "turn": 1, "prompt_tokens": 15638, "completion_tokens": 1536, "ttft_s": 7.193, "prefill_tok_s": 2174.1, "decode_tok_s": 61.29, "max_gap_s": 0.053, "finish": "length", "facts": {"service": true, "release": false, "pool": true, "change": true}}
+{"size": 15000, "task": "rca", "rep": 0, "seed": 1002, "turn": 1, "prompt_tokens": 15443, "completion_tokens": 1536, "ttft_s": 7.107, "prefill_tok_s": 2172.9, "decode_tok_s": 57.19, "max_gap_s": 0.053, "finish": "length", "facts": {"service": true, "release": true, "pool": true, "change": true}}
+{"size": 60000, "task": "script", "rep": 0, "seed": 1003, "turn": 1, "prompt_tokens": 60481, "completion_tokens": 1536, "ttft_s": 28.172, "prefill_tok_s": 2146.8, "decode_tok_s": 60.89, "max_gap_s": 0.053, "finish": "length", "facts": {"service": true, "release": false, "pool": true, "change": true}}
+{"size": 60000, "task": "rca", "rep": 0, "seed": 1004, "turn": 1, "prompt_tokens": 60453, "completion_tokens": 1536, "ttft_s": 28.221, "prefill_tok_s": 2142.1, "decode_tok_s": 61.42, "max_gap_s": 0.053, "finish": "length", "facts": {"service": true, "release": true, "pool": true, "change": true}}
+{"interference": {"small_tokens": 15000, "large_tokens": 60000, "arrival_ttft_s": 42.547, "decoder_gap_median_before_s": 0.0483, "decoder_gap_max_during_s": 2.022, "decoder_stall_s": 28.769, "decoder_gap_median_after_s": 0.0485, "decoder_finished_before_arrival_prefill": false}}
+{"yield": {"short_tokens": 2000, "large_tokens": 60000, "short_ttft_s": 1.691, "long_ttft_s": 30.156, "short_first_before_long_first": true}}
+
+| tokens | task | turn | n | TTFT s (median) | prefill tok/s | decode tok/s | max gap s | facts named per rep (of 4) |
+|---:|---|---:|---:|---:|---:|---:|---:|---|
+| 15000 | script | 1 | 1 | 7.19 | 2174 | 61.3 | 0.05 | 3 |
+| 15000 | rca | 1 | 1 | 7.11 | 2173 | 57.2 | 0.05 | 4 |
+| 60000 | script | 1 | 1 | 28.17 | 2147 | 60.9 | 0.05 | 3 |
+| 60000 | rca | 1 | 1 | 28.22 | 2142 | 61.4 | 0.05 | 4 |

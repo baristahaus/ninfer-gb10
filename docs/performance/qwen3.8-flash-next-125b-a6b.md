@@ -504,6 +504,30 @@ K=3, `--kv-capacity auto`):
   with `--pending-timeout-ms 90000` for answers up to about 3,600 tokens at 60 tok/s.
 - **Counter:** `admission_deferred_long_prefill` counted exactly the one deferral.
 
+**Decode share, yield, and prompt lookup** (`acf6f5f7`, `profiles/bench/gb10/long-context-share/`,
+`long-context-lookup/`, `step7a-ksweep-natural-*`; K=3, `--kv-capacity auto`,
+`--long-prefill-wait-ms 0`, 2026-10-04):
+- **Solo is unchanged** in every arm: 15K TTFT 7.2 s, 60K 28.3 s, 2120-2170 tok/s prefill. The
+  features touch only the interleaving of a running decode with a prefill.
+- **Yield** (on in every arm; a short request parks a staged prefill at a chunk boundary): a 2K
+  request arriving 3 s into a 60K prefill gets its first token in 1.70 s, against about 26 s of
+  remaining prefill without parking; the long prompt's TTFT costs +1.7 s (30.0 s against 28.3
+  solo). The short's 64-token answer then takes 27.4 s at share 0 (one decode round per chunk,
+  2.5 tok/s) and 6.4 s at the default share 50 (13.6 tok/s).
+- **Decode share 0 vs 50** (interference probe: a 60K prompt arrives 3 s into a 15K answer): the
+  running answer runs about 10 tok/s during the newcomer's prefill at share 0 and about 25 at
+  share 50 (2.6x); its largest gap is one chunk (2.04 s) in both arms and its total time is
+  unchanged (59.9 vs 60.5 s); the newcomer's TTFT goes 29.2 -> 42.6 s (+46%).
+  `admission_prefill_yields` counts the parked short; `admission_short_backfills` is 0 because
+  `--long-prefill-wait-ms 0` disables the deferral the backfill serves.
+- **Prompt lookup, off vs on** (ops workload at the default share, and the 16-stream natural
+  corpus at K=0..3): it drafted 57 of 2,665 MTP rounds on the ops workload (2.1%) at 55.6%
+  per-draft acceptance, below the MTP layer's 65.2% in the same arm; on natural text it costs
+  -1.0 to -1.2 points of acceptance and -0.7 to -1.2% tok/s at K=1..3 (K=3: 0.5341 -> 0.5232,
+  49.2 -> 48.6 tok/s; K=0 unchanged at 32.3). The current priors and 5% margin over-select on
+  both corpora: greedy outputs are unchanged (real-artifact checks), but the feature does not
+  beat the MTP layer yet, so it stays off by default.
+
 ### Changes and their measured effect
 
 Each change kept outputs bitwise unless the row says otherwise. Gates: op oracle tests, the
@@ -529,6 +553,8 @@ drift gate below.
 | QSA split decode staging each KV tile once in 16-byte pieces | split kernel 2.89 → 1.01 ms per round at C4 K=1; −6.4% GPU work at K=3 |
 | HyperConnection grouped RMSNorm with loads issued up front | 14.0 → 3.6 µs per launch, −0.89 ms per C4 round |
 | QSA key, value and index-query projections in one launch | QSA BF16 0.70 → 0.59 ms per round |
+| decode share and yield around long prefills (`--prefill-decode-share`, default 50) | running decode during a 60K prefill 10 → 25 tok/s; parked short first token 1.7 s; newcomer TTFT +46% |
+| prompt lookup drafting (`--prompt-lookup`, off by default) | -1.0 to -1.2% tok/s on both corpora measured; greedy outputs unchanged |
 
 ### Quality gate for numerical changes
 
@@ -569,10 +595,9 @@ drift gate below.
 
 - **DGPP at draft depth 2–3:** untested, so the depth-1 comparison is the like-for-like claim.
 - **Batch-invariant decode:** a product decision with a throughput cost.
-- **Not yet measured on GB10:** the decode share during long prefills, short requests ahead of
-  a long prefill, and prompt lookup drafting (engine-architecture §5.5 and the Flash-Next model
-  reference). Run them with `tools/gb10/long_context.sh` (`DECODE_SHARES`, `LOOKUPS`; the yield
-  probe is on by default) and `tools/gb10/k_sweep.sh` with `LOOKUP=1`.
+- **Prompt lookup tuning:** the mechanism is measured and correct (greedy outputs unchanged) but
+  the default priors and 5% margin over-select on the two corpora measured (the block above); the
+  open work is per-corpus learning or a higher margin, not the mechanism.
 - **Long-prompt follow-ups:**
   - the zero-stall case of the long-prefill policy, with an answer that ends within the wait, is
     not yet measured;

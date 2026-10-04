@@ -156,9 +156,11 @@ with flat drift.
 
 **Open:**
 - long prompts: the 4096-token default chunk on GB10 takes a 60K prompt to its first token in
-  28 s, against 32 s on DGPP. Running requests now keep decoding during a long prefill (decode
-  share), and short requests go ahead of it. Both, and prompt lookup drafting
-  (`--prompt-lookup`), are not yet measured on GB10;
+  28 s, against 32 s on DGPP. A running request keeps decoding at about 25 tok/s during a long
+  prefill (decode share; the newcomer's first token comes 46% later), and a short request parks
+  a long prefill and gets its first token in 1.7 s. Short requests passing a deferred long
+  request are not yet measured;
+- prompt lookup drafting (`--prompt-lookup`, off) costs about 1% on both corpora measured;
 - DGPP at draft depths 2–3;
 - whether greedy decode at four or more requests should be made batch-invariant.
 

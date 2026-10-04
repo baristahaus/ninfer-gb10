@@ -500,8 +500,19 @@ drift gate below.
 
 - **DGPP at draft depth 2–3:** untested, so the depth-1 comparison is the like-for-like claim.
 - **Batch-invariant decode:** a product decision with a throughput cost.
-- **Long prompts:** time to first token and decode at 15K–60K prompts on realistic, operations-style
-  workloads are not yet measured.
+- **Long prompts:** time to first token and decode at 15K–60K prompts on operations-style workloads
+  are not yet measured. `tools/gb10/long_context.sh` is the method; its findings go in their own
+  subsection here.
+  - **Prompts:** synthetic incident bundles from `ops_corpus.py`: journald, nginx, Kubernetes
+    events, stack traces, manifests, shell history and metrics, with one planted root-cause chain
+    40–70% of the way in.
+  - **Tasks:** a scripts task and a root-cause triage task, each with a follow-up turn that
+    reuses the prefix.
+  - **Interference:** one probe with a 60K prompt arriving while a 15K request decodes.
+  - **Arms:** NInfer K=1 and K=3 with two lanes, and DGPP.
+  - **Prior data:** the only prefill rates so far are the bench curve (about 2.5k tok/s at 8K–64K,
+    so a cold 60K prompt is about 25 s to first token) and the 2.1× slower cold-page-cache prefill
+    measured in September.
 - **MTP at 32K and 128K:** K=3 measured 37.7 tok/s at 32K and 60.8 at 128K against 56–57 at
   1K–8K. Each row continues different natural text, so do not cite 32K/128K MTP rates until that
   is separated from a context effect.
@@ -526,5 +537,6 @@ drift gate below.
 | `round_attribution.sh` | per-stage GPU work at a fixed concurrency; `ROUTE_STATS=1` adds the distinct-expert tally |
 | `kernel_shapes.py` | per-launch-shape medians from a trace |
 | `moe_microbench.sh` | MoE bandwidth probe |
+| `long_context.sh` | 15K–60K operations workload: TTFT, prefill, decode, follow-up reuse, prefill interference |
 
 Reports land under `profiles/bench/gb10/`.

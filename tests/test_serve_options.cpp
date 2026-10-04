@@ -152,6 +152,8 @@ int main() {
                                            "12",
                                            "--pending-timeout-ms",
                                            "2500",
+                                           "--long-prefill-wait-ms",
+                                           "2000",
                                            "--max-context",
                                            "4096",
                                            "--kv-capacity",
@@ -185,6 +187,8 @@ int main() {
                       "--max-pending-requests did not reach serving options");
     failures += check(configured.pending_timeout_ms == 2500,
                       "--pending-timeout-ms did not reach serving options");
+    failures += check(configured.long_prefill_wait_ms == 2000,
+                      "--long-prefill-wait-ms did not reach serving options");
     failures += check(configured.log_stats_interval_ms == 0,
                       "--log-stats-interval-ms did not disable periodic reporting");
     failures += check(configured.shutdown_timeout_seconds == 5,

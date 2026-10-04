@@ -269,6 +269,72 @@ int exercise_concurrent_state(ninfer::Engine& engine,
     return 0;
 }
 
+int exercise_prefill_yield(ninfer::Engine& engine) {
+    // A prompt of two 256-token chunks parks after its first chunk for a short request and then
+    // resumes. Neither request decodes beside the other (the short one generates one token at its
+    // prefill's end), so both must match their solo greedy outputs exactly; a mismatch means the
+    // interleaved prefill disturbed the parked sequence's state.
+    std::vector<ninfer::TokenId> long_prompt{248045, 846, 198};
+    const std::vector<ninfer::TokenId> sentence{814,   20139, 303,  2250, 2716, 22157, 3069, 279,
+                                                12515, 7701,  6105, 2261, 279,  1834,  13};
+    for (int repeat = 0; repeat < 26; ++repeat) {
+        long_prompt.insert(long_prompt.end(), sentence.begin(), sentence.end());
+    }
+    long_prompt.insert(long_prompt.end(), {248046, 198, 248045, 74455, 198, 248068, 271, 248069, 271});
+    const auto solo_long =
+        engine.generate(engine.prepare_tokens(long_prompt), greedy_options(8, false));
+    const auto solo_short =
+        engine.generate(engine.prepare_tokens(canonical_prompt()), greedy_options(1, false));
+    const auto before = engine.runtime_stats();
+    auto long_handle  = engine.submit(engine.prepare_tokens(long_prompt), greedy_options(8, false));
+    auto short_handle =
+        engine.submit(engine.prepare_tokens(canonical_prompt()), greedy_options(1, false));
+    const auto yielded_long  = long_handle.wait();
+    const auto yielded_short = short_handle.wait();
+    const auto after         = engine.runtime_stats();
+    if (after.admission_prefill_yields == before.admission_prefill_yields ||
+        yielded_long.generated_token_ids != solo_long.generated_token_ids ||
+        yielded_short.generated_token_ids != solo_short.generated_token_ids) {
+        std::cerr << "Flash-Next prefill yield changed an output or never parked the long prefill"
+                  << " (yields " << after.admission_prefill_yields - before.admission_prefill_yields
+                  << ")\n";
+        print_tokens("yielded long", yielded_long.generated_token_ids);
+        print_tokens("solo long", solo_long.generated_token_ids);
+        print_tokens("yielded short", yielded_short.generated_token_ids);
+        print_tokens("solo short", solo_short.generated_token_ids);
+        return 1;
+    }
+    return 0;
+}
+
+int exercise_prompt_lookup(ninfer::Engine& engine, bool lookup_enabled,
+                           std::vector<ninfer::TokenId>& reference) {
+    // The assistant turn already repeats one sentence three times, so the prompt's last tokens
+    // match earlier ones and lookup drafts the sentence again from the first round. Verification
+    // decides every token: greedy output must equal the lookup-free engine's.
+    const std::vector<ninfer::TokenId> sentence{814,   20139, 303,  2250, 2716, 22157, 3069, 279,
+                                                12515, 7701,  6105, 2261, 279,  1834,  13};
+    std::vector<ninfer::TokenId> prompt = canonical_prompt();
+    for (int repeat = 0; repeat < 3; ++repeat) {
+        prompt.insert(prompt.end(), sentence.begin(), sentence.end());
+    }
+    const auto result = engine.generate(engine.prepare_tokens(prompt), greedy_options(24, false));
+    if (!lookup_enabled) {
+        reference = result.generated_token_ids;
+        return result.speculative.lookup_rounds == 0 ? 0 : 1;
+    }
+    if (result.generated_token_ids != reference || result.speculative.lookup_rounds == 0) {
+        std::cerr << "Flash-Next prompt lookup changed greedy output or never drafted (rounds "
+                  << result.speculative.lookup_rounds << ", accepted "
+                  << result.speculative.lookup_accepted_tokens << " of "
+                  << result.speculative.lookup_drafted_tokens << ")\n";
+        print_tokens("lookup", result.generated_token_ids);
+        print_tokens("reference", reference);
+        return 1;
+    }
+    return 0;
+}
+
 int exercise_vision(ninfer::Engine& engine) {
     ninfer::MessagePart image;
     image.kind              = ninfer::MessagePartKind::Media;
@@ -305,9 +371,13 @@ int main() {
     const auto& expected_prefix   = canonical_output();
     const CrossPathFixture fixture = cross_path_fixture(recipe);
     try {
+        // The optimized-head Engine also drafts from prompt lookup, so every fixture below
+        // checks that lookup leaves greedy output unchanged.
+        std::vector<ninfer::TokenId> lookup_reference;
         for (const auto head : {ninfer::ProposalHead::Full, ninfer::ProposalHead::Optimized}) {
             auto options = engine_options(artifact);
             options.speculative.proposal_head = head;
+            options.speculative.prompt_lookup = head == ninfer::ProposalHead::Optimized;
             ninfer::Engine engine(options);
             const ninfer::LoadSummary load = engine.load_summary();
             if (load.architecture != "Qwen3_8FlashNextForCausalLM" ||
@@ -317,6 +387,11 @@ int main() {
             }
             if (exercise_mtp_and_prefix(engine, expected_prefix, fixture) != 0) { return 1; }
             if (exercise_concurrent_state(engine, expected_prefix, fixture) != 0) { return 1; }
+            if (exercise_prefill_yield(engine) != 0) { return 1; }
+            if (exercise_prompt_lookup(engine, options.speculative.prompt_lookup,
+                                       lookup_reference) != 0) {
+                return 1;
+            }
             if (exercise_vision(engine) != 0) { return 1; }
         }
         if (exercise_ordinary_greedy(artifact, expected_prefix) != 0) { return 1; }

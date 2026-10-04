@@ -296,7 +296,10 @@ Json speculative_json(const GenerationMetrics& metrics) {
                 {"drafted_tokens", metrics.speculative_draft_tokens},
                 {"accepted_tokens", metrics.speculative_accepted_tokens},
                 {"fallback_steps", metrics.speculative_fallback_steps},
-                {"accepted_per_position", metrics.speculative_accepted_per_position}};
+                {"accepted_per_position", metrics.speculative_accepted_per_position},
+                {"lookup_rounds", metrics.speculative_lookup_rounds},
+                {"lookup_drafted_tokens", metrics.speculative_lookup_drafted_tokens},
+                {"lookup_accepted_tokens", metrics.speculative_lookup_accepted_tokens}};
 }
 
 Json materialization_json(const ninfer::MaterializationDiagnostics& diagnostics) {
@@ -472,6 +475,7 @@ std::string format_server_start_json(
              {"pending_timeout_ms", engine_options.pending_timeout_ms},
              {"prefill_chunk", load.prefill_chunk},
              {"long_prefill_wait_ms", engine_options.long_prefill_wait_ms},
+             {"prefill_decode_share_percent", engine_options.prefill_decode_share_percent},
              {"log_stats_interval_ms", options.log_stats_interval_ms},
              {"kv_cache", kv_cache_name(engine_options.kv_cache)},
              {"vision", engine_options.enable_vision},
@@ -481,6 +485,7 @@ std::string format_server_start_json(
               product::speculative_backend_name(engine_options.speculative.backend)},
              {"speculative_draft_window", engine_options.speculative.draft_tokens},
              {"proposal_head", proposal_head_name(engine_options.speculative.proposal_head)},
+             {"prompt_lookup", engine_options.speculative.prompt_lookup},
              {"context_cost", Json{{"transfer_source", ninfer::context_cost_preset_source_name(
                                                            context_cost.transfer_source)},
                                    {"prefill_source", ninfer::context_cost_preset_source_name(
@@ -704,6 +709,10 @@ std::string format_throughput_json(const std::string& server_instance_id, std::u
         {"admission_deferred_long_prefill",
          monotonic_delta(previous.admission_deferred_long_prefill,
                          current.admission_deferred_long_prefill)},
+        {"admission_short_backfills", monotonic_delta(previous.admission_short_backfills,
+                                                      current.admission_short_backfills)},
+        {"admission_prefill_yields", monotonic_delta(previous.admission_prefill_yields,
+                                                     current.admission_prefill_yields)},
         {"state_operations",
          Json{{"moves", monotonic_delta(previous.state_moves, current.state_moves)},
               {"forks", monotonic_delta(previous.state_forks, current.state_forks)},

@@ -569,6 +569,10 @@ drift gate below.
 
 - **DGPP at draft depth 2–3:** untested, so the depth-1 comparison is the like-for-like claim.
 - **Batch-invariant decode:** a product decision with a throughput cost.
+- **Not yet measured on GB10:** the decode share during long prefills, short requests ahead of
+  a long prefill, and prompt lookup drafting (engine-architecture §5.5 and the Flash-Next model
+  reference). Run them with `tools/gb10/long_context.sh` (`DECODE_SHARES`, `LOOKUPS`; the yield
+  probe is on by default) and `tools/gb10/k_sweep.sh` with `LOOKUP=1`.
 - **Long-prompt follow-ups:**
   - the zero-stall case of the long-prefill policy, with an answer that ends within the wait, is
     not yet measured;

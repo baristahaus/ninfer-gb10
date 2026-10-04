@@ -825,6 +825,7 @@ The table lists executable defaults. The startup example selects a long-context 
 | `--pending-timeout-ms N` | maximum preparation-plus-admission wait | `30000` |
 | `--prefill-chunk N` | text-prefill chunk, a multiple of 128 | device default: `4096` on an integrated GPU (GB10), `1024` on a discrete one |
 | `--long-prefill-wait-ms N` | how long a request whose prefill needs more than one chunk waits for running requests to finish before it is admitted anyway; `0` admits it at once; must be shorter than `--pending-timeout-ms` | `20000` |
+| `--prefill-decode-share PCT` | decode time owed to running requests per unit of prefill time, in percent: after each prefill chunk, decode rounds run until they have taken this share of the chunk's time, and at least one round. A prefill beside decode then takes about `1 + PCT/100` times as long; `0` gives one decode round per chunk; at most `1000` | `50` |
 | `--log-stats-interval-ms N` | aggregate throughput report interval; `0` disables it | `5000` |
 | `--shutdown-timeout-seconds N` | how long admitted requests may finish after SIGINT/SIGTERM before they are cancelled; `0` cancels at once | `30` |
 | `--log-level trace\|debug\|info\|warning\|error\|critical\|off` | pretty stderr verbosity | `info` |
@@ -841,6 +842,7 @@ The table lists executable defaults. The startup example selects a long-context 
 | `--spec mtp\|dflash\|dflash2` | speculative backend | off |
 | `--draft-tokens N` | MTP `1..5` (Qwen3.5), `1..3` (Flash-Next 125B-A6B); DFlash/DFlash2 `1..15` | unset |
 | `--lm-head-draft` | optimized proposal head | off |
+| `--prompt-lookup` | Flash-Next MTP only: a round drafts the tokens that followed an earlier occurrence of the sequence's last tokens instead of the MTP layer's when that is expected to accept more drafts; greedy output is unchanged and sampled output keeps its distribution | off |
 | `--default-max-tokens N` | output limit when omitted by a request | `8192` |
 | `--default-thinking-budget N` | positive thinking cap inherited by thinking-enabled requests | unset |
 | `--vision` | enable media input and load Vision GPU allocations | off |
@@ -949,7 +951,9 @@ preserved for consumer validation, and a stable text-fallback reason. Fallback r
 
 `request_done.timings_seconds` contains `prepare`, `ttft`, `vision`, `prefill`, `decode`, and `total`
 as full-precision JSON numbers. Its `speculative` object contains `backend`, `draft_window`, `rounds`,
-`drafted_tokens`, `accepted_tokens`, `fallback_steps`, and `accepted_per_position`. Rates can be
+`drafted_tokens`, `accepted_tokens`, `fallback_steps`, `accepted_per_position`, and the
+prompt-lookup share of those rounds and drafts (`lookup_rounds`, `lookup_drafted_tokens`,
+`lookup_accepted_tokens`, zero without `--prompt-lookup`). Rates can be
 derived downstream from raw token counts and seconds instead of rounded stderr strings.
 
 For `server_start.memory`, `workspace.capacity_bytes` is the only physical workspace allocation.
@@ -992,7 +996,10 @@ counters as interval deltas; `occupancy` and `last_selection` are end-of-interva
 split by the gate that blocked it: `context_transaction`, `unsettled_state_fork`, `no_free_lane`,
 or `no_feasible_plan` (no materialization plan fits the current resources).
 `admission_deferred_long_prefill` counts admission attempts that held a ready multi-chunk prefill
-behind a running request (`--long-prefill-wait-ms`). Materialization predictions are
+behind a running request (`--long-prefill-wait-ms`). `admission_short_backfills` counts requests
+whose prefill fits one chunk admitted around such a deferred request, and
+`admission_prefill_yields` counts staged long prefills that parked at a chunk boundary so a
+short request could go first. Materialization predictions are
 request-owned and appear only on the corresponding `request_done` event.
 `pressure.searches` counts plans accepted into Program resource transactions, including a transaction that later ends in
 request-local abort; committed victim counters likewise report the resulting stable cache changes.

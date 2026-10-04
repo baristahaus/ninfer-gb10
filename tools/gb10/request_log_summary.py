@@ -28,7 +28,8 @@ def summarize(path):
           "| decode tok/s | rounds | tok/round | device wait ms/round | host exposed ms/round |")
     print("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
     total = {"completion": 0, "decode": 0.0, "prefill": 0.0, "rounds": 0, "wait": 0.0, "host": 0.0,
-             "queue": 0.0, "n": 0}
+             "queue": 0.0, "n": 0, "lookup_rounds": 0, "lookup_drafted": 0, "lookup_accepted": 0,
+             "spec_rounds": 0}
     for rec in rows(path):
         result = rec["result"]
         completion = int(result["completion_tokens"])
@@ -56,6 +57,11 @@ def summarize(path):
         total["host"] += host
         total["queue"] += queue
         total["n"] += 1
+        spec = rec.get("speculative", {})
+        total["spec_rounds"] += int(spec.get("rounds", 0))
+        total["lookup_rounds"] += int(spec.get("lookup_rounds", 0))
+        total["lookup_drafted"] += int(spec.get("lookup_drafted_tokens", 0))
+        total["lookup_accepted"] += int(spec.get("lookup_accepted_tokens", 0))
     r = total["rounds"]
     print(f"\nTotals: {total['completion']} tokens, decode {total['decode']:.1f} s "
           f"({total['completion'] / total['decode'] if total['decode'] else float('nan'):.1f} tok/s), "
@@ -63,7 +69,11 @@ def summarize(path):
           f"{total['completion'] / r if r else float('nan'):.2f} tok/round, "
           f"device wait {1e3 * total['wait'] / r if r else float('nan'):.1f} ms/round, "
           f"queue wait mean {1e3 * total['queue'] / total['n']:.0f} ms, "
-          f"host exposed {1e3 * total['host'] / r if r else float('nan'):.2f} ms/round\n")
+          f"host exposed {1e3 * total['host'] / r if r else float('nan'):.2f} ms/round")
+    if total["lookup_rounds"]:
+        print(f"Prompt lookup: {total['lookup_rounds']} of {total['spec_rounds']} drafted rounds, "
+              f"{total['lookup_accepted']} of {total['lookup_drafted']} drafts accepted")
+    print()
 
 
 def main():

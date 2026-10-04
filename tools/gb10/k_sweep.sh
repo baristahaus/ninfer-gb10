@@ -5,6 +5,7 @@
 #   SWEEP="label=/abs/artifact.ninfer ..."  artifacts to compare (required, explicit paths)
 #   KS="0 1 2 3"                            draft depths; K=0 runs without speculation
 #   REPEATS=1                               independent server runs per (artifact, K)
+#   LOOKUP=1                                serve with --prompt-lookup (labels gain -lookup)
 #   NAME=ksweep                             output prefix: profiles/bench/gb10/step7a-NAME-...
 #
 # One server at a time (the GPU is single-instance); aborts if another job holds the GPU.
@@ -16,6 +17,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 KS=${KS:-0 1 2 3}
 REPEATS=${REPEATS:-1}
 NAME=${NAME:-ksweep}
+LOOKUP=${LOOKUP:-0}
 
 if [[ -n $(nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null) ]]; then
     echo "GPU is held by another job; single-instance discipline: aborting." >&2
@@ -32,6 +34,7 @@ run_one() { # $1=K $2=ART $3=LABEL
         return 0
     fi
     [[ $k == 0 ]] || spec="--spec mtp --draft-tokens $k --lm-head-draft"
+    [[ $k == 0 || $LOOKUP == 0 ]] || spec+=" --prompt-lookup"
     local cfg="$CFGDIR/$label.sh"
     cat >"$cfg" <<CFG
 PORT=$PORT
@@ -48,7 +51,7 @@ for pair in $SWEEP; do
     [[ -f $art ]] || { echo "SWEEP artifact is not a file: $art" >&2; exit 2; }
     for k in $KS; do
         for ((r = 1; r <= REPEATS; ++r)); do
-            run_one "$k" "$art" "$NAME-$label-k$k-r$r"
+            run_one "$k" "$art" "$NAME-$label-k$k$([[ $LOOKUP == 0 ]] || echo -lookup)-r$r"
         done
     done
 done

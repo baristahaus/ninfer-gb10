@@ -35,6 +35,7 @@ struct ServeOptions {
     std::uint32_t pending_timeout_ms   = 30000;
     std::uint32_t prefill_chunk        = 0; // 0: the Engine's device default (4096 on GB10, else 1024)
     std::uint32_t long_prefill_wait_ms = 20000;
+    std::uint32_t prefill_decode_share_percent = 50;
     std::filesystem::path context_cost_presets;
     std::uint32_t log_stats_interval_ms    = 5000; // 0 disables periodic Engine throughput logs
     // On SIGINT/SIGTERM, how long admitted requests may run before they are cancelled; 0 cancels

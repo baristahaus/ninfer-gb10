@@ -82,6 +82,7 @@ struct SequencePlanningInputs {
     SpeculativeBackend speculative_backend = SpeculativeBackend::None;
     KvCacheStorage kv_storage              = KvCacheStorage::BFloat16;
     ProposalHead proposal_head             = ProposalHead::Full;
+    bool prompt_lookup                     = false;
     StartupFeatures features;
     bool use_cuda_graph = true;
     bool causal_scoring = false;
@@ -107,6 +108,7 @@ struct SequencePlanImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT> {
     SpeculativeBackend speculative_backend = SpeculativeBackend::None;
     KvCacheStorage kv_storage              = KvCacheStorage::BFloat16;
     ProposalHead proposal_head             = ProposalHead::Full;
+    bool prompt_lookup                     = false;
     StartupFeatures features;
     bool use_cuda_graph = true;
     bool causal_scoring = false;

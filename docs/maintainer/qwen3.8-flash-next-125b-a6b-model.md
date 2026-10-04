@@ -98,6 +98,23 @@ before copying each, so a round's page faults overlap. Rounds are not pipelined:
 flight measured slower on GB10, because the serial loop already exposes under 0.1 ms of host time
 per round.
 
+With `prompt_lookup` (`--prompt-lookup`), each row may take its drafts from the request's own
+history instead of the MTP layer (`impl/prompt_lookup.{h,cpp}`).
+- **Proposal:** an index of every 3-token key in the ledger (the newest four positions per key)
+  finds the longest earlier match of the row's last tokens, up to 32. The tokens that followed the
+  match are the proposal, as many as the round's draft extent allows.
+- **Choice:** the verify window has the same width with either source, so a round costs the same.
+  The row takes the proposal when its expected accepted drafts, `q + q^2 + ... + q^k`, exceed
+  the MTP layer's by 5%.
+  - `q` is learned per match-length bucket (under 6, 12, 24, and longer), with priors 0.75,
+    0.88, 0.93 and 0.96, each worth four drafts.
+  - The MTP side is an EMA of its accepted drafts per round.
+- **Exactness:** drafts are one-hot under both sources and verification decides every token, so
+  greedy output is unchanged and sampled output keeps its distribution.
+  - After a lookup round, the MTP layer re-runs over the accepted columns from the target's
+    hidden states as in every round. Its state does not depend on where the drafts came from.
+  - A lookup round differs from the device frame's echo, so the host uploads the frame for it.
+
 The Vision tower is the 27-layer Qwen multimodal backbone used by the registered Qwen3.6-family
 targets, with a checkpoint-specific merger that emits width 2560. Image/video preprocessing,
 MRoPE prompt construction, CLI input, and serving protocol translation remain the shared product

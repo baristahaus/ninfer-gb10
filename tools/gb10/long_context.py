@@ -3,7 +3,7 @@
 
 Usage: long_context.py BASE_URL OUT_JSON [--tokens 15000,30000,60000] [--tasks script,rca]
                        [--reps 2] [--max-tokens 1536] [--no-followup] [--no-interference]
-                       [--thinking]
+                       [--no-yield] [--short-tokens 2000] [--thinking]
 
 Prompts are synthetic incident bundles (`ops_corpus.py`) sized to the requested prompt tokens,
 followed by one of two operations tasks: write test/review/log scripts, or gather evidence for a
@@ -20,6 +20,9 @@ follow-up question: its TTFT measures prefix reuse (the server's request log say
 tokens it recomputed). With interference on, one request decodes on the smallest size while a
 request on the largest size arrives; the decoding stream's delta gaps before and during that
 prefill show how long a new long prompt stalls a running one (needs a server with two lanes).
+With the yield probe on, a short prompt (--short-tokens, one prefill chunk or less) arrives 3 s into
+the largest prompt's prefill: its TTFT shows whether it went ahead of the long prefill, and the long
+request's TTFT what that cost it.
 
 Sizing: the first call sends a calibration bundle with max_tokens 1 and reads usage.prompt_tokens
 to set characters per token for this tokenizer; sizes are then exact to about 1%. Thinking is off
@@ -181,6 +184,34 @@ def interference(base_url, model, small, large, cpt, max_tokens, thinking, seed)
     }
 
 
+def yield_probe(base_url, model, short, large, cpt, thinking, seed):
+    """Start a large-prompt prefill; send a short prompt 3 s later; time both first tokens."""
+    large_bundle = ops_corpus.build(int(large * cpt), seed)
+    short_bundle = ops_corpus.build(int(short * cpt), seed + 1)
+    out = {}
+
+    def long_request():
+        body = payload(model, [{"role": "user", "content": large_bundle.text + "\n\n" +
+                                ops_corpus.TASKS["rca"]}], 64, thinking, True)
+        out["long"] = stream_chat(base_url, body)
+
+    thread = threading.Thread(target=long_request)
+    thread.start()
+    time.sleep(3.0)
+    body = payload(model, [{"role": "user", "content": short_bundle.text + "\n\n" +
+                            ops_corpus.TASKS["script"]}], 64, thinking, True)
+    out["short"] = stream_chat(base_url, body)
+    thread.join()
+    if any("error" in out[k] or out[k].get("first") is None for k in ("long", "short")):
+        return {"error": out["long"].get("error") or out["short"].get("error") or "no delta"}
+    return {
+        "short_tokens": short, "large_tokens": large,
+        "short_ttft_s": round(out["short"]["first"] - out["short"]["start"], 3),
+        "long_ttft_s": round(out["long"]["first"] - out["long"]["start"], 3),
+        "short_first_before_long_first": out["short"]["first"] < out["long"]["first"],
+    }
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("base_url")
@@ -192,6 +223,8 @@ def main():
     ap.add_argument("--max-tokens", type=int, default=1536)
     ap.add_argument("--no-followup", action="store_true")
     ap.add_argument("--no-interference", action="store_true")
+    ap.add_argument("--no-yield", action="store_true")
+    ap.add_argument("--short-tokens", type=int, default=2000)
     ap.add_argument("--thinking", action="store_true")
     ap.add_argument("--seed-base", type=int, default=1000)
     args = ap.parse_args()
@@ -202,7 +235,7 @@ def main():
     cpt, calibration_tokens = calibrate(args.base_url, model, args.thinking)
     record = {"model": model, "chars_per_token": round(cpt, 4), "calibration_prompt_tokens":
               calibration_tokens, "thinking": args.thinking, "max_tokens": args.max_tokens,
-              "requests": [], "interference": None}
+              "requests": [], "interference": None, "yield": None}
     print(f"model {model}; {cpt:.3f} characters per token", flush=True)
 
     seed = args.seed_base
@@ -236,6 +269,12 @@ def main():
         record["interference"] = interference(args.base_url, model, min(sizes), max(sizes), cpt,
                                               args.max_tokens, args.thinking, seed)
         print(json.dumps({"interference": record["interference"]}), flush=True)
+
+    if not args.no_yield:
+        seed += 10
+        record["yield"] = yield_probe(args.base_url, model, args.short_tokens, max(sizes), cpt,
+                                      args.thinking, seed)
+        print(json.dumps({"yield": record["yield"]}), flush=True)
 
     with open(args.out_json, "w", encoding="utf-8") as f:
         json.dump(record, f, indent=1)

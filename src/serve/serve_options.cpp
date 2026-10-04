@@ -69,7 +69,7 @@ std::string serve_usage_text(const char* argv0) {
            " <model.ninfer> [--host H] [--port N] [--api-key KEY] "
            "[--model-id ID] [--max-context N] [--kv-capacity N|auto] [--max-concurrency N] "
            "[--max-pending-requests N] [--pending-timeout-ms N] "
-           "[--prefill-chunk N] [--long-prefill-wait-ms N] [--log-stats-interval-ms N] [--shutdown-timeout-seconds N] "
+           "[--prefill-chunk N] [--long-prefill-wait-ms N] [--prefill-decode-share PCT] [--log-stats-interval-ms N] [--shutdown-timeout-seconds N] "
            "[--device N] "
            "[--context-cost-presets FILE] "
            "[--max-request-mib N] [--media-cache-mib N] [--media-live-mib N] "
@@ -82,7 +82,7 @@ std::string serve_usage_text(const char* argv0) {
            "[--kv-dtype bf16|int8|fp8|nvfp4|k8v4] [--spec mtp|dflash|dflash2 --draft-tokens N] "
            "[--default-max-tokens N] [--default-thinking-budget N] "
            "[--vision] [--no-cuda-graph] [--no-prefix-reuse] "
-           "[--chat-template FILE] [--lm-head-draft] [--no-thinking] [--preserve-thinking] "
+           "[--chat-template FILE] [--lm-head-draft] [--prompt-lookup] [--no-thinking] [--preserve-thinking] "
            "[--token-logprobs] "
            "[--cors] "
            "[--temperature F] [--top-p F] [--top-k N] [--min-p F] [--presence-penalty F] "
@@ -185,6 +185,9 @@ ServeOptions parse_serve_options(int argc, char** argv) {
         } else if (arg == "--long-prefill-wait-ms") {
             options.long_prefill_wait_ms = static_cast<std::uint32_t>(parse_nonnegative_int(
                 require_value("--long-prefill-wait-ms"), "long-prefill-wait-ms"));
+        } else if (arg == "--prefill-decode-share") {
+            options.prefill_decode_share_percent = static_cast<std::uint32_t>(parse_nonnegative_int(
+                require_value("--prefill-decode-share"), "prefill-decode-share"));
         } else if (arg == "--context-cost-presets") {
             options.context_cost_presets = require_value("--context-cost-presets");
             if (options.context_cost_presets.empty()) {
@@ -304,6 +307,8 @@ ServeOptions parse_serve_options(int argc, char** argv) {
             options.allow_prefix_reuse = false;
         } else if (arg == "--lm-head-draft") {
             options.speculative.proposal_head = ProposalHead::Optimized;
+        } else if (arg == "--prompt-lookup") {
+            options.speculative.prompt_lookup = true;
         } else if (arg == "--chat-template") {
             options.chat_template_path = require_value("--chat-template");
         } else if (arg == "--no-thinking") {
@@ -379,6 +384,9 @@ ServeOptions parse_serve_options(int argc, char** argv) {
     if (options.long_prefill_wait_ms >= options.pending_timeout_ms) {
         throw std::invalid_argument(
             "--long-prefill-wait-ms must be shorter than --pending-timeout-ms");
+    }
+    if (options.prefill_decode_share_percent > 1000) {
+        throw std::invalid_argument("--prefill-decode-share must be at most 1000 (percent)");
     }
     product::validate_speculative_cli_options(options.speculative);
     if (default_max_tokens_explicit) {

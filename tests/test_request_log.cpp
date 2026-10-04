@@ -178,8 +178,9 @@ int main() {
                       "server thinking budget missing");
     failures += check(server.at("engine").at("kv_cache") == "fp8-e4m3-row256", "KV type missing");
     failures += check(server.at("engine").at("prefill_chunk") == 4096 &&
-                          server.at("engine").at("long_prefill_wait_ms") == 20000,
-                      "resolved prefill chunk or long-prefill wait missing");
+                          server.at("engine").at("long_prefill_wait_ms") == 20000 &&
+                          server.at("engine").at("prefill_decode_share_percent") == 50,
+                      "resolved prefill chunk, long-prefill wait or decode share missing");
     options.kv_cache        = ninfer::KvCacheStorage::Nvfp4Group16;
     engine_options.kv_cache = options.kv_cache;
     memory.kv_cache         = options.kv_cache;

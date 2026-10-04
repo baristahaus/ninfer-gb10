@@ -230,24 +230,81 @@ public:
         request.remaining_service_work -= work;
     }
 
+    // `decode_share_percent` is the decode time owed to decode-ready requests per unit of prefill
+    // time: after a prefill chunk that took t, decode rounds run until they have taken
+    // t * share / 100, and at least one round. Zero leaves one round per chunk.
+    explicit Scheduler(std::uint32_t decode_share_percent = 0) noexcept
+        : decode_share_percent_(decode_share_percent) {}
+
+    // Admission is attempted with no staged prefill, or, while one is staged, only to let a short
+    // FIFO head yield-admit (`prefill_yield_open`); the caller then admits nothing longer.
     [[nodiscard]] bool should_attempt_admission(bool have_pending, bool admission_check_pending,
                                                 bool have_decode, bool previous_unit_was_decode,
-                                                bool context_transaction) const noexcept {
-        return have_pending && admission_check_pending && !context_transaction && !prefill_lane_ &&
+                                                bool context_transaction,
+                                                bool owner_capture_pending) const noexcept {
+        return have_pending && admission_check_pending && !context_transaction &&
+               (!prefill_lane_ ? !parked_prefill_lane_
+                               : prefill_yield_open(owner_capture_pending)) &&
                (!have_decode || previous_unit_was_decode);
+    }
+
+    // A staged prefill gives way to a short request once it has run at least one chunk since it
+    // started or last resumed, so a stream of short requests can at most halve its progress.
+    [[nodiscard]] bool prefill_yield_open(bool owner_capture_pending) const noexcept {
+        return prefill_lane_ && !parked_prefill_lane_ && owner_progressed_ &&
+               !owner_capture_pending;
     }
 
     [[nodiscard]] ExecutionAction choose_execution(bool have_decode, bool prefill_runnable,
                                                    bool previous_unit_was_decode) const noexcept {
         if (prefill_runnable) {
-            return have_decode && !previous_unit_was_decode ? ExecutionAction::Decode
-                                                            : ExecutionAction::Prefill;
+            const bool decode_owed = !previous_unit_was_decode || decode_credit_ns_ > 0;
+            return have_decode && decode_owed ? ExecutionAction::Decode : ExecutionAction::Prefill;
         }
         return have_decode ? ExecutionAction::Decode : ExecutionAction::Wait;
     }
 
+    void record_prefill_unit(std::uint64_t elapsed_ns) noexcept {
+        decode_credit_ns_ = static_cast<std::int64_t>(elapsed_ns / 100U * decode_share_percent_);
+        owner_progressed_ = true;
+    }
+
+    void record_decode_unit(std::uint64_t elapsed_ns) noexcept {
+        decode_credit_ns_ -= static_cast<std::int64_t>(elapsed_ns);
+    }
+
     [[nodiscard]] std::optional<std::uint32_t> prefill_lane() const noexcept {
         return prefill_lane_;
+    }
+
+    [[nodiscard]] std::optional<std::uint32_t> parked_prefill_lane() const noexcept {
+        return parked_prefill_lane_;
+    }
+
+    // The staged prefill steps aside for a yield admission; it resumes through
+    // `resume_parked_prefill` once no other request owns staged prefill.
+    void park_prefill_lane() {
+        if (!prefill_lane_ || parked_prefill_lane_) {
+            throw std::logic_error("no staged prefill can be parked");
+        }
+        parked_prefill_lane_ = prefill_lane_;
+        prefill_lane_.reset();
+        owner_progressed_ = false;
+    }
+
+    [[nodiscard]] bool resume_parked_prefill() noexcept {
+        if (!parked_prefill_lane_ || prefill_lane_) { return false; }
+        prefill_lane_ = parked_prefill_lane_;
+        parked_prefill_lane_.reset();
+        owner_progressed_ = false;
+        return true;
+    }
+
+    void clear_parked_prefill_lane(std::uint32_t lane) {
+        if (!parked_prefill_lane_ || *parked_prefill_lane_ != lane) {
+            throw std::logic_error("request does not own the parked prefill");
+        }
+        parked_prefill_lane_.reset();
     }
 
     [[nodiscard]] std::optional<std::uint64_t> protection_epoch() const noexcept {
@@ -256,7 +313,11 @@ public:
 
     void set_prefill_lane(std::uint32_t lane) {
         if (prefill_lane_) { throw std::logic_error("multiple requests own staged prefill"); }
-        prefill_lane_ = lane;
+        if (parked_prefill_lane_ == lane) {
+            throw std::logic_error("a parked prefill lane was staged again");
+        }
+        prefill_lane_     = lane;
+        owner_progressed_ = false;
     }
 
     void clear_prefill_lane(std::uint32_t lane) {
@@ -355,12 +416,19 @@ public:
 
     void reset() noexcept {
         prefill_lane_.reset();
+        parked_prefill_lane_.reset();
+        owner_progressed_ = false;
+        decode_credit_ns_ = 0;
         fifo_head_id_.reset();
         protection_.reset();
     }
 
 private:
+    std::uint32_t decode_share_percent_ = 0;
+    std::int64_t decode_credit_ns_      = 0;
+    bool owner_progressed_              = false;
     std::optional<std::uint32_t> prefill_lane_;
+    std::optional<std::uint32_t> parked_prefill_lane_;
     std::optional<std::uint64_t> fifo_head_id_;
     std::optional<AdmissionProtection> protection_;
     std::uint64_t next_protection_epoch_ = 1;

@@ -215,6 +215,7 @@ The table lists executable defaults. The examples above select FP8 KV and MTP3.
 | `--spec mtp\|dflash\|dflash2` | speculative backend | off |
 | `--draft-tokens N` | MTP `1..5` (Qwen3.5), `1..3` (Flash-Next 125B-A6B); DFlash/DFlash2 `1..15` | unset |
 | `--lm-head-draft` | optimized proposal head | off |
+| `--prompt-lookup` | Flash-Next MTP only: draft from an earlier occurrence of the sequence's last tokens when that is expected to accept more drafts than the MTP layer; output is unchanged | off |
 | `--vision` | enable image/video input and load Vision GPU allocations | off |
 | `--no-cuda-graph` | disable CUDA Graph decode | graphs on |
 | `--chat-template FILE` | use a local Jinja template | artifact template |

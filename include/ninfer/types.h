@@ -81,6 +81,10 @@ struct SpeculativeOptions {
     // Startup-fixed K: MTP 1..5; DFlash and DFlash2 1..15 (query width K+1).
     std::uint32_t draft_tokens = 0;
     ProposalHead proposal_head = ProposalHead::Full;
+    // MTP rounds may draft the tokens that followed an earlier occurrence of the sequence's last
+    // tokens instead of the MTP layer's, when that is expected to accept more drafts. Output is
+    // unchanged (greedy) or keeps its distribution (sampled). Qwen3.8 Flash-Next MTP only.
+    bool prompt_lookup = false;
 };
 
 enum class StartupPhase : std::uint8_t {
@@ -169,11 +173,15 @@ struct EngineOptions {
     // discrete one.
     std::uint32_t prefill_chunk        = 1024;
     // How long a request whose prefill needs more than one chunk waits, while another request is
-    // running, before it is admitted anyway. A long prefill takes the GPU for its whole duration
-    // and leaves a running request one decode round per chunk, so the running request finishes
-    // first unless the newcomer has waited this long. Must be shorter than pending_timeout_ms;
-    // zero admits long prefills at once.
+    // running, before it is admitted anyway. A long prefill takes the GPU for its whole duration,
+    // so the running request finishes first unless the newcomer has waited this long. Must be
+    // shorter than pending_timeout_ms; zero admits long prefills at once.
     std::uint32_t long_prefill_wait_ms = 20000;
+    // Decode time owed to running requests per unit of prefill time, in percent. After each
+    // prefill chunk, decode rounds run until they have taken this share of the chunk's time (at
+    // least one round), so a long prefill slows running requests down instead of stopping them.
+    // 50 makes a prefill beside decode take about 1.5x as long; zero leaves one round per chunk.
+    std::uint32_t prefill_decode_share_percent = 50;
     KvCacheStorage kv_cache            = KvCacheStorage::BFloat16;
     SpeculativeOptions speculative;
     std::size_t media_cache_bytes = kDefaultMediaCacheBytes;
@@ -728,6 +736,11 @@ struct SpeculativeStats {
     std::uint64_t accepted_tokens = 0;
     std::uint64_t fallback_steps  = 0;
     std::vector<std::uint64_t> accepted_per_position;
+    // Rounds, drafts and accepted drafts that came from prompt lookup; included in the totals
+    // above.
+    std::uint64_t lookup_rounds          = 0;
+    std::uint64_t lookup_drafted_tokens  = 0;
+    std::uint64_t lookup_accepted_tokens = 0;
 };
 
 struct ThinkingBudgetStats {
@@ -963,6 +976,10 @@ struct RuntimeStats {
     std::uint64_t admission_blocked_no_feasible_plan     = 0;
     // Admission attempts that held a ready multi-chunk prefill behind a running request.
     std::uint64_t admission_deferred_long_prefill        = 0;
+    // Requests whose prefill fits one chunk, admitted ahead of a long prefill: around a deferred
+    // long FIFO head (backfill), or while a long prefill was staged (it parked for them).
+    std::uint64_t admission_short_backfills              = 0;
+    std::uint64_t admission_prefill_yields               = 0;
 
     std::uint64_t root_selections                    = 0;
     std::uint64_t private_endpoint_selections        = 0;

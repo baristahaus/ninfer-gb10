@@ -172,21 +172,62 @@ int main() {
     scheduler.commit_admission(std::move(head_grant));
 
     using ExecutionAction = Scheduler::ExecutionAction;
-    failures += check(scheduler.should_attempt_admission(true, true, false, false, false) &&
-                          !scheduler.should_attempt_admission(false, true, true, true, false) &&
-                          !scheduler.should_attempt_admission(true, false, true, true, false) &&
-                          !scheduler.should_attempt_admission(true, true, true, false, false) &&
-                          scheduler.should_attempt_admission(true, true, true, true, false) &&
-                          !scheduler.should_attempt_admission(true, true, false, false, true) &&
+    failures += check(scheduler.should_attempt_admission(true, true, false, false, false, false) &&
+                          !scheduler.should_attempt_admission(false, true, true, true, false, false) &&
+                          !scheduler.should_attempt_admission(true, false, true, true, false, false) &&
+                          !scheduler.should_attempt_admission(true, true, true, false, false, false) &&
+                          scheduler.should_attempt_admission(true, true, true, true, false, false) &&
+                          !scheduler.should_attempt_admission(true, true, false, false, true, false) &&
                           scheduler.choose_execution(true, false, false) == ExecutionAction::Decode,
                       "admission and GPU-unit fairness gates changed");
     scheduler.set_prefill_lane(0);
     failures +=
-        check(!scheduler.should_attempt_admission(true, true, true, true, false) &&
+        check(!scheduler.should_attempt_admission(true, true, true, true, false, false) &&
                   scheduler.choose_execution(true, true, false) == ExecutionAction::Decode &&
                   scheduler.choose_execution(true, true, true) == ExecutionAction::Prefill,
               "prefill/decode alternation changed");
+
+    // A staged prefill yields to a short request only after it ran a chunk since it was staged,
+    // never while its own capture is pending, and at most one prefill is parked at a time.
+    scheduler.record_prefill_unit(1'000'000);
+    failures += check(scheduler.should_attempt_admission(true, true, true, true, false, false) &&
+                          !scheduler.should_attempt_admission(true, true, true, true, false, true),
+                      "a staged prefill that ran a chunk did not open a yield admission");
+    scheduler.park_prefill_lane();
+    failures += check(!scheduler.prefill_lane() && scheduler.parked_prefill_lane() == 0U &&
+                          !scheduler.should_attempt_admission(true, true, true, true, false, false),
+                      "a parked prefill admitted a second request");
+    scheduler.set_prefill_lane(1);
+    failures += check(!scheduler.resume_parked_prefill() &&
+                          !scheduler.should_attempt_admission(true, true, true, true, false, false),
+                      "a parked prefill resumed beside the request it yielded to");
+    scheduler.record_prefill_unit(1'000'000);
+    scheduler.clear_prefill_lane(1);
+    failures += check(scheduler.resume_parked_prefill() && scheduler.prefill_lane() == 0U &&
+                          !scheduler.parked_prefill_lane() &&
+                          !scheduler.should_attempt_admission(true, true, true, true, false, false),
+                      "a resumed prefill did not run a chunk before it could yield again");
     scheduler.clear_prefill_lane(0);
+
+    // Decode share: after a prefill chunk of 1 ms at 50%, decode rounds run until they have taken
+    // 0.5 ms, at least one round; zero share keeps one round per chunk.
+    Scheduler shared(50);
+    shared.set_prefill_lane(0);
+    shared.record_prefill_unit(1'000'000);
+    const bool first_round  = shared.choose_execution(true, true, false) == ExecutionAction::Decode;
+    shared.record_decode_unit(300'000);
+    const bool owed_round   = shared.choose_execution(true, true, true) == ExecutionAction::Decode;
+    shared.record_decode_unit(300'000);
+    const bool chunk_again  = shared.choose_execution(true, true, true) == ExecutionAction::Prefill;
+    const bool alone        = shared.choose_execution(false, true, false) == ExecutionAction::Prefill;
+    failures += check(first_round && owed_round && chunk_again && alone,
+                      "decode share did not owe decode time in proportion to the prefill chunk");
+    Scheduler unshared(0);
+    unshared.set_prefill_lane(0);
+    unshared.record_prefill_unit(1'000'000);
+    failures += check(unshared.choose_execution(true, true, false) == ExecutionAction::Decode &&
+                          unshared.choose_execution(true, true, true) == ExecutionAction::Prefill,
+                      "zero decode share no longer runs one round per chunk");
 
     std::array<std::shared_ptr<SchedulerRequest>, ninfer::kMaximumConcurrency> slots{};
     slots[0]                      = std::make_shared<SchedulerRequest>();

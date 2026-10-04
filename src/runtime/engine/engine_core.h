@@ -77,7 +77,8 @@ public:
                      options.context_cache.max_shared_prefixes.value(),
                      options.context_cache.enabled,
                      options.context_cache.max_long_anchors_per_continuation.value_or(0),
-                     std::move(context_cost)) {
+                     std::move(context_cost)),
+          scheduler_(options.prefill_decode_share_percent) {
         if (max_concurrency_ == 0 || max_concurrency_ > kMaximumConcurrency ||
             options.max_pending_requests == 0 || pending_timeout_.count() <= 0 ||
             prefill_chunk_ == 0) {
@@ -541,7 +542,10 @@ private:
         snapshot.prefilling_requests = 0;
         if (const auto lane = scheduler_.prefill_lane();
             lane && slots_[*lane] != nullptr && !slots_[*lane]->capture_pending) {
-            snapshot.prefilling_requests = 1;
+            ++snapshot.prefilling_requests;
+        }
+        if (const auto lane = scheduler_.parked_prefill_lane(); lane && slots_[*lane] != nullptr) {
+            ++snapshot.prefilling_requests;
         }
         snapshot.materializing_requests = materializing_.has_value() ? 1U : 0U;
         for (std::uint32_t lane = 0; lane < max_concurrency_; ++lane) {
@@ -1047,6 +1051,9 @@ private:
             request->generation_timings = aborted.timings;
             request->speculative_stats  = std::move(aborted.speculative);
             if (scheduler_.prefill_lane() == lane) { scheduler_.clear_prefill_lane(lane); }
+            if (scheduler_.parked_prefill_lane() == lane) {
+                scheduler_.clear_parked_prefill_lane(lane);
+            }
             append_output(request, request->output.commit_preview());
             finish_engine_phase(boundary, EngineHostPhase::Boundary);
             complete_success(request, FinishReason::Cancelled);
@@ -1775,26 +1782,130 @@ private:
         return progress_context_transaction(false);
     }
 
+    [[nodiscard]] bool short_prefill(const RequestPlanSummary& plan) const {
+        if (plan.reusable_prompt_tokens > plan.prompt_tokens) {
+            throw std::logic_error("admission plan reuses more tokens than its prompt");
+        }
+        return plan.prompt_tokens - plan.reusable_prompt_tokens <= prefill_chunk_;
+    }
+
+    [[nodiscard]] bool prefill_owner_capture_pending() const noexcept {
+        const auto lane = scheduler_.prefill_lane();
+        return lane && slots_[*lane] != nullptr && slots_[*lane]->capture_pending;
+    }
+
     // A ready FIFO head whose prefill needs more than one chunk waits while another request runs:
-    // its prefill would take the GPU for its whole duration and leave the running request one
-    // decode round per chunk. It is admitted once nothing else runs (a completion re-arms
-    // admission) or once it has waited long_prefill_wait_ since submission (the worker re-arms
-    // admission at that time). Requests behind it keep FIFO order.
+    // its prefill would take most of the GPU for its whole duration. It is admitted once nothing
+    // else runs (a completion re-arms admission) or once it has waited long_prefill_wait_ since
+    // submission (the worker re-arms admission at that time). Short requests behind it may
+    // backfill (try_backfill); longer ones keep FIFO order.
     [[nodiscard]] bool defer_long_prefill(const std::shared_ptr<Request>& head,
                                           std::uint32_t other_runnable,
                                           const RequestPlanSummary& plan) {
         if (long_prefill_wait_.count() == 0 || other_runnable == 0) { return false; }
-        if (plan.reusable_prompt_tokens > plan.prompt_tokens) {
-            throw std::logic_error("admission plan reuses more tokens than its prompt");
-        }
-        if (plan.prompt_tokens - plan.reusable_prompt_tokens <= prefill_chunk_) { return false; }
+        if (short_prefill(plan)) { return false; }
         const Clock::time_point release = head->submitted + long_prefill_wait_;
         if (Clock::now() >= release) { return false; }
         long_prefill_release_ = release;
         return true;
     }
 
+    // Persistent backfill around a FIFO head that cannot be admitted now: blocked on resources, or
+    // (short_only) deferred as a long prefill, where only requests whose prefill fits one chunk
+    // may pass it. The Program proof keeps the head admissible once its donors finish.
+    [[nodiscard]] std::optional<AdmissionProgress>
+    try_backfill(const FifoSnapshot& queued, const std::shared_ptr<Request>& head,
+                 PlanningAllowance allowance, bool short_only, bool& control_progress) {
+        const ActiveAdmissionSet active =
+            scheduler_.active_admission_set(slots_, max_concurrency_);
+        if (active.size == 0 ||
+            !scheduler_.protect_blocked_head(head->id, active.span(),
+                                             instance_.program->resource_revision())) {
+            return std::nullopt;
+        }
+        const std::optional<std::uint64_t> protection_epoch = scheduler_.protection_epoch();
+        if (!protection_epoch) {
+            throw std::logic_error("blocked FIFO head has no protection epoch");
+        }
+
+        std::array<SequenceHandle, kMaximumConcurrency> persistent_borrowers{};
+        std::size_t persistent_borrower_count = 0;
+        for (const auto& active_request : slots_) {
+            if (active_request == nullptr ||
+                active_request->backfill_class != BackfillClass::Persistent ||
+                active_request->backfill_epoch != *protection_epoch) {
+                continue;
+            }
+            if (!active_request->sequence) {
+                throw std::logic_error("persistent borrower has no sequence reservation");
+            }
+            persistent_borrowers[persistent_borrower_count++] = *active_request->sequence;
+        }
+
+        for (const std::shared_ptr<Request>& candidate : queued.backfill_candidates()) {
+            if (candidate->cancelled.load(std::memory_order_acquire)) {
+                if (erase_pending(candidate)) {
+                    on_waiting_removed(candidate);
+                    complete_detached_cancelled(candidate);
+                    publish_runtime_stats();
+                    control_progress = true;
+                }
+                continue;
+            }
+            if (Clock::now() >= candidate->deadline) {
+                (void)remove_pending_error(
+                    candidate, std::make_exception_ptr(RequestError(
+                                   RequestErrorKind::QueueTimeout,
+                                   "inference request expired while waiting for admission")));
+                control_progress = true;
+                continue;
+            }
+            try {
+                ensure_base_plan(candidate);
+            } catch (...) {
+                (void)remove_pending_error(candidate, std::current_exception());
+                control_progress = true;
+                continue;
+            }
+            auto candidate_inspection = inspect_admission(candidate, allowance);
+            if (candidate_inspection.readiness == Readiness::PermanentlyInfeasible) {
+                (void)remove_pending_error(
+                    candidate, std::make_exception_ptr(RequestError(
+                                   RequestErrorKind::ContextLengthExceeded,
+                                   "request reservation exceeds Engine shared KV capacity")));
+                control_progress = true;
+                continue;
+            }
+            if ((candidate_inspection.readiness != Readiness::Ready &&
+                 candidate_inspection.readiness != Readiness::NeedsTransfer) ||
+                !candidate_inspection.choice ||
+                (short_only && !short_prefill(candidate_inspection.choice->summary()))) {
+                continue;
+            }
+            const auto proof = resources_.prove_persistent_backfill(
+                *instance_.program, *head->base_plan, *candidate_inspection.choice,
+                std::span<const SequenceHandle>(persistent_borrowers.data(),
+                                                persistent_borrower_count));
+            if (!proof) { continue; }
+            const RequestPlanSummary& candidate_plan = candidate_inspection.choice->summary();
+            auto grant =
+                scheduler_.qualify_backfill(candidate->id, candidate_plan.service_work_quanta,
+                                            active.span(), proof->resource_revision());
+            if (grant) {
+                if (short_only) { ++cumulative_stats_.admission_short_backfills; }
+                return admit_planned_request(candidate, std::move(*candidate_inspection.choice),
+                                             std::move(*grant));
+            }
+        }
+        return std::nullopt;
+    }
+
+    // Admission runs with no staged prefill, or while one is staged and may yield
+    // (Scheduler::prefill_yield_open). In the second case only a ready FIFO head whose prefill
+    // fits one chunk is admitted: the staged prefill parks, the short request prefills, and the
+    // parked one resumes. Behind a deferred long head, ready short requests backfill.
     AdmissionProgress try_admit_one() {
+        const bool yield_admission = scheduler_.prefill_lane().has_value();
         const auto other_runnable = static_cast<std::uint32_t>(
             std::count_if(slots_.begin(), slots_.end(), [](const auto& request) {
                 return request && !request->capture_pending &&
@@ -1853,8 +1964,20 @@ private:
                 if (!head_inspection.choice) {
                     throw std::logic_error("ready resource inspection has no admission choice");
                 }
-                if (defer_long_prefill(head, other_runnable, head_inspection.choice->summary())) {
+                if (yield_admission) {
+                    if (!short_prefill(head_inspection.choice->summary())) {
+                        return control_progress ? AdmissionProgress::ControlProgress
+                                                : AdmissionProgress::None;
+                    }
+                    scheduler_.park_prefill_lane();
+                    ++cumulative_stats_.admission_prefill_yields;
+                } else if (defer_long_prefill(head, other_runnable,
+                                              head_inspection.choice->summary())) {
                     ++cumulative_stats_.admission_deferred_long_prefill;
+                    if (auto backfilled = try_backfill(queued, head, allowance, true,
+                                                       control_progress)) {
+                        return *backfilled;
+                    }
                     return control_progress ? AdmissionProgress::ControlProgress
                                             : AdmissionProgress::None;
                 }
@@ -1863,6 +1986,10 @@ private:
                 return admit_planned_request(head, std::move(*head_inspection.choice),
                                              std::move(grant));
             }
+            if (yield_admission) {
+                return control_progress ? AdmissionProgress::ControlProgress
+                                        : AdmissionProgress::None;
+            }
 
             record_admission_block(head_inspection.block_reason);
             if (head_inspection.block_reason ==
@@ -1870,87 +1997,11 @@ private:
                 admission_waits_on_state_fork_ = true;
             }
 
-            const ActiveAdmissionSet active =
-                scheduler_.active_admission_set(slots_, max_concurrency_);
-            if (active.size == 0) {
+            if (scheduler_.active_admission_set(slots_, max_concurrency_).size == 0) {
                 throw std::logic_error("isolated-feasible request is blocked in an idle Engine");
             }
-            if (!scheduler_.protect_blocked_head(head->id, active.span(),
-                                                 instance_.program->resource_revision())) {
-                return control_progress ? AdmissionProgress::ControlProgress
-                                        : AdmissionProgress::None;
-            }
-            const std::optional<std::uint64_t> protection_epoch = scheduler_.protection_epoch();
-            if (!protection_epoch) {
-                throw std::logic_error("blocked FIFO head has no protection epoch");
-            }
-
-            std::array<SequenceHandle, kMaximumConcurrency> persistent_borrowers{};
-            std::size_t persistent_borrower_count = 0;
-            for (const auto& active_request : slots_) {
-                if (active_request == nullptr ||
-                    active_request->backfill_class != BackfillClass::Persistent ||
-                    active_request->backfill_epoch != *protection_epoch) {
-                    continue;
-                }
-                if (!active_request->sequence) {
-                    throw std::logic_error("persistent borrower has no sequence reservation");
-                }
-                persistent_borrowers[persistent_borrower_count++] = *active_request->sequence;
-            }
-
-            for (const std::shared_ptr<Request>& candidate : queued.backfill_candidates()) {
-                if (candidate->cancelled.load(std::memory_order_acquire)) {
-                    if (erase_pending(candidate)) {
-                        on_waiting_removed(candidate);
-                        complete_detached_cancelled(candidate);
-                        publish_runtime_stats();
-                        control_progress = true;
-                    }
-                    continue;
-                }
-                if (Clock::now() >= candidate->deadline) {
-                    (void)remove_pending_error(
-                        candidate, std::make_exception_ptr(RequestError(
-                                       RequestErrorKind::QueueTimeout,
-                                       "inference request expired while waiting for admission")));
-                    control_progress = true;
-                    continue;
-                }
-                try {
-                    ensure_base_plan(candidate);
-                } catch (...) {
-                    (void)remove_pending_error(candidate, std::current_exception());
-                    control_progress = true;
-                    continue;
-                }
-                auto candidate_inspection = inspect_admission(candidate, allowance);
-                if (candidate_inspection.readiness == Readiness::PermanentlyInfeasible) {
-                    (void)remove_pending_error(
-                        candidate, std::make_exception_ptr(RequestError(
-                                       RequestErrorKind::ContextLengthExceeded,
-                                       "request reservation exceeds Engine shared KV capacity")));
-                    control_progress = true;
-                    continue;
-                }
-                if ((candidate_inspection.readiness != Readiness::Ready &&
-                     candidate_inspection.readiness != Readiness::NeedsTransfer) ||
-                    !candidate_inspection.choice) {
-                    continue;
-                }
-                const auto proof = resources_.prove_persistent_backfill(
-                    *instance_.program, *head->base_plan, *candidate_inspection.choice,
-                    std::span<const SequenceHandle>(persistent_borrowers.data(),
-                                                    persistent_borrower_count));
-                if (!proof) { continue; }
-                const RequestPlanSummary& candidate_plan = candidate_inspection.choice->summary();
-                auto grant =
-                    scheduler_.qualify_backfill(candidate->id, candidate_plan.service_work_quanta,
-                                                active.span(), proof->resource_revision());
-                if (grant) {
-                    return admit_planned_request(candidate, std::move(*candidate_inspection.choice),
-                                                 std::move(*grant));
-                }
+            if (auto backfilled = try_backfill(queued, head, allowance, false, control_progress)) {
+                return *backfilled;
             }
             return control_progress ? AdmissionProgress::ControlProgress : AdmissionProgress::None;
         }
@@ -2209,6 +2260,11 @@ private:
                     long_prefill_release_.reset();
                     request_admission_check();
                 }
+                // A prefill parked for a yield admission resumes once the short request finished
+                // its prefill or never reached it (its materialization ended without a lane).
+                if (!materializing_ && scheduler_.resume_parked_prefill()) {
+                    request_admission_check();
+                }
                 const bool admission_check_pending =
                     admission_check_pending_.load(std::memory_order_acquire);
                 const bool skip_admission = oom_backoff_ > 0;
@@ -2216,8 +2272,8 @@ private:
                 if (!skip_admission &&
                     scheduler_.should_attempt_admission(
                         have_pending, admission_check_pending, !membership.empty(),
-                        previous_unit_was_decode,
-                        instance_.program->has_context_transaction()) &&
+                        previous_unit_was_decode, instance_.program->has_context_transaction(),
+                        prefill_owner_capture_pending()) &&
                     consume_admission_check()) {
                     (void)try_admit_one();
                     membership = scheduler_.build_round_membership(slots_, max_concurrency_);
@@ -2247,12 +2303,19 @@ private:
                     }
                     prefill_runnable = !slots_[*lane]->capture_pending;
                 }
+                if (const auto lane = scheduler_.parked_prefill_lane(); lane) {
+                    if (slots_[*lane] == nullptr || !slots_[*lane]->is_prefilling()) {
+                        throw std::logic_error("parked prefill has no active Engine request");
+                    }
+                }
                 const ExecutionAction action = scheduler_.choose_execution(
                     !membership.empty(), prefill_runnable, previous_unit_was_decode);
                 if (action == ExecutionAction::Prefill) {
                     set_host_work_class(HostWorkClass::Prefill);
                     finish_engine_phase(boundary, EngineHostPhase::Boundary);
+                    const Clock::time_point unit_started = Clock::now();
                     run_prefill_step(cancelled_at_unit_start);
+                    scheduler_.record_prefill_unit(elapsed_ns(unit_started, Clock::now()));
                     previous_unit_was_decode = false;
                     oom_recovery_count_ = 0;
                     continue;
@@ -2260,7 +2323,9 @@ private:
                 if (action == ExecutionAction::Decode) {
                     set_host_work_class(HostWorkClass::Decode, membership.lane_span());
                     finish_engine_phase(boundary, EngineHostPhase::Boundary);
+                    const Clock::time_point unit_started = Clock::now();
                     run_decode_round(membership, cancelled_at_unit_start);
+                    scheduler_.record_decode_unit(elapsed_ns(unit_started, Clock::now()));
                     previous_unit_was_decode = true;
                     oom_recovery_count_ = 0;
                     continue;

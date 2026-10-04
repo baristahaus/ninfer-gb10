@@ -13,7 +13,9 @@
 # prompt cannot be admitted beside a running 15K request (no_feasible_plan) and simply waits.
 # KV_CAPACITY=auto sizes the pool from free memory, so the interference probe measures the two
 # requests actually sharing the GPU. CHUNKS sets --prefill-chunk per arm ("default" leaves the
-# server's device default, 4096 on GB10); LONG_PREFILL_WAIT_MS sets --long-prefill-wait-ms.
+# server's device default, 4096 on GB10); LONG_PREFILL_WAIT_MS sets --long-prefill-wait-ms and
+# DECODE_SHARES the --prefill-decode-share arms ("default" leaves the server's 50). LOOKUPS="off on"
+# adds arms with --prompt-lookup.
 #
 # NInfer runs with two lanes (the interference probe needs both) and a request log, so the
 # summaries carry server-side prefill seconds, recomputed prompt tokens on follow-ups and MTP
@@ -23,6 +25,8 @@
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 KS=${KS:-1 3}
 CHUNKS=${CHUNKS:-default}
+DECODE_SHARES=${DECODE_SHARES:-default}
+LOOKUPS=${LOOKUPS:-off}
 KV_CAPACITY=${KV_CAPACITY:-}
 DGPP=${DGPP:-1}
 SIZES=${SIZES:-15000,30000,60000}
@@ -41,11 +45,17 @@ driver_args=(--tokens "$SIZES" --reps "$REPS" --max-tokens "$MAX_TOKENS" "${extr
 
 for k in $KS; do
     for chunk in $CHUNKS; do
+    for share in $DECODE_SHARES; do
+    for lookup in $LOOKUPS; do
         arm=ninfer-k$k
         [[ $CHUNKS == default ]] || arm+=-c$chunk
+        [[ $DECODE_SHARES == default ]] || arm+=-s$share
+        [[ $lookup == off ]] || arm+=-lookup
         SERVE_ARGS=(--max-context 73728 --max-concurrency 2 --kv-dtype "$KV_DTYPE" --preserve-thinking
                     --spec mtp --draft-tokens "$k" --lm-head-draft)
         [[ $chunk == default ]] || SERVE_ARGS+=(--prefill-chunk "$chunk")
+        [[ $share == default ]] || SERVE_ARGS+=(--prefill-decode-share "$share")
+        [[ $lookup == off ]] || SERVE_ARGS+=(--prompt-lookup)
         [[ -z ${LONG_PREFILL_WAIT_MS:-} ]] || SERVE_ARGS+=(--long-prefill-wait-ms "$LONG_PREFILL_WAIT_MS")
         [[ -z $KV_CAPACITY ]] || SERVE_ARGS+=(--kv-capacity "$KV_CAPACITY")
         drop_caches
@@ -55,6 +65,8 @@ for k in $KS; do
             log "$arm driver exited nonzero; see $dir/$arm.txt"
         stop_server
         "$PYTHON" tools/gb10/request_log_summary.py "$dir/$arm.jsonl" >"$dir/$arm.md"
+    done
+    done
     done
 done
 
@@ -83,7 +95,7 @@ fi
     machine_summary
     echo
     echo "Sizes $SIZES tokens, $REPS reps, max_tokens $MAX_TOKENS, greedy, thinking off;"
-    echo "prefill chunks $CHUNKS; KV capacity ${KV_CAPACITY:-default (= --max-context)}."
+    echo "prefill chunks $CHUNKS; decode shares $DECODE_SHARES; prompt lookup $LOOKUPS; KV capacity ${KV_CAPACITY:-default (= --max-context)}."
     for f in "$dir"/ninfer-k*.txt "$dir"/dgpp.txt; do
         [[ -f $f ]] || continue
         echo
@@ -91,6 +103,7 @@ fi
         echo
         sed -n '/^| tokens/,$p' "$f"
         grep -h '"interference"' "$f" | sed 's/^/interference: /'
+        grep -h '"yield"' "$f" | sed 's/^/yield: /'
     done
 } >"$dir/summary.md"
 log "summary: $dir/summary.md"

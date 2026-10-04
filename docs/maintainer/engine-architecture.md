@@ -399,17 +399,18 @@ FIFO head 暂时受 active incumbents 阻塞时，Scheduler 记录 protected hea
 这个证明不使用“borrower 预计先完成”的时间假设。改变全局资源拓扑的 transition 会推进
 `resource_revision`，之后的 backfill 必须重新证明。
 
-### 5.3 Prefill 与 decode
+### 5.3 Prefill and decode
 
-Scheduler 保证：
+The Scheduler guarantees:
 
-- 同时最多一个 staged-prefill request；
-- 已有 decode work 不会被连续 prefill 饿死；
-- decode round 包含所有且仅包含当前 decode-ready requests；
-- batch 使用精确 `B`，不以 inactive lane padding 到 `max_concurrency`。
+- at most one request owns staged prefill, and at most one more is parked for a yield (§5.5);
+- running decode work is not starved by a prefill: after each prefill chunk, decode rounds run
+  until they have taken `prefill_decode_share_percent` of the chunk's time, and at least one round;
+- a decode round contains every decode-ready request and only those;
+- a batch uses the exact `B` and is not padded with inactive lanes to `max_concurrency`.
 
-Program 接收紧凑的 `SequenceHandle[B]` 和每行预算。Prefix reuse 只减少 materialization 或 suffix
-prefill，不创建另一条调度路径。
+The Program receives a compact `SequenceHandle[B]` and per-row budgets. Prefix reuse only reduces
+materialization or suffix prefill; it does not create another scheduling path.
 
 ### 5.4 Admission invalidation
 
@@ -423,25 +424,44 @@ prefill，不创建另一条调度路径。
 
 普通 decode frontier 推进、输出发布和统计更新不扫描 cache catalog，也不重复运行 pressure planner。
 
-### 5.5 Long prefills wait for running requests
+### 5.5 Long prefills beside running requests
 
-A prefill is compute-bound, and the Scheduler runs one decode round per prefill chunk. A prefill
-of many chunks therefore leaves a running request one round per chunk for the whole prefill: on
-GB10 a 60K-token prompt froze a running stream for 28–42 s. The policy is to finish the running
-request first.
-- **The rule:** a FIFO head that is otherwise ready waits while another request is runnable
-  (prefilling or decode-ready), if its prefill after prefix reuse exceeds one prefill chunk.
-- **Release:** it is admitted once nothing else runs, or once it has waited
-  `long_prefill_wait_ms` since submission, so it cannot starve behind a long answer.
-- **Re-arming:** a lane release re-arms admission as in §5.4, and the worker re-arms it when the
-  wait limit passes.
-- **Queue order:** requests behind the waiting head keep FIFO order and are not backfilled around
-  it.
-- **Short prompts:** a prompt whose prefill fits one chunk is admitted at once; it costs a running
-  request one gap of one chunk.
-- **Startup check:** the wait limit must be shorter than `pending_timeout_ms`, so a deferred
-  request is admitted before its queue deadline.
-- **Counter:** `admission_deferred_long_prefill` in the throughput log counts the deferrals.
+A prefill is compute-bound: on GB10 a 60K-token prompt takes about 28 s at a 4096-token chunk,
+against about 46 ms for a decode round. Three rules divide the GPU between a long prefill and
+the requests around it.
+
+- **Long prefills wait for running requests.**
+  - A FIFO head that is otherwise ready waits while another request is runnable (prefilling or
+    decode-ready), if its prefill after prefix reuse exceeds one prefill chunk.
+  - It is admitted once nothing else runs, or once it has waited `long_prefill_wait_ms` since
+    submission, so it cannot starve behind a long answer.
+  - A lane release re-arms admission as in §5.4, and the worker re-arms it when the wait limit
+    passes.
+  - The wait limit must be shorter than `pending_timeout_ms`, so a deferred request is admitted
+    before its queue deadline.
+- **Running requests keep decoding during a prefill (decode share).**
+  - After each prefill chunk, decode rounds run until they have taken
+    `prefill_decode_share_percent` of the chunk's time, and at least one round.
+  - At the default 50, a prefill beside decode takes about 1.5 times as long, and a running
+    request keeps about a third of its decode rate instead of one round per chunk. Its largest
+    gap stays one chunk's prefill time.
+  - Zero restores one round per chunk.
+- **Short requests go ahead of long prefills.** A short request is one whose prefill after reuse
+  fits one chunk.
+  - *Behind a deferred head:* short requests backfill around it under the persistent-backfill
+    proof of §5.2, with the deferred head as the protected head. Longer requests keep FIFO
+    order behind it.
+  - *During a staged prefill:* admission is attempted while a prefill is staged, for a short FIFO
+    head only. The staged prefill parks at its chunk boundary, the short request materializes
+    and prefills, and the parked prefill resumes once no other request owns staged prefill.
+  - A staged prefill yields only after it has run at least one chunk since it was staged or
+    resumed, and never while its own capture is pending. So a stream of short requests can at
+    most halve its progress.
+  - Prefill state is per sequence in the Program, so the parked sequence resumes unchanged; the
+    real-artifact Engine test checks both outputs against their solo runs.
+- **Counters:** these throughput-log counters record the rules: `admission_deferred_long_prefill`
+  counts deferrals, `admission_short_backfills` short requests admitted around a deferred head,
+  and `admission_prefill_yields` staged prefills parked for a short head.
 
 ---
 

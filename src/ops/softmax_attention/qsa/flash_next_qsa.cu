@@ -1228,6 +1228,7 @@ __launch_bounds__(128, 1) __global__ void selected_attention_batched_fp8_kernel(
 
 constexpr int kMaxDecodeAttentionSplits = 64;
 constexpr int kSplitHeadsPerBlock = 4;
+static_assert(kSplitHeadsPerBlock * 32 == 128, "split staging assumes 128 threads");
 
 // Match the split-K profiles used by the reference vLLM Triton kernel for this
 // target's two KV heads. In particular, four-row MTP verification uses 32
@@ -1294,48 +1295,70 @@ __device__ __forceinline__ void selected_attention_split_body(
     const int item_end = min(item_count,
                              ((split + 1) * num_tiles / num_splits) * kTile);
     const int table_row = table_rows[batch_lane];
-    __shared__ __nv_bfloat16 staged_key[kTile][kHeadDim];
-    __shared__ __nv_bfloat16 staged_value[kTile][kHeadDim];
+    __shared__ __align__(16) __nv_bfloat16 staged_key[kTile][kHeadDim];
+    __shared__ __align__(16) __nv_bfloat16 staged_value[kTile][kHeadDim];
     __shared__ int staged_positions[kTile];
+    __shared__ int staged_rows[kTile];  // paged KV row of each key, -1 when absent
     for (int tile_begin = item_begin; tile_begin < item_end; tile_begin += kTile) {
         const int tile_size = min(kTile, item_end - tile_begin);
+        bool present = false;
         if (threadIdx.x < tile_size) {
-            staged_positions[threadIdx.x] = indices == nullptr
+            const int position = indices == nullptr
                 ? tile_begin + static_cast<int>(threadIdx.x)
                 : indices[tile_begin + static_cast<int>(threadIdx.x) +
                           static_cast<std::int64_t>(kOutputWidth) * token];
+            present = position >= 0;
+            staged_positions[threadIdx.x] = position;
+            staged_rows[threadIdx.x] = present
+                ? position % kPagedKVPageSize +
+                      kPagedKVPageSize *
+                          (kv_head + kKvHeads * physical_page(tables, logical_pages, table_row,
+                                                              position))
+                : -1;
         }
-        __syncthreads();
-        for (int element = static_cast<int>(threadIdx.x);
-             element < tile_size * kHeadDim; element += static_cast<int>(blockDim.x)) {
-            const int item = element / kHeadDim;
-            const int d = element - item * kHeadDim;
-            const int position = staged_positions[item];
-            if (position >= 0) {
-                const int page = physical_page(tables, logical_pages, table_row, position);
-                const std::int64_t offset = d + static_cast<std::int64_t>(kHeadDim) *
-                    (position % kPagedKVPageSize + kPagedKVPageSize *
-                        (kv_head + kKvHeads * page));
-                if constexpr (Fp8) {
-                    const std::int64_t scale_offset =
-                        position % kPagedKVPageSize +
-                        static_cast<std::int64_t>(kPagedKVPageSize) *
-                            (kv_head + kKvHeads * page);
+        // A tile without selected keys contributes nothing (its maximum stays -inf).
+        if (!__syncthreads_or(present)) { continue; }
+        if constexpr (Fp8) {
+            for (int element = static_cast<int>(threadIdx.x);
+                 element < tile_size * kHeadDim; element += static_cast<int>(blockDim.x)) {
+                const int item = element / kHeadDim;
+                const int d = element - item * kHeadDim;
+                const int row = staged_rows[item];
+                if (row >= 0) {
+                    const std::int64_t offset = d + static_cast<std::int64_t>(kHeadDim) * row;
                     staged_key[item][d] = __float2bfloat16_rn(
                         kv_cache_fp8_dequant_code_to_float(
                             static_cast<const std::uint8_t*>(key_pages)[offset],
-                            key_scales[scale_offset]));
+                            key_scales[row]));
                     staged_value[item][d] = __float2bfloat16_rn(
                         kv_cache_fp8_dequant_code_to_float(
                             static_cast<const std::uint8_t*>(value_pages)[offset],
-                            value_scales[scale_offset]));
+                            value_scales[row]));
                 } else {
-                    staged_key[item][d] = static_cast<const __nv_bfloat16*>(key_pages)[offset];
-                    staged_value[item][d] = static_cast<const __nv_bfloat16*>(value_pages)[offset];
+                    staged_key[item][d] = __float2bfloat16_rn(0.0F);
+                    staged_value[item][d] = __float2bfloat16_rn(0.0F);
                 }
-            } else {
-                staged_key[item][d] = __float2bfloat16_rn(0.0F);
-                staged_value[item][d] = __float2bfloat16_rn(0.0F);
+            }
+        } else {
+            // Eight BF16 per 16-byte load; all loads of a thread are independent.
+            constexpr int kVectors = kHeadDim / 8;
+#pragma unroll
+            for (int i = 0; i < kTile * kVectors / 128; ++i) {
+                const int vector = static_cast<int>(threadIdx.x) + 128 * i;
+                const int item = vector / kVectors;
+                const int d = 8 * (vector % kVectors);
+                const int row = item < tile_size ? staged_rows[item] : -1;
+                uint4 key = make_uint4(0, 0, 0, 0);
+                uint4 value = make_uint4(0, 0, 0, 0);
+                if (row >= 0) {
+                    const std::int64_t offset = d + static_cast<std::int64_t>(kHeadDim) * row;
+                    key = *reinterpret_cast<const uint4*>(
+                        static_cast<const __nv_bfloat16*>(key_pages) + offset);
+                    value = *reinterpret_cast<const uint4*>(
+                        static_cast<const __nv_bfloat16*>(value_pages) + offset);
+                }
+                *reinterpret_cast<uint4*>(&staged_key[item][d]) = key;
+                *reinterpret_cast<uint4*>(&staged_value[item][d]) = value;
             }
         }
         __syncthreads();

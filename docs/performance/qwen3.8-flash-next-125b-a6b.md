@@ -528,6 +528,25 @@ K=3, `--kv-capacity auto`):
   both corpora: greedy outputs are unchanged (real-artifact checks), but the feature does not
   beat the MTP layer yet, so it stays off by default.
 
+**Backfill and program-level lookup rates** (`1307107c`, `profiles/bench/gb10/long-context-edit/`,
+`step7a-lookup2-*`; K=3, `--kv-capacity auto`, default 20 s wait, 2026-10-05):
+- **Backfill** (a 2K request arrives 2 s after a 60K prompt has been deferred behind a running
+  15K answer, at the default wait): the short gets its first token in 1.53 s in both arms and
+  `admission_short_backfills` counts the one admission; the held 60K prompt takes 51.1 s (the
+  full 20 s wait plus its 28 s prefill), and the running answer ends 30.4 s after the 60K
+  arrival, after the short's first token.
+- **Prompt lookup rates learned per Program** (replacing the per-request rates above; a
+  passed-over proposal fades its bucket's evidence by 1%):
+  - copy-heavy edit task (the bundle carries `ops/collect_evidence.sh` with three planted bugs;
+    the answer returns the corrected script): lookup drafts 3-85% of the rounds at 86-99%
+    per-draft acceptance, but the MTP layer already accepts 96.5% of its drafts on this text
+    (97.8/95.4/96.4% per position), so decode is unchanged to -3.9% (15K first turn: 71.9 vs
+    74.8 tok/s; 60K: 74.5 vs 74.6). Greedy outputs are identical (same completion tokens and
+    finish reason, both arms).
+  - 16-stream natural corpus at K=3: 0.5341 -> 0.5262 acceptance and 49.3 -> 48.6 tok/s
+    (-1.4%); the per-request rates above measured 0.5341 -> 0.5232 and 49.2 -> 48.6. Outputs
+    identical (16,215 tokens).
+
 ### Changes and their measured effect
 
 Each change kept outputs bitwise unless the row says otherwise. Gates: op oracle tests, the
@@ -555,6 +574,7 @@ drift gate below.
 | QSA key, value and index-query projections in one launch | QSA BF16 0.70 → 0.59 ms per round |
 | decode share and yield around long prefills (`--prefill-decode-share`, default 50) | running decode during a 60K prefill 10 → 25 tok/s; parked short first token 1.7 s; newcomer TTFT +46% |
 | prompt lookup drafting (`--prompt-lookup`, off by default) | -1.0 to -1.2% tok/s on both corpora measured; greedy outputs unchanged |
+| prompt-lookup rates learned per Program, with a skip fade (`1307107c`) | no gain on the copy-heavy edit task (the MTP layer is already at 96.5% per draft there); natural corpus -1.4% tok/s, as before; greedy outputs unchanged |
 
 ### Quality gate for numerical changes
 

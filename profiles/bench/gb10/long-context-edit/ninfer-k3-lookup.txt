@@ -1,0 +1,19 @@
+model qwen3.8-flash-next-125b-a6b; 1.794 characters per token
+{"size": 15000, "task": "edit", "rep": 0, "seed": 1001, "turn": 1, "prompt_tokens": 15057, "completion_tokens": 676, "ttft_s": 7.003, "prefill_tok_s": 2150.1, "decode_tok_s": 69.29, "max_gap_s": 0.069, "finish": "stop", "facts": {"namespace": true, "configmap": true, "log_append": false}}
+{"size": 15000, "task": "edit", "rep": 0, "seed": 1001, "turn": 2, "prompt_tokens": 15780, "completion_tokens": 665, "ttft_s": 0.287, "prefill_tok_s": null, "decode_tok_s": 74.6, "max_gap_s": 0.054, "finish": "stop"}
+{"size": 15000, "task": "edit", "rep": 1, "seed": 1002, "turn": 1, "prompt_tokens": 14908, "completion_tokens": 685, "ttft_s": 6.939, "prefill_tok_s": 2148.5, "decode_tok_s": 74.58, "max_gap_s": 0.073, "finish": "stop", "facts": {"namespace": true, "configmap": true, "log_append": false}}
+{"size": 15000, "task": "edit", "rep": 1, "seed": 1002, "turn": 2, "prompt_tokens": 15640, "completion_tokens": 768, "ttft_s": 0.281, "prefill_tok_s": null, "decode_tok_s": 65.3, "max_gap_s": 0.054, "finish": "length"}
+{"size": 60000, "task": "edit", "rep": 0, "seed": 1003, "turn": 1, "prompt_tokens": 59902, "completion_tokens": 681, "ttft_s": 27.996, "prefill_tok_s": 2139.6, "decode_tok_s": 74.71, "max_gap_s": 0.07, "finish": "stop", "facts": {"namespace": true, "configmap": true, "log_append": false}}
+{"size": 60000, "task": "edit", "rep": 0, "seed": 1003, "turn": 2, "prompt_tokens": 60630, "completion_tokens": 674, "ttft_s": 0.263, "prefill_tok_s": null, "decode_tok_s": 73.6, "max_gap_s": 0.054, "finish": "stop"}
+{"size": 60000, "task": "edit", "rep": 1, "seed": 1004, "turn": 1, "prompt_tokens": 59921, "completion_tokens": 680, "ttft_s": 27.951, "prefill_tok_s": 2143.8, "decode_tok_s": 74.24, "max_gap_s": 0.07, "finish": "stop", "facts": {"namespace": true, "configmap": true, "log_append": false}}
+{"size": 60000, "task": "edit", "rep": 1, "seed": 1004, "turn": 2, "prompt_tokens": 60648, "completion_tokens": 658, "ttft_s": 0.255, "prefill_tok_s": null, "decode_tok_s": 74.17, "max_gap_s": 0.07, "finish": "stop"}
+{"interference": {"small_tokens": 15000, "large_tokens": 60000, "arrival_ttft_s": 50.182, "decoder_gap_median_before_s": 0.0486, "decoder_gap_max_during_s": 1.874, "decoder_stall_s": 5.577, "decoder_gap_median_after_s": null, "decoder_finished_before_arrival_prefill": true}}
+{"yield": {"short_tokens": 2000, "large_tokens": 60000, "short_ttft_s": 1.617, "long_ttft_s": 30.064, "short_first_before_long_first": true}}
+{"backfill": {"small_tokens": 15000, "short_tokens": 2000, "large_tokens": 60000, "short_ttft_s": 1.53, "held_ttft_s": 51.192, "running_end_after_held_arrival_s": 30.442, "short_first_before_running_end": true}}
+
+| tokens | task | turn | n | TTFT s (median) | prefill tok/s | decode tok/s | max gap s | facts named (of 4) or bugs fixed (of 3, edit) per rep |
+|---:|---|---:|---:|---:|---:|---:|---:|---|
+| 15000 | edit | 1 | 2 | 6.97 | 2149 | 71.9 | 0.07 | 2, 2 |
+| 15000 | edit | 2 | 2 | 0.28 | nan | 69.9 | 0.05 |  |
+| 60000 | edit | 1 | 2 | 27.97 | 2142 | 74.5 | 0.07 | 2, 2 |
+| 60000 | edit | 2 | 2 | 0.26 | nan | 73.9 | 0.06 |  |

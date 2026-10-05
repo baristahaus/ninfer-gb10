@@ -1,7 +1,7 @@
 ## Step 0 — build and tests
 
 - Host: Linux 6.17.0-1029-nvidia aarch64; Ubuntu 24.04.4 LTS
-- Commit: acf6f5f7
+- Commit: 1307107c (with local changes)
 - nvcc: release 13.0, V13.0.88
 - GPU/driver: NVIDIA GB10, 580.173.02
 - Artifact: qwen3_8_flash_next_125b_a6b_nvfp4_fp8_mtp.ninfer, 119G (multi-volume total)

@@ -157,16 +157,17 @@ with flat drift.
 **Open:**
 - long prompts: the 4096-token default chunk on GB10 takes a 60K prompt to its first token in
   28 s, against 32 s on DGPP. A running request keeps decoding at about 25 tok/s during a long
-  prefill (decode share; the newcomer's first token comes 46% later), and a short request parks
-  a long prefill and gets its first token in 1.7 s. Short requests passing a deferred long
-  request are not yet measured;
+  prefill (decode share; the newcomer's first token comes 46% later), a short request parks a
+  long prefill and gets its first token in 1.7 s, and a short request passing a deferred long
+  request gets its first token in 1.5 s (the held 60K prompt takes 51 s: the 20 s wait plus its
+  prefill);
 - prompt lookup drafting (`--prompt-lookup`, off) costs about 1% on both corpora measured;
 - DGPP at draft depths 2–3;
 - whether greedy decode at four or more requests should be made batch-invariant.
 
 The full record: [docs/performance/qwen3.8-flash-next-125b-a6b.md](docs/performance/qwen3.8-flash-next-125b-a6b.md#gb10-sm_121a).
 
-Build and tests: `tools/gb10/step0_build_test.sh` (ctest 139/139 plus the Flash-Next real-artifact
+Build and tests: `tools/gb10/step0_build_test.sh` (ctest 141/141 plus the Flash-Next real-artifact
 tests).
 
 NInfer is a from-scratch C++/CUDA inference engine for Qwen3.5 Dense/MoE and Qwen3.8 Flash-Next

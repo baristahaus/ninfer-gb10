@@ -1,14 +1,14 @@
 Internal ctest changing into directory: /home/apollo11/ninfer-gb10/build
 Test project /home/apollo11/ninfer-gb10/build
     Start 135: ninfer_qwen3_8_flash_next_real_test
-1/4 Test #135: ninfer_qwen3_8_flash_next_real_test ........   Passed   83.35 sec
+1/4 Test #135: ninfer_qwen3_8_flash_next_real_test ........   Passed   79.59 sec
     Start 136: ninfer_qwen3_8_flash_next_fault_test
-2/4 Test #136: ninfer_qwen3_8_flash_next_fault_test .......   Passed   75.05 sec
+2/4 Test #136: ninfer_qwen3_8_flash_next_fault_test .......   Passed   74.08 sec
     Start 140: ninfer_qwen3_8_flash_next_load_plan_test
-3/4 Test #140: ninfer_qwen3_8_flash_next_load_plan_test ...   Passed    0.04 sec
+3/4 Test #140: ninfer_qwen3_8_flash_next_load_plan_test ...   Passed    0.03 sec
     Start 141: ninfer_qwen3_8_flash_next_frontend_test
-4/4 Test #141: ninfer_qwen3_8_flash_next_frontend_test ....   Passed    0.62 sec
+4/4 Test #141: ninfer_qwen3_8_flash_next_frontend_test ....   Passed    0.61 sec
 
 100% tests passed, 0 tests failed out of 4
 
-Total Test time (real) = 159.06 sec
+Total Test time (real) = 154.32 sec

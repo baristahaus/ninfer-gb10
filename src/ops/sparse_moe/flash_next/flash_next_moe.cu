@@ -9,6 +9,7 @@
 #include "ops/linear/bf16/bf16_gemm_mma.cuh"
 #include "ops/linear/bf16/flash_next/bf16_gemv.cuh"
 #include "ops/linear/bf16/flash_next/bf16_launch.h"
+#include "ops/linear/bf16/flash_next/bf16_small_t.cuh"
 #include "ops/linear/fp8/flash_next_launch.h"
 #include "ops/linear/nvfp4/nvfp4_codec.cuh"
 #include "ops/linear/nvfp4/nvfp4_config.h"
@@ -18,10 +19,12 @@
 #include <cuda_runtime.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
+#include <utility>
 
 namespace ninfer::ops {
 namespace {
@@ -201,6 +204,92 @@ __global__ void __launch_bounds__(kRouteThreads)
         if (lane == 0) { destination[row0 + local_row] = __float2bfloat16_rn(total); }
     }
 }
+
+// Compact batches (2-8 tokens): CTAs [0, T) route one token each while the others compute the
+// shared-expert Down projection. Every 128-thread half runs one block of the production small-T
+// BF16 schedule, whose rows are warp-local, so the output equals that GEMV bit for bit.
+template <int Tokens>
+using SharedDownSmallTSchedule =
+    typename detail::flash_next::Bf16LinearSmallTProductionSchedule<SharedDownGeometry,
+                                                                    Tokens>::Type;
+constexpr int kRouteSharedDownMaxTokens = 8;
+
+template <int Tokens>
+__global__ void __launch_bounds__(kRouteThreads)
+    route_shared_down_small_t_kernel(const __nv_bfloat16* scores, const __nv_bfloat16* input,
+                                     const __nv_bfloat16* shared_scale_weight, int* ids,
+                                     float* alpha, float* shared_alpha,
+                                     const __nv_bfloat16* __restrict__ shared_activation,
+                                     const __nv_bfloat16* __restrict__ shared_down,
+                                     __nv_bfloat16* __restrict__ destination) {
+    using Schedule = SharedDownSmallTSchedule<Tokens>;
+    static_assert(Schedule::kWarpsPerRow == 1 && kRouteThreads % Schedule::kThreads == 0);
+    constexpr int kBlocksPerCta = kRouteThreads / Schedule::kThreads;
+    const int block             = static_cast<int>(blockIdx.x);
+    if (block < Tokens) {
+        route_token(scores, input, shared_scale_weight, ids, alpha, shared_alpha, block);
+        return;
+    }
+    const int thread    = static_cast<int>(threadIdx.x);
+    const int lane      = thread & 31;
+    const int virtual_block =
+        (block - Tokens) * kBlocksPerCta + thread / Schedule::kThreads;
+    const int row_group = (thread % Schedule::kThreads) / 32;
+    const int row0 = virtual_block * Schedule::kRowsPerCta + row_group * Schedule::kRowsPerWarp;
+    float accumulators[Schedule::kRowsPerWarp][Tokens][Schedule::kAccumulatorChains] = {};
+    detail::flash_next::bf16_small_t_compute_rows<SharedDownGeometry, Tokens, Schedule>(
+        shared_activation, shared_down, row0, 0, lane, accumulators);
+#pragma unroll
+    for (int local_row = 0; local_row < Schedule::kRowsPerWarp; ++local_row) {
+#pragma unroll
+        for (int token = 0; token < Tokens; ++token) {
+            float total = 0.0F;
+#pragma unroll
+            for (int chain = 0; chain < Schedule::kAccumulatorChains; ++chain) {
+                total += accumulators[local_row][token][chain];
+            }
+            total = warp_reduce_sum(total);
+            if (lane == 0) {
+                destination[static_cast<std::int64_t>(token) * kHidden + row0 + local_row] =
+                    __float2bfloat16_rn(total);
+            }
+        }
+    }
+}
+
+template <int Tokens>
+void launch_route_shared_down_small_t(const Tensor& scores, const Tensor& input,
+                                      const Weight& shared_scale, Tensor& ids, Tensor& alpha,
+                                      Tensor& shared_alpha, const Tensor& shared_activation,
+                                      const Weight& shared_down, Tensor& destination,
+                                      cudaStream_t stream) {
+    using Schedule              = SharedDownSmallTSchedule<Tokens>;
+    constexpr int kBlocksPerCta = kRouteThreads / Schedule::kThreads;
+    constexpr int kDownCtas     = kHidden / (Schedule::kRowsPerCta * kBlocksPerCta);
+    static_assert(kHidden % (Schedule::kRowsPerCta * kBlocksPerCta) == 0);
+    route_shared_down_small_t_kernel<Tokens><<<Tokens + kDownCtas, kRouteThreads, 0, stream>>>(
+        static_cast<const __nv_bfloat16*>(scores.data),
+        static_cast<const __nv_bfloat16*>(input.data),
+        static_cast<const __nv_bfloat16*>(shared_scale.qdata), static_cast<int*>(ids.data),
+        static_cast<float*>(alpha.data), static_cast<float*>(shared_alpha.data),
+        static_cast<const __nv_bfloat16*>(shared_activation.data),
+        static_cast<const __nv_bfloat16*>(shared_down.qdata),
+        static_cast<__nv_bfloat16*>(destination.data));
+}
+
+using RouteSharedDownLaunch = void (*)(const Tensor&, const Tensor&, const Weight&, Tensor&,
+                                       Tensor&, Tensor&, const Tensor&, const Weight&, Tensor&,
+                                       cudaStream_t);
+
+template <int... Offsets>
+constexpr auto route_shared_down_launchers(std::integer_sequence<int, Offsets...>) {
+    return std::array<RouteSharedDownLaunch, sizeof...(Offsets)>{
+        &launch_route_shared_down_small_t<Offsets + 2>...};
+}
+
+// Indexed by tokens - 2.
+constexpr auto kRouteSharedDownLaunchers = route_shared_down_launchers(
+    std::make_integer_sequence<int, kRouteSharedDownMaxTokens - 1>{});
 
 // Pack each expert in token-major order. Besides making the packed representation reproducible,
 // scanning tokens (whose top-k expert ids are unique) avoids contended global atomics.
@@ -806,7 +895,14 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
     Tensor ids          = workspace.alloc(DType::I32, {kTop, tokens});
     Tensor alpha        = workspace.alloc(DType::FP32, {kTop, tokens});
     Tensor shared_alpha = workspace.alloc(DType::FP32, {tokens});
-    if (tokens == 1 && fp8_entry && weights.shared_down.qtype == QType::BF16) {
+    if (tokens >= 2 && tokens <= kRouteSharedDownMaxTokens && fp8_entry &&
+        weights.shared_down.qtype == QType::BF16) {
+        // The entry kernel produced the shared activation; route and shared Down run together.
+        kRouteSharedDownLaunchers[tokens - 2](scores, input, weights.shared_scale, ids, alpha,
+                                              shared_alpha, shared_activation, weights.shared_down,
+                                              destination, stream);
+        CUDA_CHECK(cudaGetLastError());
+    } else if (tokens == 1 && fp8_entry && weights.shared_down.qtype == QType::BF16) {
         // The entry kernel produced the shared activation; route and shared Down run together.
         route_shared_down_decode_kernel<<<1 + kSharedDownBlocks, kRouteThreads, 0, stream>>>(
             static_cast<const __nv_bfloat16*>(scores.data),

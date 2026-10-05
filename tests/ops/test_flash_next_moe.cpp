@@ -154,6 +154,14 @@ int run(bool fp8) {
     ops::flash_next_moe(scalar_input, weights, scalar_output, scalar_workspace, nullptr);
     WorkspaceArena grouped_workspace(ops::flash_next_moe_workspace_capacity_bytes(kGroupedTokens));
     ops::flash_next_moe(grouped_input, weights, grouped_output, grouped_workspace, nullptr);
+    // A verification-sized batch (MTP3 rows) takes the compact decode route.
+    constexpr int kCompactTokens = 4;
+    GuardedDeviceBuffer d_compact_output(static_cast<std::size_t>(kHidden) * kCompactTokens *
+                                         sizeof(std::uint16_t));
+    Tensor compact_input(d_input.p, DType::BF16, {kHidden, kCompactTokens});
+    Tensor compact_output(d_compact_output.data(), DType::BF16, {kHidden, kCompactTokens});
+    WorkspaceArena compact_workspace(ops::flash_next_moe_workspace_capacity_bytes(kCompactTokens));
+    ops::flash_next_moe(compact_input, weights, compact_output, compact_workspace, nullptr);
     cuda_synchronize();
 
     const double activation = (0.5 / (1.0 + std::exp(-0.5))) * 0.5;
@@ -171,6 +179,13 @@ int run(bool fp8) {
         "Flash-Next BF16 MoE grouped",
         from_device_bf16(d_grouped_output.data(), static_cast<std::size_t>(kHidden) * kGroupedTokens),
         grouped_expected, {/*absolute*/ 4.0e-3, /*relative*/ 2.0e-2});
+    failures += verify_pointwise(
+        "Flash-Next MoE compact",
+        from_device_bf16(d_compact_output.data(), static_cast<std::size_t>(kHidden) * kCompactTokens),
+        std::vector<double>(grouped_expected.begin(),
+                            grouped_expected.begin() + static_cast<std::ptrdiff_t>(kHidden) * kCompactTokens),
+        {/*absolute*/ 4.0e-3, /*relative*/ 2.0e-2});
+    failures += d_compact_output.verify_guards("Flash-Next MoE compact output");
     failures += d_scalar_output.verify_guards("Flash-Next BF16 MoE scalar output");
     failures += d_grouped_output.verify_guards("Flash-Next BF16 MoE grouped output");
     return failures;

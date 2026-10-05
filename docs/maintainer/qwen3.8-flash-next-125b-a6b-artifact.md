@@ -83,6 +83,16 @@ basename gains `_fp8ple`. On the oracle fixtures the re-encoded table moves gene
 log-probabilities by 0.005-0.074 on average with perplexity changes of -1.0% to +0.5%, and MTP3
 acceptance is unchanged (2.06 tokens per round).
 
+`--projection-format fp8_e4m3fn_row_bf16` stores the 156 main-model attention projections (QSA
+q/k/v/o) and GDN projections (in_proj_qkv, in_proj_z, out_proj) as weight-only row-scaled FP8 E4M3
+(per-row BF16 max-abs scale, round-to-nearest); MTP, indexer, GDN control, HyperConnection, shared
+expert and LM-head weights keep their formats, and activations stay BF16. The binder takes each
+projection's stored format, and the Ops dispatch to the FP8 GEMV, K-split and A16 GEMM routes. The
+output basename gains `_fp8proj`. With FP8 PLE as well, Swift 1.5 MTP0 decode rises from 114.5 to
+139.7 tok/s at 512 context and from 118.2 to 147.0 at 8K (RTX PRO 6000); 8K prefill is 3% slower.
+Against the BF16 artifact, oracle generated-token |dlogp| is 0.010-0.083 on average with perplexity
+changes of -2.7% to +1.3%.
+
 Keep the entry file and all `.part-NNNN` companions together. The runtime selects PLE storage
 from the artifact's table descriptor, not the checkpoint name.
 

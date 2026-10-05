@@ -143,6 +143,18 @@ void require_weight(const Weight& weight, int rows, int columns, const char* lab
     }
 }
 
+// QKV, Z and output projections may also be row-scaled FP8 (8-bit projection artifacts).
+void require_projection(const Weight& weight, int rows, int columns, const char* label) {
+    if (weight.qtype == QType::FP8_E4M3FN_ROW_BF16) {
+        if (weight.layout != QuantLayout::RowScale || weight.qdata == nullptr ||
+            weight.n != rows || weight.k != columns) {
+            throw std::invalid_argument(label);
+        }
+        return;
+    }
+    require_weight(weight, rows, columns, label);
+}
+
 void validate(const Tensor& input, const FlashNextGdnWeights& weights,
               const Tensor& conv_in, const Tensor& conv_out, const Tensor& recurrent_in,
               const Tensor& recurrent_out, const Tensor& destination) {
@@ -170,12 +182,12 @@ void validate(const Tensor& input, const FlashNextGdnWeights& weights,
                    "flash_next_gdn: invalid a projection");
     require_weight(weights.b_projection, kHeads, kHidden,
                    "flash_next_gdn: invalid b projection");
-    require_weight(weights.query_key_value, kConvolution, kHidden,
-                   "flash_next_gdn: invalid qkv projection");
-    require_weight(weights.output_gate, kValue, kHidden,
-                   "flash_next_gdn: invalid output gate projection");
-    require_weight(weights.output, kHidden, kValue,
-                   "flash_next_gdn: invalid output projection");
+    require_projection(weights.query_key_value, kConvolution, kHidden,
+                       "flash_next_gdn: invalid qkv projection");
+    require_projection(weights.output_gate, kValue, kHidden,
+                       "flash_next_gdn: invalid output gate projection");
+    require_projection(weights.output, kHidden, kValue,
+                       "flash_next_gdn: invalid output projection");
 }
 
 } // namespace

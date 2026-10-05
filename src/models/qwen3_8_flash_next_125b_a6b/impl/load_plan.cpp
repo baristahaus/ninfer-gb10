@@ -30,6 +30,20 @@ Reference device(artifact::Binder& binder, std::string_view name, QType format,
                             format);
 }
 
+// Attention and GDN projections are BF16, or row-scaled FP8 in an 8-bit projection artifact. The
+// stored format selects the binding; consumers dispatch on the bound weight type.
+Reference projection(artifact::Binder& binder, std::string_view name,
+                     std::initializer_list<std::uint64_t> shape,
+                     Placement placement = Placement::Device) {
+    if (placement == Placement::Disabled) { return {}; }
+    const auto& binding = binder.reader().directory().bindings.at(std::string(name));
+    const auto& stored  = binder.reader().directory().tensor(binding.parts.front().object);
+    const QType format  = stored.format == artifact::format_name(QType::FP8_E4M3FN_ROW_BF16)
+                              ? QType::FP8_E4M3FN_ROW_BF16
+                              : QType::BF16;
+    return device(binder, name, format, shape, placement);
+}
+
 Reference expert_bank(artifact::Binder& binder, std::string_view name,
                       std::initializer_list<std::uint64_t> shape,
                       Placement placement = Placement::Device) {
@@ -122,10 +136,10 @@ FullAttentionPlan bind_attention(artifact::Binder& binder, const std::string& pr
                                  Placement placement = Placement::Device) {
     return {
         .query_gate =
-            device(binder, prefix + "q_proj.weight", QType::BF16, {12288, 2560}, placement),
-        .key    = device(binder, prefix + "k_proj.weight", QType::BF16, {512, 2560}, placement),
-        .value  = device(binder, prefix + "v_proj.weight", QType::BF16, {512, 2560}, placement),
-        .output = device(binder, prefix + "o_proj.weight", QType::BF16, {2560, 6144}, placement),
+            projection(binder, prefix + "q_proj.weight", {12288, 2560}, placement),
+        .key    = projection(binder, prefix + "k_proj.weight", {512, 2560}, placement),
+        .value  = projection(binder, prefix + "v_proj.weight", {512, 2560}, placement),
+        .output = projection(binder, prefix + "o_proj.weight", {2560, 6144}, placement),
         .query_norm      = device(binder, prefix + "q_norm.weight", QType::BF16, {256}, placement),
         .key_norm        = device(binder, prefix + "k_norm.weight", QType::BF16, {256}, placement),
         .index_query_key = device(binder, prefix + "indexer.index_qk_proj.weight", QType::BF16,
@@ -145,10 +159,10 @@ GdnPlan bind_gdn(artifact::Binder& binder, const std::string& prefix) {
         .a_projection = device(binder, prefix + "in_proj_a.weight", QType::BF16, {48, 2560}),
         .b_projection = device(binder, prefix + "in_proj_b.weight", QType::BF16, {48, 2560}),
         .query_key_value =
-            device(binder, prefix + "in_proj_qkv.weight", QType::BF16, {10240, 2560}),
-        .output_gate = device(binder, prefix + "in_proj_z.weight", QType::BF16, {6144, 2560}),
+            projection(binder, prefix + "in_proj_qkv.weight", {10240, 2560}),
+        .output_gate = projection(binder, prefix + "in_proj_z.weight", {6144, 2560}),
         .norm        = device(binder, prefix + "norm.weight", QType::BF16, {128}),
-        .output      = device(binder, prefix + "out_proj.weight", QType::BF16, {2560, 6144}),
+        .output      = projection(binder, prefix + "out_proj.weight", {2560, 6144}),
     };
 }
 

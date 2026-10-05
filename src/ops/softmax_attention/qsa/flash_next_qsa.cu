@@ -1490,6 +1490,18 @@ void require_weight(const Weight& weight, int n, int k, const char* label) {
     }
 }
 
+// Q/K/V/O projections may also be row-scaled FP8 (8-bit projection artifacts); linear dispatches.
+void require_projection(const Weight& weight, int n, int k, const char* label) {
+    if (weight.qtype == QType::FP8_E4M3FN_ROW_BF16) {
+        if (weight.layout != QuantLayout::RowScale || weight.qdata == nullptr || weight.n != n ||
+            weight.k != k) {
+            throw std::invalid_argument(label);
+        }
+        return;
+    }
+    require_weight(weight, n, k, label);
+}
+
 } // namespace
 
 void flash_next_expand_text_positions(const Tensor& positions, Tensor& mrope_positions,
@@ -1556,9 +1568,9 @@ void flash_next_project_query_gate(const Tensor& input, const Weight& query_gate
         gate.dtype != DType::BF16 || !gate.is_contiguous() || gate.numel() != query.numel()) {
         throw std::invalid_argument("flash_next_project_query_gate: invalid tensor geometry");
     }
-    require_weight(query_gate, 12288, 2560,
-                   "flash_next_project_query_gate: invalid packed weight");
-    if (tokens == 1) {
+    require_projection(query_gate, 12288, 2560,
+                       "flash_next_project_query_gate: invalid packed weight");
+    if (tokens == 1 && query_gate.qtype == QType::BF16) {
         detail::flash_next::launch_bf16_query_gate_decode(input, query_gate, query, gate, stream);
         return;
     }
@@ -1641,11 +1653,11 @@ void flash_next_qsa(const Tensor& input, const Tensor& cache_positions,
         cache.auxiliary_pages[1].ne[0] != 3) {
         throw std::invalid_argument("flash_next_qsa: invalid auxiliary cache geometry");
     }
-    require_weight(weights.query_gate, 12288, 2560,
-                   "flash_next_qsa: invalid packed query/gate weight");
-    require_weight(weights.key, 512, 2560, "flash_next_qsa: invalid key weight");
-    require_weight(weights.value, 512, 2560, "flash_next_qsa: invalid value weight");
-    require_weight(weights.output, 2560, 6144, "flash_next_qsa: invalid output weight");
+    require_projection(weights.query_gate, 12288, 2560,
+                       "flash_next_qsa: invalid packed query/gate weight");
+    require_projection(weights.key, 512, 2560, "flash_next_qsa: invalid key weight");
+    require_projection(weights.value, 512, 2560, "flash_next_qsa: invalid value weight");
+    require_projection(weights.output, 2560, 6144, "flash_next_qsa: invalid output weight");
     require_weight(weights.index_query, 512, 2560, "flash_next_qsa: invalid index query weight");
     require_weight(weights.index_key, 128, 2560, "flash_next_qsa: invalid index key weight");
     auto scope = workspace.scope();

@@ -538,7 +538,6 @@ __global__ void __launch_bounds__(kNormThreads, 1) fused_mix_decode_kernel(Fused
         for (int c = 0; c < kDownChunks; ++c) bits[c] = load_streaming(weight + 32 * c);
     };
     uint4 bits[kDownChunks];
-    load_down(slice, bits);  // independent of the activations: issue before the setup
     // Row scale of the reducing thread's Down row, also issued before the setup.
     const auto load_down_scale = [&](int tile) {
         const int row = tile * 8 + tid / 8;
@@ -570,6 +569,9 @@ __global__ void __launch_bounds__(kNormThreads, 1) fused_mix_decode_kernel(Fused
                     b[token][j] = p.previous_block[tid + j * kNormThreads + kHidden * token];
                 }
             }
+            // The weight tile is independent of the activations; issuing it after the state
+            // loads keeps those (on the setup's critical path) ahead of the weight stream.
+            load_down(slice, bits);
 #pragma unroll
             for (int token = 0; token < Tokens; ++token) {
                 const float scale = 2.0F / (1.0F + expf(-branch_logit[token] * 0.25F));
@@ -579,6 +581,7 @@ __global__ void __launch_bounds__(kNormThreads, 1) fused_mix_decode_kernel(Fused
                         __bfloat162float(h[token][j]) + scale * __bfloat162float(b[token][j])));
             }
         } else {
+            load_down(slice, bits);
 #pragma unroll
             for (int token = 0; token < Tokens; ++token)
 #pragma unroll

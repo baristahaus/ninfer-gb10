@@ -12,7 +12,6 @@
 #include <ninfer/models/qwen3_8_flash_next/prepared_prompt.h>
 
 #include "models/qwen3_8_flash_next/impl/ple_stage.h"
-#include "models/qwen3_8_flash_next/impl/prompt_lookup.h"
 #include "models/qwen3_8_flash_next/impl/runtime/layouts.h"
 #include "models/qwen3_8_flash_next/impl/runtime/dflash_context.h"
 #include "models/qwen3_8_flash_next/impl/runtime/host_kv_extent_store.h"
@@ -484,10 +483,6 @@ struct RequestControl {
     detail::PhysicalResources active_resources;
     detail::PhysicalResources optional_resources;
     bool publish_continuation = true;
-    // Prompt lookup over this request's ledger, and the round in flight's draft source.
-    PromptLookupIndex lookup;
-    bool lookup_round          = false;
-    std::uint32_t lookup_match = 0;
 
     struct Prefill {
         PreparedPromptData prompt;
@@ -657,9 +652,6 @@ public:
     const std::uint32_t shared_prefix_capacity;
     const std::uint32_t prefill_chunk;
     const std::uint32_t draft_window;
-    const bool prompt_lookup;
-    // Lookup and MTP acceptance learned over every request of this Program.
-    PromptLookupPolicy lookup_policy;
     const SpeculativeBackend speculative_backend;
     const KvCacheStorage kv_storage;
     const ProposalHead proposal_head;

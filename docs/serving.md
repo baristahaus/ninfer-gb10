@@ -842,7 +842,6 @@ The table lists executable defaults. The startup example selects a long-context 
 | `--spec mtp\|dflash\|dflash2` | speculative backend | off |
 | `--draft-tokens N` | MTP `1..5` (Qwen3.5), `1..3` (Flash-Next 125B-A6B); DFlash/DFlash2 `1..15` | unset |
 | `--lm-head-draft` | optimized proposal head | off |
-| `--prompt-lookup` | Flash-Next MTP only: a round drafts the tokens that followed an earlier occurrence of the sequence's last tokens instead of the MTP layer's when that is expected to accept more drafts; greedy output is unchanged and sampled output keeps its distribution | off |
 | `--default-max-tokens N` | output limit when omitted by a request | `8192` |
 | `--default-thinking-budget N` | positive thinking cap inherited by thinking-enabled requests | unset |
 | `--vision` | enable media input and load Vision GPU allocations | off |
@@ -951,9 +950,7 @@ preserved for consumer validation, and a stable text-fallback reason. Fallback r
 
 `request_done.timings_seconds` contains `prepare`, `ttft`, `vision`, `prefill`, `decode`, and `total`
 as full-precision JSON numbers. Its `speculative` object contains `backend`, `draft_window`, `rounds`,
-`drafted_tokens`, `accepted_tokens`, `fallback_steps`, `accepted_per_position`, and the
-prompt-lookup share of those rounds and drafts (`lookup_rounds`, `lookup_drafted_tokens`,
-`lookup_accepted_tokens`, zero without `--prompt-lookup`). Rates can be
+`drafted_tokens`, `accepted_tokens`, `fallback_steps`, and `accepted_per_position`. Rates can be
 derived downstream from raw token counts and seconds instead of rounded stderr strings.
 
 For `server_start.memory`, `workspace.capacity_bytes` is the only physical workspace allocation.

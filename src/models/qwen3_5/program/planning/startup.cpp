@@ -782,10 +782,6 @@ void validate_target_options(const execution::Parameters& parameters, DeviceCont
     default:
         throw std::invalid_argument("unknown kv_capacity policy");
     }
-    if (options.speculative.prompt_lookup) {
-        throw std::invalid_argument(
-            "prompt lookup drafting is implemented for the Qwen3.8 Flash-Next MTP schedule only");
-    }
     switch (options.speculative.backend) {
     case SpeculativeBackend::None:
         if (options.speculative.draft_tokens != 0 ||

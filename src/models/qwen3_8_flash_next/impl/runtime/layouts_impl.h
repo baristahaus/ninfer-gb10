@@ -746,10 +746,6 @@ void validate_target_options(DeviceContext& device, const EngineOptions& options
     default:
         throw std::invalid_argument("unknown kv_capacity policy");
     }
-    if (options.speculative.prompt_lookup &&
-        options.speculative.backend != SpeculativeBackend::Mtp) {
-        throw std::invalid_argument("prompt lookup drafting requires the MTP backend");
-    }
     switch (options.speculative.backend) {
     case SpeculativeBackend::None:
         if (options.speculative.draft_tokens != 0 ||
@@ -801,7 +797,6 @@ std::unique_ptr<SequencePlanImpl> build_sequence_candidate(const SequencePlannin
     impl->draft_window        = inputs.draft_window;
     impl->speculative_backend = inputs.speculative_backend;
     impl->proposal_head       = inputs.proposal_head;
-    impl->prompt_lookup       = inputs.prompt_lookup;
     impl->features            = inputs.features;
     impl->use_cuda_graph      = inputs.use_cuda_graph;
     impl->causal_scoring      = inputs.causal_scoring;
@@ -881,7 +876,6 @@ make_sequence_planner_impl(DeviceContext& device, const EngineOptions& options,
                 return requested;
             }(options.kv_cache),
         .proposal_head = options.speculative.proposal_head,
-        .prompt_lookup = options.speculative.prompt_lookup,
         .features      = qwen3_8_flash_next::startup_features(options),
         .use_cuda_graph = options.use_cuda_graph,
         .causal_scoring = options.purpose == EnginePurpose::CausalScoring,

@@ -307,34 +307,6 @@ int exercise_prefill_yield(ninfer::Engine& engine) {
     return 0;
 }
 
-int exercise_prompt_lookup(ninfer::Engine& engine, bool lookup_enabled,
-                           std::vector<ninfer::TokenId>& reference) {
-    // The assistant turn already repeats one sentence three times, so the prompt's last tokens
-    // match earlier ones and lookup drafts the sentence again from the first round. Verification
-    // decides every token: greedy output must equal the lookup-free engine's.
-    const std::vector<ninfer::TokenId> sentence{814,   20139, 303,  2250, 2716, 22157, 3069, 279,
-                                                12515, 7701,  6105, 2261, 279,  1834,  13};
-    std::vector<ninfer::TokenId> prompt = canonical_prompt();
-    for (int repeat = 0; repeat < 3; ++repeat) {
-        prompt.insert(prompt.end(), sentence.begin(), sentence.end());
-    }
-    const auto result = engine.generate(engine.prepare_tokens(prompt), greedy_options(24, false));
-    if (!lookup_enabled) {
-        reference = result.generated_token_ids;
-        return result.speculative.lookup_rounds == 0 ? 0 : 1;
-    }
-    if (result.generated_token_ids != reference || result.speculative.lookup_rounds == 0) {
-        std::cerr << "Flash-Next prompt lookup changed greedy output or never drafted (rounds "
-                  << result.speculative.lookup_rounds << ", accepted "
-                  << result.speculative.lookup_accepted_tokens << " of "
-                  << result.speculative.lookup_drafted_tokens << ")\n";
-        print_tokens("lookup", result.generated_token_ids);
-        print_tokens("reference", reference);
-        return 1;
-    }
-    return 0;
-}
-
 int exercise_vision(ninfer::Engine& engine) {
     ninfer::MessagePart image;
     image.kind              = ninfer::MessagePartKind::Media;
@@ -371,13 +343,9 @@ int main() {
     const auto& expected_prefix   = canonical_output();
     const CrossPathFixture fixture = cross_path_fixture(recipe);
     try {
-        // The optimized-head Engine also drafts from prompt lookup, so every fixture below
-        // checks that lookup leaves greedy output unchanged.
-        std::vector<ninfer::TokenId> lookup_reference;
         for (const auto head : {ninfer::ProposalHead::Full, ninfer::ProposalHead::Optimized}) {
             auto options = engine_options(artifact);
             options.speculative.proposal_head = head;
-            options.speculative.prompt_lookup = head == ninfer::ProposalHead::Optimized;
             ninfer::Engine engine(options);
             const ninfer::LoadSummary load = engine.load_summary();
             if (load.architecture != "Qwen3_8FlashNextForCausalLM" ||
@@ -388,10 +356,6 @@ int main() {
             if (exercise_mtp_and_prefix(engine, expected_prefix, fixture) != 0) { return 1; }
             if (exercise_concurrent_state(engine, expected_prefix, fixture) != 0) { return 1; }
             if (exercise_prefill_yield(engine) != 0) { return 1; }
-            if (exercise_prompt_lookup(engine, options.speculative.prompt_lookup,
-                                       lookup_reference) != 0) {
-                return 1;
-            }
             if (exercise_vision(engine) != 0) { return 1; }
         }
         if (exercise_ordinary_greedy(artifact, expected_prefix) != 0) { return 1; }

@@ -225,12 +225,6 @@ void print_generation_summary(const ninfer::GenerationResult& result,
             }
             print_metric(backend + " accepted by pos", positions.str());
         }
-        if (speculative.lookup_rounds != 0) {
-            print_metric("lookup rounds", std::to_string(speculative.lookup_rounds));
-            print_metric("lookup acceptance rate",
-                         format_percent(speculative.lookup_accepted_tokens,
-                                        speculative.lookup_drafted_tokens));
-        }
     }
 }
 

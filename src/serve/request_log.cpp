@@ -296,10 +296,7 @@ Json speculative_json(const GenerationMetrics& metrics) {
                 {"drafted_tokens", metrics.speculative_draft_tokens},
                 {"accepted_tokens", metrics.speculative_accepted_tokens},
                 {"fallback_steps", metrics.speculative_fallback_steps},
-                {"accepted_per_position", metrics.speculative_accepted_per_position},
-                {"lookup_rounds", metrics.speculative_lookup_rounds},
-                {"lookup_drafted_tokens", metrics.speculative_lookup_drafted_tokens},
-                {"lookup_accepted_tokens", metrics.speculative_lookup_accepted_tokens}};
+                {"accepted_per_position", metrics.speculative_accepted_per_position}};
 }
 
 Json materialization_json(const ninfer::MaterializationDiagnostics& diagnostics) {
@@ -485,7 +482,6 @@ std::string format_server_start_json(
               product::speculative_backend_name(engine_options.speculative.backend)},
              {"speculative_draft_window", engine_options.speculative.draft_tokens},
              {"proposal_head", proposal_head_name(engine_options.speculative.proposal_head)},
-             {"prompt_lookup", engine_options.speculative.prompt_lookup},
              {"context_cost", Json{{"transfer_source", ninfer::context_cost_preset_source_name(
                                                            context_cost.transfer_source)},
                                    {"prefill_source", ninfer::context_cost_preset_source_name(

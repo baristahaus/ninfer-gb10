@@ -8,7 +8,7 @@ Usage: long_context.py BASE_URL OUT_JSON [--tokens 15000,30000,60000] [--tasks s
 Prompts are synthetic incident bundles (`ops_corpus.py`) sized to the requested prompt tokens,
 followed by one of three operations tasks: write test/review/log scripts, gather evidence for a
 root-cause analysis and triage, or review the bundle's ops/collect_evidence.sh and return it
-corrected (an answer that repeats its context, as prompt lookup drafting serves). Every (size, task, rep) uses its own bundle, so first turns never
+corrected (an answer that repeats much of its context). Every (size, task, rep) uses its own bundle, so first turns never
 reuse a prefix. Measured per request, from the client's stream:
 - TTFT: send to the first streamed content or reasoning delta (queue, prefill, first round);
 - prefill rate: prompt tokens over TTFT, first turns only (a lower bound on the server's rate);

@@ -81,10 +81,6 @@ struct SpeculativeOptions {
     // Startup-fixed K: MTP 1..5; DFlash and DFlash2 1..15 (query width K+1).
     std::uint32_t draft_tokens = 0;
     ProposalHead proposal_head = ProposalHead::Full;
-    // MTP rounds may draft the tokens that followed an earlier occurrence of the sequence's last
-    // tokens instead of the MTP layer's, when that is expected to accept more drafts. Output is
-    // unchanged (greedy) or keeps its distribution (sampled). Qwen3.8 Flash-Next MTP only.
-    bool prompt_lookup = false;
 };
 
 enum class StartupPhase : std::uint8_t {
@@ -736,11 +732,6 @@ struct SpeculativeStats {
     std::uint64_t accepted_tokens = 0;
     std::uint64_t fallback_steps  = 0;
     std::vector<std::uint64_t> accepted_per_position;
-    // Rounds, drafts and accepted drafts that came from prompt lookup; included in the totals
-    // above.
-    std::uint64_t lookup_rounds          = 0;
-    std::uint64_t lookup_drafted_tokens  = 0;
-    std::uint64_t lookup_accepted_tokens = 0;
 };
 
 struct ThinkingBudgetStats {

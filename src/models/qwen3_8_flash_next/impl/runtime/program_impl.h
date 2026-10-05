@@ -791,9 +791,8 @@ ProgramImplCore::ProgramImplCore(const LoadedModelData& model_in, const Sequence
       continuation_capacity(normalized_private_capacity(plan.context_cache)),
       shared_prefix_capacity(plan.context_cache.max_shared_prefixes.value_or(0)),
       prefill_chunk(plan.prefill_chunk), draft_window(plan.draft_window),
-      prompt_lookup(plan.prompt_lookup), speculative_backend(plan.speculative_backend),
-      kv_storage(plan.kv_storage), proposal_head(plan.proposal_head),
-      vision_enabled(plan.features.vision),
+      speculative_backend(plan.speculative_backend), kv_storage(plan.kv_storage),
+      proposal_head(plan.proposal_head), vision_enabled(plan.features.vision),
       use_cuda_graph(plan.use_cuda_graph), causal_scoring(plan.causal_scoring),
       kv_payload_bytes(plan.persistent.kv_payload_bytes),
       graph_allowance_bytes(plan.graph_allowance_bytes), workspace_plan(plan.workspace),
@@ -11696,9 +11695,6 @@ void ProgramImplCore::install_sampling(SequenceState& sequence, RequestControl& 
         .draft_window          = draft_window,
         .accepted_per_position = std::vector<std::uint64_t>(draft_window, 0),
     };
-    request.lookup.reset();
-    request.lookup_round = false;
-    request.lookup_match = 0;
     const bool penalties = request.sampling_host.presence_penalty != 0.0F ||
                            request.sampling_host.frequency_penalty != 0.0F;
     if (penalties) { CUDA_CHECK(cudaMemsetAsync(counts.data, 0, counts.bytes(), device.stream)); }
@@ -12329,9 +12325,6 @@ ProgramImplCore::decode_ordinary_batch(std::span<const std::uint32_t> lanes,
     }
 }
 
-static_assert(kPromptLookupMaxDrafts >= qwen3_8_flash_next::kMtpDecodeMaximumDrafts,
-              "prompt lookup must be able to fill the MTP draft window");
-
 runtime::BatchedGeneratedRound
 ProgramImplCore::decode_mtp_batch(std::span<const std::uint32_t> lanes,
                                   std::span<const runtime::RoundBudget> budgets,
@@ -12427,31 +12420,14 @@ ProgramImplCore::decode_mtp_batch(std::span<const std::uint32_t> lanes,
         }
         for (std::size_t row = 0; row < lanes.size(); ++row) {
             SequenceState& sequence           = active_sequence(lanes[row]);
-            RequestControl& request           = requests[lanes[row]];
+            const RequestControl& request     = requests[lanes[row]];
             const std::uint32_t frontier      = sequence.execution_frontier;
             const std::uint32_t max_by_budget = budgets[row].generated_tokens_remaining > 1
                                                     ? budgets[row].generated_tokens_remaining - 1
                                                     : 0;
-            const std::uint32_t window_limit =
-                std::min({draft_window, max_by_budget, capacity - sequence.execution_frontier - 1});
-            std::uint32_t extent = std::min(sequence.mtp_draft_count, window_limit);
-            const TokenId* drafts = sequence.mtp_drafts.data();
-            // Prompt lookup replaces the MTP layer's drafts when it is expected to accept more;
-            // the verify window is the same width either way.
-            request.lookup_round = false;
-            PromptLookupProposal lookup;
-            if (prompt_lookup && window_limit != 0) {
-                request.lookup.sync(sequence.ledger);
-                lookup = request.lookup.propose(sequence.ledger, window_limit);
-                if (lookup_policy.prefer(lookup, extent)) {
-                    request.lookup_round = true;
-                    request.lookup_match = lookup.match;
-                    extent               = lookup.count;
-                    drafts               = lookup.tokens.data();
-                } else if (lookup.count != 0) {
-                    lookup_policy.observe_skipped(lookup.match);
-                }
-            }
+            const std::uint32_t extent =
+                std::min({sequence.mtp_draft_count, draft_window, max_by_budget,
+                          capacity - sequence.execution_frontier - 1});
             mtp_host_ingress->anchors[row]        = sequence.ledger.back();
             mtp_host_ingress->base_frontiers[row] = checked_i32(frontier, "MTP batch frontier");
             mtp_host_ingress->remaining_budgets[row] =
@@ -12460,7 +12436,7 @@ ProgramImplCore::decode_mtp_batch(std::span<const std::uint32_t> lanes,
             mtp_host_ingress->target_valid_columns[row] = static_cast<std::int32_t>(extent + 1);
             for (std::uint32_t j = 0; j < draft_window; ++j) {
                 mtp_host_ingress->current_drafts[row * draft_window + j] =
-                    j < extent ? drafts[j] : sequence.ledger.back();
+                    j < extent ? sequence.mtp_drafts[j] : sequence.ledger.back();
             }
             for (std::uint32_t j = 0; j < width; ++j) {
                 const std::uint32_t position = frontier + std::min(j, extent);
@@ -12567,21 +12543,12 @@ ProgramImplCore::decode_mtp_batch(std::span<const std::uint32_t> lanes,
             if (pcur == 0) {
                 request.speculative_stats.fallback_steps += 1;
             } else {
-                const auto accepted = static_cast<std::uint32_t>(accepted_i);
                 request.speculative_stats.rounds += 1;
                 request.speculative_stats.drafted_tokens += pcur;
-                request.speculative_stats.accepted_tokens += accepted;
+                request.speculative_stats.accepted_tokens += static_cast<std::uint32_t>(accepted_i);
                 for (std::int32_t i = 0; i < accepted_i; ++i) {
                     request.speculative_stats.accepted_per_position[static_cast<std::size_t>(i)] +=
                         1;
-                }
-                if (request.lookup_round) {
-                    request.speculative_stats.lookup_rounds += 1;
-                    request.speculative_stats.lookup_drafted_tokens += pcur;
-                    request.speculative_stats.lookup_accepted_tokens += accepted;
-                    lookup_policy.observe_lookup(request.lookup_match, pcur, accepted);
-                } else if (prompt_lookup) {
-                    lookup_policy.observe_mtp(pcur, accepted);
                 }
             }
             request.pending = PendingCandidate{

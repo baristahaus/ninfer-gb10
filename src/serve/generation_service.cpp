@@ -515,9 +515,6 @@ GenerationOutcome GenerationService::run(PreparedRequest& prepared, const Stream
     outcome.metrics.speculative_fallback_steps  = result.speculative.fallback_steps;
     outcome.metrics.speculative_accepted_per_position =
         std::move(result.speculative.accepted_per_position);
-    outcome.metrics.speculative_lookup_rounds          = result.speculative.lookup_rounds;
-    outcome.metrics.speculative_lookup_drafted_tokens  = result.speculative.lookup_drafted_tokens;
-    outcome.metrics.speculative_lookup_accepted_tokens = result.speculative.lookup_accepted_tokens;
 
     outcome.tool_calls      = std::move(result.tool_calls);
     outcome.tool_call_parse = result.tool_call_parse;

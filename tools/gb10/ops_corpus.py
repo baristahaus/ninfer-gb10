@@ -17,7 +17,7 @@ a quality score.
 Tasks (`TASKS`) are the request shapes measured: write test/review/log scripts for the incident,
 gather evidence for root-cause analysis and triage, and review an existing collection script
 (`build(..., script=True)` adds it to the bundle with three planted bugs) and return it corrected.
-The edit task's answer repeats the script almost verbatim, the case prompt lookup drafting serves.
+The edit task's answer repeats the script almost verbatim.
 `FOLLOWUPS` are the second turns that reuse the first turn's prefix.
 """
 import argparse

@@ -546,6 +546,8 @@ K=3, `--kv-capacity auto`):
   - 16-stream natural corpus at K=3: 0.5341 -> 0.5262 acceptance and 49.3 -> 48.6 tok/s
     (-1.4%); the per-request rates above measured 0.5341 -> 0.5232 and 49.2 -> 48.6. Outputs
     identical (16,215 tokens).
+- Prompt lookup was removed after this campaign (Evaluated and not adopted below); the
+  `--prompt-lookup` flag in these two blocks no longer exists.
 
 ### Changes and their measured effect
 
@@ -573,8 +575,6 @@ drift gate below.
 | HyperConnection grouped RMSNorm with loads issued up front | 14.0 → 3.6 µs per launch, −0.89 ms per C4 round |
 | QSA key, value and index-query projections in one launch | QSA BF16 0.70 → 0.59 ms per round |
 | decode share and yield around long prefills (`--prefill-decode-share`, default 50) | running decode during a 60K prefill 10 → 25 tok/s; parked short first token 1.7 s; newcomer TTFT +46% |
-| prompt lookup drafting (`--prompt-lookup`, off by default) | -1.0 to -1.2% tok/s on both corpora measured; greedy outputs unchanged |
-| prompt-lookup rates learned per Program, with a skip fade (`1307107c`) | no gain on the copy-heavy edit task (the MTP layer is already at 96.5% per draft there); natural corpus -1.4% tok/s, as before; greedy outputs unchanged |
 
 ### Quality gate for numerical changes
 
@@ -610,15 +610,12 @@ drift gate below.
 | MoE route kernel load hoisting | median unchanged at 8.67 µs per launch. Reverted |
 | lower-bit KV (K4V2 and similar) | decode is flat from 1K to 128K (32.6 / 31.1 / 32.2 / 31.1 tok/s at K=0); only capacity would change |
 | ncu-driven MoE tuning | replaced by the timing probe above |
+| prompt lookup drafting (Strata's idea; `acf6f5f7`, rates per Program in `1307107c`) | drafts copied from an earlier match of the last tokens, in the same verify window. No gain where it should help most: on the copy-heavy edit task the MTP layer already accepts 96.5% of its drafts, and decode was unchanged to −3.9%; on natural text −1.2 to −1.4% tok/s. Greedy outputs were unchanged throughout. Removed |
 
 ### Open items
 
 - **DGPP at draft depth 2–3:** untested, so the depth-1 comparison is the like-for-like claim.
 - **Batch-invariant decode:** a product decision with a throughput cost.
-- **Prompt lookup tuning:** the over-selection above came from per-request rates that never left
-  their priors. The rates are now learned per Program, and the ops corpus has a script-review
-  edit task (`--tasks script,rca,edit`) for the copy-heavy case. If lookup does not win there,
-  it is removed.
 - **Long-prompt follow-ups:**
   - the zero-stall case of the long-prefill policy, with an answer that ends within the wait, is
     not yet measured;

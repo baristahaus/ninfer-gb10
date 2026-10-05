@@ -161,7 +161,6 @@ with flat drift.
   long prefill and gets its first token in 1.7 s, and a short request passing a deferred long
   request gets its first token in 1.5 s (the held 60K prompt takes 51 s: the 20 s wait plus its
   prefill);
-- prompt lookup drafting (`--prompt-lookup`, off) costs about 1% on both corpora measured;
 - DGPP at draft depths 2–3;
 - whether greedy decode at four or more requests should be made batch-invariant.
 

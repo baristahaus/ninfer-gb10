@@ -1,10 +1,15 @@
 #include "ninfer/ops/hyperconnection.h"
 #include "ops/op_tester.h"
 
+#include <cuda_fp8.h>
+
+#include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <cstdint>
 #include <exception>
 #include <iostream>
+#include <random>
 #include <vector>
 
 namespace {
@@ -38,8 +43,64 @@ Weight bf16_weight(const DeviceBuffer& storage, int rows, int columns) {
     return out;
 }
 
-// Dense weights exercise the small-token cooperative route (tokens <= 8) and the general route.
-int run(int kTokens) {
+// Row-scaled E4M3 weights: random finite codes and BF16 row scales; `values` receives the exact
+// decoded weights for the oracle.
+struct Fp8Rows {
+    std::vector<std::uint8_t> codes;
+    std::vector<std::uint16_t> scales;
+};
+
+Fp8Rows random_fp8_rows(int rows, int columns, float magnitude, std::uint32_t seed,
+                        std::vector<float>& values) {
+    std::mt19937 rng(seed);
+    std::uniform_int_distribution<int> code(0, 255);
+    std::uniform_real_distribution<float> scale(0.5F, 1.0F);
+    Fp8Rows out{std::vector<std::uint8_t>(static_cast<std::size_t>(rows) * columns),
+                std::vector<std::uint16_t>(rows)};
+    values.resize(out.codes.size());
+    for (int row = 0; row < rows; ++row) {
+        out.scales[row] = f32_to_bf16(magnitude / 448.0F * scale(rng));
+        const float row_scale = bf16_to_f32(out.scales[row]);
+        for (int column = 0; column < columns; ++column) {
+            std::uint8_t word = 0;
+            do { word = static_cast<std::uint8_t>(code(rng)); } while ((word & 0x7F) == 0x7F);
+            __nv_fp8_e4m3 decoded;
+            decoded.__x = word;
+            const std::size_t i = static_cast<std::size_t>(row) * columns + column;
+            out.codes[i] = word;
+            values[i] = static_cast<float>(decoded) * row_scale;
+        }
+    }
+    return out;
+}
+
+// The registered row-scale payload: codes, then BF16 scales at the next 256-byte boundary.
+std::vector<std::uint8_t> fp8_payload(const Fp8Rows& rows) {
+    const std::size_t offset = (rows.codes.size() + 255) / 256 * 256;
+    std::vector<std::uint8_t> payload(offset + rows.scales.size() * 2);
+    std::copy(rows.codes.begin(), rows.codes.end(), payload.begin());
+    std::memcpy(payload.data() + offset, rows.scales.data(), rows.scales.size() * 2);
+    return payload;
+}
+
+Weight fp8_weight(const DeviceBuffer& payload, int rows, int columns) {
+    Weight out = bf16_weight(payload, rows, columns);
+    out.qtype = QType::FP8_E4M3FN_ROW_BF16;
+    out.layout = QuantLayout::RowScale;
+    out.group_size = static_cast<std::uint32_t>(columns);
+    out.group = columns;
+    out.scales = static_cast<const std::uint8_t*>(payload.p) +
+                 (static_cast<std::size_t>(rows) * columns + 255) / 256 * 256;
+    out.scale_dtype = DType::BF16;
+    out.scale_ne[0] = rows;
+    out.scale_nb[0] = 2;
+    out.scale_nb[1] = out.scale_nb[2] = out.scale_nb[3] = static_cast<std::int64_t>(rows) * 2;
+    return out;
+}
+
+// Dense weights exercise the small-token cooperative route (tokens <= 8) and the general route,
+// with BF16 or row-scaled FP8 Down/Up.
+int run(int kTokens, bool fp8) {
     std::vector<float> hyper(kHyper * kTokens), norm(kHyper);
     fill_uniform(hyper, 913, -0.75F, 0.75F);
     fill_uniform(norm, 914, -0.125F, 0.125F);
@@ -55,6 +116,11 @@ int run(int kTokens) {
     round_to_bf16(down);
     round_to_bf16(up);
     round_to_bf16(inject);
+    Fp8Rows down_fp8, up_fp8;
+    if (fp8) {
+        down_fp8 = random_fp8_rows(kRank, kHyper, 0.04F, 919, down);
+        up_fp8   = random_fp8_rows(kHyper, kRank, 0.25F, 920, up);
+    }
 
     std::vector<double> normalized(hyper.size());
     std::vector<double> block_reference(kHidden * kTokens);
@@ -98,8 +164,8 @@ int run(int kTokens) {
     const auto inject_bits = encode(inject);
     DeviceBuffer d_hyper = to_device(hyper_bits);
     DeviceBuffer d_norm = to_device(norm_bits);
-    DeviceBuffer d_down = to_device(down_bits);
-    DeviceBuffer d_up = to_device(up_bits);
+    DeviceBuffer d_down = fp8 ? to_device(fp8_payload(down_fp8)) : to_device(down_bits);
+    DeviceBuffer d_up = fp8 ? to_device(fp8_payload(up_fp8)) : to_device(up_bits);
     DeviceBuffer d_inject = to_device(inject_bits);
     GuardedDeviceBuffer d_block(block_reference.size() * sizeof(std::uint16_t));
     GuardedDeviceBuffer d_injection(injection_reference.size() * sizeof(std::uint16_t));
@@ -109,8 +175,8 @@ int run(int kTokens) {
     Tensor injection_tensor(d_injection.data(), DType::BF16, {kStreams, kTokens});
     ops::HyperConnectionWeights weights{
         .norm = norm_tensor,
-        .down = bf16_weight(d_down, kRank, kHyper),
-        .up = bf16_weight(d_up, kHyper, kRank),
+        .down = fp8 ? fp8_weight(d_down, kRank, kHyper) : bf16_weight(d_down, kRank, kHyper),
+        .up = fp8 ? fp8_weight(d_up, kHyper, kRank) : bf16_weight(d_up, kHyper, kRank),
         .injection = bf16_weight(d_inject, kStreams, kHyper),
     };
     WorkspaceArena workspace(ops::hyperconnection_mix_workspace_capacity_bytes(kTokens, true));
@@ -176,7 +242,9 @@ int main() {
     if (ninfer::test::cuda_unavailable()) { return 77; }
     try {
         int failures = 0;
-        for (const int tokens : {1, 2, 8, 17}) { failures += run(tokens); }
+        for (const bool fp8 : {false, true}) {
+            for (const int tokens : {1, 2, 8, 17}) { failures += run(tokens, fp8); }
+        }
         std::cout << (failures == 0 ? "OK" : "FAIL") << " HyperConnection\n";
         return failures == 0 ? 0 : 1;
     } catch (const std::exception& error) {

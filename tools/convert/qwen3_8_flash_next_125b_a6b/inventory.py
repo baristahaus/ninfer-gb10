@@ -247,6 +247,8 @@ PROJECTION_NAMES = frozenset(
     + [f"model.language_model.layers.{layer}.mlp.{name}.weight"
        for layer in LAYERS
        for name in ("gate", "shared_expert.gate_proj", "shared_expert.up_proj")]
+    + [f"model.language_model.layers.{layer}.{site}_hyper_connection.input_mix_weight_{name}.weight"
+       for layer in LAYERS for site in ("attn", "mlp") for name in ("down", "up")]
 )
 
 

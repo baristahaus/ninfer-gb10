@@ -31,6 +31,8 @@ struct HyperConnectionActivation {
     bool speculative_columns        = false;
 };
 
+// Down [320,10240] and Up [10240,320] are both BF16 or both row-scaled FP8 E4M3 (weight-only;
+// activations and the BF16 low-rank boundary are unchanged). Injection is BF16.
 struct HyperConnectionWeights {
     Tensor norm;
     Weight down;

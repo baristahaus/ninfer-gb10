@@ -30,8 +30,9 @@ Reference device(artifact::Binder& binder, std::string_view name, QType format,
                             format);
 }
 
-// Attention and GDN projections are BF16, or row-scaled FP8 in an 8-bit projection artifact. The
-// stored format selects the binding; consumers dispatch on the bound weight type.
+// Attention, GDN, MoE router/shared and HyperConnection projections are BF16, or row-scaled FP8 in
+// an 8-bit projection artifact. The stored format selects the binding; consumers dispatch on the
+// bound weight type.
 Reference projection(artifact::Binder& binder, std::string_view name,
                      std::initializer_list<std::uint64_t> shape,
                      Placement placement = Placement::Device) {
@@ -78,10 +79,8 @@ HyperConnectionPlan bind_hc(artifact::Binder& binder, const std::string& prefix,
         .block_inject = device(binder, prefix + "block_inject_weight.weight", QType::BF16,
                                {4, 10240}, placement),
         .norm         = device(binder, prefix + "hc_norm.weight", QType::BF16, {10240}, placement),
-        .down = device(binder, prefix + "input_mix_weight_down.weight", QType::BF16, {320, 10240},
-                       placement),
-        .up   = device(binder, prefix + "input_mix_weight_up.weight", QType::BF16, {10240, 320},
-                       placement),
+        .down = projection(binder, prefix + "input_mix_weight_down.weight", {320, 10240}, placement),
+        .up   = projection(binder, prefix + "input_mix_weight_up.weight", {10240, 320}, placement),
     };
 }
 

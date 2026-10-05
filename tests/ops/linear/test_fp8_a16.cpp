@@ -75,7 +75,8 @@ int run_fp8_a16() {
     flash_next_invocations.push_back({1, CallForm::A16Convenience});
     for (const auto [n, k, seed] : {std::tuple{12288, 2560, 901U}, std::tuple{10240, 2560, 903U},
                                     std::tuple{6144, 2560, 905U}, std::tuple{2560, 6144, 907U},
-                                    std::tuple{512, 2560, 909U}, std::tuple{640, 2560, 911U}}) {
+                                    std::tuple{512, 2560, 909U}, std::tuple{640, 2560, 911U},
+                                    std::tuple{320, 10240, 913U}}) {
         failures += run_shape("FP8_A16", ActivationCompute::A16, make_fp8_weight,
                               {n, k, seed, Comparison::Sampled, true, flash_next_invocations});
     }

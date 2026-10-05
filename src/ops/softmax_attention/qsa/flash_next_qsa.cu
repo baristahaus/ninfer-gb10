@@ -751,12 +751,16 @@ __global__ void expand_indices_batched_kernel(const int* selected_groups,
 __global__ void order_groups_like_persistent_topk_kernel(int* selected_groups,
                                                           const int* cache_positions,
                                                           int group_extent) {
-    using Sort = cub::BlockRadixSort<std::uint64_t, kTopkBlockThreads, 2, int>;
+    using Sort = cub::BlockRadixSort<std::uint32_t, kTopkBlockThreads, 2, int>;
     __shared__ typename Sort::TempStorage storage;
     const int token = static_cast<int>(blockIdx.x);
     const int groups = min((cache_positions[token] + 1) / kRatio, group_extent);
     if (groups <= kTopGroups) { return; }
-    std::uint64_t keys[2];
+    // Keys pack the visitation fields most-significant first in the fewest bits; absent groups
+    // take the one value above every packed key. The stable sort over [0, key_bits) orders
+    // exactly as the lexicographic field comparison.
+    const int key_bits = group_extent <= 8192 ? 14 : (group_extent <= 32768 ? 16 : 17);
+    std::uint32_t keys[2];
     int values[2];
 #pragma unroll
     for (int item = 0; item < 2; ++item) {
@@ -765,15 +769,16 @@ __global__ void order_groups_like_persistent_topk_kernel(int* selected_groups,
             static_cast<std::int64_t>(kTopGroups) * token];
         values[item] = group;
         if (group < 0) {
-            keys[item] = UINT64_MAX;
+            keys[item] = 1U << (key_bits - 1);
         } else if (group_extent <= 8192) {
-            keys[item] = (static_cast<std::uint64_t>(group & 3) << 32U) |
+            // Lane (group & 3), then float4 index (group >> 2 < 2048).
+            keys[item] = (static_cast<std::uint32_t>(group & 3) << 11U) |
                          static_cast<std::uint32_t>(group >> 2);
         } else if (group_extent <= 32768) {
             // vLLM's medium collector uses one 1024-thread CTA and walks the row at a
             // 1024-element stride.  Preserve its warp/iteration/lane visitation order.
-            keys[item] = (static_cast<std::uint64_t>((group & 1023) >> 5) << 48U) |
-                         (static_cast<std::uint64_t>(group >> 10) << 16U) |
+            keys[item] = (static_cast<std::uint32_t>((group & 1023) >> 5) << 10U) |
+                         (static_cast<std::uint32_t>(group >> 10) << 5U) |
                          static_cast<std::uint32_t>(group & 31);
         } else {
             // Decode logits have the full 65536-group capacity.  With vLLM's 35968-byte
@@ -781,13 +786,13 @@ __global__ void order_groups_like_persistent_topk_kernel(int* selected_groups,
             // one contiguous output span, then its 1024 threads collect at stride 1024.
             constexpr int kRadixChunk = 8192;
             const int local = group & (kRadixChunk - 1);
-            keys[item] = (static_cast<std::uint64_t>(group / kRadixChunk) << 52U) |
-                         (static_cast<std::uint64_t>((local & 1023) >> 5) << 44U) |
-                         (static_cast<std::uint64_t>(local >> 10) << 16U) |
+            keys[item] = (static_cast<std::uint32_t>(group / kRadixChunk) << 13U) |
+                         (static_cast<std::uint32_t>((local & 1023) >> 5) << 8U) |
+                         (static_cast<std::uint32_t>(local >> 10) << 5U) |
                          static_cast<std::uint32_t>(local & 31);
         }
     }
-    Sort(storage).Sort(keys, values);
+    Sort(storage).Sort(keys, values, 0, key_bits);
 #pragma unroll
     for (int item = 0; item < 2; ++item) {
         const int rank = static_cast<int>(threadIdx.x) * 2 + item;

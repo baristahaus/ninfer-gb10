@@ -19,7 +19,8 @@ One node runs one engine instance. The node profile for the fleet:
   12.1, build target `sm_121a`), 128 GiB unified LPDDR5x shared by CPU and GPU
   (about 121 GiB visible to the host).
 - One resident model: Qwen3.8 Flash-Next 125B-A6B NVFP4 with the FP8 MTP layer
-  (the "FP8 MTP" v3 artifact). Weights are 70.2 GiB once resident.
+  (the "FP8 MTP" v3 artifact) and the Flash-Next Vision tower. Weights are
+  70.5 GiB once resident (70.2 GiB text-only).
 - One process owns the GPU. **One device-allocating job per node at a time**
   (serve, benchmark, or test). The step scripts under `tools/gb10/` abort
   (`exit 2`) when `nvidia-smi --query-compute-apps=pid` is non-empty; a
@@ -55,9 +56,17 @@ The entry is the only path the engine opens; the `.part-NNNN` volumes are
 continuations of the same artifact. The conversion report is provenance
 (source recipe, verification) and must travel with the artifact. Never start
 from a partially copied set; verify the five sizes before the first start.
+The production artifact carries the vision component (`vision` in the
+component table plus the `vision/*` ViT tensors); the canonical profile
+(section 4) requires it. A server started with `--vision` against an artifact
+without the component exits at startup with a missing-component error. Check
+an artifact before the first start: `cd tools && python3 -m
+artifact.inspect --objects --bindings "$ART" | grep -c vision` must be
+non-zero (1,224 for the documented generation).
+
 
 Node configuration: `tools/gb10/config.local.sh` (not committed) supplies
-`ART` (artifact path), `PORT`, `KV_DTYPE`, `DRAFT_TOKENS`, `PYTHON`;
+`ART` (artifact path), `PORT` (production: 8000), `KV_DTYPE`, `DRAFT_TOKENS`, `PYTHON`;
 environment scalars override the file. The examples below use `$ART` and
 `$PORT`.
 
@@ -96,15 +105,16 @@ on integrated devices, which is the measured-best choice there.
 
 ## 4. Starting the server
 
-The measured GB10 serving profile (72K context, two lanes, FP8 KV, MTP K=3):
+The canonical GB10 production profile (full model context, two lanes, FP8 KV,
 
 ```bash
 build/apps/ninfer-serve "$ART" \
-  --host 127.0.0.1 --port "$PORT" \
-  --max-context 73728 \
+  --host 127.0.0.1 --port 8000 \
+  --max-context 262144 \
   --max-concurrency 2 \
   --kv-dtype fp8 \
   --spec mtp --draft-tokens 3 --lm-head-draft \
+  --vision \
   --preserve-thinking \
   --request-log-jsonl "$LOG_DIR/requests.jsonl" \
   >"$LOG_DIR/server.log" 2>&1 &
@@ -113,8 +123,9 @@ build/apps/ninfer-serve "$ART" \
 Startup is a memory check first: if free unified memory cannot hold the load
 (weights plus workspace, about 73.7 GiB), the process exits during startup
 with `weights exceed free GPU memory`. With a warm page cache the server is
-healthy about 23–25 s after launch (log line `engine ready | ... | weights
-70.2 GiB`). Healthy means `GET /health` returns 200.
+healthy about 23–25 s after launch (measured 24.2 s with vision; log line
+`engine ready | ... | weights 70.5 GiB`). Healthy means `GET /health`
+returns 200.
 
 ```bash
 until curl -sf "http://127.0.0.1:$PORT/health" >/dev/null; do sleep 5; done
@@ -122,14 +133,14 @@ curl -sf "http://127.0.0.1:$PORT/v1/models"
 ```
 
 `/v1/models` reports the advertised model alias (the artifact's `metadata.name`,
-`qwen3.8-flash-next-125b-a6b`) and the effective `max_model_len` (73,728).
+`qwen3.8-flash-next-125b-a6b`) and the effective `max_model_len` (262,144).
 
 Operational flag subset (defaults in the right column; the full table is in
 [serving.md](serving.md#server-options)):
 
 | Option | Effect | Default / GB10 value |
 |---|---|---|
-| `--max-context N` | per-sequence logical ceiling | 8192 → **73728** |
+| `--max-context N` | per-sequence logical ceiling | 8192 → **262144** (the model's native context) |
 | `--kv-capacity N\|auto` | shared KV pool; `auto` maximizes from free memory | `--max-context` (≈147,456 tokens with `auto` on GB10) |
 | `--max-concurrency N` | concurrent requests, `1..8`, startup-fixed | 1 → **2** |
 | `--max-pending-requests N` | requests allowed to wait for admission | 16 |
@@ -142,7 +153,7 @@ Operational flag subset (defaults in the right column; the full table is in
 | `--shutdown-timeout-seconds N` | admitted requests may finish this long after SIGTERM before being cancelled | 30 |
 | `--request-log-jsonl FILE` | full-precision JSON-lines request log | disabled → **on** |
 | `--api-key KEY` | required bearer / `x-api-key`; `/health` stays open | unset |
-| `--vision` | media input (extra weights and workspace) | off |
+| `--vision` | media input (extra weights and workspace) | off → **on** |
 | `--no-thinking` / `--preserve-thinking` | thinking default / closed-turn reasoning | thinking on / off |
 
 Long-prefill policy (the three behaviors above interact; measured on GB10):
@@ -191,8 +202,8 @@ tail -f "$LOG_DIR/requests.jsonl"
   `request_done.timings_seconds` (`prepare`, `ttft`, `vision`, `prefill`,
   `decode`, `total`).
 
-Operational baselines on GB10 (measured, MTP K=3, FP8 KV, greedy — full
-numbers and method in the [performance doc](performance/qwen3.8-flash-next-125b-a6b.md)):
+Operational baselines on GB10 (measured on the 73,728 text profile, MTP K=3,
+FP8 KV, greedy — full numbers and method in the [performance doc](performance/qwen3.8-flash-next-125b-a6b.md)):
 
 | Quantity | Value |
 |---|---:|
@@ -214,6 +225,7 @@ escalating.
 | Symptom | Evidence | Action |
 |---|---|---|
 | Startup exit, `weights exceed free GPU memory` | server log tail | Another allocation holds the pool. Find it (`nvidia-smi --query-compute-apps`), stop it, verify the memory is actually released, then start. Never launch a second copy to "make one work". |
+| Startup exit, missing Vision component | server log tail | `--vision` selected but the artifact has no `vision` component (check with `tools/artifact/inspect`, section 2). Drop `--vision` or supply the production (vision) artifact. |
 | `Something already answers on <url>` / bind failure | tool exit 2 or server log | Stop the old server or change `PORT`. Verify with `/health` and `pgrep` that exactly one server exists. |
 | Requests 504 / queue timeouts under load | request log: `pending` waits, `no_free_lane` | Normal at `--max-concurrency` saturation. Raise `--max-concurrency` (≤ 8) or `--kv-capacity` if the reservation math (`no_feasible_plan`) is the bottleneck, then restart. |
 | Decode stalls while a long prompt prefills | counters: `deferred_long_prefill`, `prefill_yields`, `short_backfills` | Expected policy behavior (20 s wait, 50% share). Act only if the running request outlives the wait *and* the stall exceeds the newcomer's whole prefill. |
@@ -248,7 +260,7 @@ reboot you are unsure about. Steps are sequential; each has a pass criterion.
    real-artifact tests.
 2. **Start** (section 4) → `/health` 200 within 60 s warm.
 3. **Model advertisement**: `GET /v1/models` → alias
-   `qwen3.8-flash-next-125b-a6b`, `max_model_len` 73,728.
+   `qwen3.8-flash-next-125b-a6b`, `max_model_len` 262,144.
 4. **Smoke request** (short, greedy; thinking disabled so the 16-token
    budget is all answer):
 
@@ -263,7 +275,40 @@ reboot you are unsure about. Steps are sequential; each has a pass criterion.
 
    Pass: HTTP 200 with content, and a `request_done` line appears in
    `$LOG_DIR/requests.jsonl`.
-5. **Numerical gate** (only when a change could alter numerics — kernels,
+5. **Vision probe** (required — the canonical profile enables media input):
+   a 64×64 solid-red image must be answered `Red`:
+
+   ```bash
+   B64=$(python3 -c 'import io, base64; from PIL import Image; b = io.BytesIO(); Image.new("RGB", (64, 64), (255, 0, 0)).save(b, "PNG"); print(base64.b64encode(b.getvalue()).decode())')
+   curl -sf "http://127.0.0.1:$PORT/v1/chat/completions" \
+     -H 'Content-Type: application/json' \
+     -d "{\"model\": \"qwen3.8-flash-next-125b-a6b\",
+          \"messages\": [{\"role\": \"user\", \"content\": [
+            {\"type\": \"text\", \"text\": \"What single color is this image? Reply with one word.\"},
+            {\"type\": \"image_url\", \"image_url\": {\"url\": \"data:image/png;base64,$B64\"}}
+          ]}],
+          \"max_tokens\": 200,
+          \"chat_template_kwargs\": {\"enable_thinking\": false}}'"
+   ```
+
+   Pass: the response content is `Red` (measured 2026-10-05, GB10).
+6. **Max-context probe** (required — the ceiling is the model's native
+   262,144, not the old 73,728 test ceiling): a ~160K-token prompt must be
+   admitted (about 70 s of prefill at the measured rate):
+
+   ```bash
+   P=$(python3 -c 'print(("The lighthouse keeper logged the weather each morning before the fog lifted, noting wind, swell, and the state of the two lamp wicks in the same slim ledger. ") * 4300, end="")')
+   curl -sf "http://127.0.0.1:$PORT/v1/chat/completions" \
+     -H 'Content-Type: application/json' \
+     -d "{\"model\": \"qwen3.8-flash-next-125b-a6b\",
+          \"messages\": [{\"role\": \"user\", \"content\": \"$P What does the keeper do each morning? Reply in one short sentence.\"}],
+          \"max_tokens\": 16, \"temperature\": 0,
+          \"chat_template_kwargs\": {\"enable_thinking\": false}}'"
+   ```
+
+   Pass: HTTP 200 with a short answer (the same prompt was rejected at the old
+   ceiling).
+7. **Numerical gate** (only when a change could alter numerics — kernels,
    quantization, state): the fixed-corpus perplexity protocol from
    [perplexity.md](perplexity.md) against the previous-build baseline before
    trusting the outputs.
@@ -307,19 +352,27 @@ Node readiness checklist (agent-executable, in order):
 
 ```bash
 set -e
+: "${PORT:=8000}"          # production port
 cd "$NINFER_ROOT"
 test -f "$ART"                                     # 1. artifact entry present
 test -x build/apps/ninfer-serve                    # 2. built
 curl -sf "http://127.0.0.1:$PORT/health" >/dev/null \
   || ( build/apps/ninfer-serve "$ART" --host 127.0.0.1 --port "$PORT" \
-        --max-context 73728 --max-concurrency 2 --kv-dtype fp8 \
-        --spec mtp --draft-tokens 3 --lm-head-draft --preserve-thinking \
+        --max-context 262144 --max-concurrency 2 --kv-dtype fp8 \
+        --spec mtp --draft-tokens 3 --lm-head-draft --vision --preserve-thinking \
         --request-log-jsonl "$LOG_DIR/requests.jsonl" \
         >"$LOG_DIR/server.log" 2>&1 & echo $! >"$LOG_DIR/serve.pid" ; \
        for i in $(seq 1 12); do sleep 5; curl -sf "http://127.0.0.1:$PORT/health" >/dev/null && break; done )
 curl -sf "http://127.0.0.1:$PORT/v1/models"        # 3. model advertised
 curl -sf "http://127.0.0.1:$PORT/v1/chat/completions" -H 'Content-Type: application/json' \
   -d '{"model": "qwen3.8-flash-next-125b-a6b", "messages": [{"role": "user", "content": "Hi"}], "max_tokens": 8, "temperature": 0, "chat_template_kwargs": {"enable_thinking": false}}'
+B64=$(python3 -c 'import io, base64; from PIL import Image; b = io.BytesIO(); Image.new("RGB", (64, 64), (255, 0, 0)).save(b, "PNG"); print(base64.b64encode(b.getvalue()).decode())')
+curl -sf "http://127.0.0.1:$PORT/v1/chat/completions" -H 'Content-Type: application/json' \
+  -d "{\"model\": \"qwen3.8-flash-next-125b-a6b\", \"messages\": [{\"role\": \"user\", \"content\": [
+       {\"type\": \"text\", \"text\": \"What single color is this image? Reply with one word.\"},
+       {\"type\": \"image_url\", \"image_url\": {\"url\": \"data:image/png;base64,$B64\"}}]}],
+       \"max_tokens\": 200, \"chat_template_kwargs\": {\"enable_thinking\": false}}" \
+  | python3 -c 'import json, sys; a = json.load(sys.stdin)["choices"][0]["message"]["content"].strip().lower(); assert a == "red", a'   # 4.5 vision probe: 'Red'
 ```
 
 Artifact distribution between nodes: copy all five files (section 2) as one
@@ -346,17 +399,18 @@ artifact:
     - {name: qwen3_8_flash_next_125b_a6b_nvfp4_fp8_mtp.ninfer.part-0003,    bytes: 30921610496}
     - {name: qwen3_8_flash_next_125b_a6b_nvfp4_fp8_mtp.ninfer.conversion.json, bytes: 103941}
   select: explicit entry path only (never glob or latest)
-  weights_resident_gib: 70.2
+  vision: component required by the canonical profile (verify before start, section 2)
+  weights_resident_gib: 70.5        # with vision (70.2 text-only)
 build:
   verify: tools/gb10/step0_build_test.sh
   pass: {exit: 0, ctest: "100% out of 140", real_artifact_tests: "4/4"}
 serve:
   binary: build/apps/ninfer-serve
-  canonical_flags: [--max-context, "73728", --max-concurrency, "2", --kv-dtype, fp8,
-                    --spec, mtp, --draft-tokens, "3", --lm-head-draft, --preserve-thinking,
-                    --request-log-jsonl, "$LOG_DIR/requests.jsonl"]
+  canonical_flags: [--max-context, "262144", --max-concurrency, "2", --kv-dtype, fp8,
+                    --spec, mtp, --draft-tokens, "3", --lm-head-draft, --vision,
+                    --preserve-thinking, --request-log-jsonl, "$LOG_DIR/requests.jsonl"]
   health: {url: "http://127.0.0.1:$PORT/health", ok: 200}
-  model: {alias: qwen3.8-flash-next-125b-a6b, max_model_len: 73728}
+  model: {alias: qwen3.8-flash-next-125b-a6b, max_model_len: 262144}
   ready_seconds_warm: 25
   stop: {signal: SIGTERM, drain_seconds: 30}
 limits:
@@ -375,7 +429,7 @@ monitor:
   counters: [admission_deferred_long_prefill, admission_prefill_yields, admission_short_backfills,
              admission_blocked.no_feasible_plan, admission_blocked.no_free_lane,
              admission_blocked.unsettled_state_fork, admission_blocked.context_transaction]
-baselines_gb10:   # measured, MTP K=3, FP8 KV, greedy
+baselines_gb10:   # measured on the 73728 text profile, MTP K=3, FP8 KV, greedy
   prefill_tok_s: 2150
   ttft_s: {15k: 7.2, 60k: 28.3}
   decode_tok_s: {solo_1k_8k: 57, natural_16_stream: 49, script_heavy: 74}

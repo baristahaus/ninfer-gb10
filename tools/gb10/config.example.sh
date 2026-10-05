@@ -4,21 +4,21 @@
 # Explicit Flash-Next artifact. Never a glob or a "latest" name.
 ART=/absolute/path/to/qwen3_8_flash_next_125b_a6b_nvfp4.ninfer
 
-# Port for the temporary server started by steps 1 and 2. It must be free.
-PORT=18087
+# Production port (the step scripts start their temporary server on it). It must be free.
+PORT=8000
 
 # KV cache dtype and MTP draft tokens used by the benchmarks. Match what you serve.
 KV_DTYPE=fp8
 DRAFT_TOKENS=2
 
-# Server flags for steps 1 and 2 (the scripts add the artifact path and --port).
-# Replace with the flags you normally serve with.
+# Canonical production serve flags; the step scripts add the artifact path and --port.
+# Replace with your own flags only if your production profile differs.
 SERVE_ARGS=(
-  --max-context 73728
+  --max-context 262144
   --max-concurrency 2
   --kv-dtype fp8
   --spec mtp --draft-tokens 2 --lm-head-draft
-  --preserve-thinking
+  --vision
 )
 
 # Python 3.11+ with the standard library is enough for every step except the optional

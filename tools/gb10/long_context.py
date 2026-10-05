@@ -130,6 +130,24 @@ def summarize(result, cold):
         "finish": result.get("finish"),
     }
 
+RED_PNG_B64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAX0lEQVR4nO3PQQ0AIBDAMMC/50MEj4ZkVbDtWX87Ou"
+    "BVA1oDWgNaA1oDWgNaA1oDWgNaA1oDWgNaA1oDWgNaA1oDWgNaA1oDWgNaA1oDWgNaA1oDWgNaA1oDWgNaA1oDWgNaA9"
+    "oFUoUBf3Xr7AgAAAAASUVORK5CYII="
+)
+
+
+def vision_probe(base_url, model, thinking):
+    """One media round in the mix: a 64x64 solid-red image must be answered 'Red'."""
+    messages = [{"role": "user", "content": [
+        {"type": "text", "text": "What single color is this image? Reply with one word."},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64," + RED_PNG_B64}},
+    ]}]
+    result = stream_chat(base_url, payload(model, messages, 200, thinking, True))
+    answer = (result.get("text") or "").strip().lower()
+    return {"expected": "red", "answer": answer, "ok": answer == "red",
+            **summarize(result, cold=True)}
+
 
 def calibrate(base_url, model, thinking):
     chars = 60_000
@@ -277,6 +295,7 @@ def main():
     ap.add_argument("--no-interference", action="store_true")
     ap.add_argument("--no-yield", action="store_true")
     ap.add_argument("--no-backfill", action="store_true")
+    ap.add_argument("--no-vision", action="store_true")
     ap.add_argument("--short-tokens", type=int, default=2000)
     ap.add_argument("--thinking", action="store_true")
     ap.add_argument("--seed-base", type=int, default=1000)
@@ -288,7 +307,7 @@ def main():
     cpt, calibration_tokens = calibrate(args.base_url, model, args.thinking)
     record = {"model": model, "chars_per_token": round(cpt, 4), "calibration_prompt_tokens":
               calibration_tokens, "thinking": args.thinking, "max_tokens": args.max_tokens,
-              "requests": [], "interference": None, "yield": None, "backfill": None}
+              "requests": [], "interference": None, "yield": None, "backfill": None, "vision": None}
     print(f"model {model}; {cpt:.3f} characters per token", flush=True)
 
     seed = args.seed_base
@@ -317,6 +336,10 @@ def main():
                         **summarize(second, cold=False)}
                 record["requests"].append(row2)
                 print(json.dumps(row2), flush=True)
+
+    if not args.no_vision:
+        record["vision"] = vision_probe(args.base_url, model, args.thinking)
+        print(json.dumps({"vision": record["vision"]}), flush=True)
 
     if not args.no_interference and len(sizes) > 1:
         seed += 10

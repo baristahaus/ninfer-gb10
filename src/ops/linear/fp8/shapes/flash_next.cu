@@ -105,34 +105,40 @@ struct SharedRows {
 constexpr int kMoeHidden       = 2560;
 constexpr int kMoeExperts      = 512;
 constexpr int kMoeIntermediate = 640;
-constexpr int kRouterBlocks    = kMoeExperts / Gemv::kRowsPerCta;
-constexpr int kSharedBlocks    = kMoeIntermediate / Gemv::kRowsPerCta;
+// Each 256-thread half of a 512-thread CTA runs one eight-row GEMV block. Rows keep the
+// production lane/chain/phase accumulation, so results equal the separate GEMVs bit for bit.
+using EntryGemv                = Fp8GemvSchedule<8, 1, 8, 4, Fp8CodeCache::Default, 2, 1>;
+constexpr int kEntryThreads    = 2 * EntryGemv::kThreads;
+constexpr int kRouterBlocks    = kMoeExperts / EntryGemv::kRowsPerCta / 2;
+constexpr int kSharedBlocks    = kMoeIntermediate / EntryGemv::kRowsPerCta;
 
-__global__ __launch_bounds__(Gemv::kThreads, Gemv::kMinBlocksPerSm) void fp8_moe_entry_decode_kernel(
+__global__ __launch_bounds__(kEntryThreads, 1) void fp8_moe_entry_decode_kernel(
     const __nv_bfloat16* __restrict__ x, const std::uint8_t* __restrict__ router_codes,
     const __nv_bfloat16* __restrict__ router_scales, __nv_bfloat16* __restrict__ scores,
     const std::uint8_t* __restrict__ gate_codes, const __nv_bfloat16* __restrict__ gate_scales,
     const std::uint8_t* __restrict__ up_codes, const __nv_bfloat16* __restrict__ up_scales,
     __nv_bfloat16* __restrict__ activation) {
-    const int block = static_cast<int>(blockIdx.x);
+    const int block  = static_cast<int>(blockIdx.x);
+    const int half   = static_cast<int>(threadIdx.x) / EntryGemv::kThreads;
+    const int thread = static_cast<int>(threadIdx.x) % EntryGemv::kThreads;
     if (block < kRouterBlocks) {
-        fp8_gemv_block<Fp8Geometry<kMoeExperts, kMoeHidden>, Gemv>(
-            block, x, router_codes, router_scales, Fp8ContiguousOutput{scores, kMoeExperts});
+        fp8_gemv_block<Fp8Geometry<kMoeExperts, kMoeHidden>, EntryGemv>(
+            2 * block + half, thread, x, router_codes, router_scales,
+            Fp8ContiguousOutput{scores, kMoeExperts});
         return;
     }
     using SharedGeometry = Fp8Geometry<kMoeIntermediate, kMoeHidden>;
-    __shared__ float gate[Gemv::kRowsPerCta];
-    __shared__ float up[Gemv::kRowsPerCta];
+    __shared__ float projected[2][EntryGemv::kRowsPerCta];  // gate, up
     const int shared_block = block - kRouterBlocks;
-    const int base         = shared_block * Gemv::kRowsPerCta;
-    fp8_gemv_block<SharedGeometry, Gemv>(shared_block, x, gate_codes, gate_scales,
-                                         SharedRows{gate, base});
-    fp8_gemv_block<SharedGeometry, Gemv>(shared_block, x, up_codes, up_scales,
-                                         SharedRows{up, base});
+    const int base         = shared_block * EntryGemv::kRowsPerCta;
+    fp8_gemv_block<SharedGeometry, EntryGemv>(shared_block, thread, x,
+                                              half == 0 ? gate_codes : up_codes,
+                                              half == 0 ? gate_scales : up_scales,
+                                              SharedRows{projected[half], base});
     __syncthreads();
-    if (threadIdx.x < Gemv::kRowsPerCta) {
-        const int row   = static_cast<int>(threadIdx.x);
-        activation[base + row] = __float2bfloat16(silu(gate[row]) * up[row]);
+    if (threadIdx.x < EntryGemv::kRowsPerCta) {
+        const int row          = static_cast<int>(threadIdx.x);
+        activation[base + row] = __float2bfloat16(silu(projected[0][row]) * projected[1][row]);
     }
 }
 
@@ -151,7 +157,7 @@ void flash_next::launch_fp8_moe_entry_decode(const Tensor& x, const Weight& rout
         scores.numel() != kMoeExperts || activation.numel() != kMoeIntermediate) {
         throw std::invalid_argument("FP8 MoE entry decode: invalid exact problem");
     }
-    fp8_moe_entry_decode_kernel<<<kRouterBlocks + kSharedBlocks, Gemv::kThreads, 0, stream>>>(
+    fp8_moe_entry_decode_kernel<<<kRouterBlocks + kSharedBlocks, kEntryThreads, 0, stream>>>(
         static_cast<const __nv_bfloat16*>(x.data), static_cast<const std::uint8_t*>(router.qdata),
         static_cast<const __nv_bfloat16*>(router.scales), static_cast<__nv_bfloat16*>(scores.data),
         static_cast<const std::uint8_t*>(shared_gate.qdata),

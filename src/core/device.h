@@ -85,4 +85,30 @@ private:
     cudaEvent_t event_ = nullptr;
 };
 
+// Low-latency completion wait for steady per-step work such as decode rounds. With the
+// blocking-sync schedule a synchronize costs an interrupt wake-up (~100 us) after the GPU goes
+// idle; spinning for the whole step would hold a core busy. This waiter sleeps until shortly
+// before the expected completion, an exponential average of measured GPU durations (so a late
+// wake-up cannot inflate the estimate), and polls the completion event for the remainder.
+class LowLatencyStreamWait {
+public:
+    explicit LowLatencyStreamWait(const DeviceContext& ctx);
+    ~LowLatencyStreamWait();
+
+    LowLatencyStreamWait(const LowLatencyStreamWait&)            = delete;
+    LowLatencyStreamWait& operator=(const LowLatencyStreamWait&) = delete;
+
+    // Marks the start of the step's device work on `stream`; call before enqueueing it.
+    void begin(cudaStream_t stream);
+    // Waits for all work enqueued on `stream`; throws on a device error.
+    void wait(cudaStream_t stream);
+
+private:
+    cudaEvent_t start_          = nullptr;
+    cudaEvent_t stop_           = nullptr;
+    double expected_us_         = 0.0;
+    bool started_               = false;
+    std::int64_t begin_host_ns_ = 0;
+};
+
 } // namespace ninfer

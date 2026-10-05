@@ -655,6 +655,7 @@ public:
     WorkspaceArena work;
     std::unique_ptr<ops::Bf16GemmContext> bf16_gemm;
     std::unique_ptr<HostWorkerPool> ple_gather_workers;
+    std::unique_ptr<LowLatencyStreamWait> decode_wait;
     std::unique_ptr<qwen3_8_flash_next::DecoderState> decoder;
     std::unique_ptr<HostKVArena> host_kv_arena;
     std::unique_ptr<LogicalKVPageStore> text_kv_pages;

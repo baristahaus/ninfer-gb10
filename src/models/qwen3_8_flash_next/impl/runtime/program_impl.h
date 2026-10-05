@@ -766,6 +766,7 @@ ProgramImplCore::ProgramImplCore(const LoadedModelData& model_in, const Sequence
       bf16_gemm(Variant::flash_next ? std::make_unique<ops::Bf16GemmContext>(device_in.stream)
                                     : nullptr),
       ple_gather_workers(std::make_unique<HostWorkerPool>(16, 16)),
+      decode_wait(std::make_unique<LowLatencyStreamWait>(device_in)),
       continuation_states(continuation_capacity), continuation_slots(continuation_capacity),
       shared_prefix_states(shared_prefix_capacity), shared_prefix_slots(shared_prefix_capacity),
       ordinary_execution_profiles(plan.speculative_backend == SpeculativeBackend::None
@@ -11979,6 +11980,7 @@ ProgramImplCore::decode_ordinary_batch(std::span<const std::uint32_t> lanes,
         std::optional<nvtx::ScopedRange> submit_range;
         submit_range.emplace(nvtx::Name::DecodeOrdinarySubmit, nvtx::Category::Decode,
                              static_cast<std::uint64_t>(lanes.size()));
+        decode_wait->begin(device.stream);
         DecodeGraphExecutable* executable = nullptr;
         // Graph selection changes launch machinery, not the target's arithmetic profile.
         const auto planned = std::find_if(
@@ -12060,7 +12062,7 @@ ProgramImplCore::decode_ordinary_batch(std::span<const std::uint32_t> lanes,
         {
             nvtx::ScopedRange wait_range(nvtx::Name::DecodeOrdinaryWait, nvtx::Category::Control,
                                          static_cast<std::uint64_t>(lanes.size()));
-            device.synchronize();
+            decode_wait->wait(device.stream);
         }
         timing.end_wait();
 
@@ -12152,6 +12154,7 @@ ProgramImplCore::decode_mtp_batch(std::span<const std::uint32_t> lanes,
         std::optional<nvtx::ScopedRange> submit_range;
         submit_range.emplace(nvtx::Name::DecodeMtpSubmit, nvtx::Category::Mtp,
                              static_cast<std::uint64_t>(lanes.size()));
+        decode_wait->begin(device.stream);
         DecodeGraphExecutable* executable = nullptr;
         schedule::MtpCausalAttentionEnvelopes envelopes =
             mtp_causal_attention_envelopes(maximum_frontier, draft_window, capacity);
@@ -12254,7 +12257,7 @@ ProgramImplCore::decode_mtp_batch(std::span<const std::uint32_t> lanes,
         {
             nvtx::ScopedRange wait_range(nvtx::Name::DecodeMtpWait, nvtx::Category::Control,
                                          static_cast<std::uint64_t>(lanes.size()));
-            device.synchronize();
+            decode_wait->wait(device.stream);
         }
         timing.end_wait();
 

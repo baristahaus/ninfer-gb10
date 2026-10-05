@@ -1,9 +1,11 @@
 #include "core/device.h"
 
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <utility>
 
 namespace ninfer {
@@ -254,6 +256,59 @@ bool CudaCompletionEvent::ready() const {
 void CudaCompletionEvent::synchronize() const {
     if (event_ == nullptr) { throw std::logic_error("CUDA completion event is empty"); }
     CUDA_CHECK(cudaEventSynchronize(event_));
+}
+
+namespace {
+
+std::int64_t steady_ns() {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
+
+// Wake this long before the expected completion: covers sleep overshoot and step jitter.
+constexpr double kWakeMarginUs = 250.0;
+
+} // namespace
+
+LowLatencyStreamWait::LowLatencyStreamWait(const DeviceContext& ctx) {
+    ctx.bind_to_current_thread();
+    CUDA_CHECK(cudaEventCreate(&start_));
+    CUDA_CHECK(cudaEventCreate(&stop_));
+}
+
+LowLatencyStreamWait::~LowLatencyStreamWait() {
+    if (stop_ != nullptr) { (void)cudaEventDestroy(stop_); }
+    if (start_ != nullptr) { (void)cudaEventDestroy(start_); }
+}
+
+void LowLatencyStreamWait::begin(cudaStream_t stream) {
+    CUDA_CHECK(cudaEventRecord(start_, stream));
+    begin_host_ns_ = steady_ns();
+    started_       = true;
+}
+
+void LowLatencyStreamWait::wait(cudaStream_t stream) {
+    CUDA_CHECK(cudaEventRecord(stop_, stream));
+    if (started_ && expected_us_ > kWakeMarginUs) {
+        const auto deadline = begin_host_ns_ + static_cast<std::int64_t>(
+                                                   (expected_us_ - kWakeMarginUs) * 1000.0);
+        const auto remaining = deadline - steady_ns();
+        if (remaining > 0) { std::this_thread::sleep_for(std::chrono::nanoseconds(remaining)); }
+    }
+    for (;;) {
+        const cudaError_t status = cudaEventQuery(stop_);
+        if (status == cudaSuccess) { break; }
+        if (status != cudaErrorNotReady) { CUDA_CHECK(status); }
+    }
+    if (started_) {
+        float ms = 0.0F;
+        if (cudaEventElapsedTime(&ms, start_, stop_) == cudaSuccess) {
+            const double measured = static_cast<double>(ms) * 1000.0;
+            expected_us_ = expected_us_ == 0.0 ? measured : 0.75 * expected_us_ + 0.25 * measured;
+        }
+        started_ = false;
+    }
 }
 
 } // namespace ninfer

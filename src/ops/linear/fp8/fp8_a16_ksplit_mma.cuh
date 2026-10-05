@@ -4,7 +4,9 @@
 //
 // A CTA owns sixteen output rows and splits K across compile-time-selected warps. Persistent E4M3
 // codes are widened exactly to BF16 MMA operands; the represented BF16 row multiplier is applied
-// once to the complete FP32 dot product. The public activation is never quantized.
+// once to the complete FP32 dot product. The public activation is never quantized. When two
+// staging buffers fit in 32 KB, K groups are double-buffered: the next group's codes and
+// activations load while the current group computes. Larger tiles keep one buffer and occupancy.
 
 #include "ops/common/mma.cuh"
 #include "ops/common/memory.cuh"
@@ -38,18 +40,19 @@ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void fp8_a16_ks
     static_assert((kWarps & 1) == 0);
     constexpr unsigned kMask = 0xffffffffU;
 
+    constexpr int kStageBytes =
+        kRowsPerCta * kGroupK + kWarps * kTileTokens * kTileK * static_cast<int>(sizeof(__nv_bfloat16));
+    constexpr int kStages = kGroups > 1 && 2 * kStageBytes <= 32 * 1024 ? 2 : 1;
     union SharedStorage {
         struct {
-            std::uint8_t codes[kRowsPerCta][kGroupK];
-            __nv_bfloat16 activations[kWarps][kTileTokens * kTileK];
+            std::uint8_t codes[kStages][kRowsPerCta][kGroupK];
+            __nv_bfloat16 activations[kStages][kWarps][kTileTokens * kTileK];
         } staging;
 
         float partial[kWarps * kTokenMmas * 32 * 4];
     };
 
     __shared__ __align__(16) SharedStorage shared;
-    auto& code_shared = shared.staging.codes;
-    auto& x_shared    = shared.staging.activations;
 
     const int tid          = static_cast<int>(threadIdx.x);
     const int warp         = tid >> 5;
@@ -59,7 +62,8 @@ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void fp8_a16_ks
     const int row0         = static_cast<int>(blockIdx.x) * kRowsPerCta;
     const int live_columns = MaskedColumns ? columns : ActiveTokens;
 
-    const auto stage_activation = [&](int group_k0) {
+    const auto stage_activation = [&](int group_k0, int stage) {
+        auto& x_shared = shared.staging.activations[stage];
         constexpr auto kActivationCache =
             Schedule::kActivationCache == Fp8A16KSplitCache::Default ? Cache::ca : Cache::cg;
         constexpr bool kPadded =
@@ -86,7 +90,8 @@ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void fp8_a16_ks
         }
     };
 
-    const auto stage_codes = [&](int group_k0) {
+    const auto stage_codes = [&](int group_k0, int stage) {
+        auto& code_shared = shared.staging.codes[stage];
         constexpr auto kWeightCache =
             Schedule::kWeightCache == Fp8A16KSplitCache::Default ? Cache::ca : Cache::cg;
 #pragma unroll
@@ -107,14 +112,26 @@ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void fp8_a16_ks
     const int warp_k0                 = warp * kTileK;
     float accumulators[kTokenMmas][4] = {};
 
-    stage_codes(0);
-    stage_activation(0);
+    stage_codes(0, 0);
+    stage_activation(0, 0);
     cp_commit();
-    cp_wait<0>();
-    __syncthreads();
 
 #pragma unroll
     for (int group_index = 0; group_index < kGroups; ++group_index) {
+        const int stage = group_index % kStages;
+        if (kStages == 2 && group_index + 1 < kGroups) {
+            // The target stage was last read by the previous group, behind its trailing barrier.
+            const int next_k0 = (group_index + 1) * kGroupK;
+            stage_codes(next_k0, (group_index + 1) % kStages);
+            stage_activation(next_k0, (group_index + 1) % kStages);
+            cp_commit();
+            cp_wait<1>();
+        } else {
+            cp_wait<0>();
+        }
+        __syncthreads();
+        const auto& code_shared = shared.staging.codes[stage];
+        const auto& x_shared    = shared.staging.activations[stage];
 #pragma unroll
         for (int k_step = 0; k_step < kTileK / 16; ++k_step) {
             const int code_col        = k_step * 16 + lid * 2;
@@ -142,19 +159,14 @@ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void fp8_a16_ks
                          b1);
             }
         }
-
-        if (group_index + 1 < kGroups) {
-            __syncthreads();
-            const int next_k0 = (group_index + 1) * kGroupK;
-            stage_codes(next_k0);
-            stage_activation(next_k0);
+        __syncthreads();
+        if (kStages == 1 && group_index + 1 < kGroups) {
+            stage_codes((group_index + 1) * kGroupK, 0);
+            stage_activation((group_index + 1) * kGroupK, 0);
             cp_commit();
-            cp_wait<0>();
-            __syncthreads();
         }
     }
 
-    __syncthreads();
     auto* partial = shared.partial;
     if ((warp & 1) != 0) {
 #pragma unroll

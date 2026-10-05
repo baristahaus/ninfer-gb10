@@ -13,6 +13,7 @@ run the CLI or HTTP server.
 | [Weight conversion](weight-conversion.md) | official recipes, custom formats and sources, conversion methods, optional components and artifact output |
 | [Perplexity](perplexity.md) | fixed-corpus and custom-text causal perplexity, comparison rules, progress, and reports |
 | [CLI examples](../examples/cli/) | committed text, multimodal, thinking, long-decode, and long-context inputs |
+| [Operations (GB10 fleet)](operations.md) | running the engine on GB10 nodes: node model, build, serve, monitoring, failure response, upgrades |
 
 The executable `--help` output is the exact source for command-line option spelling and defaults.
 

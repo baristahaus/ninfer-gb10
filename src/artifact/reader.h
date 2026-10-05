@@ -25,6 +25,9 @@ public:
         return segments.empty() ? 0 : segments.back().begin + segments.back().bytes;
     }
     void copy(std::uint64_t offset, std::span<std::byte> destination) const;
+    // Starts asynchronous reads of the pages covering [offset, offset + bytes) without waiting,
+    // so scattered lookups that are issued together share one round of storage latency.
+    void will_need(std::uint64_t offset, std::uint64_t bytes) const;
 };
 
 struct ReadSegment {

@@ -4,6 +4,9 @@
 #include "artifact/formats.h"
 #include "artifact/layouts.h"
 
+#include <sys/mman.h>
+#include <unistd.h>
+
 #include <algorithm>
 #include <array>
 #include <limits>
@@ -200,6 +203,26 @@ void MappedRange::copy(std::uint64_t offset, std::span<std::byte> destination) c
         std::copy_n(it->storage.get() + local, count, destination.data());
         offset += count;
         destination = destination.subspan(count);
+        ++it;
+    }
+}
+
+void MappedRange::will_need(std::uint64_t offset, std::uint64_t bytes) const {
+    if (bytes == 0 || offset > size() || bytes > size() - offset) { return; }
+    static const auto page = static_cast<std::uintptr_t>(::sysconf(_SC_PAGESIZE));
+    auto it = std::upper_bound(
+        segments.begin(), segments.end(), offset,
+        [](std::uint64_t value, const MappedSegment& segment) { return value < segment.begin; });
+    --it;
+    while (bytes != 0) {
+        const auto local = offset - it->begin;
+        const auto count = std::min<std::uint64_t>(bytes, it->bytes - local);
+        const auto first = reinterpret_cast<std::uintptr_t>(it->storage.get() + local);
+        const auto begin = first / page * page;
+        // Advice is a hint: a failure leaves the subsequent copy to fault the pages in itself.
+        (void)::madvise(reinterpret_cast<void*>(begin), first + count - begin, MADV_WILLNEED);
+        offset += count;
+        bytes -= count;
         ++it;
     }
 }

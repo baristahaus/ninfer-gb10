@@ -104,6 +104,17 @@ void gather_ple(const artifact::MappedRange& table, DType dtype, std::span<const
         }
     };
     if (workers == nullptr || ids.size() < 128) {
+        // Decode-sized gathers: start every row's page read before copying, so a cold lookup pays
+        // about one storage latency instead of one per row (measured 1.18 ms -> 0.14 ms per
+        // token on NVMe); cached rows cost a few microseconds of advice.
+        for (const PleIds& token : ids) {
+            for (const std::uint64_t row : token) {
+                if (row < kPleRows) {
+                    table.will_need(row * kPleHeadWidth * element_bytes,
+                                    kPleHeadWidth * element_bytes);
+                }
+            }
+        }
         gather(0, ids.size());
         return;
     }

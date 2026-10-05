@@ -142,6 +142,64 @@ __global__ __launch_bounds__(kEntryThreads, 1) void fp8_moe_entry_decode_kernel(
     }
 }
 
+// Compact batches (2-8 tokens): each 512-thread CTA hosts two production K-split blocks with
+// their own dynamic shared storage. Router CTAs run two row blocks; shared CTAs run the gate and
+// up blocks of the same rows, then apply SwiGLU at the BF16 projection boundary.
+using EntrySplit          = Fp8A16KSplitSchedule<8, 8, 1>;
+using EntrySplitShared    = Fp8A16KSplitShared<Fp8Geometry<kMoeExperts, kMoeHidden>, EntrySplit>;
+using EntrySharedSplit    = Fp8A16KSplitShared<Fp8Geometry<kMoeIntermediate, kMoeHidden>, EntrySplit>;
+static_assert(sizeof(EntrySplitShared) == sizeof(EntrySharedSplit));
+constexpr int kSplitThreads       = 2 * EntrySplit::kThreads;
+constexpr int kSplitRouterBlocks  = kMoeExperts / EntrySplit::kRowsPerCta / 2;
+constexpr int kSplitSharedBlocks  = kMoeIntermediate / EntrySplit::kRowsPerCta;
+constexpr std::size_t kSplitBytes = 2 * sizeof(EntrySplitShared);
+
+// CTA-local [rows, tokens] values of one shared-expert projection at the BF16 boundary.
+struct SharedTile {
+    float (*values)[EntrySplit::kTileTokens];
+    int base;
+
+    __device__ __forceinline__ void store(std::int32_t parent_row, std::int32_t token,
+                                          float value) const {
+        values[parent_row - base][token] = __bfloat162float(__float2bfloat16_rn(value));
+    }
+};
+
+__global__ __launch_bounds__(kSplitThreads, 1) void fp8_moe_entry_small_t_kernel(
+    const __nv_bfloat16* __restrict__ x, const std::uint8_t* __restrict__ router_codes,
+    const __nv_bfloat16* __restrict__ router_scales, __nv_bfloat16* __restrict__ scores,
+    const std::uint8_t* __restrict__ gate_codes, const __nv_bfloat16* __restrict__ gate_scales,
+    const std::uint8_t* __restrict__ up_codes, const __nv_bfloat16* __restrict__ up_scales,
+    __nv_bfloat16* __restrict__ activation, int tokens) {
+    extern __shared__ float4 entry_split_storage[];
+    const int block  = static_cast<int>(blockIdx.x);
+    const int half   = static_cast<int>(threadIdx.x) / EntrySplit::kThreads;
+    const int thread = static_cast<int>(threadIdx.x) % EntrySplit::kThreads;
+    if (block < kSplitRouterBlocks) {
+        auto* shared = reinterpret_cast<EntrySplitShared*>(entry_split_storage) + half;
+        fp8_a16_ksplit_block<Fp8Geometry<kMoeExperts, kMoeHidden>, EntrySplit::kTileTokens,
+                             EntrySplit, Fp8ContiguousOutput, true>(
+            2 * block + half, thread, *shared, x, router_codes, router_scales,
+            Fp8ContiguousOutput{scores, kMoeExperts}, tokens);
+        return;
+    }
+    __shared__ float projected[2][EntrySplit::kRowsPerCta][EntrySplit::kTileTokens];  // gate, up
+    auto* shared           = reinterpret_cast<EntrySharedSplit*>(entry_split_storage) + half;
+    const int shared_block = block - kSplitRouterBlocks;
+    const int base         = shared_block * EntrySplit::kRowsPerCta;
+    fp8_a16_ksplit_block<Fp8Geometry<kMoeIntermediate, kMoeHidden>, EntrySplit::kTileTokens,
+                         EntrySplit, SharedTile, true>(
+        shared_block, thread, *shared, x, half == 0 ? gate_codes : up_codes,
+        half == 0 ? gate_scales : up_scales, SharedTile{projected[half], base}, tokens);
+    __syncthreads();
+    const int row   = static_cast<int>(threadIdx.x) % EntrySplit::kRowsPerCta;
+    const int token = static_cast<int>(threadIdx.x) / EntrySplit::kRowsPerCta;
+    if (token < tokens) {
+        activation[static_cast<std::int64_t>(token) * kMoeIntermediate + base + row] =
+            __float2bfloat16(silu(projected[0][row][token]) * projected[1][row][token]);
+    }
+}
+
 } // namespace
 
 void flash_next::launch_fp8_moe_entry_decode(const Tensor& x, const Weight& router,
@@ -152,10 +210,31 @@ void flash_next::launch_fp8_moe_entry_decode(const Tensor& x, const Weight& rout
         return weight.qtype == QType::FP8_E4M3FN_ROW_BF16 && weight.n == n &&
                weight.k == kMoeHidden && weight.scales != nullptr;
     };
-    if (x.ne[1] != 1 || x.ne[0] != kMoeHidden || !fp8(router, kMoeExperts) ||
-        !fp8(shared_gate, kMoeIntermediate) || !fp8(shared_up, kMoeIntermediate) ||
-        scores.numel() != kMoeExperts || activation.numel() != kMoeIntermediate) {
-        throw std::invalid_argument("FP8 MoE entry decode: invalid exact problem");
+    const int tokens = x.ne[1];
+    if (tokens < 1 || tokens > kFp8MoeEntryMaxTokens || x.ne[0] != kMoeHidden ||
+        !fp8(router, kMoeExperts) || !fp8(shared_gate, kMoeIntermediate) ||
+        !fp8(shared_up, kMoeIntermediate) || scores.numel() != kMoeExperts * tokens ||
+        activation.numel() != kMoeIntermediate * tokens) {
+        throw std::invalid_argument("FP8 MoE entry: invalid exact problem");
+    }
+    if (tokens > 1) {
+        static const cudaError_t configured = cudaFuncSetAttribute(
+            fp8_moe_entry_small_t_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize,
+            static_cast<int>(kSplitBytes));
+        CUDA_CHECK(configured);
+        fp8_moe_entry_small_t_kernel<<<kSplitRouterBlocks + kSplitSharedBlocks, kSplitThreads,
+                                       kSplitBytes, stream>>>(
+            static_cast<const __nv_bfloat16*>(x.data),
+            static_cast<const std::uint8_t*>(router.qdata),
+            static_cast<const __nv_bfloat16*>(router.scales),
+            static_cast<__nv_bfloat16*>(scores.data),
+            static_cast<const std::uint8_t*>(shared_gate.qdata),
+            static_cast<const __nv_bfloat16*>(shared_gate.scales),
+            static_cast<const std::uint8_t*>(shared_up.qdata),
+            static_cast<const __nv_bfloat16*>(shared_up.scales),
+            static_cast<__nv_bfloat16*>(activation.data), tokens);
+        CUDA_CHECK(cudaGetLastError());
+        return;
     }
     fp8_moe_entry_decode_kernel<<<kRouterBlocks + kSharedBlocks, kEntryThreads, 0, stream>>>(
         static_cast<const __nv_bfloat16*>(x.data), static_cast<const std::uint8_t*>(router.qdata),

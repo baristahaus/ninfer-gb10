@@ -791,8 +791,9 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
     auto scope    = workspace.scope();
     Tensor scores = workspace.alloc(DType::BF16, {kExperts, tokens});
     Tensor shared_activation = workspace.alloc(DType::BF16, {kIntermediate, tokens});
-    // One-token FP8 decode computes router scores and the shared SwiGLU in one grid.
-    const bool fp8_entry = tokens == 1 && weights.router.qtype == QType::FP8_E4M3FN_ROW_BF16 &&
+    // Compact FP8 batches compute router scores and the shared SwiGLU in one grid.
+    const bool fp8_entry = tokens <= detail::flash_next::kFp8MoeEntryMaxTokens &&
+                           weights.router.qtype == QType::FP8_E4M3FN_ROW_BF16 &&
                            weights.shared_gate.qtype == QType::FP8_E4M3FN_ROW_BF16 &&
                            weights.shared_up.qtype == QType::FP8_E4M3FN_ROW_BF16;
     if (fp8_entry) {
@@ -805,7 +806,7 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
     Tensor ids          = workspace.alloc(DType::I32, {kTop, tokens});
     Tensor alpha        = workspace.alloc(DType::FP32, {kTop, tokens});
     Tensor shared_alpha = workspace.alloc(DType::FP32, {tokens});
-    if (fp8_entry && weights.shared_down.qtype == QType::BF16) {
+    if (tokens == 1 && fp8_entry && weights.shared_down.qtype == QType::BF16) {
         // The entry kernel produced the shared activation; route and shared Down run together.
         route_shared_down_decode_kernel<<<1 + kSharedDownBlocks, kRouteThreads, 0, stream>>>(
             static_cast<const __nv_bfloat16*>(scores.data),

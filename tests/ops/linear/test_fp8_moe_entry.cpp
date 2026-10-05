@@ -1,4 +1,4 @@
-// Flash-Next one-token FP8 MoE entry: router scores and shared SwiGLU against an FP64 oracle over
+// Flash-Next FP8 MoE entry (1-8 tokens): router scores and shared SwiGLU against an FP64 oracle over
 // the decoded row-scaled weights, and bitwise against the unfused linear + silu_mul route.
 #include "ninfer/ops/linear.h"
 #include "ninfer/ops/silu_mul.h"
@@ -73,77 +73,82 @@ Weight fp8_weight(const DeviceBuffer& payload, int rows) {
     return out;
 }
 
-std::vector<double> dot_rows(const Fp8Matrix& matrix, int rows, const std::vector<float>& x) {
-    std::vector<double> out(rows);
-    for (int row = 0; row < rows; ++row) {
-        double sum = 0.0;
-        for (int k = 0; k < kHidden; ++k) {
-            sum += matrix.values[static_cast<std::size_t>(row) * kHidden + k] * x[k];
+// [rows, tokens] token-major dot products.
+std::vector<double> dot_rows(const Fp8Matrix& matrix, int rows, const std::vector<float>& x,
+                             int tokens) {
+    std::vector<double> out(static_cast<std::size_t>(rows) * tokens);
+    for (int token = 0; token < tokens; ++token) {
+        for (int row = 0; row < rows; ++row) {
+            double sum = 0.0;
+            for (int k = 0; k < kHidden; ++k) {
+                sum += matrix.values[static_cast<std::size_t>(row) * kHidden + k] *
+                       x[static_cast<std::size_t>(token) * kHidden + k];
+            }
+            out[static_cast<std::size_t>(token) * rows + row] = sum;
         }
-        out[row] = sum;
     }
     return out;
 }
 
-int run() {
-    std::vector<float> input(kHidden);
+int run(int tokens) {
+    std::vector<float> input(static_cast<std::size_t>(kHidden) * tokens);
     fill_uniform(input, 931, -1.0F, 1.0F);
     round_to_bf16(input);
     const Fp8Matrix router = random_fp8(kExperts, 932);
     const Fp8Matrix gate = random_fp8(kIntermediate, 933);
     const Fp8Matrix up = random_fp8(kIntermediate, 934);
 
-    const std::vector<double> scores_reference = dot_rows(router, kExperts, input);
-    const std::vector<double> gate_reference = dot_rows(gate, kIntermediate, input);
-    const std::vector<double> up_reference = dot_rows(up, kIntermediate, input);
-    std::vector<double> activation_reference(kIntermediate);
-    for (int row = 0; row < kIntermediate; ++row) {
+    const std::vector<double> scores_reference = dot_rows(router, kExperts, input, tokens);
+    const std::vector<double> gate_reference = dot_rows(gate, kIntermediate, input, tokens);
+    const std::vector<double> up_reference = dot_rows(up, kIntermediate, input, tokens);
+    std::vector<double> activation_reference(gate_reference.size());
+    for (std::size_t row = 0; row < activation_reference.size(); ++row) {
         const double g = gate_reference[row];
         activation_reference[row] = g / (1.0 + std::exp(-g)) * up_reference[row];
     }
 
-    std::vector<std::uint16_t> input_bits(kHidden);
-    for (int k = 0; k < kHidden; ++k) { input_bits[k] = f32_to_bf16(input[k]); }
+    std::vector<std::uint16_t> input_bits(input.size());
+    for (std::size_t k = 0; k < input.size(); ++k) { input_bits[k] = f32_to_bf16(input[k]); }
     DeviceBuffer d_input = to_device(input_bits);
     DeviceBuffer d_router = to_device(router.payload);
     DeviceBuffer d_gate = to_device(gate.payload);
     DeviceBuffer d_up = to_device(up.payload);
-    GuardedDeviceBuffer d_scores(kExperts * sizeof(std::uint16_t));
-    GuardedDeviceBuffer d_activation(kIntermediate * sizeof(std::uint16_t));
-    DeviceBuffer d_unfused_scores(kExperts * sizeof(std::uint16_t));
-    DeviceBuffer d_unfused_gate(kIntermediate * sizeof(std::uint16_t));
-    DeviceBuffer d_unfused_up(kIntermediate * sizeof(std::uint16_t));
-    DeviceBuffer d_unfused_activation(kIntermediate * sizeof(std::uint16_t));
+    GuardedDeviceBuffer d_scores(static_cast<std::size_t>(kExperts) * tokens * sizeof(std::uint16_t));
+    GuardedDeviceBuffer d_activation(static_cast<std::size_t>(kIntermediate) * tokens * sizeof(std::uint16_t));
+    DeviceBuffer d_unfused_scores(static_cast<std::size_t>(kExperts) * tokens * sizeof(std::uint16_t));
+    DeviceBuffer d_unfused_gate(static_cast<std::size_t>(kIntermediate) * tokens * sizeof(std::uint16_t));
+    DeviceBuffer d_unfused_up(static_cast<std::size_t>(kIntermediate) * tokens * sizeof(std::uint16_t));
+    DeviceBuffer d_unfused_activation(static_cast<std::size_t>(kIntermediate) * tokens * sizeof(std::uint16_t));
 
-    const Tensor x(d_input.p, DType::BF16, {kHidden, 1});
+    const Tensor x(d_input.p, DType::BF16, {kHidden, tokens});
     const Weight router_weight = fp8_weight(d_router, kExperts);
     const Weight gate_weight = fp8_weight(d_gate, kIntermediate);
     const Weight up_weight = fp8_weight(d_up, kIntermediate);
-    Tensor scores(d_scores.data(), DType::BF16, {kExperts, 1});
-    Tensor activation(d_activation.data(), DType::BF16, {kIntermediate, 1});
+    Tensor scores(d_scores.data(), DType::BF16, {kExperts, tokens});
+    Tensor activation(d_activation.data(), DType::BF16, {kIntermediate, tokens});
     ops::detail::flash_next::launch_fp8_moe_entry_decode(x, router_weight, gate_weight, up_weight,
                                                          scores, activation, nullptr);
-    Tensor unfused_scores(d_unfused_scores.p, DType::BF16, {kExperts, 1});
-    Tensor unfused_gate(d_unfused_gate.p, DType::BF16, {kIntermediate, 1});
-    Tensor unfused_up(d_unfused_up.p, DType::BF16, {kIntermediate, 1});
-    Tensor unfused_activation(d_unfused_activation.p, DType::BF16, {kIntermediate, 1});
+    Tensor unfused_scores(d_unfused_scores.p, DType::BF16, {kExperts, tokens});
+    Tensor unfused_gate(d_unfused_gate.p, DType::BF16, {kIntermediate, tokens});
+    Tensor unfused_up(d_unfused_up.p, DType::BF16, {kIntermediate, tokens});
+    Tensor unfused_activation(d_unfused_activation.p, DType::BF16, {kIntermediate, tokens});
     ops::linear(x, router_weight, unfused_scores, nullptr);
     ops::linear(x, gate_weight, unfused_gate, nullptr);
     ops::linear(x, up_weight, unfused_up, nullptr);
     ops::silu_mul(unfused_gate, unfused_up, unfused_activation, nullptr);
     cuda_synchronize();
 
-    const auto got_scores = from_device_bf16(d_scores.data(), kExperts);
-    const auto got_activation = from_device_bf16(d_activation.data(), kIntermediate);
+    const auto got_scores = from_device_bf16(d_scores.data(), scores_reference.size());
+    const auto got_activation = from_device_bf16(d_activation.data(), activation_reference.size());
     int failures = verify_pointwise("FP8 MoE entry scores", got_scores, scores_reference,
                                     {/*absolute*/ 2.0e-3, /*relative*/ 1.0e-2});
     failures += verify_pointwise("FP8 MoE entry SwiGLU", got_activation, activation_reference,
                                  {/*absolute*/ 2.0e-3, /*relative*/ 2.0e-2});
     failures += verify_pointwise("FP8 MoE entry scores vs unfused", got_scores,
-                                 from_device_bf16(d_unfused_scores.p, kExperts),
+                                 from_device_bf16(d_unfused_scores.p, scores_reference.size()),
                                  {/*absolute*/ 0.0, /*relative*/ 0.0});
     failures += verify_pointwise("FP8 MoE entry SwiGLU vs unfused", got_activation,
-                                 from_device_bf16(d_unfused_activation.p, kIntermediate),
+                                 from_device_bf16(d_unfused_activation.p, activation_reference.size()),
                                  {/*absolute*/ 0.0, /*relative*/ 0.0});
     failures += d_scores.verify_guards("FP8 MoE entry scores");
     failures += d_activation.verify_guards("FP8 MoE entry SwiGLU");
@@ -155,7 +160,8 @@ int run() {
 int main() {
     if (ninfer::test::cuda_unavailable()) { return 77; }
     try {
-        const int failures = run();
+        int failures = 0;
+        for (const int tokens : {1, 2, 4, 8}) { failures += run(tokens); }
         std::cout << (failures == 0 ? "OK" : "FAIL") << " FP8 MoE entry\n";
         return failures == 0 ? 0 : 1;
     } catch (const std::exception& error) {

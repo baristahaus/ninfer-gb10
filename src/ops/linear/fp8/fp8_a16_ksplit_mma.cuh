@@ -20,10 +20,37 @@
 
 namespace ninfer::ops::detail {
 
+template <class Geometry, class Schedule>
+struct Fp8A16KSplitShared {
+    static constexpr int kHidden     = Geometry::kInputRows;
+    static constexpr int kTileK      = Schedule::kTileKPerWarp;
+    static constexpr int kWarps      = Schedule::kKWarps;
+    static constexpr int kRowsPerCta = Schedule::kRowsPerCta;
+    static constexpr int kGroupK     = Schedule::kGroupK;
+    static constexpr int kGroups     = kHidden / kGroupK;
+    static constexpr int kTileTokens = Schedule::kTileTokens;
+    static constexpr int kTokenMmas  = kTileTokens / 8;
+    static constexpr int kStageBytes =
+        kRowsPerCta * kGroupK + kWarps * kTileTokens * kTileK * static_cast<int>(sizeof(__nv_bfloat16));
+    static constexpr int kStages = kGroups > 1 && 2 * kStageBytes <= 32 * 1024 ? 2 : 1;
+
+    union {
+        struct {
+            std::uint8_t codes[kStages][kRowsPerCta][kGroupK];
+            __nv_bfloat16 activations[kStages][kWarps][kTileTokens * kTileK];
+        } staging;
+
+        float partial[kWarps * kTokenMmas * 32 * 4];
+    };
+};
+
+// One CTA's sixteen rows, run by `Schedule::kThreads` threads numbered by `thread` with their own
+// `shared` storage. Every thread of the hosting CTA must reach the same number of barriers, so a
+// CTA may host several blocks of identical schedules (for example two projections of one input).
 template <class Geometry, int ActiveTokens, class Schedule, class Output = Fp8ContiguousOutput,
           bool MaskedColumns = false>
-__global__
-__launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void fp8_a16_ksplit_mma_kernel(
+__device__ __forceinline__ void fp8_a16_ksplit_block(
+    int block, int thread, Fp8A16KSplitShared<Geometry, Schedule>& shared,
     const __nv_bfloat16* __restrict__ x, const std::uint8_t* __restrict__ weight_codes,
     const __nv_bfloat16* __restrict__ row_scales, Output output, int columns = ActiveTokens) {
     constexpr int kHidden     = Geometry::kInputRows;
@@ -40,26 +67,14 @@ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void fp8_a16_ks
     static_assert((kWarps & 1) == 0);
     constexpr unsigned kMask = 0xffffffffU;
 
-    constexpr int kStageBytes =
-        kRowsPerCta * kGroupK + kWarps * kTileTokens * kTileK * static_cast<int>(sizeof(__nv_bfloat16));
-    constexpr int kStages = kGroups > 1 && 2 * kStageBytes <= 32 * 1024 ? 2 : 1;
-    union SharedStorage {
-        struct {
-            std::uint8_t codes[kStages][kRowsPerCta][kGroupK];
-            __nv_bfloat16 activations[kStages][kWarps][kTileTokens * kTileK];
-        } staging;
+    constexpr int kStages     = Fp8A16KSplitShared<Geometry, Schedule>::kStages;
 
-        float partial[kWarps * kTokenMmas * 32 * 4];
-    };
-
-    __shared__ __align__(16) SharedStorage shared;
-
-    const int tid          = static_cast<int>(threadIdx.x);
+    const int tid          = thread;
     const int warp         = tid >> 5;
     const int lane         = tid & 31;
     const int gid          = lane >> 2;
     const int lid          = lane & 3;
-    const int row0         = static_cast<int>(blockIdx.x) * kRowsPerCta;
+    const int row0         = block * kRowsPerCta;
     const int live_columns = MaskedColumns ? columns : ActiveTokens;
 
     const auto stage_activation = [&](int group_k0, int stage) {
@@ -233,6 +248,18 @@ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void fp8_a16_ks
             }
         }
     }
+}
+
+template <class Geometry, int ActiveTokens, class Schedule, class Output = Fp8ContiguousOutput,
+          bool MaskedColumns = false>
+__global__
+__launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void fp8_a16_ksplit_mma_kernel(
+    const __nv_bfloat16* __restrict__ x, const std::uint8_t* __restrict__ weight_codes,
+    const __nv_bfloat16* __restrict__ row_scales, Output output, int columns = ActiveTokens) {
+    __shared__ __align__(16) Fp8A16KSplitShared<Geometry, Schedule> shared;
+    fp8_a16_ksplit_block<Geometry, ActiveTokens, Schedule, Output, MaskedColumns>(
+        static_cast<int>(blockIdx.x), static_cast<int>(threadIdx.x), shared, x, weight_codes,
+        row_scales, output, columns);
 }
 
 } // namespace ninfer::ops::detail

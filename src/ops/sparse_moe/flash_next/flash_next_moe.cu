@@ -8,6 +8,7 @@
 #include "ops/linear/bf16/bf16_config.h"
 #include "ops/linear/bf16/bf16_gemm_mma.cuh"
 #include "ops/linear/bf16/flash_next/bf16_launch.h"
+#include "ops/linear/fp8/flash_next_launch.h"
 #include "ops/linear/nvfp4/nvfp4_codec.cuh"
 #include "ops/linear/nvfp4/nvfp4_config.h"
 #include "ops/linear/nvfp4/nvfp4_w4a4_mma.cuh"
@@ -738,7 +739,18 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
                  "flash_next_moe: invalid routed down bank");
     auto scope    = workspace.scope();
     Tensor scores = workspace.alloc(DType::BF16, {kExperts, tokens});
-    linear(input, weights.router, scores, stream, bf16_gemm);
+    Tensor shared_activation = workspace.alloc(DType::BF16, {kIntermediate, tokens});
+    // One-token FP8 decode computes router scores and the shared SwiGLU in one grid.
+    const bool fp8_entry = tokens == 1 && weights.router.qtype == QType::FP8_E4M3FN_ROW_BF16 &&
+                           weights.shared_gate.qtype == QType::FP8_E4M3FN_ROW_BF16 &&
+                           weights.shared_up.qtype == QType::FP8_E4M3FN_ROW_BF16;
+    if (fp8_entry) {
+        detail::flash_next::launch_fp8_moe_entry_decode(input, weights.router, weights.shared_gate,
+                                                        weights.shared_up, scores,
+                                                        shared_activation, stream);
+    } else {
+        linear(input, weights.router, scores, stream, bf16_gemm);
+    }
     Tensor ids          = workspace.alloc(DType::I32, {kTop, tokens});
     Tensor alpha        = workspace.alloc(DType::FP32, {kTop, tokens});
     Tensor shared_alpha = workspace.alloc(DType::FP32, {tokens});
@@ -747,9 +759,10 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
         static_cast<const __nv_bfloat16*>(input.data),
         static_cast<const __nv_bfloat16*>(weights.shared_scale.qdata), static_cast<int*>(ids.data),
         static_cast<float*>(alpha.data), static_cast<float*>(shared_alpha.data), tokens);
-    Tensor shared_activation = workspace.alloc(DType::BF16, {kIntermediate, tokens});
-    if (tokens == 1 && weights.shared_gate.qtype == QType::BF16 &&
-        weights.shared_up.qtype == QType::BF16) {
+    if (fp8_entry) {
+        // Already produced by the MoE entry kernel.
+    } else if (tokens == 1 && weights.shared_gate.qtype == QType::BF16 &&
+               weights.shared_up.qtype == QType::BF16) {
         detail::flash_next::launch_bf16_shared_swiglu_decode(input, weights.shared_gate, weights.shared_up,
                                                  shared_activation, stream);
     } else {

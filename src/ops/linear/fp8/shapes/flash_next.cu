@@ -4,7 +4,9 @@
 // the K-split Tensor Core kernel, and prefill the A16 GEMM.
 // Schedules were measured on 48 cold weight copies per shape (RTX PRO 6000).
 #include "ops/linear/fp8/fp8_shapes.h"
+#include "ops/linear/fp8/flash_next_launch.h"
 #include "core/device.h"
+#include "ops/common/math.cuh"
 #include "ops/common/math.h"
 #include "ops/common/token_slices.h"
 #include "ops/linear/fp8/fp8_a16_gemm_mma.cuh"
@@ -89,7 +91,76 @@ template <int N, int K>
 constexpr Fp8LinearShape flash_next_shape() {
     return {N, K, launch_a16<Fp8Geometry<N, K>>, nullptr, uses_a8};
 }
+
+// CTA-local rows of one shared-expert projection, rounded at the BF16 projection boundary.
+struct SharedRows {
+    float* rows;
+    int base;
+
+    __device__ __forceinline__ void store(std::int32_t parent_row, std::int32_t, float value) const {
+        rows[parent_row - base] = __bfloat162float(__float2bfloat16_rn(value));
+    }
+};
+
+constexpr int kMoeHidden       = 2560;
+constexpr int kMoeExperts      = 512;
+constexpr int kMoeIntermediate = 640;
+constexpr int kRouterBlocks    = kMoeExperts / Gemv::kRowsPerCta;
+constexpr int kSharedBlocks    = kMoeIntermediate / Gemv::kRowsPerCta;
+
+__global__ __launch_bounds__(Gemv::kThreads, Gemv::kMinBlocksPerSm) void fp8_moe_entry_decode_kernel(
+    const __nv_bfloat16* __restrict__ x, const std::uint8_t* __restrict__ router_codes,
+    const __nv_bfloat16* __restrict__ router_scales, __nv_bfloat16* __restrict__ scores,
+    const std::uint8_t* __restrict__ gate_codes, const __nv_bfloat16* __restrict__ gate_scales,
+    const std::uint8_t* __restrict__ up_codes, const __nv_bfloat16* __restrict__ up_scales,
+    __nv_bfloat16* __restrict__ activation) {
+    const int block = static_cast<int>(blockIdx.x);
+    if (block < kRouterBlocks) {
+        fp8_gemv_block<Fp8Geometry<kMoeExperts, kMoeHidden>, Gemv>(
+            block, x, router_codes, router_scales, Fp8ContiguousOutput{scores, kMoeExperts});
+        return;
+    }
+    using SharedGeometry = Fp8Geometry<kMoeIntermediate, kMoeHidden>;
+    __shared__ float gate[Gemv::kRowsPerCta];
+    __shared__ float up[Gemv::kRowsPerCta];
+    const int shared_block = block - kRouterBlocks;
+    const int base         = shared_block * Gemv::kRowsPerCta;
+    fp8_gemv_block<SharedGeometry, Gemv>(shared_block, x, gate_codes, gate_scales,
+                                         SharedRows{gate, base});
+    fp8_gemv_block<SharedGeometry, Gemv>(shared_block, x, up_codes, up_scales,
+                                         SharedRows{up, base});
+    __syncthreads();
+    if (threadIdx.x < Gemv::kRowsPerCta) {
+        const int row   = static_cast<int>(threadIdx.x);
+        activation[base + row] = __float2bfloat16(silu(gate[row]) * up[row]);
+    }
+}
+
 } // namespace
+
+void flash_next::launch_fp8_moe_entry_decode(const Tensor& x, const Weight& router,
+                                             const Weight& shared_gate, const Weight& shared_up,
+                                             Tensor& scores, Tensor& activation,
+                                             cudaStream_t stream) {
+    const auto fp8 = [](const Weight& weight, int n) {
+        return weight.qtype == QType::FP8_E4M3FN_ROW_BF16 && weight.n == n &&
+               weight.k == kMoeHidden && weight.scales != nullptr;
+    };
+    if (x.ne[1] != 1 || x.ne[0] != kMoeHidden || !fp8(router, kMoeExperts) ||
+        !fp8(shared_gate, kMoeIntermediate) || !fp8(shared_up, kMoeIntermediate) ||
+        scores.numel() != kMoeExperts || activation.numel() != kMoeIntermediate) {
+        throw std::invalid_argument("FP8 MoE entry decode: invalid exact problem");
+    }
+    fp8_moe_entry_decode_kernel<<<kRouterBlocks + kSharedBlocks, Gemv::kThreads, 0, stream>>>(
+        static_cast<const __nv_bfloat16*>(x.data), static_cast<const std::uint8_t*>(router.qdata),
+        static_cast<const __nv_bfloat16*>(router.scales), static_cast<__nv_bfloat16*>(scores.data),
+        static_cast<const std::uint8_t*>(shared_gate.qdata),
+        static_cast<const __nv_bfloat16*>(shared_gate.scales),
+        static_cast<const std::uint8_t*>(shared_up.qdata),
+        static_cast<const __nv_bfloat16*>(shared_up.scales),
+        static_cast<__nv_bfloat16*>(activation.data));
+    CUDA_CHECK(cudaGetLastError());
+}
 
 const Fp8LinearShape kFp8N12288K2560 = flash_next_shape<12288, 2560>();
 const Fp8LinearShape kFp8N10240K2560 = flash_next_shape<10240, 2560>();

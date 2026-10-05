@@ -89,8 +89,9 @@ out_proj, each MoE layer's router and shared-expert gate/up projections, each la
 MLP HyperConnection Down/Up, and the output head. MTP, indexer, GDN control, HyperConnection
 injection and final-mixer weights, shared-expert down (K = 640, no qualified FP8 route) and routed
 expert weights keep their formats, and activations stay BF16. The binder takes each matrix's stored
-format; linear dispatches to the FP8 GEMV, K-split and A16 GEMM routes, the shared-expert decode
-falls back from its fused BF16 kernel to two linears and SiLU-mul, the fused HyperConnection mix
+format; linear dispatches to the FP8 GEMV, K-split and A16 GEMM routes, one-token MoE decode
+computes router scores and the shared-expert SwiGLU in one FP8 grid (larger batches use linears and
+SiLU-mul), the fused HyperConnection mix
 widens FP8 Down/Up codes at its MMA and applies row scales to the sums (its general route widens Up
 to BF16 in workspace), and the proposal-head rerank decodes FP8 head rows. The output basename
 gains `_fp8proj`; with FP8 PLE the artifact occupies 130,608,653,312 bytes.

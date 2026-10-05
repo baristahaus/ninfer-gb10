@@ -92,10 +92,12 @@ __device__ __forceinline__ void accumulate_rows(const Fp8CodePack<Values> (&code
     }
 }
 
+// One CTA's rows of the GEMV. `block` selects the CTA's row range, so fused kernels can host
+// several GEMVs (or other work) in one grid with the production accumulation order.
 template <class Geometry, class Schedule, class Output, class RowPolicy = Fp8GemvIdentityRows,
           bool PairRows = false, class Epilogue = Fp8IdentityEpilogue>
-__global__ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void fp8_gemv_kernel(
-    const __nv_bfloat16* __restrict__ x, const std::uint8_t* __restrict__ weight_codes,
+__device__ __forceinline__ void fp8_gemv_block(
+    int block, const __nv_bfloat16* __restrict__ x, const std::uint8_t* __restrict__ weight_codes,
     const __nv_bfloat16* __restrict__ row_scales, Output output, RowPolicy row_policy = {},
     Epilogue epilogue = {}) {
     constexpr int kValuesPerPhase = kWarpSize * Schedule::kValuesPerLane;
@@ -110,8 +112,7 @@ __global__ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void
 
     const int lane = static_cast<int>(threadIdx.x) & (kWarpSize - 1);
     const int warp = static_cast<int>(threadIdx.x) / kWarpSize;
-    const int row_begin =
-        static_cast<int>(blockIdx.x) * kStoredRowsPerCta + warp * kStoredRowsPerWarp;
+    const int row_begin = block * kStoredRowsPerCta + warp * kStoredRowsPerWarp;
     const auto* activation_pairs = reinterpret_cast<const std::uint32_t*>(x);
     float accumulators[Schedule::kRowsPerWarp][Schedule::kAccumulatorChains] = {};
 
@@ -170,6 +171,16 @@ __global__ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void
             }
         }
     }
+}
+
+template <class Geometry, class Schedule, class Output, class RowPolicy = Fp8GemvIdentityRows,
+          bool PairRows = false, class Epilogue = Fp8IdentityEpilogue>
+__global__ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void fp8_gemv_kernel(
+    const __nv_bfloat16* __restrict__ x, const std::uint8_t* __restrict__ weight_codes,
+    const __nv_bfloat16* __restrict__ row_scales, Output output, RowPolicy row_policy = {},
+    Epilogue epilogue = {}) {
+    fp8_gemv_block<Geometry, Schedule, Output, RowPolicy, PairRows, Epilogue>(
+        static_cast<int>(blockIdx.x), x, weight_codes, row_scales, output, row_policy, epilogue);
 }
 
 } // namespace ninfer::ops::detail

@@ -7,6 +7,7 @@
 #include "ninfer/ops/silu_mul.h"
 #include "ops/linear/bf16/bf16_config.h"
 #include "ops/linear/bf16/bf16_gemm_mma.cuh"
+#include "ops/linear/bf16/flash_next/bf16_gemv.cuh"
 #include "ops/linear/bf16/flash_next/bf16_launch.h"
 #include "ops/linear/fp8/flash_next_launch.h"
 #include "ops/linear/nvfp4/nvfp4_codec.cuh"
@@ -55,11 +56,10 @@ using Bf16GroupedDownGeometry = detail::Bf16Geometry<kHidden, kIntermediate>;
 constexpr int kRouteThreads = 256;
 static_assert(kExperts == 2 * kRouteThreads && kHidden % kRouteThreads == 0);
 
-__global__ void __launch_bounds__(kRouteThreads)
-    route_kernel(const __nv_bfloat16* scores, const __nv_bfloat16* input,
-                 const __nv_bfloat16* shared_scale_weight, int* ids, float* alpha,
-                 float* shared_alpha, int tokens) {
-    const int token   = static_cast<int>(blockIdx.x);
+__device__ __forceinline__ void route_token(const __nv_bfloat16* scores,
+                                            const __nv_bfloat16* input,
+                                            const __nv_bfloat16* shared_scale_weight, int* ids,
+                                            float* alpha, float* shared_alpha, int token) {
     const int lane    = static_cast<int>(threadIdx.x) & 31;
     const int warp    = static_cast<int>(threadIdx.x) >> 5;
     const int expert0 = static_cast<int>(threadIdx.x);
@@ -148,6 +148,57 @@ __global__ void __launch_bounds__(kRouteThreads)
             ids[offset]      = top_ids[rank];
             alpha[offset]    = expf(top_values[rank] - maximum) / denominator;
         }
+    }
+}
+
+__global__ void __launch_bounds__(kRouteThreads)
+    route_kernel(const __nv_bfloat16* scores, const __nv_bfloat16* input,
+                 const __nv_bfloat16* shared_scale_weight, int* ids, float* alpha,
+                 float* shared_alpha, int) {
+    route_token(scores, input, shared_scale_weight, ids, alpha, shared_alpha,
+                static_cast<int>(blockIdx.x));
+}
+
+// One-token decode: CTA 0 routes while the other CTAs compute the shared-expert Down projection
+// [2560,640] from the already available shared activation. Each warp runs one block of the
+// production single-warp BF16 decode schedule, so the output equals that GEMV bit for bit.
+using SharedDownGeometry = detail::flash_next::Bf16GemvGeometry<kHidden, kIntermediate>;
+using SharedDownSchedule = detail::flash_next::Bf16LinearDecodeSchedule<SharedDownGeometry>;
+static_assert(SharedDownSchedule::kWarpsPerCta == 1 && SharedDownSchedule::kWarpsPerRow == 1 &&
+              SharedDownSchedule::kActivationAccess ==
+                  detail::flash_next::Bf16ActivationAccess::Direct);
+constexpr int kSharedDownWarps  = kRouteThreads / 32;
+constexpr int kSharedDownBlocks =
+    kHidden / (SharedDownSchedule::kRowsPerCta * kSharedDownWarps);
+
+__global__ void __launch_bounds__(kRouteThreads)
+    route_shared_down_decode_kernel(const __nv_bfloat16* scores, const __nv_bfloat16* input,
+                                    const __nv_bfloat16* shared_scale_weight, int* ids,
+                                    float* alpha, float* shared_alpha,
+                                    const __nv_bfloat16* __restrict__ shared_activation,
+                                    const __nv_bfloat16* __restrict__ shared_down,
+                                    __nv_bfloat16* __restrict__ destination) {
+    if (blockIdx.x == 0) {
+        route_token(scores, input, shared_scale_weight, ids, alpha, shared_alpha, 0);
+        return;
+    }
+    const int lane = static_cast<int>(threadIdx.x) & 31;
+    const int warp = static_cast<int>(threadIdx.x) >> 5;
+    const int row0 = ((static_cast<int>(blockIdx.x) - 1) * kSharedDownWarps + warp) *
+                     SharedDownSchedule::kRowsPerCta;
+    float accumulators[SharedDownSchedule::kRowsPerWarp][SharedDownSchedule::kAccumulatorChains] =
+        {};
+    detail::flash_next::compute_bf16_gemv_rows<SharedDownGeometry, SharedDownSchedule>(
+        shared_activation, shared_down, row0, 0, lane, accumulators);
+#pragma unroll
+    for (int local_row = 0; local_row < SharedDownSchedule::kRowsPerWarp; ++local_row) {
+        float total = 0.0F;
+#pragma unroll
+        for (int chain = 0; chain < SharedDownSchedule::kAccumulatorChains; ++chain) {
+            total += accumulators[local_row][chain];
+        }
+        total = warp_reduce_sum(total);
+        if (lane == 0) { destination[row0 + local_row] = __float2bfloat16_rn(total); }
     }
 }
 
@@ -754,25 +805,40 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
     Tensor ids          = workspace.alloc(DType::I32, {kTop, tokens});
     Tensor alpha        = workspace.alloc(DType::FP32, {kTop, tokens});
     Tensor shared_alpha = workspace.alloc(DType::FP32, {tokens});
-    route_kernel<<<tokens, kRouteThreads, 0, stream>>>(
-        static_cast<const __nv_bfloat16*>(scores.data),
-        static_cast<const __nv_bfloat16*>(input.data),
-        static_cast<const __nv_bfloat16*>(weights.shared_scale.qdata), static_cast<int*>(ids.data),
-        static_cast<float*>(alpha.data), static_cast<float*>(shared_alpha.data), tokens);
-    if (fp8_entry) {
-        // Already produced by the MoE entry kernel.
-    } else if (tokens == 1 && weights.shared_gate.qtype == QType::BF16 &&
-               weights.shared_up.qtype == QType::BF16) {
-        detail::flash_next::launch_bf16_shared_swiglu_decode(input, weights.shared_gate, weights.shared_up,
-                                                 shared_activation, stream);
+    if (fp8_entry && weights.shared_down.qtype == QType::BF16) {
+        // The entry kernel produced the shared activation; route and shared Down run together.
+        route_shared_down_decode_kernel<<<1 + kSharedDownBlocks, kRouteThreads, 0, stream>>>(
+            static_cast<const __nv_bfloat16*>(scores.data),
+            static_cast<const __nv_bfloat16*>(input.data),
+            static_cast<const __nv_bfloat16*>(weights.shared_scale.qdata),
+            static_cast<int*>(ids.data), static_cast<float*>(alpha.data),
+            static_cast<float*>(shared_alpha.data),
+            static_cast<const __nv_bfloat16*>(shared_activation.data),
+            static_cast<const __nv_bfloat16*>(weights.shared_down.qdata),
+            static_cast<__nv_bfloat16*>(destination.data));
+        CUDA_CHECK(cudaGetLastError());
     } else {
-        Tensor shared_gate = workspace.alloc(DType::BF16, {kIntermediate, tokens});
-        Tensor shared_up   = workspace.alloc(DType::BF16, {kIntermediate, tokens});
-        linear(input, weights.shared_gate, shared_gate, stream, bf16_gemm);
-        linear(input, weights.shared_up, shared_up, stream, bf16_gemm);
-        silu_mul(shared_gate, shared_up, shared_activation, stream);
+        route_kernel<<<tokens, kRouteThreads, 0, stream>>>(
+            static_cast<const __nv_bfloat16*>(scores.data),
+            static_cast<const __nv_bfloat16*>(input.data),
+            static_cast<const __nv_bfloat16*>(weights.shared_scale.qdata),
+            static_cast<int*>(ids.data), static_cast<float*>(alpha.data),
+            static_cast<float*>(shared_alpha.data), tokens);
+        if (fp8_entry) {
+            // Already produced by the MoE entry kernel.
+        } else if (tokens == 1 && weights.shared_gate.qtype == QType::BF16 &&
+                   weights.shared_up.qtype == QType::BF16) {
+            detail::flash_next::launch_bf16_shared_swiglu_decode(
+                input, weights.shared_gate, weights.shared_up, shared_activation, stream);
+        } else {
+            Tensor shared_gate = workspace.alloc(DType::BF16, {kIntermediate, tokens});
+            Tensor shared_up   = workspace.alloc(DType::BF16, {kIntermediate, tokens});
+            linear(input, weights.shared_gate, shared_gate, stream, bf16_gemm);
+            linear(input, weights.shared_up, shared_up, stream, bf16_gemm);
+            silu_mul(shared_gate, shared_up, shared_activation, stream);
+        }
+        linear(shared_activation, weights.shared_down, destination, stream, bf16_gemm);
     }
-    linear(shared_activation, weights.shared_down, destination, stream, bf16_gemm);
     Tensor routed_activation = workspace.alloc(DType::BF16, {kIntermediate, kTop, tokens});
     if (weights.routed_gate_up.qtype == QType::NVFP4 && tokens >= kGroupedFirstToken) {
         if (tokens <= kDecodeGroupedTokenTile) {

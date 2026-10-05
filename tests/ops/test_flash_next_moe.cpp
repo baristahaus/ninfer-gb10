@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <initializer_list>
 #include <iostream>
 #include <vector>
 
@@ -31,12 +32,50 @@ Weight bf16_weight(const DeviceBuffer& storage, int rows, int columns) {
     return out;
 }
 
+// Row-scaled FP8 [rows, kHidden] with unit row scales; `ones`/`twos` list elements set to 1 and 2.
+struct Fp8Rows {
+    DeviceBuffer payload;
+    Weight weight;
+};
+
+Fp8Rows fp8_rows(int rows, std::initializer_list<std::size_t> ones,
+                 std::initializer_list<std::size_t> twos) {
+    const std::size_t codes = static_cast<std::size_t>(rows) * kHidden;
+    const std::size_t offset = (codes + 255) / 256 * 256;
+    std::vector<std::uint8_t> bytes(offset + 2 * static_cast<std::size_t>(rows), 0);
+    for (const std::size_t i : ones) { bytes[i] = 0x38; }  // E4M3 1.0
+    for (const std::size_t i : twos) { bytes[i] = 0x40; }  // E4M3 2.0
+    for (int row = 0; row < rows; ++row) {
+        bytes[offset + 2 * row] = 0x80;  // BF16 1.0 = 0x3F80, little-endian
+        bytes[offset + 2 * row + 1] = 0x3F;
+    }
+    Fp8Rows out{to_device(bytes), {}};
+    Weight& w = out.weight;
+    w.payload = w.qdata = out.payload.p;
+    w.payload_bytes = out.payload.bytes;
+    w.qtype = QType::FP8_E4M3FN_ROW_BF16;
+    w.layout = QuantLayout::RowScale;
+    w.n = w.shape[0] = w.padded_shape[0] = rows;
+    w.k = w.shape[1] = w.padded_shape[1] = kHidden;
+    w.ndim = 2;
+    w.group_size = kHidden;
+    w.group = kHidden;
+    w.scales = static_cast<const std::uint8_t*>(out.payload.p) + offset;
+    w.scale_dtype = DType::BF16;
+    w.scale_ne[0] = rows;
+    w.scale_nb[0] = 2;
+    w.scale_nb[1] = w.scale_nb[2] = w.scale_nb[3] = static_cast<std::int64_t>(rows) * 2;
+    return out;
+}
+
 void store_bf16(DeviceBuffer& storage, std::size_t element, float value) {
     const std::uint16_t bits = f32_to_bf16(value);
     storage.copy_from_host(&bits, sizeof(bits), element * sizeof(bits));
 }
 
-int run() {
+// `fp8` stores the router and shared gate/up as row-scaled FP8 (the one-token entry and fused
+// route/shared-Down route) with the same values.
+int run(bool fp8) {
     std::vector<float> input(static_cast<std::size_t>(kHidden) * kGroupedTokens, 0.0F);
     for (int token = 0; token < kGroupedTokens; ++token) {
         input[static_cast<std::size_t>(token) * kHidden] = 0.5F;
@@ -86,6 +125,9 @@ int run() {
     Tensor scalar_output(d_scalar_output.data(), DType::BF16, {kHidden, 1});
     Tensor grouped_input(d_input.p, DType::BF16, {kHidden, kGroupedTokens});
     Tensor grouped_output(d_grouped_output.data(), DType::BF16, {kHidden, kGroupedTokens});
+    Fp8Rows router_fp8 = fp8_rows(kExperts, {}, {});
+    Fp8Rows gate_fp8 = fp8_rows(kIntermediate, {0}, {});
+    Fp8Rows up_fp8 = fp8_rows(kIntermediate, {}, {1});
     ops::FlashNextMoeWeights weights{
         .router = bf16_weight(d_router, kExperts, kHidden),
         .shared_gate = bf16_weight(d_shared_gate, kIntermediate, kHidden),
@@ -103,6 +145,11 @@ int run() {
                         .rows = kHidden,
                         .columns = kIntermediate},
     };
+    if (fp8) {
+        weights.router = router_fp8.weight;
+        weights.shared_gate = gate_fp8.weight;
+        weights.shared_up = up_fp8.weight;
+    }
     WorkspaceArena scalar_workspace(ops::flash_next_moe_workspace_capacity_bytes(1));
     ops::flash_next_moe(scalar_input, weights, scalar_output, scalar_workspace, nullptr);
     WorkspaceArena grouped_workspace(ops::flash_next_moe_workspace_capacity_bytes(kGroupedTokens));
@@ -134,7 +181,7 @@ int run() {
 int main() {
     if (ninfer::test::cuda_unavailable()) { return 77; }
     try {
-        const int failures = run();
+        const int failures = run(false) + run(true);
         std::cout << (failures == 0 ? "OK" : "FAIL") << " Flash-Next MoE\n";
         return failures == 0 ? 0 : 1;
     } catch (const std::exception& error) {

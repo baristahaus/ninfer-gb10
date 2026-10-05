@@ -1,4 +1,5 @@
-// Flash-Next attention and GDN projections in the optional row-scaled FP8 profile. All routes
+// Flash-Next attention/GDN projections, router, shared-expert gate/up and output head in the optional
+// row-scaled FP8 profile. All routes
 // keep BF16 activations (weight-only FP8): one token uses the GEMV, compact batches (MTP
 // verification, small batches) the K-split Tensor Core kernel, and prefill the A16 GEMM.
 // Schedules were measured on 48 cold weight copies per shape (RTX PRO 6000).
@@ -95,4 +96,6 @@ const Fp8LinearShape kFp8N10240K2560 = flash_next_shape<10240, 2560>();
 const Fp8LinearShape kFp8N6144K2560  = flash_next_shape<6144, 2560>();
 const Fp8LinearShape kFp8N2560K6144  = flash_next_shape<2560, 6144>();
 const Fp8LinearShape kFp8N512K2560   = flash_next_shape<512, 2560>();
+const Fp8LinearShape kFp8N640K2560   = flash_next_shape<640, 2560>();
+const Fp8LinearShape kFp8N248320K2560 = flash_next_shape<248320, 2560>();
 } // namespace ninfer::ops::detail

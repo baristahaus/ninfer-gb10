@@ -74,13 +74,19 @@ void shortlist_exact_argmax_launch(const Tensor& hidden, const Tensor& approxima
         static_cast<std::int32_t*>(candidate_ids.data), shortlist_rows, physical_rows,
         candidate_rows);
     CUDA_CHECK(cudaGetLastError());
-    shortlist_exact_scores_kernel<<<dim3(static_cast<unsigned>(candidate_rows),
-                                          static_cast<unsigned>(tokens)),
-                                   256, 0, stream>>>(
-        static_cast<const __nv_bfloat16*>(hidden.data),
-        static_cast<const __nv_bfloat16*>(exact_head.qdata),
-        static_cast<const std::int32_t*>(candidate_ids.data),
-        static_cast<float*>(candidate_scores.data), hidden.ne[0], candidate_rows);
+    const dim3 score_grid(static_cast<unsigned>(candidate_rows), static_cast<unsigned>(tokens));
+    if (exact_head.qtype == QType::FP8_E4M3FN_ROW_BF16) {
+        shortlist_exact_scores_kernel<true><<<score_grid, 256, 0, stream>>>(
+            static_cast<const __nv_bfloat16*>(hidden.data), exact_head.qdata,
+            static_cast<const __nv_bfloat16*>(exact_head.scales),
+            static_cast<const std::int32_t*>(candidate_ids.data),
+            static_cast<float*>(candidate_scores.data), hidden.ne[0], candidate_rows);
+    } else {
+        shortlist_exact_scores_kernel<false><<<score_grid, 256, 0, stream>>>(
+            static_cast<const __nv_bfloat16*>(hidden.data), exact_head.qdata, nullptr,
+            static_cast<const std::int32_t*>(candidate_ids.data),
+            static_cast<float*>(candidate_scores.data), hidden.ne[0], candidate_rows);
+    }
     CUDA_CHECK(cudaGetLastError());
     shortlist_exact_select_kernel<<<static_cast<unsigned>(tokens), kShortlistRerankTile, 0,
                                     stream>>>(

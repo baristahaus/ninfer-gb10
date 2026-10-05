@@ -234,14 +234,19 @@ TENSOR_SPECS = TEXT_TENSOR_SPECS + MTP_TENSOR_SPECS + VISION_TENSOR_SPECS
 OBJECT_SPECS: tuple[str | TensorSpec, ...] = RESOURCE_SPECS + TENSOR_SPECS
 
 
-# Main-model attention and GDN projections that the 8-bit projection profile stores as
-# row-scaled FP8 (weight-only; MTP, indexer, control, HyperConnection and expert weights keep
-# their formats).
+# Main-model attention and GDN projections, router and shared-expert gate/up projections and the
+# output head, which the 8-bit projection profile stores as row-scaled FP8 (weight-only). MTP,
+# indexer, GDN control, HyperConnection, shared-expert down (K = 640) and routed expert weights keep
+# their formats.
 PROJECTION_NAMES = frozenset(
     [f"model.language_model.layers.{layer}.self_attn.{name}_proj.weight"
      for layer in FULL_ATTENTION_LAYERS for name in ("q", "k", "v", "o")]
     + [f"model.language_model.layers.{layer}.linear_attn.{name}.weight"
        for layer in GDN_LAYERS for name in ("in_proj_qkv", "in_proj_z", "out_proj")]
+    + ["lm_head.weight"]
+    + [f"model.language_model.layers.{layer}.mlp.{name}.weight"
+       for layer in LAYERS
+       for name in ("gate", "shared_expert.gate_proj", "shared_expert.up_proj")]
 )
 
 

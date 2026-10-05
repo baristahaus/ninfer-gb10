@@ -98,11 +98,9 @@ FinalHyperConnectionPlan bind_final_hc(artifact::Binder& binder, const std::stri
 
 MoePlan bind_main_moe(artifact::Binder& binder, const std::string& prefix) {
     return {
-        .router = device(binder, prefix + "gate.weight", QType::BF16, {512, 2560}),
-        .shared_gate =
-            device(binder, prefix + "shared_expert.gate_proj.weight", QType::BF16, {640, 2560}),
-        .shared_up =
-            device(binder, prefix + "shared_expert.up_proj.weight", QType::BF16, {640, 2560}),
+        .router      = projection(binder, prefix + "gate.weight", {512, 2560}),
+        .shared_gate = projection(binder, prefix + "shared_expert.gate_proj.weight", {640, 2560}),
+        .shared_up   = projection(binder, prefix + "shared_expert.up_proj.weight", {640, 2560}),
         .shared_down =
             device(binder, prefix + "shared_expert.down_proj.weight", QType::BF16, {2560, 640}),
         .shared_scale =
@@ -305,7 +303,7 @@ ArtifactLoadPlan plan_artifact(artifact::Binder& binder,
         target.moe    = bind_main_moe(binder, prefix + "mlp.");
     }
     out.bindings.final_hc = bind_final_hc(binder, "model.language_model.hyper_connection_mixer.");
-    out.bindings.output_head = device(binder, "lm_head.weight", QType::BF16, {248320, 2560});
+    out.bindings.output_head = projection(binder, "lm_head.weight", {248320, 2560});
     const Placement proposal_placement =
         features.optimized_proposal() ? Placement::Device : Placement::Disabled;
     out.bindings.optimized_proposal_head =

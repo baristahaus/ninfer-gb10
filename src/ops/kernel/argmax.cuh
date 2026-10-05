@@ -7,6 +7,7 @@
 // winner selects the exact value/lower-id maximum per column.
 
 #include <cuda_bf16.h>
+#include <cuda_fp8.h>
 #include <cstdint>
 #include <climits>
 #include <math_constants.h>
@@ -157,8 +158,11 @@ __launch_bounds__(kShortlistRerankTile) __global__ void shortlist_tile_candidate
     }
 }
 
+// Exact head scores for the shortlist candidates. A BF16 head row is read directly; a row-scaled
+// FP8 head row decodes each E4M3 code and applies the row's BF16 scale once to the dot product.
+template <bool Fp8Rows>
 __launch_bounds__(256) __global__ void shortlist_exact_scores_kernel(
-    const __nv_bfloat16* hidden, const __nv_bfloat16* exact_head,
+    const __nv_bfloat16* hidden, const void* exact_head, const __nv_bfloat16* row_scales,
     const std::int32_t* candidate_ids, float* candidate_scores, std::int32_t hidden_rows,
     std::int32_t candidate_rows) {
     const int candidate = static_cast<int>(blockIdx.x);
@@ -167,10 +171,20 @@ __launch_bounds__(256) __global__ void shortlist_exact_scores_kernel(
                                          candidate;
     const int token_id = candidate_ids[candidate_index];
     const __nv_bfloat16* x = hidden + static_cast<std::int64_t>(token) * hidden_rows;
-    const __nv_bfloat16* weight = exact_head + static_cast<std::int64_t>(token_id) * hidden_rows;
     float sum = 0.0F;
-    for (int k = static_cast<int>(threadIdx.x); k < hidden_rows; k += blockDim.x) {
-        sum = fmaf(__bfloat162float(x[k]), __bfloat162float(weight[k]), sum);
+    if constexpr (Fp8Rows) {
+        const auto* codes = static_cast<const __nv_fp8_e4m3*>(exact_head) +
+                            static_cast<std::int64_t>(token_id) * hidden_rows;
+        for (int k = static_cast<int>(threadIdx.x); k < hidden_rows; k += blockDim.x) {
+            sum = fmaf(__bfloat162float(x[k]), static_cast<float>(codes[k]), sum);
+        }
+        sum *= __bfloat162float(row_scales[token_id]);
+    } else {
+        const auto* weight = static_cast<const __nv_bfloat16*>(exact_head) +
+                             static_cast<std::int64_t>(token_id) * hidden_rows;
+        for (int k = static_cast<int>(threadIdx.x); k < hidden_rows; k += blockDim.x) {
+            sum = fmaf(__bfloat162float(x[k]), __bfloat162float(weight[k]), sum);
+        }
     }
     __shared__ float partial[256];
     partial[threadIdx.x] = sum;

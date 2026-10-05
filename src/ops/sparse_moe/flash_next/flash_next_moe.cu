@@ -748,7 +748,8 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
         static_cast<const __nv_bfloat16*>(weights.shared_scale.qdata), static_cast<int*>(ids.data),
         static_cast<float*>(alpha.data), static_cast<float*>(shared_alpha.data), tokens);
     Tensor shared_activation = workspace.alloc(DType::BF16, {kIntermediate, tokens});
-    if (tokens == 1) {
+    if (tokens == 1 && weights.shared_gate.qtype == QType::BF16 &&
+        weights.shared_up.qtype == QType::BF16) {
         detail::flash_next::launch_bf16_shared_swiglu_decode(input, weights.shared_gate, weights.shared_up,
                                                  shared_activation, stream);
     } else {

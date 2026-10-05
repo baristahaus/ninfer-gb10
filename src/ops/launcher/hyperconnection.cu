@@ -539,6 +539,12 @@ __global__ void __launch_bounds__(kNormThreads, 1) fused_mix_decode_kernel(Fused
     };
     uint4 bits[kDownChunks];
     load_down(slice, bits);  // independent of the activations: issue before the setup
+    // Row scale of the reducing thread's Down row, also issued before the setup.
+    const auto load_down_scale = [&](int tile) {
+        const int row = tile * 8 + tid / 8;
+        return Fp8 && tid < 64 && row < kRank ? p.down_scales[row] : __float2bfloat16_rn(1.0F);
+    };
+    __nv_bfloat16 down_scale = load_down_scale(slice);
 
     const int columns_per_cta = (kHidden + static_cast<int>(gridDim.x) - 1) / gridDim.x;
     const int column_begin    = static_cast<int>(blockIdx.x) * columns_per_cta;
@@ -626,7 +632,10 @@ __global__ void __launch_bounds__(kNormThreads, 1) fused_mix_decode_kernel(Fused
     // Lane-segment partial dots: eight rows per tile, K split across the eight warps and reduced
     // in a fixed order.
     for (int tile = slice; tile * 8 < rows; tile += slices) {
-        if (tile != slice) load_down(tile, bits);
+        if (tile != slice) {
+            load_down(tile, bits);
+            down_scale = load_down_scale(tile);
+        }
         const bool codes = Fp8 && tile * 8 < kRank;
         float c[4] = {};
 #pragma unroll
@@ -649,7 +658,7 @@ __global__ void __launch_bounds__(kNormThreads, 1) fused_mix_decode_kernel(Fused
             float sum       = 0.0F;
 #pragma unroll
             for (int w = 0; w < kFusedWarps; ++w) sum += tile_shared[w][tid / 8][token];
-            if (Fp8 && row < kRank) sum *= __bfloat162float(p.down_scales[row]);
+            if (Fp8) sum *= __bfloat162float(down_scale);
             if (row < rows && token < Tokens)
                 p.partials[(token * kProjectionRows + row) * kStreams + stream] = sum;
         }
@@ -661,8 +670,9 @@ __global__ void __launch_bounds__(kNormThreads, 1) fused_mix_decode_kernel(Fused
     const int up_tile = warp >> 1;
     const int up_half = warp & 1;
     uint4 up_top[kUpChunks], up_bottom[kUpChunks];
-    float up_scale_top = 1.0F, up_scale_bottom = 1.0F;
-    const auto load_up = [&](int up_row, uint4 (&out)[kUpChunks], float& scale) {
+    // Raw BF16 row scales: their loads stay in flight across the grid barrier.
+    __nv_bfloat16 up_scale_top = __float2bfloat16_rn(1.0F), up_scale_bottom = up_scale_top;
+    const auto load_up = [&](int up_row, uint4 (&out)[kUpChunks], __nv_bfloat16& scale) {
         if (up_row >= up_rows) {
 #pragma unroll
             for (int c = 0; c < kUpChunks; ++c) out[c] = make_uint4(0, 0, 0, 0);
@@ -675,7 +685,7 @@ __global__ void __launch_bounds__(kNormThreads, 1) fused_mix_decode_kernel(Fused
             const auto* codes = static_cast<const std::uint8_t*>(p.up) + offset;
 #pragma unroll
             for (int c = 0; c < kUpChunks; ++c) out[c] = load_streaming_codes(codes + 32 * c);
-            scale = __bfloat162float(p.up_scales[global_row]);
+            scale = p.up_scales[global_row];
         } else {
             const auto* weight = static_cast<const __nv_bfloat16*>(p.up) + offset;
 #pragma unroll
@@ -753,10 +763,12 @@ __global__ void __launch_bounds__(kNormThreads, 1) fused_mix_decode_kernel(Fused
             }
         }
         if constexpr (Fp8) {
-            c[0] *= up_scale_top;
-            c[1] *= up_scale_top;
-            c[2] *= up_scale_bottom;
-            c[3] *= up_scale_bottom;
+            const float top    = __bfloat162float(up_scale_top);
+            const float bottom = __bfloat162float(up_scale_bottom);
+            c[0] *= top;
+            c[1] *= top;
+            c[2] *= bottom;
+            c[3] *= bottom;
         }
         float* sums = up_sums + up_half * 64 * 8;
         const int row = up_tile * 16 + group;

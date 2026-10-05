@@ -202,6 +202,14 @@ struct Bf16LinearSmallTProductionSchedule<Bf16GemvGeometry<320, 10240>, ActiveTo
         Bf16WeightCache::Streaming, Bf16PhaseOrder::Sequential, 1, 1, 1, 1>;
 };
 
+// QSA index key: split rows across warps so the 128-row projection spans 64 CTAs.
+template <int ActiveTokens>
+struct Bf16LinearSmallTProductionSchedule<Bf16GemvGeometry<128, 2560>, ActiveTokens> {
+    using Type = Bf16SmallTInnerSchedule<
+        8, 4, 1, 4, 4, 4, Bf16SmallTActivationAccess::WarpPacked,
+        Bf16WeightCache::Streaming, Bf16PhaseOrder::Sequential, 1, 1, 1, 1>;
+};
+
 template <int ActiveTokens>
 struct Bf16LinearSmallTProductionSchedule<Bf16GemvGeometry<512, 2560>, ActiveTokens> {
     using Type = Bf16SmallTInnerSchedule<

@@ -274,7 +274,8 @@ int run_bf16_linear() {
     for (const auto [rows, columns] : {std::pair{320, 10240}, std::pair{10240, 320},
                                       std::pair{10240, 2560}, std::pair{6144, 2560},
                                       std::pair{2560, 6144}, std::pair{512, 2560},
-                                      std::pair{640, 2560}, std::pair{2560, 640}}) {
+                                      std::pair{640, 2560}, std::pair{2560, 640},
+                                      std::pair{128, 2560}}) {
         DeviceWeight weight(make_patterned(rows, columns, 431U));
         for (int tokens : {1, 2, 8, 17}) {
             failures += run_bf16_linear_case(weight, tokens);

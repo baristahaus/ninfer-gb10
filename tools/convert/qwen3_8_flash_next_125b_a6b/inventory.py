@@ -18,6 +18,8 @@ I32 = "int32"
 CONTIGUOUS = "contiguous_le_v1"
 ROW_SPLIT = "row_split_k128_v1"
 EXPERT_NVFP4 = "expert_block_scale_k16_m128x4_v1"
+FP8_ROW = "fp8_e4m3fn_row_bf16"
+ROW_SCALE = "row_scale_v1"
 
 LAYERS = tuple(range(48))
 FULL_ATTENTION_LAYERS = tuple(range(3, 48, 4))
@@ -232,18 +234,40 @@ TENSOR_SPECS = TEXT_TENSOR_SPECS + MTP_TENSOR_SPECS + VISION_TENSOR_SPECS
 OBJECT_SPECS: tuple[str | TensorSpec, ...] = RESOURCE_SPECS + TENSOR_SPECS
 
 
-def object_specs(ple_format: str = FP8) -> tuple[str | TensorSpec, ...]:
+# Main-model attention and GDN projections that the 8-bit projection profile stores as
+# row-scaled FP8 (weight-only; MTP, indexer, control, HyperConnection and expert weights keep
+# their formats).
+PROJECTION_NAMES = frozenset(
+    [f"model.language_model.layers.{layer}.self_attn.{name}_proj.weight"
+     for layer in FULL_ATTENTION_LAYERS for name in ("q", "k", "v", "o")]
+    + [f"model.language_model.layers.{layer}.linear_attn.{name}.weight"
+       for layer in GDN_LAYERS for name in ("in_proj_qkv", "in_proj_z", "out_proj")]
+)
+
+
+def object_specs(ple_format: str = FP8, projection_format: str = BF16) -> tuple[str | TensorSpec, ...]:
+    if projection_format not in (BF16, FP8_ROW):
+        raise ValueError(f"unsupported projection format: {projection_format}")
     if ple_format == FP8:
-        return OBJECT_SPECS
-    if ple_format != BF16:
+        specs = OBJECT_SPECS
+    elif ple_format == BF16:
+        prefix = "model.language_model.layers.1.ple.ple_embedding.ngram_embedding."
+        specs = tuple(
+            direct(spec.id, spec.shape, BF16)
+            if isinstance(spec, TensorSpec) and spec.id == prefix + "weight"
+            else spec
+            for spec in OBJECT_SPECS
+            if not isinstance(spec, TensorSpec) or spec.id != prefix + "weight_scale"
+        )
+    else:
         raise ValueError(f"unsupported PLE format: {ple_format}")
-    prefix = "model.language_model.layers.1.ple.ple_embedding.ngram_embedding."
+    if projection_format == BF16:
+        return specs
     return tuple(
-        direct(spec.id, spec.shape, BF16)
-        if isinstance(spec, TensorSpec) and spec.id == prefix + "weight"
+        TensorSpec(spec.id, spec.shape, FP8_ROW, ROW_SCALE)
+        if isinstance(spec, TensorSpec) and spec.id in PROJECTION_NAMES
         else spec
-        for spec in OBJECT_SPECS
-        if not isinstance(spec, TensorSpec) or spec.id != prefix + "weight_scale"
+        for spec in specs
     )
 
 
@@ -255,6 +279,8 @@ __all__ = [
     "MODEL_ID",
     "MTP_TENSOR_SPECS",
     "OBJECT_SPECS",
+    "PROJECTION_NAMES",
+    "FP8_ROW",
     "object_specs",
     "RESOURCE_SPECS",
     "TARGET_KEY",

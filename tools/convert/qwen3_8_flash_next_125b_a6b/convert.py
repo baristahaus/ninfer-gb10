@@ -22,9 +22,11 @@ from tools.artifact.writer import ArtifactWriter
 from tools.artifact.reader import Artifact
 from tools.artifact.schema import ResourceSpec, plan_objects
 from tools.artifact.codecs.direct import encode_direct
+from tools.artifact.codecs.fp8_row import encode_fp8_row_scaled
 from tools.artifact.codecs.nvfp4 import swizzle_nvfp4_scales
 from tools.artifact.codecs.row_split import encode_row_split
 from tools.convert.sources.safetensors import SafetensorsSource, TensorInfo
+from tools.convert.quantization.fp8_row import quantize_bf16_rows
 from tools.convert.quantization.groupwise import pick_device, quantize_matrix
 from . import draft_head, inventory, descriptor, vision
 
@@ -58,6 +60,7 @@ _PLE_PREFIX = (
     "model.language_model.layers.1.ple.ple_embedding.ngram_embedding."
 )
 _PLE_TABLE = _PLE_PREFIX + "weight"
+_PLE_SCALE = _PLE_PREFIX + "weight_scale"
 _PLE_SHARDS = tuple(_PLE_PREFIX + f"shard_{part}.weight" for part in range(128))
 _PLE_METADATA = frozenset(
     {
@@ -334,13 +337,42 @@ def _input_divisors(reader: SafetensorsSource, layer: int, role: str) -> bytes:
     return encode_direct(values, inventory.FP32)
 
 
-def _ple_payload(reader: SafetensorsSource, ple_format: str) -> Iterator[bytes]:
+def _ple_shard(reader: SafetensorsSource, name: str, source_format: str) -> torch.Tensor:
+    tensor = read_tensor(reader, name)
+    dtype = torch.bfloat16 if source_format == inventory.BF16 else torch.float8_e4m3fn
+    if tensor.dtype != dtype or tuple(tensor.shape) != (2_500_012, 160):
+        raise ValueError(f"{name}: PLE shard signature mismatch")
+    return tensor
+
+
+def _ple_fp8_scale(reader: SafetensorsSource) -> tuple[torch.Tensor, float]:
+    """Per-table BF16 scale for quantizing a BF16 PLE table to FP8 E4M3.
+
+    amax / 448 rounded up to the next BF16 value, so no element saturates.
+    """
+    amax = 0.0
     for name in _PLE_SHARDS:
-        tensor = read_tensor(reader, name)
-        dtype = torch.bfloat16 if ple_format == inventory.BF16 else torch.float8_e4m3fn
-        if tensor.dtype != dtype or tuple(tensor.shape) != (2_500_012, 160):
-            raise ValueError(f"{name}: PLE shard signature mismatch")
-        yield encode_direct(tensor, ple_format)
+        amax = max(amax, read_tensor(reader, name).abs().max().float().item())
+    if not amax > 0.0:
+        raise ValueError("PLE table has no nonzero values")
+    exact = amax / 448.0
+    scale = torch.tensor(exact).to(torch.bfloat16)
+    if scale.float().item() < exact:
+        scale = torch.nextafter(scale.float(), torch.tensor(float("inf"))).to(torch.bfloat16)
+        while scale.float().item() < exact:
+            scale = torch.tensor(scale.float().item() * (1.0 + 2.0 ** -8)).to(torch.bfloat16)
+    return scale.reshape(1), amax
+
+
+def _ple_payload(reader: SafetensorsSource, source_format: str, ple_format: str,
+                 scale: torch.Tensor | None) -> Iterator[bytes]:
+    for name in _PLE_SHARDS:
+        tensor = _ple_shard(reader, name, source_format)
+        if source_format == ple_format:
+            yield encode_direct(tensor, ple_format)
+        else:
+            codes = (tensor.float() / scale.float()).to(torch.float8_e4m3fn)
+            yield encode_direct(codes, ple_format)
 
 
 def _payload(
@@ -349,6 +381,8 @@ def _payload(
     device: torch.device,
     draft: draft_head.DraftHeadContext,
     ple_format: str = inventory.FP8,
+    source_ple_format: str = inventory.FP8,
+    ple_scale: torch.Tensor | None = None,
 ) -> bytes | Iterable[bytes]:
     if spec.id == _DRAFT_HEAD_IDS:
         return encode_direct(draft_head.materialize_draft_head_token_ids(draft), inventory.I32)
@@ -357,7 +391,9 @@ def _payload(
         selected = draft_head.materialize_draft_head(full_head, draft)
         return encode_tensor_payload(selected, spec, device)
     if spec.id == _PLE_TABLE:
-        return _ple_payload(reader, ple_format)
+        return _ple_payload(reader, source_ple_format, ple_format, ple_scale)
+    if spec.id == _PLE_SCALE and ple_scale is not None:
+        return encode_direct(ple_scale, inventory.BF16)
     for layer in inventory.LAYERS:
         prefix = _bank_name(layer, "")
         if spec.id == prefix + "gate_up":
@@ -372,6 +408,11 @@ def _payload(
         value = read_tensor(reader, _VISION_BY_NAME[spec.id]).reshape(spec.shape)
         return encode_tensor_payload(value, spec, device)
     tensor = read_tensor(reader, spec.id)
+    if spec.format == inventory.FP8_ROW:
+        if tuple(tensor.shape) != spec.shape or tensor.dtype != torch.bfloat16:
+            raise ValueError(f"{spec.id}: projection source signature mismatch")
+        encoded = quantize_bf16_rows(tensor)
+        return encode_fp8_row_scaled(encoded.codes, encoded.scales, spec.shape)
     expected_shape = (10240, 1, 4) if spec.id in _CONVOLUTION_NAMES else spec.shape
     if tuple(tensor.shape) != expected_shape or tensor.dtype != torch.bfloat16:
         raise ValueError(f"{spec.id}: direct source signature mismatch")
@@ -388,25 +429,48 @@ def convert(
     *,
     device: str | torch.device = "cuda",
     source_profile: str = "radixark",
+    ple_format: str | None = None,
+    projection_format: str = inventory.BF16,
 ) -> Path:
+    """Convert one source profile.
+
+    `ple_format` optionally re-encodes a BF16 PLE table as FP8; `projection_format` optionally
+    stores the main-model attention and GDN projections as weight-only row-scaled FP8.
+    """
     source = Path(model_dir)
     output = Path(out_path)
-    source_repository, output_basename, ple_format = SOURCE_PROFILES[source_profile]
+    source_repository, output_basename, source_ple_format = SOURCE_PROFILES[source_profile]
+    ple_format = ple_format or source_ple_format
+    variant = ""
+    if ple_format != source_ple_format:
+        if (source_ple_format, ple_format) != (inventory.BF16, inventory.FP8):
+            raise ValueError("only a BF16 PLE source can be re-encoded, and only to FP8")
+        variant = "_fp8ple"
+    if projection_format == inventory.FP8_ROW:
+        variant += "_fp8proj"
+    elif projection_format != inventory.BF16:
+        raise ValueError(f"unsupported projection format: {projection_format}")
+    if variant:
+        output_basename = output_basename.removesuffix(".ninfer") + variant + ".ninfer"
     if output.name != output_basename:
         raise ValueError(f"output basename must be {output_basename!r}")
     started = time.perf_counter()
     resolved_device = pick_device(device)
-    config_summary = _validate_config(source, ple_format)
+    config_summary = _validate_config(source, source_ple_format)
     resource_map = {name: (source / name.removeprefix("frontend/")).read_bytes()
                     for name in inventory.RESOURCE_SPECS}
-    object_specs = inventory.object_specs(ple_format)
+    object_specs = inventory.object_specs(ple_format, projection_format)
     specs = [ResourceSpec(name, len(data)) for name, data in resource_map.items()] + [
         spec for spec in object_specs if isinstance(spec, inventory.TensorSpec)]
     objects = plan_objects(specs)
     description = descriptor.describe([o.to_json() for o in objects])
 
     with SafetensorsSource(source) as reader:
-        _, dtype_counts = _validate_source(reader, ple_format)
+        _, dtype_counts = _validate_source(reader, source_ple_format)
+        ple_scale = ple_amax = None
+        if ple_format != source_ple_format:
+            ple_scale, ple_amax = _ple_fp8_scale(reader)
+            print(f"PLE FP8 scale {ple_scale.float().item():.9g} (amax {ple_amax:.9g})", flush=True)
         draft = draft_head.compute_shortlist(
             Path(__file__).resolve().parents[3] / draft_head.DEFAULT_RANKING,
             source,
@@ -418,14 +482,16 @@ def convert(
             output,
             specs, **description,
             metadata={"name": source_repository if source_profile == "swift" else inventory.MODEL_ID},
-            provenance={"source": source_repository, "recipe": RECIPE_ID + "-" + source_profile},
+            provenance={"source": source_repository,
+                        "recipe": RECIPE_ID + "-" + source_profile + variant.replace("_", "-")},
             random_access_objects=(_PLE_TABLE,),
         ) as writer:
             for index, spec in enumerate(object_specs, start=1):
                 payload = (
                     resource_map[spec]
                     if isinstance(spec, str)
-                    else _payload(spec, reader, resolved_device, draft, ple_format)
+                    else _payload(spec, reader, resolved_device, draft, ple_format,
+                                  source_ple_format, ple_scale)
                 )
                 writer.write_object(spec if isinstance(spec, str) else spec.id, payload)
                 print(f"[{index}/{len(object_specs)}] {spec if isinstance(spec, str) else spec.id}", flush=True)
@@ -447,6 +513,10 @@ def convert(
         "conversion_device": str(resolved_device),
         "ple_materialization": "file-backed-read-only",
         "ple_format": ple_format,
+        "projection_format": projection_format,
+        **({"ple_quantization": {
+            "method": "round-to-nearest FP8 E4M3, per-table BF16 scale = amax/448 rounded up",
+            "scale": ple_scale.float().item(), "amax": ple_amax}} if ple_scale is not None else {}),
         "proposal_shortlist": "frequency-rank-plus-lm-head-norm-rank",
     }
     report_path = Path(str(output) + ".conversion.json")
@@ -461,8 +531,14 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--source-profile", choices=SOURCE_PROFILES, default="radixark")
+    parser.add_argument("--ple-format", choices=(inventory.BF16, inventory.FP8), default=None,
+                        help="re-encode a BF16 PLE source table as FP8 (default: source format)")
+    parser.add_argument("--projection-format", choices=(inventory.BF16, inventory.FP8_ROW),
+                        default=inventory.BF16,
+                        help="store attention/GDN projections as weight-only row-scaled FP8")
     args = parser.parse_args(argv)
-    convert(args.model, args.out, device=args.device, source_profile=args.source_profile)
+    convert(args.model, args.out, device=args.device, source_profile=args.source_profile,
+            ple_format=args.ple_format, projection_format=args.projection_format)
 
 
 if __name__ == "__main__":

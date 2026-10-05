@@ -76,6 +76,13 @@ python3 -m tools.convert.qwen3_8_flash_next_125b_a6b.convert \
   --device cpu
 ```
 
+`--ple-format fp8_e4m3fn` instead re-encodes Swift's BF16 PLE table as FP8 E4M3 with one BF16
+table scale (the table max-abs over 448, rounded up so no value saturates; round-to-nearest codes).
+The table halves to 51.2 GB, which a 128 GB host can keep resident in the page cache; the output
+basename gains `_fp8ple`. On the oracle fixtures the re-encoded table moves generated-token
+log-probabilities by 0.005-0.074 on average with perplexity changes of -1.0% to +0.5%, and MTP3
+acceptance is unchanged (2.06 tokens per round).
+
 Keep the entry file and all `.part-NNNN` companions together. The runtime selects PLE storage
 from the artifact's table descriptor, not the checkpoint name.
 

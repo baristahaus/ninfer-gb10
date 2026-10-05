@@ -123,6 +123,15 @@ void launch_rmsnorm(const Tensor& x, const Tensor& weight, const Tensor* z, Tens
                 reinterpret_cast<const __nv_bfloat162*>(w_bf16),
                 reinterpret_cast<const __nv_bfloat162*>(z_bf16),
                 reinterpret_cast<__nv_bfloat162*>(out_bf16), d, rows, eps);
+    } else if (aligned2 && d > 8192 && d <= 16384 && d % 2048 == 0) {
+        // Four-lane residual rows (Flash-Next MTP hidden, 10240): one 1024-thread CTA per row
+        // keeps the generic kernel's single-CTA latency from dominating one-token rows.
+        rmsnorm_cta_bf16x2_kernel<Epilogue, 1024, 8, true>
+            <<<static_cast<unsigned int>(rows), 1024, 0, stream>>>(
+                reinterpret_cast<const __nv_bfloat162*>(x_bf16),
+                reinterpret_cast<const __nv_bfloat162*>(w_bf16),
+                reinterpret_cast<const __nv_bfloat162*>(z_bf16),
+                reinterpret_cast<__nv_bfloat162*>(out_bf16), d, rows, eps);
     } else {
         rmsnorm_generic_kernel<Epilogue><<<static_cast<unsigned int>(rows), 256, 0, stream>>>(
             x_bf16, w_bf16, z_bf16, out_bf16, d, rows, eps);

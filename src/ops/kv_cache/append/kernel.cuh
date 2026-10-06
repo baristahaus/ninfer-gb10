@@ -139,42 +139,8 @@ __launch_bounds__(256) __global__
     const int page_off              = position & kPagedKVPageMask;
     page                            = __shfl_sync(FullMask, page, 0);
 
-    float k_values[8];
-#pragma unroll
-    for (int r = 0; r < 8; ++r) {
-        const int d = lane + 32 * r;
-        k_values[r] =
-            __bfloat162float(k[kv_cache_int8_quant_src_index<Geometry>(kv_head, d, token)]);
-    }
-    normalized_hadamard_d256_inplace(k_values, lane);
-
-#pragma unroll
-    for (int group = 0; group < kKVCacheInt8Groups; ++group) {
-        const int d0                 = group * kKVCacheInt8Group + lane;
-        const int d1                 = d0 + 32;
-        const float k0               = k_values[2 * group];
-        const float k1               = k_values[2 * group + 1];
-        const std::int64_t src0      = kv_cache_int8_quant_src_index<Geometry>(kv_head, d0, token);
-        const std::int64_t src1      = kv_cache_int8_quant_src_index<Geometry>(kv_head, d1, token);
-        const float v0               = __bfloat162float(v[src0]);
-        const float v1               = __bfloat162float(v[src1]);
-        const float k_abs            = warp_max(fmaxf(fabsf(k0), fabsf(k1)), FullMask);
-        const float v_abs            = warp_max(fmaxf(fabsf(v0), fabsf(v1)), FullMask);
-        const auto k_quant           = kv_cache_int8_quant_params(k_abs);
-        const auto v_quant           = kv_cache_int8_quant_params(v_abs);
-        const std::int64_t code_base = kv_cache_int8_quant_code_index<Geometry>(
-            page, kv_head, group * kKVCacheInt8Group, page_off);
-        cache_k[code_base + lane]      = kv_cache_int8_quant_code(k0, k_quant.inverse_scale);
-        cache_k[code_base + lane + 32] = kv_cache_int8_quant_code(k1, k_quant.inverse_scale);
-        cache_v[code_base + lane]      = kv_cache_int8_quant_code(v0, v_quant.inverse_scale);
-        cache_v[code_base + lane + 32] = kv_cache_int8_quant_code(v1, v_quant.inverse_scale);
-        if (lane == 0) {
-            const std::int64_t scale_off =
-                kv_cache_int8_quant_scale_index<Geometry>(page, kv_head, group, page_off);
-            scale_k[scale_off] = k_quant.scale;
-            scale_v[scale_off] = v_quant.scale;
-        }
-    }
+    kv_cache_append_full_int8_row<Geometry>(k, v, cache_k, cache_v, scale_k, scale_v, token,
+                                            kv_head, page, page_off, lane);
 }
 
 template <typename Geometry, typename Metadata>

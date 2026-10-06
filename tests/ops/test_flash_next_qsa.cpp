@@ -198,6 +198,53 @@ int run(int kPrefillTokens) {
         ++failures;
     }
 
+    // The INT8 profile stores four 64-value group scales per row; V=0.5 is exact in it as well.
+    DeviceBuffer d_int8_k_pages(static_cast<std::size_t>(kHeadDim) * 64 * 2 * kCachePages);
+    DeviceBuffer d_int8_v_pages(static_cast<std::size_t>(kHeadDim) * 64 * 2 * kCachePages);
+    DeviceBuffer d_int8_k_scales(static_cast<std::size_t>(4) * 64 * 2 * kCachePages *
+                                 sizeof(std::uint16_t));
+    DeviceBuffer d_int8_v_scales(static_cast<std::size_t>(4) * 64 * 2 * kCachePages *
+                                 sizeof(std::uint16_t));
+    d_int8_k_pages.fill();
+    d_int8_v_pages.fill();
+    d_int8_k_scales.fill();
+    d_int8_v_scales.fill();
+    PagedKVBatchLayerView int8_cache{
+        .k_pages = Tensor(d_int8_k_pages.p, DType::I8, {kHeadDim, 64, 2, kCachePages}),
+        .v_pages = Tensor(d_int8_v_pages.p, DType::I8, {kHeadDim, 64, 2, kCachePages}),
+        .k_scale_pages = Tensor(d_int8_k_scales.p, DType::FP16, {4, 64, 2, kCachePages}),
+        .v_scale_pages = Tensor(d_int8_v_scales.p, DType::FP16, {4, 64, 2, kCachePages}),
+        .block_tables = Tensor(d_table.p, DType::I32, {kCachePages, 1}),
+        .auxiliary_pages = {
+            Tensor(d_raw_pages.p, DType::BF16, {128, 64, kCachePages, 1}),
+            Tensor(d_position_pages.p, DType::I32, {3, 64, kCachePages, 1}),
+        },
+        .head_dim = kHeadDim,
+        .num_kv_heads = 2,
+        .storage = KvCacheStorage::Int8Group64,
+    };
+    d_destination.fill();
+    workspace.reset();
+    ops::flash_next_qsa(
+        input_tensor, Tensor(d_cache_positions.p, DType::I32, {1, 1}),
+        Tensor(d_rope_positions.p, DType::I32, {1, 1, 3}),
+        Tensor(d_valid.p, DType::I32, {1}), Tensor(d_rows.p, DType::I32, {1}), weights,
+        int8_cache, {.min_visible_keys = 1, .max_visible_keys = 1}, destination, workspace,
+        nullptr);
+    cuda_synchronize();
+    failures += verify_pointwise("Flash-Next QSA INT8 one-token attention",
+                                 from_device_bf16(d_destination.data(), kHidden), expected,
+                                 {/*absolute*/ 4.0e-3, /*relative*/ 2.0e-2});
+    failures += d_destination.verify_guards("Flash-Next QSA INT8 destination");
+    std::int8_t cached_int8_value = 0;
+    std::uint16_t cached_int8_scale = 0;
+    d_int8_v_pages.copy_to_host(&cached_int8_value, sizeof(cached_int8_value));
+    d_int8_v_scales.copy_to_host(&cached_int8_scale, sizeof(cached_int8_scale));
+    if (cached_int8_value != 127 || cached_int8_scale == 0) {
+        std::cerr << "Flash-Next QSA did not commit its projected value to the INT8 cache\n";
+        ++failures;
+    }
+
     // Complete the first index group and verify the persistent BF16 compression boundary.  The
     // first call already stored raw key [1,0,...] at position zero.
     for (int position = 1; position < 3; ++position) {

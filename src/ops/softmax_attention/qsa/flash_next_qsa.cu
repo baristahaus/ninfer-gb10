@@ -10,6 +10,7 @@
 #include "ops/softmax_attention/dense/causal_cache/prompt_common.cuh"
 #include "ops/linear/bf16/flash_next/bf16_launch.h"
 #include "ops/kv_cache/fp8_e4m3_row_codec.cuh"
+#include "ops/kv_cache/int8_g64_codec.cuh"
 #include "ops/kv_cache/hadamard_d256.cuh"
 
 #include <cuda_bf16.h>
@@ -46,6 +47,74 @@ constexpr int kTopkBlockItems = kTopkBlockThreads * kTopkItemsPerThread;
 struct FlashQsaKVGeometry {
     static constexpr int KVHeads = kKvHeads;
 };
+
+// Stored representation of the paged primary K/V cache. FP8 and INT8 keys are stored after the
+// normalized D256 Hadamard rotation; queries are rotated to match.
+enum class KvCode : std::uint8_t { Bf16, Fp8, Int8 };
+
+// Eight quantized codes of one paged K/V row and the scale that applies to them.
+// The scale stays raw FP16 so its load remains in flight until the codes are decoded.
+struct KvCodes8 {
+    uint2 codes;
+    __half scale;
+};
+
+template <KvCode Code>
+__device__ __forceinline__ KvCodes8 load_kv_codes8(const void* pages, const __half* scales,
+                                                   std::int64_t row, int d) {
+    static_assert(Code != KvCode::Bf16);
+    const std::int64_t offset = d + static_cast<std::int64_t>(kHeadDim) * row;
+    const std::int64_t scale  = Code == KvCode::Fp8
+                                    ? row
+                                    : row * kKVCacheInt8Groups + d / kKVCacheInt8Group;
+    return {*reinterpret_cast<const uint2*>(static_cast<const std::uint8_t*>(pages) + offset),
+            scales[scale]};
+}
+
+// FP8 and INT8 decode every code exactly and apply the row (FP8) or 64-value group (INT8) scale
+// in FP32 before the BF16 boundary.
+template <KvCode Code>
+__device__ __forceinline__ uint4 decode_kv_codes8(const KvCodes8& value) {
+    static_assert(Code != KvCode::Bf16);
+    const float scale = __half2float(value.scale);
+    if constexpr (Code == KvCode::Fp8) {
+        const std::uint32_t words[2] = {value.codes.x, value.codes.y};
+        std::uint32_t packed[4];
+#pragma unroll
+        for (int i = 0; i < 4; ++i) {
+            __nv_fp8x2_e4m3 pair;
+            pair.__x             = static_cast<std::uint16_t>(words[i / 2] >> (16 * (i % 2)));
+            const float2 decoded = static_cast<float2>(pair);
+            packed[i]            = pack_bf16x2(decoded.x * scale, decoded.y * scale);
+        }
+        return make_uint4(packed[0], packed[1], packed[2], packed[3]);
+    } else {
+        // Same arithmetic as kv_cache_int8_dequant_i8x8_from, unpacked from registers.
+        const std::uint32_t words[2] = {value.codes.x, value.codes.y};
+        std::uint32_t packed[4];
+#pragma unroll
+        for (int i = 0; i < 4; ++i) {
+            const std::uint32_t word = words[i / 2] >> (16 * (i % 2));
+            const float x0 = static_cast<float>(static_cast<std::int8_t>(word & 0xFFU)) * scale;
+            const float x1 =
+                static_cast<float>(static_cast<std::int8_t>((word >> 8) & 0xFFU)) * scale;
+            packed[i] = pack_bf16x2(x0, x1);
+        }
+        return make_uint4(packed[0], packed[1], packed[2], packed[3]);
+    }
+}
+
+// Eight BF16 values of paged K/V row `row` from dimension d.
+template <KvCode Code>
+__device__ __forceinline__ uint4 load_kv8(const void* pages, const __half* scales,
+                                          std::int64_t row, int d) {
+    if constexpr (Code == KvCode::Bf16) {
+        return *reinterpret_cast<const uint4*>(static_cast<const __nv_bfloat16*>(pages) + d +
+                                               static_cast<std::int64_t>(kHeadDim) * row);
+    } else {
+        return decode_kv_codes8<Code>(load_kv_codes8<Code>(pages, scales, row, d));
+    }
+}
 
 __global__ void split_query_gate_kernel(const __nv_bfloat16* packed,
                                         __nv_bfloat16* query,
@@ -208,6 +277,40 @@ __global__ void append_cache_fp8_kernel(
     const int lane = static_cast<int>(threadIdx.x) & 31;
     if (warp < kKvHeads) {
         kv_cache_append_full_fp8_row<FlashQsaKVGeometry>(
+            key, value, key_pages, value_pages, key_scales, value_scales,
+            token, warp, page, page_offset, lane);
+    }
+    for (int d = static_cast<int>(threadIdx.x); d < kIndexDim;
+         d += static_cast<int>(blockDim.x)) {
+        raw_pages[d + static_cast<std::int64_t>(kIndexDim) *
+                         (page_offset + kPagedKVPageSize * page)] =
+            raw_index_key[d + static_cast<std::int64_t>(kIndexDim) * token];
+    }
+    if (threadIdx.x < 3) {
+        position_pages[threadIdx.x + 3LL * (page_offset + kPagedKVPageSize * page)] =
+            rope_positions[token + static_cast<std::int64_t>(width * batch) * threadIdx.x];
+    }
+}
+
+__global__ void append_cache_int8_kernel(
+    const __nv_bfloat16* key, const __nv_bfloat16* value,
+    const __nv_bfloat16* raw_index_key, const int* cache_positions,
+    const int* rope_positions, const int* valid_columns, const int* table_rows,
+    int width, int batch, int logical_pages, const int* tables,
+    std::int8_t* key_pages, std::int8_t* value_pages,
+    __half* key_scales, __half* value_scales,
+    __nv_bfloat16* raw_pages, int* position_pages) {
+    const int token = static_cast<int>(blockIdx.x);
+    const int lane_index = token / width;
+    const int column = token - lane_index * width;
+    if (lane_index >= batch || column >= valid_columns[lane_index]) { return; }
+    const int position = cache_positions[token];
+    const int page = physical_page(tables, logical_pages, table_rows[lane_index], position);
+    const int page_offset = position % kPagedKVPageSize;
+    const int warp = static_cast<int>(threadIdx.x) >> 5;
+    const int lane = static_cast<int>(threadIdx.x) & 31;
+    if (warp < kKvHeads) {
+        kv_cache_append_full_int8_row<FlashQsaKVGeometry>(
             key, value, key_pages, value_pages, key_scales, value_scales,
             token, warp, page, page_offset, lane);
     }
@@ -802,64 +905,105 @@ __global__ void order_groups_like_persistent_topk_kernel(int* selected_groups,
 
 constexpr int kPrefillRows = 16;
 constexpr int kPrefillColumns = 16;
+// Q/K/V tiles, then each staged key's selected position and paged K/V row.
 constexpr int kPrefillSharedBytes =
     (kPrefillRows + 2 * kPrefillColumns) * kHeadDim * sizeof(__nv_bfloat16) +
-    kPrefillColumns * sizeof(int);
+    2 * kPrefillColumns * sizeof(int);
 
-template <bool Fp8>
-__device__ __forceinline__ void stage_selected_qsa_tile(
-    __nv_bfloat16* destination, int* staged_positions,
-    const void* cache, const __half* scales,
-    const int* indices, const int* tables,
-    int logical_pages, int table_row, int kv_head, int token, int tile_begin,
-    int item_count) {
-    const int tid = static_cast<int>(threadIdx.x);
-    for (int row = tid; row < kPrefillColumns; row += static_cast<int>(blockDim.x)) {
-        const int item = tile_begin + row;
-        staged_positions[row] = item < item_count
+// Positions and paged K/V rows of one tile's keys (-1 when absent). Each key's page is resolved
+// once here instead of once per staged vector.
+__device__ __forceinline__ void stage_selected_qsa_rows(
+    int* staged_positions, int* staged_rows, const int* indices, const int* tables,
+    int logical_pages, int table_row, int kv_head, int token, int tile_begin, int item_count) {
+    for (int row = static_cast<int>(threadIdx.x); row < kPrefillColumns;
+         row += static_cast<int>(blockDim.x)) {
+        const int item     = tile_begin + row;
+        const int position = item < item_count
             ? (indices == nullptr
                    ? item
                    : indices[item + static_cast<std::int64_t>(kOutputWidth) * token])
             : -1;
+        staged_positions[row] = position;
+        staged_rows[row]      = position >= 0
+            ? position % kPagedKVPageSize +
+                  kPagedKVPageSize *
+                      (kv_head + kKvHeads * physical_page(tables, logical_pages, table_row,
+                                                          position))
+            : -1;
     }
     __syncthreads();
+}
+
+__device__ __forceinline__ void stage_selected_qsa_tile(
+    __nv_bfloat16* destination, int* staged_positions, int* staged_rows, const void* cache,
+    const int* indices, const int* tables, int logical_pages, int table_row, int kv_head,
+    int token, int tile_begin, int item_count) {
+    stage_selected_qsa_rows(staged_positions, staged_rows, indices, tables, logical_pages,
+                            table_row, kv_head, token, tile_begin, item_count);
     constexpr int kVectorsPerRow = kHeadDim / 8;
-    for (int vector = tid; vector < kPrefillColumns * kVectorsPerRow;
+    for (int vector = static_cast<int>(threadIdx.x); vector < kPrefillColumns * kVectorsPerRow;
          vector += static_cast<int>(blockDim.x)) {
         const int row = vector / kVectorsPerRow;
         const int d = (vector % kVectorsPerRow) * 8;
-        __nv_bfloat16* output = destination +
-            row * kHeadDim + causal_prompt_swz(row, d);
-        const int position = staged_positions[row];
-        if (position >= 0) {
-            const int page = physical_page(tables, logical_pages, table_row, position);
-            const std::int64_t offset = d + static_cast<std::int64_t>(kHeadDim) *
-                (position % kPagedKVPageSize + kPagedKVPageSize *
-                    (kv_head + kKvHeads * page));
-            if constexpr (Fp8) {
-                const auto* codes = static_cast<const std::uint8_t*>(cache);
-                const std::int64_t scale_offset =
-                    position % kPagedKVPageSize + static_cast<std::int64_t>(kPagedKVPageSize) *
-                        (kv_head + kKvHeads * page);
-#pragma unroll
-                for (int item = 0; item < 8; ++item) {
-                    output[item] = __float2bfloat16_rn(kv_cache_fp8_dequant_code_to_float(
-                        codes[offset + item], scales[scale_offset]));
-                }
-            } else {
-                cp_async<16, Cache::cg>(output,
-                    static_cast<const __nv_bfloat16*>(cache) + offset);
-            }
+        __nv_bfloat16* output = destination + row * kHeadDim + causal_prompt_swz(row, d);
+        const int paged_row = staged_rows[row];
+        if (paged_row >= 0) {
+            cp_async<16, Cache::cg>(output, static_cast<const __nv_bfloat16*>(cache) + d +
+                                                static_cast<std::int64_t>(kHeadDim) * paged_row);
         } else {
             store_vec(output, make_int4(0, 0, 0, 0));
         }
     }
 }
 
+// Quantized tiles are staged in two steps so their global loads overlap attention work like the
+// BF16 cp.async route: issue loads the tile's codes into registers, complete decodes them into
+// shared memory before the barrier that publishes the tile.
+struct PendingKvTile {
+    static constexpr int kVectors = kPrefillColumns * (kHeadDim / 8) / 128;
+    KvCodes8 values[kVectors];
+    bool present[kVectors];
+};
+
+template <KvCode Code>
+__device__ __forceinline__ void issue_selected_qsa_tile(
+    PendingKvTile& pending, int* staged_positions, int* staged_rows, const void* cache,
+    const __half* scales, const int* indices, const int* tables, int logical_pages,
+    int table_row, int kv_head, int token, int tile_begin, int item_count) {
+    stage_selected_qsa_rows(staged_positions, staged_rows, indices, tables, logical_pages,
+                            table_row, kv_head, token, tile_begin, item_count);
+    constexpr int kVectorsPerRow = kHeadDim / 8;
+#pragma unroll
+    for (int i = 0; i < PendingKvTile::kVectors; ++i) {
+        const int vector    = static_cast<int>(threadIdx.x) + 128 * i;
+        const int paged_row = staged_rows[vector / kVectorsPerRow];
+        pending.present[i]  = paged_row >= 0;
+        if (paged_row >= 0) {
+            pending.values[i] = load_kv_codes8<Code>(cache, scales, paged_row,
+                                                     (vector % kVectorsPerRow) * 8);
+        }
+    }
+}
+
+template <KvCode Code>
+__device__ __forceinline__ void complete_selected_qsa_tile(const PendingKvTile& pending,
+                                                           __nv_bfloat16* destination) {
+    constexpr int kVectorsPerRow = kHeadDim / 8;
+#pragma unroll
+    for (int i = 0; i < PendingKvTile::kVectors; ++i) {
+        const int vector = static_cast<int>(threadIdx.x) + 128 * i;
+        const int row    = vector / kVectorsPerRow;
+        const int d      = (vector % kVectorsPerRow) * 8;
+        store_vec(destination + row * kHeadDim + causal_prompt_swz(row, d),
+                  pending.present[i] ? decode_kv_codes8<Code>(pending.values[i])
+                                     : make_uint4(0, 0, 0, 0));
+    }
+}
+
 // Four warps share QK/softmax work for the twelve query heads of one KV head and split the
 // 256-value output dimension. This preserves the compact 16-key tile while increasing resident
 // PV warp-level work at the same dynamic shared-memory footprint.
-template <bool Fp8>
+template <KvCode Code>
 __device__ __forceinline__ void selected_attention_batched_body(
     const __nv_bfloat16* query, const void* key_pages, const void* value_pages,
     const __half* key_scales, const __half* value_scales,
@@ -924,6 +1068,7 @@ __device__ __forceinline__ void selected_attention_batched_body(
     __nv_bfloat16* value_shared = key_shared + kPrefillColumns * kHeadDim;
     int* staged_positions = reinterpret_cast<int*>(
         value_shared + kPrefillColumns * kHeadDim);
+    int* staged_rows = staged_positions + kPrefillColumns;
 
     constexpr int kVectorsPerRow = kHeadDim / 8;
     for (int vector = tid; vector < kPrefillRows * kVectorsPerRow;
@@ -977,19 +1122,34 @@ __device__ __forceinline__ void selected_attention_batched_body(
     const int tile_begin = split * tile_count / num_splits;
     const int tile_end = (split + 1) * tile_count / num_splits;
 
+    constexpr bool kCodes = Code != KvCode::Bf16;
+    PendingKvTile pending_key{};
+    PendingKvTile pending_value{};
     cp_commit();
-    stage_selected_qsa_tile<Fp8>(key_shared, staged_positions, key_pages, key_scales,
-                            indices, tables,
-                            logical_pages, table_row, kv_head, token,
-                            tile_begin * kPrefillColumns, item_count);
+    if constexpr (kCodes) {
+        issue_selected_qsa_tile<Code>(pending_key, staged_positions, staged_rows, key_pages,
+                                      key_scales, indices, tables, logical_pages, table_row,
+                                      kv_head, token, tile_begin * kPrefillColumns, item_count);
+    } else {
+        stage_selected_qsa_tile(key_shared, staged_positions, staged_rows, key_pages, indices,
+                                tables, logical_pages, table_row, kv_head, token,
+                                tile_begin * kPrefillColumns, item_count);
+    }
     cp_commit();
     for (int tile = tile_begin; tile < tile_end; ++tile) {
         cp_wait<0>();
+        if constexpr (kCodes) { complete_selected_qsa_tile<Code>(pending_key, key_shared); }
         __syncthreads();
-        stage_selected_qsa_tile<Fp8>(value_shared, staged_positions, value_pages, value_scales,
-                                indices, tables,
-                                logical_pages, table_row, kv_head, token,
-                                tile * kPrefillColumns, item_count);
+        if constexpr (kCodes) {
+            issue_selected_qsa_tile<Code>(pending_value, staged_positions, staged_rows, value_pages,
+                                          value_scales, indices, tables, logical_pages,
+                                          table_row, kv_head, token, tile * kPrefillColumns,
+                                          item_count);
+        } else {
+            stage_selected_qsa_tile(value_shared, staged_positions, staged_rows, value_pages,
+                                    indices, tables, logical_pages, table_row, kv_head, token,
+                                    tile * kPrefillColumns, item_count);
+        }
         cp_commit();
 
         unsigned probabilities[kPvSteps][4] = {};
@@ -1106,12 +1266,19 @@ __device__ __forceinline__ void selected_attention_batched_body(
         }
 
         cp_wait<0>();
+        if constexpr (kCodes) { complete_selected_qsa_tile<Code>(pending_value, value_shared); }
         __syncthreads();
         if (tile + 1 < tile_end) {
-            stage_selected_qsa_tile<Fp8>(key_shared, staged_positions, key_pages, key_scales,
-                                    indices, tables,
-                                    logical_pages, table_row, kv_head, token,
-                                    (tile + 1) * kPrefillColumns, item_count);
+            if constexpr (kCodes) {
+                issue_selected_qsa_tile<Code>(pending_key, staged_positions, staged_rows, key_pages,
+                                              key_scales, indices, tables, logical_pages,
+                                              table_row, kv_head, token,
+                                              (tile + 1) * kPrefillColumns, item_count);
+            } else {
+                stage_selected_qsa_tile(key_shared, staged_positions, staged_rows, key_pages,
+                                        indices, tables, logical_pages, table_row, kv_head,
+                                        token, (tile + 1) * kPrefillColumns, item_count);
+            }
             cp_commit();
         }
         constexpr int kPvHalf = kPvTiles / 2;
@@ -1205,27 +1372,16 @@ __device__ __forceinline__ void selected_attention_batched_body(
     }
 }
 
-__launch_bounds__(128, 1) __global__ void selected_attention_batched_bf16_kernel(
-    const __nv_bfloat16* query, const __nv_bfloat16* key_pages,
-    const __nv_bfloat16* value_pages, const int* indices, const int* tables,
+// Three CTAs per SM, as the BF16 route reaches without a bound; the quantized routes otherwise
+// spend registers on pending codes and drop to two.
+template <KvCode Code>
+__launch_bounds__(128, 3) __global__ void selected_attention_batched_kernel(
+    const __nv_bfloat16* query, const void* key_pages, const void* value_pages,
+    const __half* key_scales, const __half* value_scales, const int* indices, const int* tables,
     int logical_pages, const int* cache_positions, const int* valid_columns,
-    const int* table_rows, int width, int tokens, int num_splits,
-    float* partial_maximum, float* partial_denominator, float* partial_numerator,
-    __nv_bfloat16* output) {
-    selected_attention_batched_body<false>(
-        query, key_pages, value_pages, nullptr, nullptr, indices, tables, logical_pages,
-        cache_positions, valid_columns, table_rows, width, tokens, num_splits, partial_maximum,
-        partial_denominator, partial_numerator, output);
-}
-
-__launch_bounds__(128, 1) __global__ void selected_attention_batched_fp8_kernel(
-    const __nv_bfloat16* query, const std::uint8_t* key_pages,
-    const std::uint8_t* value_pages, const __half* key_scales, const __half* value_scales,
-    const int* indices, const int* tables, int logical_pages, const int* cache_positions,
-    const int* valid_columns, const int* table_rows, int width, int tokens, int num_splits,
-    float* partial_maximum, float* partial_denominator, float* partial_numerator,
-    __nv_bfloat16* output) {
-    selected_attention_batched_body<true>(
+    const int* table_rows, int width, int tokens, int num_splits, float* partial_maximum,
+    float* partial_denominator, float* partial_numerator, __nv_bfloat16* output) {
+    selected_attention_batched_body<Code>(
         query, key_pages, value_pages, key_scales, value_scales, indices, tables, logical_pages,
         cache_positions, valid_columns, table_rows, width, tokens, num_splits, partial_maximum,
         partial_denominator, partial_numerator, output);
@@ -1249,7 +1405,7 @@ int decode_attention_splits(int tokens) {
     return 1;
 }
 
-template <bool Fp8>
+template <KvCode Code>
 __device__ __forceinline__ void selected_attention_split_body(
     const __nv_bfloat16* query, const void* key_pages, const void* value_pages,
     const __half* key_scales, const __half* value_scales,
@@ -1325,29 +1481,8 @@ __device__ __forceinline__ void selected_attention_split_body(
         }
         // A tile without selected keys contributes nothing (its maximum stays -inf).
         if (!__syncthreads_or(present)) { continue; }
-        if constexpr (Fp8) {
-            for (int element = static_cast<int>(threadIdx.x);
-                 element < tile_size * kHeadDim; element += static_cast<int>(blockDim.x)) {
-                const int item = element / kHeadDim;
-                const int d = element - item * kHeadDim;
-                const int row = staged_rows[item];
-                if (row >= 0) {
-                    const std::int64_t offset = d + static_cast<std::int64_t>(kHeadDim) * row;
-                    staged_key[item][d] = __float2bfloat16_rn(
-                        kv_cache_fp8_dequant_code_to_float(
-                            static_cast<const std::uint8_t*>(key_pages)[offset],
-                            key_scales[row]));
-                    staged_value[item][d] = __float2bfloat16_rn(
-                        kv_cache_fp8_dequant_code_to_float(
-                            static_cast<const std::uint8_t*>(value_pages)[offset],
-                            value_scales[row]));
-                } else {
-                    staged_key[item][d] = __float2bfloat16_rn(0.0F);
-                    staged_value[item][d] = __float2bfloat16_rn(0.0F);
-                }
-            }
-        } else {
-            // Eight BF16 per 16-byte load; all loads of a thread are independent.
+        {
+            // Eight values per load; all loads of a thread are independent.
             constexpr int kVectors = kHeadDim / 8;
 #pragma unroll
             for (int i = 0; i < kTile * kVectors / 128; ++i) {
@@ -1358,11 +1493,8 @@ __device__ __forceinline__ void selected_attention_split_body(
                 uint4 key = make_uint4(0, 0, 0, 0);
                 uint4 value = make_uint4(0, 0, 0, 0);
                 if (row >= 0) {
-                    const std::int64_t offset = d + static_cast<std::int64_t>(kHeadDim) * row;
-                    key = *reinterpret_cast<const uint4*>(
-                        static_cast<const __nv_bfloat16*>(key_pages) + offset);
-                    value = *reinterpret_cast<const uint4*>(
-                        static_cast<const __nv_bfloat16*>(value_pages) + offset);
+                    key = load_kv8<Code>(key_pages, key_scales, row, d);
+                    value = load_kv8<Code>(value_pages, value_scales, row, d);
                 }
                 *reinterpret_cast<uint4*>(&staged_key[item][d]) = key;
                 *reinterpret_cast<uint4*>(&staged_value[item][d]) = value;
@@ -1426,25 +1558,14 @@ __device__ __forceinline__ void selected_attention_split_body(
     }
 }
 
-__global__ void selected_attention_split_bf16_kernel(
-    const __nv_bfloat16* query, const __nv_bfloat16* key_pages,
-    const __nv_bfloat16* value_pages, const int* indices, const int* tables,
+template <KvCode Code>
+__global__ void selected_attention_split_kernel(
+    const __nv_bfloat16* query, const void* key_pages, const void* value_pages,
+    const __half* key_scales, const __half* value_scales, const int* indices, const int* tables,
     int logical_pages, const int* cache_positions, const int* valid_columns,
     const int* table_rows, int width, int tokens, float* partial_maximum,
     float* partial_denominator, float* partial_numerator, int num_splits) {
-    selected_attention_split_body<false>(
-        query, key_pages, value_pages, nullptr, nullptr, indices, tables, logical_pages,
-        cache_positions, valid_columns, table_rows, width, tokens, partial_maximum,
-        partial_denominator, partial_numerator, num_splits);
-}
-
-__global__ void selected_attention_split_fp8_kernel(
-    const __nv_bfloat16* query, const std::uint8_t* key_pages,
-    const std::uint8_t* value_pages, const __half* key_scales, const __half* value_scales,
-    const int* indices, const int* tables, int logical_pages, const int* cache_positions,
-    const int* valid_columns, const int* table_rows, int width, int tokens,
-    float* partial_maximum, float* partial_denominator, float* partial_numerator, int num_splits) {
-    selected_attention_split_body<true>(
+    selected_attention_split_body<Code>(
         query, key_pages, value_pages, key_scales, value_scales, indices, tables, logical_pages,
         cache_positions, valid_columns, table_rows, width, tokens, partial_maximum,
         partial_denominator, partial_numerator, num_splits);
@@ -1654,15 +1775,21 @@ void flash_next_qsa(const Tensor& input, const Tensor& cache_positions,
         throw std::invalid_argument("flash_next_qsa: invalid index-sharing control");
     }
     const bool fp8_cache = cache.storage == KvCacheStorage::Fp8E4M3Row256;
+    const bool int8_cache = cache.storage == KvCacheStorage::Int8Group64;
     const bool bf16_cache = cache.storage == KvCacheStorage::BFloat16KeyValue;
+    const KvCode code = fp8_cache ? KvCode::Fp8 : int8_cache ? KvCode::Int8 : KvCode::Bf16;
+    const auto scaled_codes = [&](DType dtype, int groups) {
+        return cache.k_pages.dtype == dtype && cache.v_pages.dtype == dtype &&
+               cache.k_scale_pages.dtype == DType::FP16 &&
+               cache.v_scale_pages.dtype == DType::FP16 &&
+               cache.k_scale_pages.ne[0] == groups && cache.v_scale_pages.ne[0] == groups;
+    };
     const bool valid_primary =
         (bf16_cache && cache.k_pages.dtype == DType::BF16 &&
          cache.v_pages.dtype == DType::BF16 && cache.k_scale_pages.data == nullptr &&
          cache.v_scale_pages.data == nullptr) ||
-        (fp8_cache && cache.k_pages.dtype == DType::FP8_E4M3FN &&
-         cache.v_pages.dtype == DType::FP8_E4M3FN &&
-         cache.k_scale_pages.dtype == DType::FP16 && cache.v_scale_pages.dtype == DType::FP16 &&
-         cache.k_scale_pages.ne[0] == 1 && cache.v_scale_pages.ne[0] == 1);
+        (fp8_cache && scaled_codes(DType::FP8_E4M3FN, 1)) ||
+        (int8_cache && scaled_codes(DType::I8, kKVCacheInt8Groups));
     if (!valid_primary || cache.k_pages.ne[0] != kHeadDim ||
         cache.v_pages.ne[0] != kHeadDim ||
         cache.k_pages.ne[2] != kKvHeads || cache.v_pages.ne[2] != kKvHeads) {
@@ -1709,7 +1836,7 @@ void flash_next_qsa(const Tensor& input, const Tensor& cache_positions,
     rmsnorm(query_heads, weights.query_norm, 1.0e-6F, true, normalized_query_heads, stream);
     rmsnorm(key_heads, weights.key_norm, 1.0e-6F, true, normalized_key_heads, stream);
     rope(rope_view, 64, kTheta, normalized_query_heads, normalized_key_heads, stream);
-    if (fp8_cache) {
+    if (code != KvCode::Bf16) {
         hadamard_rows_kernel<<<tokens * kQueryHeads, 32, 0, stream>>>(
             static_cast<__nv_bfloat16*>(normalized_query.data), tokens * kQueryHeads);
     }
@@ -1741,6 +1868,20 @@ void flash_next_qsa(const Tensor& input, const Tensor& cache_positions,
             static_cast<__half*>(cache.v_scale_pages.data),
             static_cast<__nv_bfloat16*>(cache.auxiliary_pages[0].data),
             static_cast<int*>(cache.auxiliary_pages[1].data));
+    } else if (int8_cache) {
+        append_cache_int8_kernel<<<tokens, 64, 0, stream>>>(
+            static_cast<const __nv_bfloat16*>(normalized_key.data),
+            static_cast<const __nv_bfloat16*>(value.data),
+            static_cast<const __nv_bfloat16*>(index_key.data),
+            static_cast<const int*>(cache_positions.data), static_cast<const int*>(rope_view.data),
+            static_cast<const int*>(valid_columns.data), static_cast<const int*>(table_rows.data),
+            width, batch, logical_pages, static_cast<const int*>(cache.block_tables.data),
+            static_cast<std::int8_t*>(cache.k_pages.data),
+            static_cast<std::int8_t*>(cache.v_pages.data),
+            static_cast<__half*>(cache.k_scale_pages.data),
+            static_cast<__half*>(cache.v_scale_pages.data),
+            static_cast<__nv_bfloat16*>(cache.auxiliary_pages[0].data),
+            static_cast<int*>(cache.auxiliary_pages[1].data));
     } else {
         append_cache_kernel<<<tokens, 256, 0, stream>>>(
             static_cast<const __nv_bfloat16*>(normalized_key.data),
@@ -1766,93 +1907,75 @@ void flash_next_qsa(const Tensor& input, const Tensor& cache_positions,
         throw std::invalid_argument("flash_next_qsa: invalid visibility envelope");
     }
     Tensor attention = workspace.alloc(DType::BF16, {6144, tokens});
-    const auto launch_batched = [&]<bool Fp8>(std::bool_constant<Fp8>, dim3 grid,
-                                              const int* indices, int num_splits,
-                                              float* partial_maximum,
-                                              float* partial_denominator,
-                                              float* partial_numerator,
-                                              __nv_bfloat16* output) {
-        if constexpr (Fp8) {
-            static const cudaError_t configured = cudaFuncSetAttribute(
-                selected_attention_batched_fp8_kernel,
-                cudaFuncAttributeMaxDynamicSharedMemorySize, kPrefillSharedBytes);
-            CUDA_CHECK(configured);
-            selected_attention_batched_fp8_kernel<<<grid, 128, kPrefillSharedBytes, stream>>>(
-                static_cast<const __nv_bfloat16*>(normalized_query.data),
-                static_cast<const std::uint8_t*>(cache.k_pages.data),
-                static_cast<const std::uint8_t*>(cache.v_pages.data),
-                static_cast<const __half*>(cache.k_scale_pages.data),
-                static_cast<const __half*>(cache.v_scale_pages.data), indices,
-                static_cast<const int*>(cache.block_tables.data), logical_pages,
-                static_cast<const int*>(cache_positions.data),
-                static_cast<const int*>(valid_columns.data),
-                static_cast<const int*>(table_rows.data), width, tokens, num_splits,
-                partial_maximum, partial_denominator, partial_numerator, output);
-        } else {
-            static const cudaError_t configured = cudaFuncSetAttribute(
-                selected_attention_batched_bf16_kernel,
-                cudaFuncAttributeMaxDynamicSharedMemorySize, kPrefillSharedBytes);
-            CUDA_CHECK(configured);
-            selected_attention_batched_bf16_kernel<<<grid, 128, kPrefillSharedBytes, stream>>>(
-                static_cast<const __nv_bfloat16*>(normalized_query.data),
-                static_cast<const __nv_bfloat16*>(cache.k_pages.data),
-                static_cast<const __nv_bfloat16*>(cache.v_pages.data), indices,
-                static_cast<const int*>(cache.block_tables.data), logical_pages,
-                static_cast<const int*>(cache_positions.data),
-                static_cast<const int*>(valid_columns.data),
-                static_cast<const int*>(table_rows.data), width, tokens, num_splits,
-                partial_maximum, partial_denominator, partial_numerator, output);
-        }
+    const auto* key_scales   = static_cast<const __half*>(cache.k_scale_pages.data);
+    const auto* value_scales = static_cast<const __half*>(cache.v_scale_pages.data);
+    const auto launch_batched = [&]<KvCode Code>(std::integral_constant<KvCode, Code>, dim3 grid,
+                                                 const int* indices, int num_splits,
+                                                 float* partial_maximum,
+                                                 float* partial_denominator,
+                                                 float* partial_numerator,
+                                                 __nv_bfloat16* output) {
+        static const cudaError_t configured = cudaFuncSetAttribute(
+            selected_attention_batched_kernel<Code>,
+            cudaFuncAttributeMaxDynamicSharedMemorySize, kPrefillSharedBytes);
+        CUDA_CHECK(configured);
+        selected_attention_batched_kernel<Code><<<grid, 128, kPrefillSharedBytes, stream>>>(
+            static_cast<const __nv_bfloat16*>(normalized_query.data), cache.k_pages.data,
+            cache.v_pages.data, key_scales, value_scales, indices,
+            static_cast<const int*>(cache.block_tables.data), logical_pages,
+            static_cast<const int*>(cache_positions.data),
+            static_cast<const int*>(valid_columns.data),
+            static_cast<const int*>(table_rows.data), width, tokens, num_splits,
+            partial_maximum, partial_denominator, partial_numerator, output);
     };
     const auto dispatch_batched = [&](dim3 grid, const int* indices, int num_splits,
                                       float* partial_maximum, float* partial_denominator,
                                       float* partial_numerator, __nv_bfloat16* output) {
-        if (fp8_cache) {
-            launch_batched(std::true_type{}, grid, indices, num_splits, partial_maximum,
-                           partial_denominator, partial_numerator, output);
-        } else {
-            launch_batched(std::false_type{}, grid, indices, num_splits, partial_maximum,
-                           partial_denominator, partial_numerator, output);
+        switch (code) {
+        case KvCode::Fp8:
+            return launch_batched(std::integral_constant<KvCode, KvCode::Fp8>{}, grid, indices,
+                                  num_splits, partial_maximum, partial_denominator,
+                                  partial_numerator, output);
+        case KvCode::Int8:
+            return launch_batched(std::integral_constant<KvCode, KvCode::Int8>{}, grid, indices,
+                                  num_splits, partial_maximum, partial_denominator,
+                                  partial_numerator, output);
+        case KvCode::Bf16:
+            return launch_batched(std::integral_constant<KvCode, KvCode::Bf16>{}, grid, indices,
+                                  num_splits, partial_maximum, partial_denominator,
+                                  partial_numerator, output);
         }
     };
-    const auto launch_split = [&]<bool Fp8>(std::bool_constant<Fp8>, const int* indices,
-                                            float* partial_maximum,
-                                            float* partial_denominator,
-                                            float* partial_numerator, int num_splits) {
+    const auto launch_split = [&]<KvCode Code>(std::integral_constant<KvCode, Code>,
+                                               const int* indices, float* partial_maximum,
+                                               float* partial_denominator,
+                                               float* partial_numerator, int num_splits) {
         const dim3 grid(kQueryHeads / kSplitHeadsPerBlock, tokens, num_splits);
-        if constexpr (Fp8) {
-            selected_attention_split_fp8_kernel<<<grid, kSplitHeadsPerBlock * 32, 0, stream>>>(
-                static_cast<const __nv_bfloat16*>(normalized_query.data),
-                static_cast<const std::uint8_t*>(cache.k_pages.data),
-                static_cast<const std::uint8_t*>(cache.v_pages.data),
-                static_cast<const __half*>(cache.k_scale_pages.data),
-                static_cast<const __half*>(cache.v_scale_pages.data), indices,
-                static_cast<const int*>(cache.block_tables.data), logical_pages,
-                static_cast<const int*>(cache_positions.data),
-                static_cast<const int*>(valid_columns.data),
-                static_cast<const int*>(table_rows.data), width, tokens,
-                partial_maximum, partial_denominator, partial_numerator, num_splits);
-        } else {
-            selected_attention_split_bf16_kernel<<<grid, kSplitHeadsPerBlock * 32, 0, stream>>>(
-                static_cast<const __nv_bfloat16*>(normalized_query.data),
-                static_cast<const __nv_bfloat16*>(cache.k_pages.data),
-                static_cast<const __nv_bfloat16*>(cache.v_pages.data), indices,
-                static_cast<const int*>(cache.block_tables.data), logical_pages,
-                static_cast<const int*>(cache_positions.data),
-                static_cast<const int*>(valid_columns.data),
-                static_cast<const int*>(table_rows.data), width, tokens,
-                partial_maximum, partial_denominator, partial_numerator, num_splits);
-        }
+        selected_attention_split_kernel<Code><<<grid, kSplitHeadsPerBlock * 32, 0, stream>>>(
+            static_cast<const __nv_bfloat16*>(normalized_query.data), cache.k_pages.data,
+            cache.v_pages.data, key_scales, value_scales, indices,
+            static_cast<const int*>(cache.block_tables.data), logical_pages,
+            static_cast<const int*>(cache_positions.data),
+            static_cast<const int*>(valid_columns.data),
+            static_cast<const int*>(table_rows.data), width, tokens,
+            partial_maximum, partial_denominator, partial_numerator, num_splits);
     };
     const auto dispatch_split = [&](const int* indices, float* partial_maximum,
                                     float* partial_denominator, float* partial_numerator,
                                     int num_splits) {
-        if (fp8_cache) {
-            launch_split(std::true_type{}, indices, partial_maximum, partial_denominator,
-                         partial_numerator, num_splits);
-        } else {
-            launch_split(std::false_type{}, indices, partial_maximum, partial_denominator,
-                         partial_numerator, num_splits);
+        switch (code) {
+        case KvCode::Fp8:
+            return launch_split(std::integral_constant<KvCode, KvCode::Fp8>{}, indices,
+                                partial_maximum, partial_denominator, partial_numerator,
+                                num_splits);
+        case KvCode::Int8:
+            return launch_split(std::integral_constant<KvCode, KvCode::Int8>{}, indices,
+                                partial_maximum, partial_denominator, partial_numerator,
+                                num_splits);
+        case KvCode::Bf16:
+            return launch_split(std::integral_constant<KvCode, KvCode::Bf16>{}, indices,
+                                partial_maximum, partial_denominator, partial_numerator,
+                                num_splits);
         }
     };
     if (tokens > 16 && envelope.max_visible_keys <= kOutputWidth) {

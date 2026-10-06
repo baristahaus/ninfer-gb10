@@ -262,7 +262,8 @@ Run `./build/apps/ninfer --help` for the exact option contract.
 The official artifacts have a native context limit of 262,144 tokens. The practical allocation
 on one RTX 5090 depends on the selected artifact, media workload, output budget, and KV-cache type.
 The artifact describes its model configuration and weight representations;
-`--kv-dtype` independently selects runtime KV storage. The prepared prompt must fit
+`--kv-dtype` independently selects runtime KV storage. Qwen3.8 Flash-Next accepts `bf16`, `fp8`,
+and `int8`. The prepared prompt must fit
 `--max-context`; generation stops at the remaining context capacity when necessary.
 `--kv-capacity N` controls the shared physical Main Text KV pool independently and is rounded up to
 the 64-token page size. `--kv-capacity auto` loads the selected weights, measures the remaining GPU

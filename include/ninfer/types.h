@@ -78,8 +78,10 @@ enum class SpeculativeBackend : std::uint8_t {
 
 struct SpeculativeOptions {
     SpeculativeBackend backend = SpeculativeBackend::None;
-    // Startup-fixed K: MTP 1..5; DFlash and DFlash2 1..15 (query width K+1).
+    // Startup-fixed K: MTP 1..7 (target maximum); DFlash and DFlash2 1..15 (query width K+1).
+    // Zero with `adaptive_draft_tokens` lets an MTP target choose K for every round.
     std::uint32_t draft_tokens = 0;
+    bool adaptive_draft_tokens = false;
     ProposalHead proposal_head = ProposalHead::Full;
 };
 

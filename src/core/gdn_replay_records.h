@@ -56,6 +56,10 @@ struct GdnReplayRecords {
     GdnReplayRecords(DeviceSpan backing, const GdnReplayRecordLayout& layout);
 
     [[nodiscard]] GdnReplayRecordLayer layer(std::int32_t layer, std::int32_t rows) const;
+
+    // The same storage viewed at a smaller record width, packed contiguously from the start of
+    // each plane. Records written through one width are read back through the same width.
+    [[nodiscard]] GdnReplayRecords narrowed(std::int32_t width) const;
 };
 
 } // namespace ninfer

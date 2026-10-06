@@ -177,6 +177,12 @@ may be combined with `--vision`.
   --lm-head-draft
 ```
 
+Qwen3.8 Flash-Next also accepts `--draft-tokens auto`, which is its default with `--spec mtp`.
+The engine then chooses three to seven drafts for every round. It uses each request's recent
+per-position acceptance and the measured round time of each draft count. While several requests
+decode together, a round verifies at most eight tokens, so two or more active requests use three
+drafts. Qwen3.5 targets need a fixed count from one to five.
+
 For DFlash:
 
 ```bash
@@ -213,7 +219,7 @@ The table lists executable defaults. The examples above select FP8 KV and MTP3.
 | `--device N` | CUDA device index | `0` |
 | `--kv-dtype bf16\|int8\|fp8\|nvfp4\|k8v4` | KV-cache storage | `bf16` |
 | `--spec mtp\|dflash\|dflash2` | speculative backend | off |
-| `--draft-tokens N` | MTP `1..5`; DFlash/DFlash2 `1..15` | unset |
+| `--draft-tokens auto\|N` | MTP `auto` or `1..7` (Qwen3.5 targets `1..5`, no `auto`); DFlash/DFlash2 `1..15` | MTP: `auto` |
 | `--lm-head-draft` | optimized proposal head | off |
 | `--vision` | enable image/video input and load Vision GPU allocations | off |
 | `--no-cuda-graph` | disable CUDA Graph decode | graphs on |

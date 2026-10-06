@@ -775,6 +775,10 @@ void validate_target_options(const execution::Parameters& parameters, DeviceCont
     default:
         throw std::invalid_argument("unknown kv_capacity policy");
     }
+    if (options.speculative.adaptive_draft_tokens) {
+        throw std::invalid_argument(
+            "Qwen3.5 targets need a fixed MTP draft count (--draft-tokens 1..5)");
+    }
     switch (options.speculative.backend) {
     case SpeculativeBackend::None:
         if (options.speculative.draft_tokens != 0 ||

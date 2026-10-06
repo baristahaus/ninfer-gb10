@@ -464,6 +464,44 @@ struct SharedPrefixSlot {
     std::uint64_t generation  = 1;
 };
 
+// Decayed evidence for adaptive MTP: for every draft position, how often it was accepted or was
+// the first rejected draft. Expected round tokens follow the product of the per-position
+// conditional acceptance rates, so early rejections do not hide a high acceptance run later.
+struct MtpDraftStatistics {
+    static constexpr float kDecay          = 0.92F;
+    static constexpr float kPriorAccepted  = 1.5F;
+    static constexpr float kPriorRejected  = 0.5F;
+    std::array<float, qwen3_8_flash_next::kMtpDecodeMaximumDrafts> accepted = filled(kPriorAccepted);
+    std::array<float, qwen3_8_flash_next::kMtpDecodeMaximumDrafts> rejected = filled(kPriorRejected);
+
+    void record(std::uint32_t extent, std::uint32_t accepted_drafts) {
+        for (std::uint32_t position = 0; position < extent && position <= accepted_drafts;
+             ++position) {
+            accepted[position] = kDecay * accepted[position] + (position < accepted_drafts ? 1.0F : 0.0F);
+            rejected[position] = kDecay * rejected[position] + (position == accepted_drafts ? 1.0F : 0.0F);
+        }
+    }
+
+    // Expected committed tokens of one round that verifies `drafts` drafts (bonus included).
+    [[nodiscard]] double expected_tokens(std::uint32_t drafts) const {
+        double expected = 1.0;
+        double run      = 1.0;
+        for (std::uint32_t position = 0; position < drafts; ++position) {
+            run *= accepted[position] / (accepted[position] + rejected[position]);
+            expected += run;
+        }
+        return expected;
+    }
+
+private:
+    static constexpr std::array<float, qwen3_8_flash_next::kMtpDecodeMaximumDrafts>
+    filled(float value) {
+        std::array<float, qwen3_8_flash_next::kMtpDecodeMaximumDrafts> values{};
+        values.fill(value);
+        return values;
+    }
+};
+
 // Request/round control is not retained with a reusable SequenceState. A later concurrent Engine
 // gives every occupied request slot its own instance of this state.
 struct RequestControl {
@@ -472,6 +510,7 @@ struct RequestControl {
     ops::SamplingConfig sampling_host;
     GenerationTimings timings;
     SpeculativeStats speculative_stats;
+    MtpDraftStatistics mtp_draft_statistics;
     detail::PhysicalResources active_resources;
     detail::PhysicalResources optional_resources;
     bool publish_continuation = true;
@@ -640,6 +679,9 @@ public:
     const std::uint32_t shared_prefix_capacity;
     const std::uint32_t prefill_chunk;
     const std::uint32_t draft_window;
+    // Smallest MTP draft count a round may verify; draft_window is the largest. They are equal
+    // unless the MTP draft count is adaptive.
+    const std::uint32_t minimum_draft_window;
     const SpeculativeBackend speculative_backend;
     const KvCacheStorage kv_storage;
     const ProposalHead proposal_head;
@@ -690,7 +732,20 @@ public:
 
     const std::vector<GraphExecutionProfile> ordinary_execution_profiles;
     DecodeGraphFamily ordinary_graphs;
-    DecodeGraphFamily mtp_graphs;
+    // One MTP decode frame and CUDA Graph family per draft count in
+    // [minimum_draft_window, draft_window], indexed by draft count - minimum_draft_window.
+    std::vector<qwen3_8_flash_next::MtpDecodeState> mtp_frames;
+    std::vector<DecodeGraphFamily> mtp_graphs;
+    // GDN and PLE replay records and the GDN fold viewed at each MTP round width.
+    std::vector<GdnReplayRecords> mtp_replay_records;
+    std::vector<ops::GdnReplayFoldPlan> mtp_replay_folds;
+    std::vector<Tensor> mtp_ple_records;
+    // Measured MTP round seconds per [batch size][draft count]; zero until observed.
+    std::array<std::array<double, qwen3_8_flash_next::kMtpDecodeMaximumDrafts + 1>,
+               kMaximumConcurrency + 1>
+        mtp_round_seconds{};
+    // Draft count of the most recent MTP round; its egress rows use width count + 1.
+    std::uint32_t last_mtp_draft_window = 0;
     DecodeGraphFamily dflash_graphs;
 
     PinnedHostBuffer round_host;
@@ -1241,6 +1296,13 @@ private:
     decode_ordinary_batch(std::span<const std::uint32_t> lanes,
                           std::span<const runtime::RoundBudget> budgets,
                           runtime::ExecutionTiming* failed_timing);
+    // Draft count for the next MTP round of these lanes: the count that maximizes the expected
+    // committed tokens per estimated round second.
+    [[nodiscard]] std::uint32_t select_mtp_draft_window(std::span<const std::uint32_t> lanes) const;
+    // Largest draft count an MTP round of this batch size may use.
+    [[nodiscard]] std::uint32_t maximum_mtp_draft_window(std::uint32_t batch_size) const;
+    [[nodiscard]] double estimated_mtp_round_seconds(std::uint32_t batch_size,
+                                                     std::uint32_t drafts) const;
     [[nodiscard]] runtime::BatchedGeneratedRound
     decode_mtp_batch(std::span<const std::uint32_t> lanes,
                      std::span<const runtime::RoundBudget> budgets,

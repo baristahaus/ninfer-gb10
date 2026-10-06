@@ -85,7 +85,7 @@ std::string usage_text(const char* argv0) {
            "       [--max-context N] [--kv-capacity N|auto] [--prefill-chunk N] [--max-new N]\n"
            "       [--device N]\n"
            "       [--kv-dtype bf16|int8|fp8|nvfp4|k8v4] [--spec mtp|dflash|dflash2 --draft-tokens "
-           "N]\n"
+           "auto|N]\n"
            "       [--lm-head-draft]\n"
            "       [--temperature F] [--top-p F] [--top-k N] [--min-p F]\n"
            "       [--presence-penalty F] [--frequency-penalty F] [--seed N] [--greedy]\n"
@@ -148,7 +148,7 @@ Options parse_options(int argc, char** argv) {
         } else if (arg == "--spec") {
             options.speculative.backend = product::parse_speculative_backend(value(arg));
         } else if (arg == "--draft-tokens") {
-            options.speculative.draft_tokens = parse_u32(value(arg), "draft-tokens");
+            product::parse_draft_tokens(value(arg), options.speculative);
         } else if (arg == "--lm-head-draft") {
             options.speculative.proposal_head = ProposalHead::Optimized;
         } else if (arg == "--raw-output") {
@@ -223,6 +223,7 @@ Options parse_options(int argc, char** argv) {
         options.kv_capacity.explicit_tokens < options.max_context) {
         throw std::invalid_argument("--kv-capacity must be at least --max-context");
     }
+    product::apply_speculative_cli_defaults(options.speculative);
     product::validate_speculative_cli_options(options.speculative);
     if (options.enable_thinking == false && options.reasoning_effort &&
         *options.reasoning_effort != ReasoningEffort::None) {

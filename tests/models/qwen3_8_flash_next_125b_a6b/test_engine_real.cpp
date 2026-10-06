@@ -352,6 +352,28 @@ int main(int argc, char** argv) {
             if (exercise_concurrent_state(engine) != 0) { return 1; }
             if (exercise_vision(engine) != 0) { return 1; }
         }
+        {
+            // Adaptive MTP selects each round's draft count; greedy output and prefix/concurrent
+            // state transactions must match the fixed-window contract.
+            auto options                              = engine_options(artifact);
+            options.speculative.draft_tokens          = 0;
+            options.speculative.adaptive_draft_tokens = true;
+            options.speculative.proposal_head         = ninfer::ProposalHead::Optimized;
+            ninfer::Engine engine(options);
+            if (exercise_mtp_and_prefix(engine) != 0) { return 1; }
+            if (exercise_concurrent_state(engine) != 0) { return 1; }
+        }
+        {
+            // Adaptive MTP selects each round's draft count; greedy output and prefix/concurrent
+            // state transactions must match the fixed-window contract.
+            auto options                              = engine_options(artifact);
+            options.speculative.draft_tokens          = 0;
+            options.speculative.adaptive_draft_tokens = true;
+            options.speculative.proposal_head         = ninfer::ProposalHead::Optimized;
+            ninfer::Engine engine(options);
+            if (exercise_mtp_and_prefix(engine) != 0) { return 1; }
+            if (exercise_concurrent_state(engine) != 0) { return 1; }
+        }
         if (exercise_ordinary_greedy(artifact) != 0) { return 1; }
         std::cout << "OK Qwen3.8 Flash Next real Engine\n";
         return 0;

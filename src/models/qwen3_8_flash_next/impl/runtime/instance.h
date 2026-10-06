@@ -58,6 +58,10 @@ inline constexpr float kGdnScale                         = Variant::gdn_scale;
 inline constexpr std::uint32_t kPrefillChunkAlignment    = Variant::prefill_chunk_alignment;
 inline constexpr std::uint32_t kMaximumMtpDraftTokens    = Variant::maximum_mtp_draft_tokens;
 inline constexpr std::uint32_t kMaximumDFlashDraftTokens = Variant::maximum_dflash_draft_tokens;
+// Adaptive MTP selects each round's draft count in [kAdaptiveMtpMinimumDraftTokens,
+// kMaximumMtpDraftTokens]. Shorter windows lose more acceptance than they save in round time.
+inline constexpr std::uint32_t kAdaptiveMtpMinimumDraftTokens = 3;
+static_assert(kAdaptiveMtpMinimumDraftTokens <= kMaximumMtpDraftTokens);
 
 inline std::vector<GraphExecutionProfile> ordinary_graph_profiles(std::uint32_t capacity) {
     return Variant::ordinary_graph_profiles(capacity);

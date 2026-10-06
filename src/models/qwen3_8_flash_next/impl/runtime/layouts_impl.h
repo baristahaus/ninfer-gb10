@@ -750,23 +750,26 @@ void validate_target_options(DeviceContext& device, const EngineOptions& options
     }
     switch (options.speculative.backend) {
     case SpeculativeBackend::None:
-        if (options.speculative.draft_tokens != 0 ||
+        if (options.speculative.draft_tokens != 0 || options.speculative.adaptive_draft_tokens ||
             options.speculative.proposal_head != ProposalHead::Full) {
             throw std::invalid_argument(
                 "disabled speculative decoding requires draft_tokens=0 and the full proposal head");
         }
         break;
     case SpeculativeBackend::Mtp:
-        if (options.speculative.draft_tokens == 0 ||
-            options.speculative.draft_tokens > kMaximumMtpDraftTokens) {
-            throw std::invalid_argument("MTP draft window must be in [1,5]");
+        if (options.speculative.adaptive_draft_tokens
+                ? options.speculative.draft_tokens != 0
+                : options.speculative.draft_tokens == 0 ||
+                      options.speculative.draft_tokens > kMaximumMtpDraftTokens) {
+            throw std::invalid_argument("MTP draft window must be adaptive or in [1," +
+                                        std::to_string(kMaximumMtpDraftTokens) + "]");
         }
         break;
     case SpeculativeBackend::DFlash:
         if (kMaximumDFlashDraftTokens == 0) {
             throw std::invalid_argument("DFlash is not supported by this target");
         }
-        if (options.speculative.draft_tokens == 0 ||
+        if (options.speculative.adaptive_draft_tokens || options.speculative.draft_tokens == 0 ||
             options.speculative.draft_tokens > kMaximumDFlashDraftTokens) {
             throw std::invalid_argument("DFlash draft window must be in [1,15]");
         }
@@ -795,6 +798,7 @@ std::unique_ptr<SequencePlanImpl> build_sequence_candidate(const SequencePlannin
     impl->max_concurrency     = inputs.max_concurrency;
     impl->prefill_chunk       = inputs.prefill_chunk;
     impl->draft_window        = inputs.draft_window;
+    impl->minimum_draft_window = inputs.minimum_draft_window;
     impl->speculative_backend = inputs.speculative_backend;
     impl->proposal_head       = inputs.proposal_head;
     impl->features            = inputs.features;
@@ -866,7 +870,12 @@ make_sequence_planner_impl(DeviceContext& device, const EngineOptions& options,
         .capacity            = options.max_context,
         .max_concurrency     = options.max_concurrency,
         .prefill_chunk       = std::min(options.prefill_chunk, options.max_context),
-        .draft_window        = options.speculative.draft_tokens,
+        .draft_window        = options.speculative.adaptive_draft_tokens
+                                   ? kMaximumMtpDraftTokens
+                                   : options.speculative.draft_tokens,
+        .minimum_draft_window = options.speculative.adaptive_draft_tokens
+                                    ? kAdaptiveMtpMinimumDraftTokens
+                                    : options.speculative.draft_tokens,
         .speculative_backend = options.speculative.backend,
         .kv_storage =
             [](KvCacheStorage requested) {

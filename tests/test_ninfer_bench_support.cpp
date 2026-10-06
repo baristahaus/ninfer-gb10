@@ -146,9 +146,23 @@ int test_cli_contract() {
     failures += expect_throws<std::invalid_argument>(
         [] {
             (void)parse_for_test({"ninfer_bench", "--weights", "model.ninfer", "--spec", "mtp",
-                                  "--draft-tokens", "6"});
+                                  "--draft-tokens", "8"});
         },
         "unsupported MTP window");
+    const qb::BenchOptions mtp_default =
+        parse_for_test({"ninfer_bench", "--weights", "model.ninfer", "--spec", "mtp"});
+    failures += expect(mtp_default.speculative.adaptive_draft_tokens &&
+                           mtp_default.speculative.draft_tokens == 0,
+                       "MTP defaults to the adaptive draft count");
+    const qb::BenchOptions mtp_auto = parse_for_test(
+        {"ninfer_bench", "--weights", "model.ninfer", "--spec", "mtp", "--draft-tokens", "auto"});
+    failures += expect(mtp_auto.speculative.adaptive_draft_tokens, "--draft-tokens auto");
+    failures += expect_throws<std::invalid_argument>(
+        [] {
+            (void)parse_for_test({"ninfer_bench", "--weights", "model.ninfer", "--spec", "dflash",
+                                  "--draft-tokens", "auto"});
+        },
+        "adaptive DFlash window");
     failures += expect_throws<std::invalid_argument>(
         [] {
             (void)parse_for_test(

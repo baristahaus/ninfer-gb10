@@ -139,4 +139,19 @@ GdnReplayRecordLayer GdnReplayRecords::layer(std::int32_t layer_index, std::int3
     };
 }
 
+GdnReplayRecords GdnReplayRecords::narrowed(std::int32_t width) const {
+    validate_spec(spec);
+    if (width <= 0 || width > spec.width) {
+        throw std::out_of_range("GDN replay narrowed width is outside the record width");
+    }
+    GdnReplayRecords out = *this;
+    out.spec.width       = width;
+    const std::int32_t outer = checked_outer_extent(spec);
+    out.conv  = Tensor(conv.data, conv.dtype, {spec.conv_channels, width, outer, 1});
+    out.key   = Tensor(key.data, key.dtype, {spec.key_dim, spec.qk_heads, width, outer});
+    out.value = Tensor(value.data, value.dtype, {spec.value_dim, spec.value_heads, width, outer});
+    out.gate  = Tensor(gate.data, gate.dtype, {2, spec.value_heads, width, outer});
+    return out;
+}
+
 } // namespace ninfer

@@ -306,23 +306,41 @@ MtpDecodeState::MtpDecodeState(DeviceSpan backing, const MtpDecodeStateLayout& l
     next_drafts =
         egress_tensor(offsetof(MtpDecodeEgress, next_drafts), DType::I32, {batch, drafts});
     next_extents     = egress_tensor(offsetof(MtpDecodeEgress, next_extents), DType::I32, {batch});
-    verify_ids       = layout.verify_ids.bind(backing);
-    target_positions = layout.target_positions.bind(backing);
-    target_argmax    = layout.target_argmax.bind(backing);
-    target_logits    = layout.target_logits.bind(backing);
-    target_hidden    = layout.target_hidden.bind(backing);
+    // Width-dependent regions are round-local scratch sized for the configured maximum window. A
+    // narrower frame views the leading bytes of each region with its own contiguous geometry.
+    const auto narrowed = [&](const TensorRegion& region, int width_dimension) {
+        Tensor bound = region.bind(backing);
+        if (bound.ne[width_dimension] < width) {
+            throw std::logic_error("MTP decode region is narrower than the frame width");
+        }
+        bound.ne[width_dimension] = width;
+        return Tensor(bound.data, bound.dtype,
+                      {bound.ne[0], bound.ne[1], bound.ne[2], bound.ne[3]});
+    };
+    const auto narrowed_steps = [&](const TensorRegion& region) {
+        Tensor bound = region.bind(backing);
+        if (bound.ne[0] != batch || bound.ne[1] < steps) {
+            throw std::logic_error("MTP decode AR layout does not match its configured dimensions");
+        }
+        return Tensor(bound.data, bound.dtype, {batch, steps});
+    };
+    verify_ids       = narrowed(layout.verify_ids, 0);
+    target_positions = narrowed(layout.target_positions, 0);
+    target_argmax    = narrowed(layout.target_argmax, 0);
+    target_logits    = narrowed(layout.target_logits, 1);
+    target_hidden    = narrowed(layout.target_hidden, 1);
     target_continuation_hidden = layout.target_continuation_hidden.bind(backing);
     if (layout.target_mtp_hidden) {
-        target_mtp_hidden.emplace(layout.target_mtp_hidden->bind(backing));
+        target_mtp_hidden.emplace(narrowed(*layout.target_mtp_hidden, 1));
         target_continuation_mtp_hidden.emplace(
             layout.target_continuation_mtp_hidden->bind(backing));
     }
     proposal_logits  = layout.proposal_logits.bind(backing);
-    alignment_ids    = layout.alignment_ids.bind(backing);
-    alignment_hidden = layout.alignment_hidden.bind(backing);
+    alignment_ids    = narrowed(layout.alignment_ids, 0);
+    alignment_hidden = narrowed(layout.alignment_hidden, 1);
     if (layout.alignment_mtp_hidden) {
-        alignment_mtp_hidden.emplace(layout.alignment_mtp_hidden->bind(backing));
-        alignment_qsa_indices.emplace(layout.alignment_qsa_indices->bind(backing));
+        alignment_mtp_hidden.emplace(narrowed(*layout.alignment_mtp_hidden, 1));
+        alignment_qsa_indices.emplace(narrowed(*layout.alignment_qsa_indices, 1));
     }
     ar_hidden = layout.ar_hidden.bind(backing);
     if (layout.ar_mtp_hidden) {
@@ -331,12 +349,9 @@ MtpDecodeState::MtpDecodeState(DeviceSpan backing, const MtpDecodeStateLayout& l
     }
     next_hidden = layout.next_hidden.bind(backing);
     if (layout.next_mtp_hidden) { next_mtp_hidden.emplace(layout.next_mtp_hidden->bind(backing)); }
-    ar_positions      = layout.ar_positions.bind(backing);
-    ar_rope_positions = layout.ar_rope_positions.bind(backing);
-    ar_valid_columns  = layout.ar_valid_columns.bind(backing);
-    if (ar_positions.ne[0] != batch || ar_positions.ne[1] != steps) {
-        throw std::logic_error("MTP decode AR layout does not match its configured dimensions");
-    }
+    ar_positions      = narrowed_steps(layout.ar_positions);
+    ar_rope_positions = narrowed_steps(layout.ar_rope_positions);
+    ar_valid_columns  = narrowed_steps(layout.ar_valid_columns);
 }
 
 DFlashDecodeState::DFlashDecodeState(DeviceSpan backing, const DFlashDecodeStateLayout& layout,

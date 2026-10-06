@@ -163,7 +163,12 @@ auto mtp_decode_batch_body(MtpBatchContext& state, std::int32_t batch_size, std:
 
         Tensor ple_embeddings;
         if (state.ple_embeddings != nullptr) {
-            ple_embeddings = state.ple_embeddings->slice(2, 0, batch_size);
+            // The host stages [hidden, width, batch] rows packed at this round's width.
+            if (state.ple_embeddings->ne[1] < width) {
+                throw std::logic_error("MTP decode PLE staging is narrower than the round width");
+            }
+            ple_embeddings = Tensor(state.ple_embeddings->data, state.ple_embeddings->dtype,
+                                    {state.ple_embeddings->ne[0], width, batch_size});
             card.set_ple_embeddings(&ple_embeddings);
         }
 

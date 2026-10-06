@@ -76,6 +76,8 @@ struct SequencePlanningInputs {
     std::uint32_t max_concurrency          = 1;
     std::uint32_t prefill_chunk            = 0;
     std::uint32_t draft_window             = 0;
+    // Smallest per-round MTP draft count; equal to draft_window unless the count is adaptive.
+    std::uint32_t minimum_draft_window     = 0;
     SpeculativeBackend speculative_backend = SpeculativeBackend::None;
     KvCacheStorage kv_storage              = KvCacheStorage::BFloat16;
     ProposalHead proposal_head             = ProposalHead::Full;
@@ -100,6 +102,8 @@ struct SequencePlanImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT> {
     std::uint32_t max_concurrency          = 1;
     std::uint32_t prefill_chunk            = 0;
     std::uint32_t draft_window             = 0;
+    // Smallest per-round MTP draft count; equal to draft_window unless the count is adaptive.
+    std::uint32_t minimum_draft_window     = 0;
     SpeculativeBackend speculative_backend = SpeculativeBackend::None;
     KvCacheStorage kv_storage              = KvCacheStorage::BFloat16;
     ProposalHead proposal_head             = ProposalHead::Full;

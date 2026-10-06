@@ -14,7 +14,7 @@ namespace ninfer::ops { struct ActivationDevice; }
 
 namespace ninfer::models::qwen3_8_flash_next {
 
-inline constexpr std::uint32_t kMtpDecodeMaximumDrafts    = 5;
+inline constexpr std::uint32_t kMtpDecodeMaximumDrafts    = 7;
 inline constexpr std::uint32_t kMtpDecodeMaximumWidth     = kMtpDecodeMaximumDrafts + 1;
 inline constexpr std::uint32_t kDFlashDecodeMaximumDrafts = 15;
 inline constexpr std::uint32_t kDFlashDecodeMaximumWidth  = kDFlashDecodeMaximumDrafts + 1;

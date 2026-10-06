@@ -78,7 +78,7 @@ std::string serve_usage_text(const char* argv0) {
            "[--max-long-anchors-per-continuation N] "
            "[--request-log-jsonl FILE] "
            "[--response-store-max-records N] [--response-store-max-mib N] "
-           "[--kv-dtype bf16|int8|fp8|nvfp4|k8v4] [--spec mtp|dflash|dflash2 --draft-tokens N] "
+           "[--kv-dtype bf16|int8|fp8|nvfp4|k8v4] [--spec mtp|dflash|dflash2 --draft-tokens auto|N] "
            "[--default-max-tokens N] [--default-thinking-budget N] "
            "[--capture-path DIR] [--capture-sites prompt_last,completion_last] "
            "[--steering-pack PATH] [--vision] [--no-cuda-graph] [--no-prefix-reuse] "
@@ -267,8 +267,7 @@ ServeOptions parse_serve_options(int argc, char** argv) {
             options.speculative.backend =
                 product::parse_speculative_backend(require_value("--spec"));
         } else if (arg == "--draft-tokens") {
-            options.speculative.draft_tokens = static_cast<std::uint32_t>(
-                parse_nonnegative_int(require_value("--draft-tokens"), "draft-tokens"));
+            product::parse_draft_tokens(require_value("--draft-tokens"), options.speculative);
         } else if (arg == "--default-max-tokens") {
             options.default_max_tokens =
                 parse_nonnegative_int(require_value("--default-max-tokens"), "default-max-tokens");
@@ -374,6 +373,7 @@ ServeOptions parse_serve_options(int argc, char** argv) {
     if (options.prefill_chunk == 0 || options.prefill_chunk % 128 != 0) {
         throw std::invalid_argument("--prefill-chunk must be a positive multiple of 128");
     }
+    product::apply_speculative_cli_defaults(options.speculative);
     product::validate_speculative_cli_options(options.speculative);
     if (default_max_tokens_explicit) {
         if (options.default_max_tokens <= 0) {

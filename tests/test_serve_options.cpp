@@ -42,6 +42,18 @@ int main() {
                           mtp_capture.speculative.draft_tokens == 3 &&
                           mtp_capture.context_cache.host_kv_capacity_bytes == (16384ULL << 20),
                       "capture changed MTP or cache capacity settings");
+    const auto mtp_default = parse({"ninfer-serve", "model.ninfer", "--spec", "mtp"});
+    failures += check(mtp_default.speculative.adaptive_draft_tokens &&
+                          mtp_default.speculative.draft_tokens == 0,
+                      "MTP did not default to the adaptive draft count");
+    const auto mtp_auto =
+        parse({"ninfer-serve", "model.ninfer", "--spec", "mtp", "--draft-tokens", "auto"});
+    failures += check(mtp_auto.speculative.adaptive_draft_tokens, "--draft-tokens auto was lost");
+    const auto mtp_seven =
+        parse({"ninfer-serve", "model.ninfer", "--spec", "mtp", "--draft-tokens", "7"});
+    failures += check(!mtp_seven.speculative.adaptive_draft_tokens &&
+                          mtp_seven.speculative.draft_tokens == 7,
+                      "--draft-tokens 7 did not select a fixed MTP window");
     const auto steering = parse({"ninfer-serve","model.ninfer","--steering-pack","/tmp/pack.safetensors"});
     failures += check(steering.steering_pack == "/tmp/pack.safetensors", "steering startup flag lost");
     const ServeOptions defaults = parse({"ninfer-serve", "model.ninfer"});

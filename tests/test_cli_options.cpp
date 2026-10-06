@@ -61,6 +61,16 @@ int main() {
                           dflash_vision.speculative.backend == ninfer::SpeculativeBackend::DFlash &&
                           dflash_vision.speculative.draft_tokens == 7,
                       "CLI did not preserve the combined DFlash and Vision startup features");
+    const ninfer::cli::Options mtp_default =
+        parse({"ninfer-cli", "model.ninfer", "--prompt", "hello", "--spec", "mtp"});
+    failures += check(mtp_default.speculative.adaptive_draft_tokens &&
+                          mtp_default.speculative.draft_tokens == 0,
+                      "CLI MTP did not default to the adaptive draft count");
+    failures += check(rejects([&] {
+                          (void)parse({"ninfer-cli", "model.ninfer", "--prompt", "hello", "--spec",
+                                       "mtp", "--draft-tokens", "8"});
+                      }),
+                      "CLI accepted an unsupported MTP draft count");
     for (const auto k : {1U, 2U, 7U, 15U}) {
         const auto dflash2 = parse({"ninfer-cli", "model.ninfer", "--prompt", "hello", "--spec",
                                     "dflash2", "--draft-tokens", std::to_string(k)});

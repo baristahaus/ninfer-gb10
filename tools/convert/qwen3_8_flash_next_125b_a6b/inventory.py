@@ -249,6 +249,16 @@ PROJECTION_NAMES = frozenset(
        for name in ("gate", "shared_expert.gate_proj", "shared_expert.up_proj")]
     + [f"model.language_model.layers.{layer}.{site}_hyper_connection.input_mix_weight_{name}.weight"
        for layer in LAYERS for site in ("attn", "mlp") for name in ("down", "up")]
+    + [f"{prefix}input_mix_weight_{name}.weight"
+       for prefix in ("model.language_model.hyper_connection_mixer.", "mtp.hyper_connection_mixer.")
+       for name in ("down", "up")]
+    # MTP drafter: its precision affects proposals (acceptance), not verified output.
+    + ["mtp.fc_embedding.weight", "mtp.fc_hidden.weight"]
+    + [f"mtp.layers.0.self_attn.{name}_proj.weight" for name in ("q", "k", "v", "o")]
+    + [f"mtp.layers.0.{site}_hyper_connection.input_mix_weight_{name}.weight"
+       for site in ("attn", "mlp") for name in ("down", "up")]
+    + [f"mtp.layers.0.mlp.{name}.weight"
+       for name in ("gate", "shared_expert.gate_proj", "shared_expert.up_proj")]
 )
 
 

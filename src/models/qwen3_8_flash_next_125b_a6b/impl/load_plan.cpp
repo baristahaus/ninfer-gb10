@@ -30,8 +30,8 @@ Reference device(artifact::Binder& binder, std::string_view name, QType format,
                             format);
 }
 
-// Attention, GDN, MoE router/shared and HyperConnection projections are BF16, or row-scaled FP8 in
-// an 8-bit projection artifact. The stored format selects the binding; consumers dispatch on the
+// Attention, GDN, MoE router/shared, HyperConnection and MTP drafter projections are BF16, or
+// row-scaled FP8 in an 8-bit projection artifact. The stored format selects the binding; consumers dispatch on the
 // bound weight type.
 Reference projection(artifact::Binder& binder, std::string_view name,
                      std::initializer_list<std::uint64_t> shape,
@@ -88,10 +88,8 @@ FinalHyperConnectionPlan bind_final_hc(artifact::Binder& binder, const std::stri
                                        Placement placement = Placement::Device) {
     return {
         .norm = device(binder, prefix + "hc_norm.weight", QType::BF16, {10240}, placement),
-        .down = device(binder, prefix + "input_mix_weight_down.weight", QType::BF16, {320, 10240},
-                       placement),
-        .up   = device(binder, prefix + "input_mix_weight_up.weight", QType::BF16, {10240, 320},
-                       placement),
+        .down = projection(binder, prefix + "input_mix_weight_down.weight", {320, 10240}, placement),
+        .up   = projection(binder, prefix + "input_mix_weight_up.weight", {10240, 320}, placement),
     };
 }
 
@@ -113,11 +111,11 @@ MoePlan bind_main_moe(artifact::Binder& binder, const std::string& prefix) {
 
 MoePlan bind_mtp_moe(artifact::Binder& binder, const std::string& prefix, Placement placement) {
     return {
-        .router      = device(binder, prefix + "gate.weight", QType::BF16, {512, 2560}, placement),
-        .shared_gate = device(binder, prefix + "shared_expert.gate_proj.weight", QType::BF16,
-                              {640, 2560}, placement),
-        .shared_up   = device(binder, prefix + "shared_expert.up_proj.weight", QType::BF16,
-                              {640, 2560}, placement),
+        .router      = projection(binder, prefix + "gate.weight", {512, 2560}, placement),
+        .shared_gate =
+            projection(binder, prefix + "shared_expert.gate_proj.weight", {640, 2560}, placement),
+        .shared_up =
+            projection(binder, prefix + "shared_expert.up_proj.weight", {640, 2560}, placement),
         .shared_down = device(binder, prefix + "shared_expert.down_proj.weight", QType::BF16,
                               {2560, 640}, placement),
         .shared_scale =
@@ -319,9 +317,8 @@ ArtifactLoadPlan plan_artifact(artifact::Binder& binder,
     mtp.hidden_norm =
         device(binder, "mtp.pre_fc_norm_hidden.weight", QType::BF16, {10240}, mtp_placement);
     mtp.embedding_projection =
-        device(binder, "mtp.fc_embedding.weight", QType::BF16, {2560, 2560}, mtp_placement);
-    mtp.hidden_projection =
-        device(binder, "mtp.fc_hidden.weight", QType::BF16, {2560, 2560}, mtp_placement);
+        projection(binder, "mtp.fc_embedding.weight", {2560, 2560}, mtp_placement);
+    mtp.hidden_projection = projection(binder, "mtp.fc_hidden.weight", {2560, 2560}, mtp_placement);
     mtp.attention_hc = bind_hc(binder, "mtp.layers.0.attn_hyper_connection.", mtp_placement);
     mtp.attention    = bind_attention(binder, "mtp.layers.0.self_attn.", mtp_placement);
     mtp.mlp_hc       = bind_hc(binder, "mtp.layers.0.mlp_hyper_connection.", mtp_placement);

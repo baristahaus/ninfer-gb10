@@ -236,6 +236,55 @@ int run(int kTokens, bool fp8) {
     return failures;
 }
 
+// The fused small-token route computes every token identically at any launch width, so a token's
+// block input and injection do not depend on how many tokens share the launch.
+int run_width_invariance() {
+    constexpr int kWide = 16;
+    std::vector<float> hyper(static_cast<std::size_t>(kHyper) * kWide), norm(kHyper);
+    std::vector<float> down(static_cast<std::size_t>(kRank) * kHyper);
+    std::vector<float> up(static_cast<std::size_t>(kHyper) * kRank);
+    std::vector<float> inject(static_cast<std::size_t>(kStreams) * kHyper);
+    fill_uniform(hyper, 931, -0.75F, 0.75F);
+    fill_uniform(norm, 932, -0.125F, 0.125F);
+    fill_uniform(down, 933, -0.04F, 0.04F);
+    fill_uniform(up, 934, -0.25F, 0.25F);
+    fill_uniform(inject, 935, -0.02F, 0.02F);
+    DeviceBuffer d_norm = to_device(encode(norm));
+    DeviceBuffer d_down = to_device(encode(down));
+    DeviceBuffer d_up = to_device(encode(up));
+    DeviceBuffer d_inject = to_device(encode(inject));
+    const ops::HyperConnectionWeights weights{
+        .norm = Tensor(d_norm.p, DType::BF16, {kHyper}),
+        .down = bf16_weight(d_down, kRank, kHyper),
+        .up = bf16_weight(d_up, kHyper, kRank),
+        .injection = bf16_weight(d_inject, kStreams, kHyper),
+    };
+    const auto mix = [&](int tokens) {
+        std::vector<float> columns(hyper.begin(),
+                                   hyper.begin() + static_cast<std::ptrdiff_t>(kHyper) * tokens);
+        DeviceBuffer d_hyper = to_device(encode(columns));
+        DeviceBuffer d_block(static_cast<std::size_t>(kHidden) * tokens * sizeof(std::uint16_t));
+        DeviceBuffer d_injection(static_cast<std::size_t>(kStreams) * tokens * sizeof(std::uint16_t));
+        Tensor block(d_block.p, DType::BF16, {kHidden, tokens});
+        Tensor injection(d_injection.p, DType::BF16, {kStreams, tokens});
+        WorkspaceArena workspace(ops::hyperconnection_mix_workspace_capacity_bytes(tokens, true));
+        ops::hyperconnection_mix(Tensor(d_hyper.p, DType::BF16, {kHyper, tokens}), weights, block,
+                                 &injection, workspace, nullptr);
+        cuda_synchronize();
+        std::vector<double> out = from_device_bf16(d_block.p, static_cast<std::size_t>(kHidden) * tokens);
+        const std::vector<double> gates = from_device_bf16(d_injection.p, static_cast<std::size_t>(kStreams) * tokens);
+        out.insert(out.end(), gates.begin(), gates.end());
+        return out;
+    };
+    const std::vector<double> narrow = mix(4);
+    const std::vector<double> wide = mix(kWide);
+    std::vector<double> wide_prefix(wide.begin(), wide.begin() + kHidden * 4);
+    wide_prefix.insert(wide_prefix.end(), wide.begin() + kHidden * kWide,
+                       wide.begin() + kHidden * kWide + kStreams * 4);
+    return verify_pointwise("HyperConnection launch-width invariance", wide_prefix, narrow,
+                            {/*absolute*/ 0.0, /*relative*/ 0.0});
+}
+
 } // namespace
 
 int main() {
@@ -243,8 +292,9 @@ int main() {
     try {
         int failures = 0;
         for (const bool fp8 : {false, true}) {
-            for (const int tokens : {1, 2, 8, 17}) { failures += run(tokens, fp8); }
+            for (const int tokens : {1, 2, 8, 12, 16, 17}) { failures += run(tokens, fp8); }
         }
+        failures += run_width_invariance();
         std::cout << (failures == 0 ? "OK" : "FAIL") << " HyperConnection\n";
         return failures == 0 ? 0 : 1;
     } catch (const std::exception& error) {

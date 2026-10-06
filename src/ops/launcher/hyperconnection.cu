@@ -399,8 +399,11 @@ __global__ void combine_kernel(__nv_bfloat16* hyper, const __nv_bfloat16* block,
 // normalized rows are never materialized. Each CTA also loads its Up rows before the barrier.
 // Phase 2 (per hidden-column CTA): rebuild low = SiLU(Down n / 4) at the BF16 low-rank
 // boundary, apply Up for the CTA's columns of all four lanes, and gate-mix the block input.
-// Every reduction has a fixed order, so repeated launches are bitwise reproducible.
-constexpr int kFusedMaxTokens      = 8;
+// Every reduction has a fixed order, so repeated launches are bitwise reproducible. Tokens run in
+// tiles of eight with identical per-token arithmetic, so a token's result does not depend on how
+// many tokens share the launch.
+constexpr int kFusedMaxTokens      = 16;
+constexpr int kTokenTile           = 8;
 constexpr int kFusedWarps          = kNormThreads / 32;
 constexpr int kProjectionRows      = kRank + kStreams;
 
@@ -460,7 +463,7 @@ __device__ __forceinline__ void warp_sum_all(float (&values)[Count]) {
     }
 }
 
-// Both projections run on BF16 m16n8k16 MMA with the (at most eight) tokens as N. Within each
+// Both projections run on BF16 m16n8k16 MMA with each eight-token tile as N. Within each
 // 32-wide K chunk, lane (g, q) loads eight consecutive weights of row g (and g + 8) and the same
 // eight activations of token g; dot products are permutation invariant, so the chunk is mapped
 // onto the fragment K order without any shuffling: weights 0-3 feed the first MMA, 4-7 the second.
@@ -497,11 +500,13 @@ __device__ __forceinline__ std::uint32_t pack_bf16(float low, float high) {
 
 template <int Tokens, bool Fp8>
 __global__ void __launch_bounds__(kNormThreads, 1) fused_mix_decode_kernel(FusedMixParams p) {
+    constexpr int kTiles = (Tokens + kTokenTile - 1) / kTokenTile;
+    constexpr int kSlots = kTiles * kTokenTile;
     extern __shared__ float4 fused_shared_storage[];
     auto* activations = reinterpret_cast<__nv_bfloat16*>(fused_shared_storage);
     __shared__ float reduce_shared[kFusedWarps];
     __shared__ float square_shared[kFusedWarps][Tokens];
-    __shared__ float tile_shared[kFusedWarps][8][8];
+    __shared__ float tile_shared[kFusedWarps][8][kSlots];
     __shared__ float inverse_rms[Tokens * kStreams];
     const int tid   = static_cast<int>(threadIdx.x);
     const int lane  = tid & 31;
@@ -540,8 +545,9 @@ __global__ void __launch_bounds__(kNormThreads, 1) fused_mix_decode_kernel(Fused
     uint4 bits[kDownChunks];
     // Row scale of the reducing thread's Down row, also issued before the setup.
     const auto load_down_scale = [&](int tile) {
-        const int row = tile * 8 + tid / 8;
-        return Fp8 && tid < 64 && row < kRank ? p.down_scales[row] : __float2bfloat16_rn(1.0F);
+        const int row = tile * 8 + tid / kSlots;
+        return Fp8 && tid < 8 * kSlots && row < kRank ? p.down_scales[row]
+                                                       : __float2bfloat16_rn(1.0F);
     };
     __nv_bfloat16 down_scale = load_down_scale(slice);
 
@@ -550,77 +556,93 @@ __global__ void __launch_bounds__(kNormThreads, 1) fused_mix_decode_kernel(Fused
     const int columns         = max(0, min(columns_per_cta, kHidden - column_begin));
     const int up_rows         = kStreams * columns;
 
-    // Phase 1: commit every token's lane, steer, and fold the lane's norm weight. All activation
-    // loads are issued before any use so their latency overlaps the weight stream once.
-    {
-        float x[Tokens][kPerThread];
+    // Phase 1: commit every token's lane, steer, and fold the lane's norm weight, one tile of at
+    // most eight tokens at a time. A tile's activation loads are issued before any use so their
+    // latency overlaps the weight stream.
+#pragma unroll
+    for (int tile_index = 0; tile_index < kTiles; ++tile_index) {
+        constexpr int kTile = Tokens < kTokenTile ? Tokens : kTokenTile;
+        const int first     = tile_index * kTokenTile;
+        float x[kTile][kPerThread];
         const std::int64_t lane_base = static_cast<std::int64_t>(kHidden) * stream + tid;
         if (p.previous_block != nullptr) {
-            float branch_logit[Tokens];
-            __nv_bfloat16 h[Tokens][kPerThread], b[Tokens][kPerThread];
+            float branch_logit[kTile];
+            __nv_bfloat16 h[kTile][kPerThread], b[kTile][kPerThread];
 #pragma unroll
-            for (int token = 0; token < Tokens; ++token) {
-                branch_logit[token] =
-                    __bfloat162float(p.previous_injection[stream + kStreams * token]);
+            for (int i = 0; i < kTile; ++i) {
+                const int token = first + i;
+                if (token >= Tokens) break;
+                branch_logit[i] = __bfloat162float(p.previous_injection[stream + kStreams * token]);
 #pragma unroll
                 for (int j = 0; j < kPerThread; ++j) {
-                    h[token][j] = p.hyper[lane_base + static_cast<std::int64_t>(kHyper) * token +
-                                          j * kNormThreads];
-                    b[token][j] = p.previous_block[tid + j * kNormThreads + kHidden * token];
+                    h[i][j] = p.hyper[lane_base + static_cast<std::int64_t>(kHyper) * token +
+                                      j * kNormThreads];
+                    b[i][j] = p.previous_block[tid + j * kNormThreads + kHidden * token];
                 }
             }
             // The weight tile is independent of the activations; issuing it after the state
             // loads keeps those (on the setup's critical path) ahead of the weight stream.
-            load_down(slice, bits);
+            if (tile_index == 0) load_down(slice, bits);
 #pragma unroll
-            for (int token = 0; token < Tokens; ++token) {
-                const float scale = 2.0F / (1.0F + expf(-branch_logit[token] * 0.25F));
+            for (int i = 0; i < kTile; ++i) {
+                if (first + i >= Tokens) break;
+                const float scale = 2.0F / (1.0F + expf(-branch_logit[i] * 0.25F));
 #pragma unroll
                 for (int j = 0; j < kPerThread; ++j)
-                    x[token][j] = __bfloat162float(__float2bfloat16_rn(
-                        __bfloat162float(h[token][j]) + scale * __bfloat162float(b[token][j])));
+                    x[i][j] = __bfloat162float(__float2bfloat16_rn(
+                        __bfloat162float(h[i][j]) + scale * __bfloat162float(b[i][j])));
             }
         } else {
-            load_down(slice, bits);
+            if (tile_index == 0) load_down(slice, bits);
 #pragma unroll
-            for (int token = 0; token < Tokens; ++token)
+            for (int i = 0; i < kTile; ++i) {
+                if (first + i >= Tokens) break;
 #pragma unroll
                 for (int j = 0; j < kPerThread; ++j)
-                    x[token][j] = __bfloat162float(
-                        p.hyper[lane_base + static_cast<std::int64_t>(kHyper) * token +
+                    x[i][j] = __bfloat162float(
+                        p.hyper[lane_base + static_cast<std::int64_t>(kHyper) * (first + i) +
                                 j * kNormThreads]);
+            }
         }
         if (p.steering != nullptr) {
 #pragma unroll
-            for (int token = 0; token < Tokens; ++token)
-                steer_lane(x[token], p.steering, p.layer, p.width, stream, token, reduce_shared);
+            for (int i = 0; i < kTile; ++i) {
+                if (first + i >= Tokens) break;
+                steer_lane(x[i], p.steering, p.layer, p.width, stream, first + i, reduce_shared);
+            }
         }
         float norm_scale[kPerThread];
 #pragma unroll
         for (int j = 0; j < kPerThread; ++j)
             norm_scale[j] =
                 1.0F + __bfloat162float(p.norm[kHidden * stream + tid + j * kNormThreads]);
-        float square[Tokens] = {};
+        float square[kTile] = {};
 #pragma unroll
-        for (int token = 0; token < Tokens; ++token) {
+        for (int i = 0; i < kTile; ++i) {
+            if (first + i >= Tokens) break;
 #pragma unroll
             for (int j = 0; j < kPerThread; ++j) {
-                activations[token * kActivationStride + tid + j * kNormThreads] =
-                    __float2bfloat16_rn(x[token][j] * norm_scale[j]);
-                square[token] = fmaf(x[token][j], x[token][j], square[token]);
+                activations[(first + i) * kActivationStride + tid + j * kNormThreads] =
+                    __float2bfloat16_rn(x[i][j] * norm_scale[j]);
+                square[i] = fmaf(x[i][j], x[i][j], square[i]);
             }
         }
         if (slice == 0) {
 #pragma unroll
-            for (int token = 0; token < Tokens; ++token)
+            for (int i = 0; i < kTile; ++i) {
+                if (first + i >= Tokens) break;
 #pragma unroll
                 for (int j = 0; j < kPerThread; ++j)
-                    p.staged[static_cast<std::int64_t>(kHyper) * token + lane_base +
-                             j * kNormThreads] = __float2bfloat16_rn(x[token][j]);
+                    p.staged[static_cast<std::int64_t>(kHyper) * (first + i) + lane_base +
+                             j * kNormThreads] = __float2bfloat16_rn(x[i][j]);
+            }
             warp_sum_all(square);
             if (lane == 0) {
 #pragma unroll
-                for (int token = 0; token < Tokens; ++token) square_shared[warp][token] = square[token];
+                for (int i = 0; i < kTile; ++i) {
+                    if (first + i >= Tokens) break;
+                    square_shared[warp][first + i] = square[i];
+                }
             }
         }
     }
@@ -640,27 +662,36 @@ __global__ void __launch_bounds__(kNormThreads, 1) fused_mix_decode_kernel(Fused
             down_scale = load_down_scale(tile);
         }
         const bool codes = Fp8 && tile * 8 < kRank;
-        float c[4] = {};
+        float c[kTiles][4] = {};
 #pragma unroll
         for (int chunk = 0; chunk < kDownChunks; ++chunk) {
-            uint4 activation = make_uint4(0, 0, 0, 0);
-            if (group < Tokens) {
-                activation = *reinterpret_cast<const uint4*>(
-                    activations + group * kActivationStride + warp * kDownWarpK + 32 * chunk +
-                    8 * quad);
-            }
-            mma_chunk(c, codes ? widen_codes(bits[chunk]) : bits[chunk], make_uint4(0, 0, 0, 0),
-                      activation);
-        }
-        tile_shared[warp][group][2 * quad]     = c[0];
-        tile_shared[warp][group][2 * quad + 1] = c[1];
-        __syncthreads();
-        if (tid < 64) {
-            const int row   = tile * 8 + tid / 8;
-            const int token = tid % 8;
-            float sum       = 0.0F;
+            const uint4 weights = codes ? widen_codes(bits[chunk]) : bits[chunk];
 #pragma unroll
-            for (int w = 0; w < kFusedWarps; ++w) sum += tile_shared[w][tid / 8][token];
+            for (int n = 0; n < kTiles; ++n) {
+                const int token  = n * kTokenTile + group;
+                uint4 activation = make_uint4(0, 0, 0, 0);
+                if (token < Tokens) {
+                    activation = *reinterpret_cast<const uint4*>(
+                        activations + token * kActivationStride + warp * kDownWarpK + 32 * chunk +
+                        8 * quad);
+                }
+                mma_chunk(c[n], weights, make_uint4(0, 0, 0, 0), activation);
+            }
+        }
+#pragma unroll
+        for (int n = 0; n < kTiles; ++n) {
+            tile_shared[warp][group][n * kTokenTile + 2 * quad]     = c[n][0];
+            tile_shared[warp][group][n * kTokenTile + 2 * quad + 1] = c[n][1];
+        }
+        __syncthreads();
+        // Thread (row, token) reduces the eight warps in a fixed order.
+        if (tid < 8 * kSlots) {
+            const int local_row = tid / kSlots;
+            const int row       = tile * 8 + local_row;
+            const int token     = tid % kSlots;
+            float sum           = 0.0F;
+#pragma unroll
+            for (int w = 0; w < kFusedWarps; ++w) sum += tile_shared[w][local_row][token];
             if (Fp8) sum *= __bfloat162float(down_scale);
             if (row < rows && token < Tokens)
                 p.partials[(token * kProjectionRows + row) * kStreams + stream] = sum;
@@ -701,8 +732,8 @@ __global__ void __launch_bounds__(kNormThreads, 1) fused_mix_decode_kernel(Fused
     cooperative_groups::this_grid().sync();
 
     // Phase 2: low-rank activation, injection, Up for this CTA's columns, and the gate mix.
-    auto* low      = activations;                                             // [8,kLowStride]
-    float* up_sums = reinterpret_cast<float*>(activations + 8 * kLowStride);  // [2,64,8]
+    auto* low      = activations;                                                  // [kSlots,kLowStride]
+    float* up_sums = reinterpret_cast<float*>(activations + kSlots * kLowStride);  // [2,64,kSlots]
     const int mix_token  = tid / max(columns, 1);
     const int mix_column = tid % max(columns, 1);
     const bool mixes     = tid < Tokens * columns;
@@ -751,34 +782,40 @@ __global__ void __launch_bounds__(kNormThreads, 1) fused_mix_decode_kernel(Fused
     if (columns == 0) return;
 
     {
-        float c[4] = {};
+        float c[kTiles][4] = {};
 #pragma unroll
         for (int chunk = 0; chunk < kUpChunks; ++chunk) {
-            uint4 activation = make_uint4(0, 0, 0, 0);
-            if (group < Tokens) {
-                activation = *reinterpret_cast<const uint4*>(
-                    low + group * kLowStride + up_half * (kRank / 2) + 32 * chunk + 8 * quad);
-            }
-            if constexpr (Fp8) {
-                mma_chunk(c, widen_codes(up_top[chunk]), widen_codes(up_bottom[chunk]), activation);
-            } else {
-                mma_chunk(c, up_top[chunk], up_bottom[chunk], activation);
+            const uint4 top    = Fp8 ? widen_codes(up_top[chunk]) : up_top[chunk];
+            const uint4 bottom = Fp8 ? widen_codes(up_bottom[chunk]) : up_bottom[chunk];
+#pragma unroll
+            for (int n = 0; n < kTiles; ++n) {
+                const int token  = n * kTokenTile + group;
+                uint4 activation = make_uint4(0, 0, 0, 0);
+                if (token < Tokens) {
+                    activation = *reinterpret_cast<const uint4*>(
+                        low + token * kLowStride + up_half * (kRank / 2) + 32 * chunk + 8 * quad);
+                }
+                mma_chunk(c[n], top, bottom, activation);
             }
         }
-        if constexpr (Fp8) {
-            const float top    = __bfloat162float(up_scale_top);
-            const float bottom = __bfloat162float(up_scale_bottom);
-            c[0] *= top;
-            c[1] *= top;
-            c[2] *= bottom;
-            c[3] *= bottom;
-        }
-        float* sums = up_sums + up_half * 64 * 8;
+        float* sums   = up_sums + up_half * 64 * kSlots;
         const int row = up_tile * 16 + group;
-        sums[row * 8 + 2 * quad]           = c[0];
-        sums[row * 8 + 2 * quad + 1]       = c[1];
-        sums[(row + 8) * 8 + 2 * quad]     = c[2];
-        sums[(row + 8) * 8 + 2 * quad + 1] = c[3];
+#pragma unroll
+        for (int n = 0; n < kTiles; ++n) {
+            if constexpr (Fp8) {
+                const float top    = __bfloat162float(up_scale_top);
+                const float bottom = __bfloat162float(up_scale_bottom);
+                c[n][0] *= top;
+                c[n][1] *= top;
+                c[n][2] *= bottom;
+                c[n][3] *= bottom;
+            }
+            const int token                                = n * kTokenTile + 2 * quad;
+            sums[row * kSlots + token]                     = c[n][0];
+            sums[row * kSlots + token + 1]                 = c[n][1];
+            sums[(row + 8) * kSlots + token]               = c[n][2];
+            sums[(row + 8) * kSlots + token + 1]           = c[n][3];
+        }
     }
     __syncthreads();
 
@@ -790,8 +827,8 @@ __global__ void __launch_bounds__(kNormThreads, 1) fused_mix_decode_kernel(Fused
             p.hyper[static_cast<std::int64_t>(kHyper) * mix_token + kHidden * s + d] = committed[s];
             const float normalized = __bfloat162float(committed[s]) *
                                      inverse_rms[mix_token * kStreams + s] * mix_norm[s];
-            const int row     = (s * columns + mix_column) * 8 + mix_token;
-            const float logit = up_sums[row] + up_sums[64 * 8 + row];
+            const int row     = (s * columns + mix_column) * kSlots + mix_token;
+            const float logit = up_sums[row] + up_sums[64 * kSlots + row];
             mixed             = fmaf(normalized, 1.0F / (1.0F + expf(-logit)), mixed);
         }
         p.block_input[d + static_cast<std::int64_t>(kHidden) * mix_token] =
@@ -800,8 +837,10 @@ __global__ void __launch_bounds__(kNormThreads, 1) fused_mix_decode_kernel(Fused
 }
 
 std::size_t fused_mix_shared_bytes(int tokens) {
+    const std::size_t slots  = static_cast<std::size_t>((tokens + kTokenTile - 1) / kTokenTile) *
+                               kTokenTile;
     const std::size_t phase1 = static_cast<std::size_t>(tokens) * kActivationStride * 2;
-    const std::size_t phase2 = 8 * kLowStride * 2 + 2 * 64 * 8 * sizeof(float);
+    const std::size_t phase2 = slots * kLowStride * 2 + 2 * 64 * slots * sizeof(float);
     return phase1 > phase2 ? phase1 : phase2;
 }
 

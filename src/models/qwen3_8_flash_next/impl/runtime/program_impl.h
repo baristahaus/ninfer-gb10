@@ -12184,10 +12184,10 @@ double ProgramImplCore::estimated_mtp_round_seconds(std::uint32_t batch_size,
 
 std::uint32_t ProgramImplCore::maximum_mtp_draft_window(std::uint32_t batch_size) const {
     if (minimum_draft_window == draft_window) { return draft_window; }
-    // Fused small-batch verify kernels cover at most eight target tokens and give every row the
-    // same result at any batch composition. A wider concurrent round would leave that domain,
-    // run slower general paths and let concurrency change near-tie tokens.
-    constexpr std::uint32_t kFusedVerifyTokens = 8;
+    // Compact verify kernels cover at most sixteen target tokens and give every row the same
+    // result at any batch composition. A wider concurrent round would leave that domain, run
+    // slower general paths and let concurrency change near-tie tokens.
+    constexpr std::uint32_t kFusedVerifyTokens = 16;
     return std::clamp(kFusedVerifyTokens / batch_size, minimum_draft_window + 1U,
                       draft_window + 1U) -
            1U;
@@ -12372,8 +12372,11 @@ ProgramImplCore::decode_mtp_batch(std::span<const std::uint32_t> lanes,
 
         const double seconds = std::chrono::duration<double>(Clock::now() - started).count();
         last_mtp_draft_window = drafts;
-        double& measured      = mtp_round_seconds[lanes.size()][drafts];
-        measured              = measured == 0.0 ? seconds : 0.9 * measured + 0.1 * seconds;
+        // The first round of a (batch size, draft count) pays one-time graph launch costs and
+        // would otherwise keep that count from being selected again.
+        std::uint32_t& samples = mtp_round_samples[lanes.size()][drafts];
+        double& measured       = mtp_round_seconds[lanes.size()][drafts];
+        if (samples++ > 0) { measured = measured == 0.0 ? seconds : 0.9 * measured + 0.1 * seconds; }
         for (std::size_t row = 0; row < lanes.size(); ++row) {
             SequenceState& sequence       = active_sequence(lanes[row]);
             RequestControl& request       = requests[lanes[row]];

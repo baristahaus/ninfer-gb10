@@ -90,6 +90,10 @@ std::vector<double> dot_rows(const Fp8Matrix& matrix, int rows, const std::vecto
     return out;
 }
 
+// Records each token count's fused outputs to check that a token's result does not depend on how
+// many tokens share the launch.
+std::vector<std::vector<double>> recorded(17);
+
 int run(int tokens) {
     std::vector<float> input(static_cast<std::size_t>(kHidden) * tokens);
     fill_uniform(input, 931, -1.0F, 1.0F);
@@ -140,6 +144,14 @@ int run(int tokens) {
 
     const auto got_scores = from_device_bf16(d_scores.data(), scores_reference.size());
     const auto got_activation = from_device_bf16(d_activation.data(), activation_reference.size());
+    recorded[tokens].clear();
+    for (int token = 0; token < tokens; ++token) {
+        recorded[tokens].insert(recorded[tokens].end(), got_scores.begin() + token * kExperts,
+                                got_scores.begin() + (token + 1) * kExperts);
+        recorded[tokens].insert(recorded[tokens].end(),
+                                got_activation.begin() + token * kIntermediate,
+                                got_activation.begin() + (token + 1) * kIntermediate);
+    }
     int failures = verify_pointwise("FP8 MoE entry scores", got_scores, scores_reference,
                                     {/*absolute*/ 2.0e-3, /*relative*/ 1.0e-2});
     failures += verify_pointwise("FP8 MoE entry SwiGLU", got_activation, activation_reference,
@@ -161,7 +173,13 @@ int main() {
     if (ninfer::test::cuda_unavailable()) { return 77; }
     try {
         int failures = 0;
-        for (const int tokens : {1, 2, 4, 8}) { failures += run(tokens); }
+        for (const int tokens : {1, 2, 4, 8, 9, 12, 16}) { failures += run(tokens); }
+        // The 4-token (8-token tile) and 12-token (16-token tile) launches share their inputs'
+        // first four tokens.
+        std::vector<double> wide(recorded[12].begin(),
+                                 recorded[12].begin() + static_cast<std::ptrdiff_t>(recorded[4].size()));
+        failures += verify_pointwise("FP8 MoE entry token-tile invariance", wide, recorded[4],
+                                     {/*absolute*/ 0.0, /*relative*/ 0.0});
         std::cout << (failures == 0 ? "OK" : "FAIL") << " FP8 MoE entry\n";
         return failures == 0 ? 0 : 1;
     } catch (const std::exception& error) {

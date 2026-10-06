@@ -154,8 +154,8 @@ int run(bool fp8) {
     ops::flash_next_moe(scalar_input, weights, scalar_output, scalar_workspace, nullptr);
     WorkspaceArena grouped_workspace(ops::flash_next_moe_workspace_capacity_bytes(kGroupedTokens));
     ops::flash_next_moe(grouped_input, weights, grouped_output, grouped_workspace, nullptr);
-    // A verification-sized batch (MTP3 rows) takes the compact decode route.
-    constexpr int kCompactTokens = 4;
+    // Verification-sized batches take the compact decode route.
+    constexpr int kCompactTokens = 12;
     GuardedDeviceBuffer d_compact_output(static_cast<std::size_t>(kHidden) * kCompactTokens *
                                          sizeof(std::uint16_t));
     Tensor compact_input(d_input.p, DType::BF16, {kHidden, kCompactTokens});

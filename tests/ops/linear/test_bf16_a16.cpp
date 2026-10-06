@@ -89,6 +89,31 @@ std::vector<std::int32_t> sampled_tokens(std::int32_t tokens) {
     return result;
 }
 
+// Flash-Next verification batches mix rows from concurrent requests; a token's projection must not
+// depend on how many tokens share the launch.
+int run_batch_width_invariance(DeviceWeight& weight) {
+    const std::int32_t rows   = weight.host.n;
+    const std::int32_t hidden = weight.host.k;
+    const std::vector<std::uint16_t> wide_bits = make_activation_bits(hidden, 12);
+    const auto project = [&](std::int32_t tokens) {
+        std::vector<std::uint16_t> bits(wide_bits.begin(),
+                                        wide_bits.begin() + static_cast<std::ptrdiff_t>(hidden) * tokens);
+        DeviceBuffer activation = to_device(bits);
+        DeviceBuffer output(static_cast<std::size_t>(rows) * tokens * sizeof(std::uint16_t));
+        Tensor x(activation.p, DType::BF16, {hidden, tokens});
+        Tensor y(output.p, DType::BF16, {rows, tokens});
+        DeviceArena workspace(256);
+        ops::linear(x, weight.view(), y, ops::LinearPolicy::A16Only, workspace, nullptr);
+        cuda_synchronize();
+        return from_device_bf16(output.p, static_cast<std::size_t>(rows) * tokens);
+    };
+    const std::vector<double> narrow = project(4);
+    std::vector<double> wide         = project(12);
+    wide.resize(narrow.size());
+    return verify_pointwise("BF16 linear batch-width invariance", wide, narrow,
+                            {/*absolute*/ 0.0, /*relative*/ 0.0});
+}
+
 int run_bf16_linear_case(DeviceWeight& weight, std::int32_t tokens, bool replay = false) {
     const std::int32_t rows                    = weight.host.n;
     const std::int32_t hidden                  = weight.host.k;
@@ -283,6 +308,7 @@ int run_bf16_linear() {
         for (int tokens : {1, 2, 8}) {
             failures += run_bf16_linear_case(weight, tokens, true);
         }
+        failures += run_batch_width_invariance(weight);
     }
     failures += run_selector_linear();
     return failures;

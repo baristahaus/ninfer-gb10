@@ -1237,11 +1237,13 @@ static_assert(kSplitHeadsPerBlock * 32 == 128, "split staging assumes 128 thread
 
 // Match the split-K profiles used by the reference vLLM Triton kernel for this
 // target's two KV heads. In particular, four-row MTP verification uses 32
-// splits rather than the single-token decode profile's 64 splits.
+// splits rather than the single-token decode profile's 64 splits. Every compact
+// verification batch (3 to 16 tokens) keeps 32 splits, so a row's attention
+// reduction does not depend on how many rows share the batch.
 int decode_attention_splits(int tokens) {
     const int base_programs = tokens * kKvHeads;
     if (base_programs <= 4) { return 64; }
-    if (base_programs < 32) { return 32; }
+    if (base_programs <= 32) { return 32; }
     if (base_programs <= 256) { return 8; }
     if (base_programs <= 512) { return 4; }
     return 1;

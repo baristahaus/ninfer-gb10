@@ -205,14 +205,14 @@ __global__ void __launch_bounds__(kRouteThreads)
     }
 }
 
-// Compact batches (2-8 tokens): CTAs [0, T) route one token each while the others compute the
+// Compact batches (2-16 tokens): CTAs [0, T) route one token each while the others compute the
 // shared-expert Down projection. Every 128-thread half runs one block of the production small-T
 // BF16 schedule, whose rows are warp-local, so the output equals that GEMV bit for bit.
 template <int Tokens>
 using SharedDownSmallTSchedule =
     typename detail::flash_next::Bf16LinearSmallTProductionSchedule<SharedDownGeometry,
                                                                     Tokens>::Type;
-constexpr int kRouteSharedDownMaxTokens = 8;
+constexpr int kRouteSharedDownMaxTokens = 16;
 
 template <int Tokens>
 __global__ void __launch_bounds__(kRouteThreads)

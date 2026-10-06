@@ -179,7 +179,10 @@ struct Bf16LinearSmallTProductionSchedule {
     static constexpr Bf16SmallTActivationAccess kActivationAccess =
         ActiveTokens <= 8 ? Bf16SmallTActivationAccess::WarpPacked
                           : Bf16SmallTActivationAccess::DirectStream;
-    static constexpr bool kSequential = ActiveTokens <= 9 || ActiveTokens >= 17;
+    // Flash-Next geometries keep the sequential phase order at every token count, so a token's
+    // accumulation order and result do not depend on the batch size.
+    static constexpr bool kSequential =
+        !kOutputProjectionGeometry || ActiveTokens <= 9 || ActiveTokens >= 17;
     static constexpr bool kUnroll2 =
         kOutputProjectionGeometry
             ? ((ActiveTokens >= 2 && ActiveTokens <= 8) ||

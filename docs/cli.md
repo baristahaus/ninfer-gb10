@@ -180,8 +180,8 @@ may be combined with `--vision`.
 Qwen3.8 Flash-Next also accepts `--draft-tokens auto`, which is its default with `--spec mtp`.
 The engine then chooses three to seven drafts for every round. It uses each request's recent
 per-position acceptance and the measured round time of each draft count. While several requests
-decode together, a round verifies at most eight tokens, so two or more active requests use three
-drafts. Qwen3.5 targets need a fixed count from one to five.
+decode together, a round verifies at most sixteen tokens: two active requests use up to seven
+drafts each, and three or more use three. Qwen3.5 targets need a fixed count from one to five.
 
 For DFlash:
 

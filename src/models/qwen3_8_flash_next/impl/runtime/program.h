@@ -744,6 +744,9 @@ public:
     std::array<std::array<double, qwen3_8_flash_next::kMtpDecodeMaximumDrafts + 1>,
                kMaximumConcurrency + 1>
         mtp_round_seconds{};
+    std::array<std::array<std::uint32_t, qwen3_8_flash_next::kMtpDecodeMaximumDrafts + 1>,
+               kMaximumConcurrency + 1>
+        mtp_round_samples{};
     // Draft count of the most recent MTP round; its egress rows use width count + 1.
     std::uint32_t last_mtp_draft_window = 0;
     DecodeGraphFamily dflash_graphs;

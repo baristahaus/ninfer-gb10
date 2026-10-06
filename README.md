@@ -15,36 +15,66 @@ These instructions also apply to this fork.
 
 ## Performance
 
+![Decode and prefill throughput of the 16-bit and 8-bit variants](docs/images/flash-next-performance.svg)
+
 These measurements use one request, BF16 KV, CUDA Graphs, greedy sampling and an 8,192-token
 prefill chunk. The model is Swift 1.5. The GPU power limit is 600 W. Both variants use the same
 build.
 
 ### Decode
 
-| Mode | Context | 16-bit | 8-bit | Change |
-|---|---:|---:|---:|---:|
-| No speculative decoding | 512 | 118.0 tok/s | 172.0 tok/s | +46% |
-| No speculative decoding | 8K | 117.8 tok/s | 170.6 tok/s | +45% |
-| MTP3 | 512 | 171.1 tok/s | 256.2 tok/s | +50% |
-| MTP3 | 8K | 268.2 tok/s | 381.5 tok/s | +42% |
-| MTP3 with `--lm-head-draft` | 512 | 197.1 tok/s | 274.8 tok/s | +39% |
-| MTP3 with `--lm-head-draft` | 8K | 303.1 tok/s | 401.3 tok/s | +32% |
+Without speculative decoding:
+
+| Context | 16-bit | 8-bit | Change |
+|---:|---:|---:|---:|
+| 512 | 118.0 tok/s | 172.0 tok/s | +46% |
+| 8K | 117.8 tok/s | 170.6 tok/s | +45% |
+| 64K | 109.7 tok/s | 153.9 tok/s | +40% |
+| 128K | 107.2 tok/s | 149.8 tok/s | +40% |
+| 256K (maximum) | 106.6 tok/s | 149.0 tok/s | +40% |
+
+MTP3:
+
+| Context | 16-bit | 8-bit | Change |
+|---:|---:|---:|---:|
+| 512 | 171.1 tok/s | 256.2 tok/s | +50% |
+| 8K | 268.2 tok/s | 381.5 tok/s | +42% |
+| 64K | 256.6 tok/s | 353.5 tok/s | +38% |
+| 128K | 253.5 tok/s | 348.1 tok/s | +37% |
+| 256K (maximum) | 251.7 tok/s | 346.8 tok/s | +38% |
+
+MTP3 with `--lm-head-draft`:
+
+| Context | 16-bit | 8-bit | Change |
+|---:|---:|---:|---:|
+| 512 | 197.1 tok/s | 274.8 tok/s | +39% |
+| 8K | 303.1 tok/s | 401.3 tok/s | +32% |
+| 64K | 291.7 tok/s | 380.3 tok/s | +30% |
+| 128K | 282.6 tok/s | 368.0 tok/s | +30% |
+| 256K (maximum) | 277.4 tok/s | 360.6 tok/s | +30% |
 
 ### Prefill
 
 | Prompt length | 16-bit | 8-bit | Change |
-|---|---:|---:|---:|
-| 512 tokens | 6,709 tok/s | 5,905 tok/s | -12% |
-| 8,192 tokens | 13,903 tok/s | 13,908 tok/s | 0% |
+|---:|---:|---:|---:|
+| 512 | 6,709 tok/s | 5,905 tok/s | -12% |
+| 8K | 13,903 tok/s | 13,908 tok/s | 0% |
+| 64K | 13,043 tok/s | 12,171 tok/s | -7% |
+| 128K | 11,927 tok/s | 11,032 tok/s | -8% |
+| 256K (maximum) | 9,941 tok/s | 9,154 tok/s | -8% |
+
+The 256K row uses a 261,632-token prompt and 256 generated tokens, which is the 262,144-token
+maximum context. The other rows generate 256 tokens after a prompt of the given length.
 
 The 16-bit variant has BF16 non-expert weights and a BF16 PLE table. The 8-bit variant has FP8
 non-expert weights and an FP8 PLE table. Both variants use NVFP4 routed experts.
 
-`--lm-head-draft` makes the MTP drafter use a smaller, quantized proposal head. It increases MTP3 decode
-by 5% to 15%.
+`--lm-head-draft` makes the MTP drafter use a smaller, quantized proposal head. It increases MTP3
+decode by 4% to 15%.
 
-MTP3 throughput depends on the text. The 8K benchmark text accepts 3.9 tokens per verification
-round. The 512-token text accepts 2.5 to 2.6.
+MTP3 throughput depends on the text. The benchmark text accepts 2.5 to 2.6 tokens per
+verification round at 512 context and 3.9 to 4.0 at 8K and longer. The long prompts repeat the
+same text, so they give high acceptance. Typical text gives lower MTP3 throughput.
 
 ### Power limit
 
@@ -71,6 +101,9 @@ at 600 W.
 
 The benchmark binary is in the `dev` preset. Remove the `--spec`, `--draft-tokens` and
 `--lm-head-draft` options to measure decode without speculative decoding.
+
+For the long-context rows, use `-pg "65536,256;131072,256" --max-ctx 131584` or
+`-pg "261632,256" --max-ctx 262144`.
 
 ## Target system
 

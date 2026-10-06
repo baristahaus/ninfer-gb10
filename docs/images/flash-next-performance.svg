@@ -1,0 +1,119 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="520" viewBox="0 0 1100 520" font-family="Helvetica, Arial, sans-serif">
+<rect width="1100" height="520" fill="#ffffff"/>
+<text x="550.0" y="32.0" font-size="18" text-anchor="middle" font-weight="bold" fill="#222">Qwen3.8 Flash-Next (Swift 1.5) on RTX PRO 6000, 600 W, one request</text>
+<text x="550.0" y="54.0" font-size="13" text-anchor="middle" font-weight="normal" fill="#444">Solid: 8-bit variant. Dashed: 16-bit variant.</text>
+<text x="300.0" y="74.0" font-size="16" text-anchor="middle" font-weight="bold" fill="#222">Decode (tg)</text>
+<line x1="80" y1="420.0" x2="520" y2="420.0" stroke="#e3e3e3" stroke-width="1"/>
+<text x="72.0" y="424.0" font-size="12" text-anchor="end" font-weight="normal" fill="#555">0</text>
+<line x1="80" y1="383.3" x2="520" y2="383.3" stroke="#e3e3e3" stroke-width="1"/>
+<text x="72.0" y="387.3" font-size="12" text-anchor="end" font-weight="normal" fill="#555">50</text>
+<line x1="80" y1="346.7" x2="520" y2="346.7" stroke="#e3e3e3" stroke-width="1"/>
+<text x="72.0" y="350.7" font-size="12" text-anchor="end" font-weight="normal" fill="#555">100</text>
+<line x1="80" y1="310.0" x2="520" y2="310.0" stroke="#e3e3e3" stroke-width="1"/>
+<text x="72.0" y="314.0" font-size="12" text-anchor="end" font-weight="normal" fill="#555">150</text>
+<line x1="80" y1="273.3" x2="520" y2="273.3" stroke="#e3e3e3" stroke-width="1"/>
+<text x="72.0" y="277.3" font-size="12" text-anchor="end" font-weight="normal" fill="#555">200</text>
+<line x1="80" y1="236.7" x2="520" y2="236.7" stroke="#e3e3e3" stroke-width="1"/>
+<text x="72.0" y="240.7" font-size="12" text-anchor="end" font-weight="normal" fill="#555">250</text>
+<line x1="80" y1="200.0" x2="520" y2="200.0" stroke="#e3e3e3" stroke-width="1"/>
+<text x="72.0" y="204.0" font-size="12" text-anchor="end" font-weight="normal" fill="#555">300</text>
+<line x1="80" y1="163.3" x2="520" y2="163.3" stroke="#e3e3e3" stroke-width="1"/>
+<text x="72.0" y="167.3" font-size="12" text-anchor="end" font-weight="normal" fill="#555">350</text>
+<line x1="80" y1="126.7" x2="520" y2="126.7" stroke="#e3e3e3" stroke-width="1"/>
+<text x="72.0" y="130.7" font-size="12" text-anchor="end" font-weight="normal" fill="#555">400</text>
+<line x1="80" y1="90.0" x2="520" y2="90.0" stroke="#e3e3e3" stroke-width="1"/>
+<text x="72.0" y="94.0" font-size="12" text-anchor="end" font-weight="normal" fill="#555">450</text>
+<line x1="80" y1="420" x2="520" y2="420" stroke="#888"/>
+<line x1="80" y1="90" x2="80" y2="420" stroke="#888"/>
+<text x="110.0" y="440.0" font-size="12" text-anchor="middle" font-weight="normal" fill="#555">512</text>
+<text x="205.0" y="440.0" font-size="12" text-anchor="middle" font-weight="normal" fill="#555">8K</text>
+<text x="300.0" y="440.0" font-size="12" text-anchor="middle" font-weight="normal" fill="#555">64K</text>
+<text x="395.0" y="440.0" font-size="12" text-anchor="middle" font-weight="normal" fill="#555">128K</text>
+<text x="490.0" y="440.0" font-size="12" text-anchor="middle" font-weight="normal" fill="#555">256K</text>
+<text x="300.0" y="462.0" font-size="13" text-anchor="middle" font-weight="normal" fill="#333">Context length (tokens)</text>
+<text transform="translate(22,255.0) rotate(-90)" font-size="13" text-anchor="middle" fill="#333">Tokens per second</text>
+<polyline points="110.0,333.5 205.0,333.6 300.0,339.6 395.0,341.4 490.0,341.8" fill="none" stroke="#4e79a7" stroke-width="2.5" stroke-dasharray="7,5"/>
+<circle cx="110.0" cy="333.5" r="4" fill="#fff" stroke="#4e79a7" stroke-width="2"/>
+<circle cx="205.0" cy="333.6" r="4" fill="#fff" stroke="#4e79a7" stroke-width="2"/>
+<circle cx="300.0" cy="339.6" r="4" fill="#fff" stroke="#4e79a7" stroke-width="2"/>
+<circle cx="395.0" cy="341.4" r="4" fill="#fff" stroke="#4e79a7" stroke-width="2"/>
+<circle cx="490.0" cy="341.8" r="4" fill="#fff" stroke="#4e79a7" stroke-width="2"/>
+<polyline points="110.0,293.9 205.0,294.9 300.0,307.1 395.0,310.1 490.0,310.7" fill="none" stroke="#4e79a7" stroke-width="2.5"/>
+<circle cx="110.0" cy="293.9" r="4" fill="#4e79a7" stroke="#4e79a7" stroke-width="2"/>
+<circle cx="205.0" cy="294.9" r="4" fill="#4e79a7" stroke="#4e79a7" stroke-width="2"/>
+<circle cx="300.0" cy="307.1" r="4" fill="#4e79a7" stroke="#4e79a7" stroke-width="2"/>
+<circle cx="395.0" cy="310.1" r="4" fill="#4e79a7" stroke="#4e79a7" stroke-width="2"/>
+<circle cx="490.0" cy="310.7" r="4" fill="#4e79a7" stroke="#4e79a7" stroke-width="2"/>
+<polyline points="110.0,294.5 205.0,223.3 300.0,231.8 395.0,234.1 490.0,235.4" fill="none" stroke="#f28e2b" stroke-width="2.5" stroke-dasharray="7,5"/>
+<circle cx="110.0" cy="294.5" r="4" fill="#fff" stroke="#f28e2b" stroke-width="2"/>
+<circle cx="205.0" cy="223.3" r="4" fill="#fff" stroke="#f28e2b" stroke-width="2"/>
+<circle cx="300.0" cy="231.8" r="4" fill="#fff" stroke="#f28e2b" stroke-width="2"/>
+<circle cx="395.0" cy="234.1" r="4" fill="#fff" stroke="#f28e2b" stroke-width="2"/>
+<circle cx="490.0" cy="235.4" r="4" fill="#fff" stroke="#f28e2b" stroke-width="2"/>
+<polyline points="110.0,232.1 205.0,140.2 300.0,160.8 395.0,164.7 490.0,165.7" fill="none" stroke="#f28e2b" stroke-width="2.5"/>
+<circle cx="110.0" cy="232.1" r="4" fill="#f28e2b" stroke="#f28e2b" stroke-width="2"/>
+<circle cx="205.0" cy="140.2" r="4" fill="#f28e2b" stroke="#f28e2b" stroke-width="2"/>
+<circle cx="300.0" cy="160.8" r="4" fill="#f28e2b" stroke="#f28e2b" stroke-width="2"/>
+<circle cx="395.0" cy="164.7" r="4" fill="#f28e2b" stroke="#f28e2b" stroke-width="2"/>
+<circle cx="490.0" cy="165.7" r="4" fill="#f28e2b" stroke="#f28e2b" stroke-width="2"/>
+<polyline points="110.0,275.5 205.0,197.7 300.0,206.1 395.0,212.8 490.0,216.6" fill="none" stroke="#59a14f" stroke-width="2.5" stroke-dasharray="7,5"/>
+<circle cx="110.0" cy="275.5" r="4" fill="#fff" stroke="#59a14f" stroke-width="2"/>
+<circle cx="205.0" cy="197.7" r="4" fill="#fff" stroke="#59a14f" stroke-width="2"/>
+<circle cx="300.0" cy="206.1" r="4" fill="#fff" stroke="#59a14f" stroke-width="2"/>
+<circle cx="395.0" cy="212.8" r="4" fill="#fff" stroke="#59a14f" stroke-width="2"/>
+<circle cx="490.0" cy="216.6" r="4" fill="#fff" stroke="#59a14f" stroke-width="2"/>
+<polyline points="110.0,218.5 205.0,125.7 300.0,141.1 395.0,150.1 490.0,155.6" fill="none" stroke="#59a14f" stroke-width="2.5"/>
+<circle cx="110.0" cy="218.5" r="4" fill="#59a14f" stroke="#59a14f" stroke-width="2"/>
+<circle cx="205.0" cy="125.7" r="4" fill="#59a14f" stroke="#59a14f" stroke-width="2"/>
+<circle cx="300.0" cy="141.1" r="4" fill="#59a14f" stroke="#59a14f" stroke-width="2"/>
+<circle cx="395.0" cy="150.1" r="4" fill="#59a14f" stroke="#59a14f" stroke-width="2"/>
+<circle cx="490.0" cy="155.6" r="4" fill="#59a14f" stroke="#59a14f" stroke-width="2"/>
+<text x="840.0" y="74.0" font-size="16" text-anchor="middle" font-weight="bold" fill="#222">Prefill (pp)</text>
+<line x1="620" y1="420.0" x2="1060" y2="420.0" stroke="#e3e3e3" stroke-width="1"/>
+<text x="612.0" y="424.0" font-size="12" text-anchor="end" font-weight="normal" fill="#555">0</text>
+<line x1="620" y1="378.8" x2="1060" y2="378.8" stroke="#e3e3e3" stroke-width="1"/>
+<text x="612.0" y="382.8" font-size="12" text-anchor="end" font-weight="normal" fill="#555">2,000</text>
+<line x1="620" y1="337.5" x2="1060" y2="337.5" stroke="#e3e3e3" stroke-width="1"/>
+<text x="612.0" y="341.5" font-size="12" text-anchor="end" font-weight="normal" fill="#555">4,000</text>
+<line x1="620" y1="296.2" x2="1060" y2="296.2" stroke="#e3e3e3" stroke-width="1"/>
+<text x="612.0" y="300.2" font-size="12" text-anchor="end" font-weight="normal" fill="#555">6,000</text>
+<line x1="620" y1="255.0" x2="1060" y2="255.0" stroke="#e3e3e3" stroke-width="1"/>
+<text x="612.0" y="259.0" font-size="12" text-anchor="end" font-weight="normal" fill="#555">8,000</text>
+<line x1="620" y1="213.8" x2="1060" y2="213.8" stroke="#e3e3e3" stroke-width="1"/>
+<text x="612.0" y="217.8" font-size="12" text-anchor="end" font-weight="normal" fill="#555">10,000</text>
+<line x1="620" y1="172.5" x2="1060" y2="172.5" stroke="#e3e3e3" stroke-width="1"/>
+<text x="612.0" y="176.5" font-size="12" text-anchor="end" font-weight="normal" fill="#555">12,000</text>
+<line x1="620" y1="131.2" x2="1060" y2="131.2" stroke="#e3e3e3" stroke-width="1"/>
+<text x="612.0" y="135.2" font-size="12" text-anchor="end" font-weight="normal" fill="#555">14,000</text>
+<line x1="620" y1="90.0" x2="1060" y2="90.0" stroke="#e3e3e3" stroke-width="1"/>
+<text x="612.0" y="94.0" font-size="12" text-anchor="end" font-weight="normal" fill="#555">16,000</text>
+<line x1="620" y1="420" x2="1060" y2="420" stroke="#888"/>
+<line x1="620" y1="90" x2="620" y2="420" stroke="#888"/>
+<text x="650.0" y="440.0" font-size="12" text-anchor="middle" font-weight="normal" fill="#555">512</text>
+<text x="745.0" y="440.0" font-size="12" text-anchor="middle" font-weight="normal" fill="#555">8K</text>
+<text x="840.0" y="440.0" font-size="12" text-anchor="middle" font-weight="normal" fill="#555">64K</text>
+<text x="935.0" y="440.0" font-size="12" text-anchor="middle" font-weight="normal" fill="#555">128K</text>
+<text x="1030.0" y="440.0" font-size="12" text-anchor="middle" font-weight="normal" fill="#555">256K</text>
+<text x="840.0" y="462.0" font-size="13" text-anchor="middle" font-weight="normal" fill="#333">Context length (tokens)</text>
+<text transform="translate(562,255.0) rotate(-90)" font-size="13" text-anchor="middle" fill="#333">Tokens per second</text>
+<polyline points="650.0,281.6 745.0,133.3 840.0,151.0 935.0,174.0 1030.0,215.0" fill="none" stroke="#b07aa1" stroke-width="2.5" stroke-dasharray="7,5"/>
+<circle cx="650.0" cy="281.6" r="4" fill="#fff" stroke="#b07aa1" stroke-width="2"/>
+<circle cx="745.0" cy="133.3" r="4" fill="#fff" stroke="#b07aa1" stroke-width="2"/>
+<circle cx="840.0" cy="151.0" r="4" fill="#fff" stroke="#b07aa1" stroke-width="2"/>
+<circle cx="935.0" cy="174.0" r="4" fill="#fff" stroke="#b07aa1" stroke-width="2"/>
+<circle cx="1030.0" cy="215.0" r="4" fill="#fff" stroke="#b07aa1" stroke-width="2"/>
+<polyline points="650.0,298.2 745.0,133.1 840.0,169.0 935.0,192.5 1030.0,231.2" fill="none" stroke="#b07aa1" stroke-width="2.5"/>
+<circle cx="650.0" cy="298.2" r="4" fill="#b07aa1" stroke="#b07aa1" stroke-width="2"/>
+<circle cx="745.0" cy="133.1" r="4" fill="#b07aa1" stroke="#b07aa1" stroke-width="2"/>
+<circle cx="840.0" cy="169.0" r="4" fill="#b07aa1" stroke="#b07aa1" stroke-width="2"/>
+<circle cx="935.0" cy="192.5" r="4" fill="#b07aa1" stroke="#b07aa1" stroke-width="2"/>
+<circle cx="1030.0" cy="231.2" r="4" fill="#b07aa1" stroke="#b07aa1" stroke-width="2"/>
+<line x1="120" y1="492" x2="148" y2="492" stroke="#4e79a7" stroke-width="3"/>
+<text x="156.0" y="496.0" font-size="13" text-anchor="start" font-weight="normal" fill="#222">No speculative decoding</text>
+<line x1="345.6" y1="492" x2="373.6" y2="492" stroke="#f28e2b" stroke-width="3"/>
+<text x="381.6" y="496.0" font-size="13" text-anchor="start" font-weight="normal" fill="#222">MTP3</text>
+<line x1="434.40000000000003" y1="492" x2="462.40000000000003" y2="492" stroke="#59a14f" stroke-width="3"/>
+<text x="470.4" y="496.0" font-size="13" text-anchor="start" font-weight="normal" fill="#222">MTP3 + lm-head-draft</text>
+<line x1="638.4000000000001" y1="492" x2="666.4000000000001" y2="492" stroke="#b07aa1" stroke-width="3"/>
+<text x="674.4" y="496.0" font-size="13" text-anchor="start" font-weight="normal" fill="#222">Prefill</text>
+</svg>

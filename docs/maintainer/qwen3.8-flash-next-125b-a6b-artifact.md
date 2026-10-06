@@ -83,23 +83,25 @@ basename gains `_fp8ple`. On the oracle fixtures the re-encoded table moves gene
 log-probabilities by 0.005-0.074 on average with perplexity changes of -1.0% to +0.5%, and MTP3
 acceptance is unchanged (2.06 tokens per round).
 
-`--projection-format fp8_e4m3fn_row_bf16` stores 493 main-model matrices as weight-only row-scaled
-FP8 E4M3 (per-row BF16 max-abs scale, round-to-nearest): QSA q/k/v/o, GDN in_proj_qkv/in_proj_z/
-out_proj, each MoE layer's router and shared-expert gate/up projections, each layer's attention and
-MLP HyperConnection Down/Up, and the output head. MTP, indexer, GDN control, HyperConnection
-injection and final-mixer weights, shared-expert down (K = 640, no qualified FP8 route) and routed
+`--projection-format fp8_e4m3fn_row_bf16` stores 510 matrices as weight-only row-scaled FP8 E4M3
+(per-row BF16 max-abs scale, round-to-nearest): QSA q/k/v/o, GDN in_proj_qkv/in_proj_z/out_proj,
+each MoE layer's router and shared-expert gate/up projections, each layer's attention and MLP
+HyperConnection Down/Up, both final HyperConnection mixers, the output head, and the MTP drafter's
+input, attention, HyperConnection, router and shared gate/up projections. Indexer, GDN control,
+HyperConnection injection, shared-expert down (K = 640, no qualified FP8 route), MTP and routed
 expert weights keep their formats, and activations stay BF16. The binder takes each matrix's stored
-format; linear dispatches to the FP8 GEMV, K-split and A16 GEMM routes, one-token MoE decode
-computes router scores and the shared-expert SwiGLU in one FP8 grid (larger batches use linears and
-SiLU-mul), the fused HyperConnection mix
-widens FP8 Down/Up codes at its MMA and applies row scales to the sums (its general route widens Up
-to BF16 in workspace), and the proposal-head rerank decodes FP8 head rows. The output basename
-gains `_fp8proj`; with FP8 PLE the artifact occupies 130,608,653,312 bytes.
+format; linear dispatches to the FP8 GEMV, K-split and A16 GEMM routes, MoE decode of one to eight
+tokens computes router scores and the shared-expert SwiGLU in one FP8 grid (larger batches use
+linears and SiLU-mul), the fused HyperConnection mix widens FP8 Down/Up codes at its MMA and applies
+row scales to the sums (its general route widens Up to BF16 in workspace), and the proposal-head
+rerank decodes FP8 head rows. The output basename gains `_fp8proj`; with FP8 PLE the artifact
+occupies 130,515,067,392 bytes.
 
-With FP8 PLE as well, Swift 1.5 decode on an RTX PRO 6000 rises from 114.5 to 153.3 tok/s (MTP0,
-512 context) and from 118.2 to 159.6 (8K); MTP3 with the optimized proposal head reaches 240.4 and
-357.6 tok/s. Against the BF16 artifact, oracle generated-token |dlogp| is 0.003-0.085 on average,
-perplexity changes -2.4% to +1.7%, and MTP3 acceptance is unchanged or higher.
+With FP8 PLE as well, Swift 1.5 decode on an RTX PRO 6000 rises from 114.5 to 167.9 tok/s (MTP0,
+512 context) and from 118.2 to 171.6 (8K); MTP3 with the optimized proposal head reaches 271.4 and
+390.8 tok/s. Against the BF16 artifact, oracle generated-token |dlogp| is 0.003-0.086 on average and
+perplexity changes -2.4% to +1.7%. MTP drafter precision changes only proposals: fixture MTP3
+acceptance stays within -0.17 to +0.19 tokens per round of the BF16 drafter.
 
 Keep the entry file and all `.part-NNNN` companions together. The runtime selects PLE storage
 from the artifact's table descriptor, not the checkpoint name.

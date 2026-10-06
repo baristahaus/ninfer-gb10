@@ -12267,10 +12267,17 @@ ProgramImplCore::decode_mtp_batch(std::span<const std::uint32_t> lanes,
         DecodeGraphExecutable* executable = nullptr;
         schedule::MtpCausalAttentionEnvelopes envelopes =
             mtp_causal_attention_envelopes(maximum_frontier, drafts, capacity);
+        // A round that installs another profile pays a graph update; its time is not a sample of
+        // the draft count's round cost.
+        bool graph_updated = false;
         if (use_cuda_graph) {
             DecodeGraphProfile& profile =
                 select_graph_profile(graphs, static_cast<std::uint32_t>(lanes.size()),
                                      maximum_frontier, "MTP batch");
+            graph_updated =
+                select_graph_topology(graphs, profile.topology_class, "MTP batch")
+                    .installed_profile !=
+                static_cast<std::size_t>(&profile - graphs.profiles.data());
             executable = &install_graph_profile(graphs, profile, "MTP batch");
             envelopes  = mtp_causal_attention_envelopes(profile.max_execution_frontier, drafts,
                                                         capacity);
@@ -12372,11 +12379,16 @@ ProgramImplCore::decode_mtp_batch(std::span<const std::uint32_t> lanes,
 
         const double seconds = std::chrono::duration<double>(Clock::now() - started).count();
         last_mtp_draft_window = drafts;
-        // The first round of a (batch size, draft count) pays one-time graph launch costs and
-        // would otherwise keep that count from being selected again.
+        // The first round of a (batch size, draft count) pays one-time graph launch costs, and a
+        // slow outlier would keep that count from being selected (and re-measured) again, so
+        // first rounds and graph updates are skipped and one sample moves the estimate by at
+        // most 5%.
         std::uint32_t& samples = mtp_round_samples[lanes.size()][drafts];
         double& measured       = mtp_round_seconds[lanes.size()][drafts];
-        if (samples++ > 0) { measured = measured == 0.0 ? seconds : 0.9 * measured + 0.1 * seconds; }
+        if (!graph_updated && samples++ > 0) {
+            measured = measured == 0.0 ? seconds
+                                       : 0.9 * measured + 0.1 * std::min(seconds, 1.5 * measured);
+        }
         for (std::size_t row = 0; row < lanes.size(); ++row) {
             SequenceState& sequence       = active_sequence(lanes[row]);
             RequestControl& request       = requests[lanes[row]];

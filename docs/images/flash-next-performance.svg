@@ -96,24 +96,46 @@
 <text x="1030.0" y="440.0" font-size="12" text-anchor="middle" font-weight="normal" fill="#555">256K</text>
 <text x="840.0" y="462.0" font-size="13" text-anchor="middle" font-weight="normal" fill="#333">Context length (tokens)</text>
 <text transform="translate(562,255.0) rotate(-90)" font-size="13" text-anchor="middle" fill="#333">Tokens per second</text>
-<polyline points="650.0,281.6 745.0,133.3 840.0,151.0 935.0,174.0 1030.0,215.0" fill="none" stroke="#b07aa1" stroke-width="2.5" stroke-dasharray="7,5"/>
-<circle cx="650.0" cy="281.6" r="4" fill="#fff" stroke="#b07aa1" stroke-width="2"/>
-<circle cx="745.0" cy="133.3" r="4" fill="#fff" stroke="#b07aa1" stroke-width="2"/>
-<circle cx="840.0" cy="151.0" r="4" fill="#fff" stroke="#b07aa1" stroke-width="2"/>
-<circle cx="935.0" cy="174.0" r="4" fill="#fff" stroke="#b07aa1" stroke-width="2"/>
-<circle cx="1030.0" cy="215.0" r="4" fill="#fff" stroke="#b07aa1" stroke-width="2"/>
-<polyline points="650.0,298.2 745.0,133.1 840.0,169.0 935.0,192.5 1030.0,231.2" fill="none" stroke="#b07aa1" stroke-width="2.5"/>
-<circle cx="650.0" cy="298.2" r="4" fill="#b07aa1" stroke="#b07aa1" stroke-width="2"/>
-<circle cx="745.0" cy="133.1" r="4" fill="#b07aa1" stroke="#b07aa1" stroke-width="2"/>
-<circle cx="840.0" cy="169.0" r="4" fill="#b07aa1" stroke="#b07aa1" stroke-width="2"/>
-<circle cx="935.0" cy="192.5" r="4" fill="#b07aa1" stroke="#b07aa1" stroke-width="2"/>
-<circle cx="1030.0" cy="231.2" r="4" fill="#b07aa1" stroke="#b07aa1" stroke-width="2"/>
-<line x1="120" y1="492" x2="148" y2="492" stroke="#4e79a7" stroke-width="3"/>
-<text x="156.0" y="496.0" font-size="13" text-anchor="start" font-weight="normal" fill="#222">No speculative decoding</text>
-<line x1="345.6" y1="492" x2="373.6" y2="492" stroke="#f28e2b" stroke-width="3"/>
-<text x="381.6" y="496.0" font-size="13" text-anchor="start" font-weight="normal" fill="#222">MTP3</text>
-<line x1="434.40000000000003" y1="492" x2="462.40000000000003" y2="492" stroke="#59a14f" stroke-width="3"/>
-<text x="470.4" y="496.0" font-size="13" text-anchor="start" font-weight="normal" fill="#222">MTP3 + lm-head-draft</text>
-<line x1="638.4000000000001" y1="492" x2="666.4000000000001" y2="492" stroke="#b07aa1" stroke-width="3"/>
-<text x="674.4" y="496.0" font-size="13" text-anchor="start" font-weight="normal" fill="#222">Prefill</text>
+<polyline points="650.0,281.6 745.0,133.3 840.0,151.0 935.0,174.0 1030.0,215.0" fill="none" stroke="#4e79a7" stroke-width="2.5" stroke-dasharray="7,5"/>
+<circle cx="650.0" cy="281.6" r="4" fill="#fff" stroke="#4e79a7" stroke-width="2"/>
+<circle cx="745.0" cy="133.3" r="4" fill="#fff" stroke="#4e79a7" stroke-width="2"/>
+<circle cx="840.0" cy="151.0" r="4" fill="#fff" stroke="#4e79a7" stroke-width="2"/>
+<circle cx="935.0" cy="174.0" r="4" fill="#fff" stroke="#4e79a7" stroke-width="2"/>
+<circle cx="1030.0" cy="215.0" r="4" fill="#fff" stroke="#4e79a7" stroke-width="2"/>
+<polyline points="650.0,298.2 745.0,133.1 840.0,169.0 935.0,192.5 1030.0,231.2" fill="none" stroke="#4e79a7" stroke-width="2.5"/>
+<circle cx="650.0" cy="298.2" r="4" fill="#4e79a7" stroke="#4e79a7" stroke-width="2"/>
+<circle cx="745.0" cy="133.1" r="4" fill="#4e79a7" stroke="#4e79a7" stroke-width="2"/>
+<circle cx="840.0" cy="169.0" r="4" fill="#4e79a7" stroke="#4e79a7" stroke-width="2"/>
+<circle cx="935.0" cy="192.5" r="4" fill="#4e79a7" stroke="#4e79a7" stroke-width="2"/>
+<circle cx="1030.0" cy="231.2" r="4" fill="#4e79a7" stroke="#4e79a7" stroke-width="2"/>
+<polyline points="650.0,293.5 745.0,147.9 840.0,171.9 935.0,193.3 1030.0,236.4" fill="none" stroke="#f28e2b" stroke-width="2.5" stroke-dasharray="7,5"/>
+<circle cx="650.0" cy="293.5" r="4" fill="#fff" stroke="#f28e2b" stroke-width="2"/>
+<circle cx="745.0" cy="147.9" r="4" fill="#fff" stroke="#f28e2b" stroke-width="2"/>
+<circle cx="840.0" cy="171.9" r="4" fill="#fff" stroke="#f28e2b" stroke-width="2"/>
+<circle cx="935.0" cy="193.3" r="4" fill="#fff" stroke="#f28e2b" stroke-width="2"/>
+<circle cx="1030.0" cy="236.4" r="4" fill="#fff" stroke="#f28e2b" stroke-width="2"/>
+<polyline points="650.0,305.6 745.0,145.5 840.0,181.7 935.0,210.7 1030.0,242.5" fill="none" stroke="#f28e2b" stroke-width="2.5"/>
+<circle cx="650.0" cy="305.6" r="4" fill="#f28e2b" stroke="#f28e2b" stroke-width="2"/>
+<circle cx="745.0" cy="145.5" r="4" fill="#f28e2b" stroke="#f28e2b" stroke-width="2"/>
+<circle cx="840.0" cy="181.7" r="4" fill="#f28e2b" stroke="#f28e2b" stroke-width="2"/>
+<circle cx="935.0" cy="210.7" r="4" fill="#f28e2b" stroke="#f28e2b" stroke-width="2"/>
+<circle cx="1030.0" cy="242.5" r="4" fill="#f28e2b" stroke="#f28e2b" stroke-width="2"/>
+<polyline points="650.0,290.3 745.0,147.8 840.0,177.8 935.0,198.9 1030.0,239.3" fill="none" stroke="#59a14f" stroke-width="2.5" stroke-dasharray="7,5"/>
+<circle cx="650.0" cy="290.3" r="4" fill="#fff" stroke="#59a14f" stroke-width="2"/>
+<circle cx="745.0" cy="147.8" r="4" fill="#fff" stroke="#59a14f" stroke-width="2"/>
+<circle cx="840.0" cy="177.8" r="4" fill="#fff" stroke="#59a14f" stroke-width="2"/>
+<circle cx="935.0" cy="198.9" r="4" fill="#fff" stroke="#59a14f" stroke-width="2"/>
+<circle cx="1030.0" cy="239.3" r="4" fill="#fff" stroke="#59a14f" stroke-width="2"/>
+<polyline points="650.0,304.9 745.0,146.5 840.0,183.5 935.0,215.2 1030.0,241.6" fill="none" stroke="#59a14f" stroke-width="2.5"/>
+<circle cx="650.0" cy="304.9" r="4" fill="#59a14f" stroke="#59a14f" stroke-width="2"/>
+<circle cx="745.0" cy="146.5" r="4" fill="#59a14f" stroke="#59a14f" stroke-width="2"/>
+<circle cx="840.0" cy="183.5" r="4" fill="#59a14f" stroke="#59a14f" stroke-width="2"/>
+<circle cx="935.0" cy="215.2" r="4" fill="#59a14f" stroke="#59a14f" stroke-width="2"/>
+<circle cx="1030.0" cy="241.6" r="4" fill="#59a14f" stroke="#59a14f" stroke-width="2"/>
+<line x1="230" y1="492" x2="258" y2="492" stroke="#4e79a7" stroke-width="3"/>
+<text x="266.0" y="496.0" font-size="13" text-anchor="start" font-weight="normal" fill="#222">No speculative decoding</text>
+<line x1="455.6" y1="492" x2="483.6" y2="492" stroke="#f28e2b" stroke-width="3"/>
+<text x="491.6" y="496.0" font-size="13" text-anchor="start" font-weight="normal" fill="#222">MTP3</text>
+<line x1="544.4" y1="492" x2="572.4" y2="492" stroke="#59a14f" stroke-width="3"/>
+<text x="580.4" y="496.0" font-size="13" text-anchor="start" font-weight="normal" fill="#222">MTP3 + lm-head-draft</text>
 </svg>

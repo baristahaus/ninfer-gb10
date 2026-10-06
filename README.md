@@ -55,13 +55,17 @@ MTP3 with `--lm-head-draft`:
 
 ### Prefill
 
-| Prompt length | 16-bit | 8-bit | Change |
-|---:|---:|---:|---:|
-| 512 | 6,709 tok/s | 5,905 tok/s | -12% |
-| 8K | 13,903 tok/s | 13,908 tok/s | 0% |
-| 64K | 13,043 tok/s | 12,171 tok/s | -7% |
-| 128K | 11,927 tok/s | 11,032 tok/s | -8% |
-| 256K (maximum) | 9,941 tok/s | 9,154 tok/s | -8% |
+The prompt is also processed by the MTP layer, so MTP3 makes prefill 5% to 10% slower.
+
+| Prompt length | No MTP, 16-bit | No MTP, 8-bit | MTP3, 16-bit | MTP3, 8-bit | MTP3 + head, 16-bit | MTP3 + head, 8-bit |
+|---:|---:|---:|---:|---:|---:|---:|
+| 512 | 6,709 | 5,905 | 6,131 | 5,546 | 6,290 | 5,580 |
+| 8K | 13,903 | 13,908 | 13,192 | 13,308 | 13,197 | 13,263 |
+| 64K | 13,043 | 12,171 | 12,028 | 11,555 | 11,742 | 11,469 |
+| 128K | 11,927 | 11,032 | 10,991 | 10,149 | 10,722 | 9,930 |
+| 256K (maximum) | 9,941 | 9,154 | 8,902 | 8,605 | 8,762 | 8,651 |
+
+The values are tokens per second. "MTP3 + head" is MTP3 with `--lm-head-draft`.
 
 The 256K row uses a 261,632-token prompt and 256 generated tokens, which is the 262,144-token
 maximum context. The other rows generate 256 tokens after a prompt of the given length.

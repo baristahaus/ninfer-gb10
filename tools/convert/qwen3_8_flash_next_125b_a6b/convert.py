@@ -4,7 +4,8 @@ The checkpoint's numerical words are retained. BF16 projections and PLE FP8
 tensors are copied directly, channel-wise convolution kernels are transposed
 to NInfer's channel-fast runtime layout, and expert-major ModelOpt NVFP4
 tensors are rearranged into the closed NInfer bank layout without dequantizing
-or requantizing them.
+or requantizing them. Optional profiles re-encode the PLE table and projections
+as FP8 and the BF16 MTP drafter experts as NVFP4.
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ from tools.artifact.codecs.row_split import encode_row_split
 from tools.convert.sources.safetensors import SafetensorsSource, TensorInfo
 from tools.convert.quantization.fp8_row import quantize_bf16_rows
 from tools.convert.quantization.groupwise import pick_device, quantize_matrix
+from tools.convert.quantization.nvfp4 import quantize_expert_bank
 from . import draft_head, inventory, descriptor, vision
 
 
@@ -69,6 +71,12 @@ _PLE_METADATA = frozenset(
         "model.language_model.layers.1.ple.ple_embedding.ngram_heads_vocab_sizes",
     }
 )
+# Largest |value| of the MTP MoE expert inputs (gate/up input and SwiGLU output) seen with BF16
+# drafter experts over prefill and greedy MTP generation of code, math, multi-turn, tool-call and
+# long-context prompts, rounded up. As in the ModelOpt main layers, every expert of a bank shares
+# the activation scale amax / (6 * 448).
+_MTP_EXPERT_INPUT_AMAX = {"gate_up": 24.0, "down": 2720.0}
+_MTP_EXPERT_PREFIX = "mtp.layers.0.mlp.experts."
 _DRAFT_HEAD = "ninfer.optimized_proposal_head.weight"
 _DRAFT_HEAD_IDS = "ninfer.optimized_proposal_head.token_ids"
 _VISION_BY_NAME = vision.SOURCES
@@ -394,6 +402,15 @@ def _payload(
         return _ple_payload(reader, source_ple_format, ple_format, ple_scale)
     if spec.id == _PLE_SCALE and ple_scale is not None:
         return encode_direct(ple_scale, inventory.BF16)
+    if spec.id.startswith(_MTP_EXPERT_PREFIX) and spec.format != inventory.BF16:
+        role = spec.id.removeprefix(_MTP_EXPERT_PREFIX).removesuffix("_input_divisors")
+        if spec.id.endswith("_input_divisors"):
+            divisor = 6.0 * 448.0 / _MTP_EXPERT_INPUT_AMAX[role]
+            return encode_direct(torch.full((inventory.EXPERTS,), divisor), inventory.FP32)
+        bank = read_tensor(reader, _MTP_EXPERT_PREFIX + role + "_proj")
+        if tuple(bank.shape) != spec.shape or bank.dtype != torch.bfloat16:
+            raise ValueError(f"{spec.id}: MTP expert source signature mismatch")
+        return quantize_expert_bank(bank, device)
     for layer in inventory.LAYERS:
         prefix = _bank_name(layer, "")
         if spec.id == prefix + "gate_up":
@@ -431,11 +448,13 @@ def convert(
     source_profile: str = "radixark",
     ple_format: str | None = None,
     projection_format: str = inventory.BF16,
+    mtp_expert_format: str = inventory.BF16,
 ) -> Path:
     """Convert one source profile.
 
     `ple_format` optionally re-encodes a BF16 PLE table as FP8; `projection_format` optionally
-    stores the main-model attention and GDN projections as weight-only row-scaled FP8.
+    stores the main-model attention and GDN projections as weight-only row-scaled FP8;
+    `mtp_expert_format` optionally quantizes the BF16 MTP drafter experts to NVFP4.
     """
     source = Path(model_dir)
     output = Path(out_path)
@@ -450,6 +469,10 @@ def convert(
         variant += "_fp8proj"
     elif projection_format != inventory.BF16:
         raise ValueError(f"unsupported projection format: {projection_format}")
+    if mtp_expert_format == inventory.NVFP4:
+        variant += "_nvfp4mtp"
+    elif mtp_expert_format != inventory.BF16:
+        raise ValueError(f"unsupported MTP expert format: {mtp_expert_format}")
     if variant:
         output_basename = output_basename.removesuffix(".ninfer") + variant + ".ninfer"
     if output.name != output_basename:
@@ -459,7 +482,7 @@ def convert(
     config_summary = _validate_config(source, source_ple_format)
     resource_map = {name: (source / name.removeprefix("frontend/")).read_bytes()
                     for name in inventory.RESOURCE_SPECS}
-    object_specs = inventory.object_specs(ple_format, projection_format)
+    object_specs = inventory.object_specs(ple_format, projection_format, mtp_expert_format)
     specs = [ResourceSpec(name, len(data)) for name, data in resource_map.items()] + [
         spec for spec in object_specs if isinstance(spec, inventory.TensorSpec)]
     objects = plan_objects(specs)
@@ -514,6 +537,12 @@ def convert(
         "ple_materialization": "file-backed-read-only",
         "ple_format": ple_format,
         "projection_format": projection_format,
+        "mtp_expert_format": mtp_expert_format,
+        **({"mtp_expert_quantization": {
+            "method": "round-to-nearest NVFP4, per-expert FP32 global scale = amax/(6*448), "
+                      "E4M3FN group scales, E2M1 codes with ties to even",
+            "input_amax": _MTP_EXPERT_INPUT_AMAX}}
+           if mtp_expert_format == inventory.NVFP4 else {}),
         **({"ple_quantization": {
             "method": "round-to-nearest FP8 E4M3, per-table BF16 scale = amax/448 rounded up",
             "scale": ple_scale.float().item(), "amax": ple_amax}} if ple_scale is not None else {}),
@@ -536,9 +565,13 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--projection-format", choices=(inventory.BF16, inventory.FP8_ROW),
                         default=inventory.BF16,
                         help="store attention/GDN projections as weight-only row-scaled FP8")
+    parser.add_argument("--mtp-expert-format", choices=(inventory.BF16, inventory.NVFP4),
+                        default=inventory.BF16,
+                        help="quantize the BF16 MTP drafter experts to NVFP4")
     args = parser.parse_args(argv)
     convert(args.model, args.out, device=args.device, source_profile=args.source_profile,
-            ple_format=args.ple_format, projection_format=args.projection_format)
+            ple_format=args.ple_format, projection_format=args.projection_format,
+            mtp_expert_format=args.mtp_expert_format)
 
 
 if __name__ == "__main__":

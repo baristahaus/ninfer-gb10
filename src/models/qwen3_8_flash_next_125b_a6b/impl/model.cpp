@@ -131,20 +131,21 @@ ops::FlashNextExpertBank bf16_bank(const artifact::MaterializedArtifact& artifac
     };
 }
 
-ops::FlashNextMoeWeights moe(const MoePlan& plan, const artifact::MaterializedArtifact& artifact,
-                             bool mtp) {
+ops::FlashNextMoeWeights moe(const MoePlan& plan, const artifact::MaterializedArtifact& artifact) {
     return {
         .router         = bf16(artifact, plan.router, 512, 2560),
         .shared_gate    = bf16(artifact, plan.shared_gate, 640, 2560),
         .shared_up      = bf16(artifact, plan.shared_up, 640, 2560),
         .shared_down    = bf16(artifact, plan.shared_down, 2560, 640),
         .shared_scale   = bf16(artifact, plan.shared_scale, 1, 2560),
-        .routed_gate_up = mtp ? bf16_bank(artifact, plan.routed_gate_up, 1280, 2560)
-                              : nvfp4_bank(artifact, plan.routed_gate_up,
-                                           plan.routed_gate_up_input_divisors, 1280, 2560),
-        .routed_down = mtp ? bf16_bank(artifact, plan.routed_down, 2560, 640)
-                           : nvfp4_bank(artifact, plan.routed_down, plan.routed_down_input_divisors,
-                                        2560, 640),
+        .routed_gate_up = plan.nvfp4_experts
+                              ? nvfp4_bank(artifact, plan.routed_gate_up,
+                                           plan.routed_gate_up_input_divisors, 1280, 2560)
+                              : bf16_bank(artifact, plan.routed_gate_up, 1280, 2560),
+        .routed_down = plan.nvfp4_experts
+                           ? nvfp4_bank(artifact, plan.routed_down, plan.routed_down_input_divisors,
+                                        2560, 640)
+                           : bf16_bank(artifact, plan.routed_down, 2560, 640),
     };
 }
 
@@ -231,7 +232,7 @@ LoadedModelData::LoadedModelData(BindingPlan plan, artifact::MaterializedArtifac
             out.has_ple           = source.has_ple;
             if (source.has_ple) { out.ple = ple(source.ple, backing); }
             out.mlp_hc     = hc(source.mlp_hc, backing);
-            out.post_mixer = moe(source.moe, backing, false);
+            out.post_mixer = moe(source.moe, backing);
         } else {
             GdnLayerWeights& out = runtime.gdn_layers.at(gdn_index++);
             out.attention_hc     = hc(source.attention_hc, backing);
@@ -242,7 +243,7 @@ LoadedModelData::LoadedModelData(BindingPlan plan, artifact::MaterializedArtifac
             out.has_ple          = source.has_ple;
             if (source.has_ple) { out.ple = ple(source.ple, backing); }
             out.mlp_hc     = hc(source.mlp_hc, backing);
-            out.post_mixer = moe(source.moe, backing, false);
+            out.post_mixer = moe(source.moe, backing);
         }
     }
     runtime.final_hc    = final_hc(plan.final_hc, backing);
@@ -268,8 +269,8 @@ LoadedModelData::LoadedModelData(BindingPlan plan, artifact::MaterializedArtifac
             .key_norm             = tensor(backing, source.attention.key_norm, {256}),
             .output               = bf16(backing, source.attention.output, 2560, 6144),
             .mlp_hc               = hc(source.mlp_hc, backing),
-            .moe                  = moe(source.moe, backing, true),
-            .post_mixer           = moe(source.moe, backing, true),
+            .moe                  = moe(source.moe, backing),
+            .post_mixer           = moe(source.moe, backing),
             .final_hc             = final_hc(source.final_hc, backing),
         };
     }

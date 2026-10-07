@@ -34,6 +34,8 @@ struct MoePlan {
     artifact::ParameterReference routed_gate_up_input_divisors;
     artifact::ParameterReference routed_down;
     artifact::ParameterReference routed_down_input_divisors;
+    // Main banks are NVFP4. The MTP bank is BF16 unless the artifact stores NVFP4 drafter experts.
+    bool nvfp4_experts = true;
 };
 
 struct FullAttentionPlan {

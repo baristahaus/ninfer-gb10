@@ -18,8 +18,9 @@ Only enabled components and their dependencies are bound and materialized.
 
 The FP8-PLE inventory contains 1,627 tensors and six raw resources. Main routed expert banks use
 `nvfp4` with `expert_block_scale_k16_m128x4_v1`; their FP32 input divisors are per-expert `activation_divisor` auxiliaries on the
-`AllowA4` Use. Other projections consume A16 and require a declared activation policy. MTP expert banks, projections, HyperConnection weights, norms, embeddings, output head,
-and shared experts retain BF16. GDN control vectors and NVFP4 divisors use FP32. Vision retains the
+`AllowA4` Use. Other projections consume A16 and require a declared activation policy. MTP expert
+banks (unless re-encoded as NVFP4), projections, HyperConnection weights, norms, embeddings, output
+head, and shared experts retain BF16. GDN control vectors and NVFP4 divisors use FP32. Vision retains the
 existing Q4/Q5/Q6 groupwise and W8 merger profiles.
 
 The 320,001,536-by-160 PLE embedding is one contiguous FP8 E4M3FN tensor plus a BF16 multiplier
@@ -102,6 +103,17 @@ With FP8 PLE as well, Swift 1.5 decode on an RTX PRO 6000 rises from 114.5 to 16
 390.8 tok/s. Against the BF16 artifact, oracle generated-token |dlogp| is 0.003-0.086 on average and
 perplexity changes -2.4% to +1.7%. MTP drafter precision changes only proposals: fixture MTP3
 acceptance stays within -0.17 to +0.19 tokens per round of the BF16 drafter.
+
+`--mtp-expert-format nvfp4` quantizes the BF16 MTP drafter experts to NVFP4 in the main expert-bank
+layout (`mtp.layers.0.mlp.experts.gate_up` and `.down`, round-to-nearest, per-expert FP32 global
+scale amax/(6*448), E4M3FN group scales, E2M1 codes with ties to even). Each bank gets the same
+`activation_divisor` auxiliary as a main layer. Its value is 6*448/amax, from the largest drafter
+expert input seen with BF16 experts: 24 at gate/up and 2720 at down. The binder selects the bank by
+the stored object, and the drafter then runs the main W4A4 MoE route. Verified output is unchanged.
+With both 8-bit options the output basename gains `_nvfp4mtp`, the artifact is 3.6 GB smaller, and
+on an RTX PRO 6000 (INT8 K/V, adaptive drafts) device weights fall from 73.58 to 70.22 GiB. Decode
+across code, math, multi-turn, tool-call and 8K/64K context prompts changes -1.8% to +6.9% (mean
++3.7%). At seven fixed drafts, acceptance stays within 0.09 tokens per round of the BF16 drafter.
 
 Keep the entry file and all `.part-NNNN` companions together. The runtime selects PLE storage
 from the artifact's table descriptor, not the checkpoint name.

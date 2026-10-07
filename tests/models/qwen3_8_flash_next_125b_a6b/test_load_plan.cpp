@@ -39,7 +39,10 @@ int main() {
         ninfer::artifact::Binder mtp_binder(reader);
         const auto mtp_plan = ninfer::models::qwen3_8_flash_next_125b_a6b::plan_artifact(
             mtp_binder, {.speculative = ninfer::SpeculativeBackend::Mtp});
-        const std::size_t expected_mtp_objects = expected_text_objects + 31;
+        // NVFP4 drafter experts add an activation-divisor object to each of the two banks.
+        const bool nvfp4_mtp =
+            reader.directory().bindings.contains("mtp.layers.0.mlp.experts.gate_up");
+        const std::size_t expected_mtp_objects = expected_text_objects + (nvfp4_mtp ? 33 : 31);
         if (mtp_plan.materialization.device_objects.size() != expected_mtp_objects ||
             mtp_plan.materialization.device_capacity_bytes <=
                 plan.materialization.device_capacity_bytes) {

@@ -262,9 +262,29 @@ PROJECTION_NAMES = frozenset(
 )
 
 
-def object_specs(ple_format: str = FP8, projection_format: str = BF16) -> tuple[str | TensorSpec, ...]:
+# Routed MTP drafter experts. The source stores them as BF16; an NVFP4 drafter bank uses the main
+# layers' expert layout and activation divisors.
+MTP_EXPERT_BF16 = ("mtp.layers.0.mlp.experts.gate_up_proj", "mtp.layers.0.mlp.experts.down_proj")
+
+
+def _nvfp4_mtp_experts(specs: tuple[str | TensorSpec, ...]) -> tuple[str | TensorSpec, ...]:
+    out: list[str | TensorSpec] = []
+    for spec in specs:
+        if isinstance(spec, TensorSpec) and spec.id in MTP_EXPERT_BF16:
+            name = spec.id.removesuffix("_proj")
+            out.append(TensorSpec(name, spec.shape, NVFP4, EXPERT_NVFP4))
+            out.append(direct(name + "_input_divisors", (EXPERTS,), FP32))
+        else:
+            out.append(spec)
+    return tuple(out)
+
+
+def object_specs(ple_format: str = FP8, projection_format: str = BF16,
+                 mtp_expert_format: str = BF16) -> tuple[str | TensorSpec, ...]:
     if projection_format not in (BF16, FP8_ROW):
         raise ValueError(f"unsupported projection format: {projection_format}")
+    if mtp_expert_format not in (BF16, NVFP4):
+        raise ValueError(f"unsupported MTP expert format: {mtp_expert_format}")
     if ple_format == FP8:
         specs = OBJECT_SPECS
     elif ple_format == BF16:
@@ -278,6 +298,8 @@ def object_specs(ple_format: str = FP8, projection_format: str = BF16) -> tuple[
         )
     else:
         raise ValueError(f"unsupported PLE format: {ple_format}")
+    if mtp_expert_format == NVFP4:
+        specs = _nvfp4_mtp_experts(specs)
     if projection_format == BF16:
         return specs
     return tuple(
@@ -294,10 +316,12 @@ __all__ = [
     "GDN_LAYERS",
     "LAYERS",
     "MODEL_ID",
+    "MTP_EXPERT_BF16",
     "MTP_TENSOR_SPECS",
     "OBJECT_SPECS",
     "PROJECTION_NAMES",
     "FP8_ROW",
+    "NVFP4",
     "object_specs",
     "RESOURCE_SPECS",
     "TARGET_KEY",

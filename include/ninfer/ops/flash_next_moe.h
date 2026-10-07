@@ -37,7 +37,7 @@ struct FlashNextMoeWeights {
 [[nodiscard]] std::size_t flash_next_moe_workspace_capacity_bytes(std::int32_t tokens);
 
 // Exact Qwen3.8 Flash-Next 512-way, normalized top-10 routed MoE plus sigmoid-gated shared
-// expert. Main-model banks are expert-major NVFP4; the MTP bank is expert-major BF16.
+// expert. Main-model banks are expert-major NVFP4; the MTP bank is expert-major BF16 or NVFP4.
 // Destination is overwritten with the BF16 result.
 void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Tensor& destination,
                     WorkspaceArena& workspace, cudaStream_t stream,

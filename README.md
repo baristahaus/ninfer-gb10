@@ -135,12 +135,13 @@ The converter accepts two source checkpoints. Both store the routed experts as N
 
 ## Conversion options
 
-The converter has two optional 8-bit formats:
+The converter has two optional 8-bit formats and an NVFP4 option for the drafter:
 
 | Option | Effect |
 |---|---|
 | `--ple-format fp8_e4m3fn` | Re-encodes a BF16 PLE table as FP8 E4M3 with one BF16 scale. Applies to `swift` only. |
 | `--projection-format fp8_e4m3fn_row_bf16` | Stores 510 non-expert matrices as FP8 E4M3 with one BF16 scale per row. Activations stay BF16. |
+| `--mtp-expert-format nvfp4` | Quantizes the BF16 MTP drafter experts to NVFP4. Saves 3.4 GiB of VRAM. Output does not change. |
 
 The FP8 projection option converts these matrices:
 
@@ -152,7 +153,7 @@ The FP8 projection option converts these matrices:
 - the MTP drafter projections.
 
 The routed experts stay NVFP4. The indexer, the GDN control weights, the shared-expert down
-projection and the MTP experts stay BF16.
+projection and the MTP experts stay BF16 unless `--mtp-expert-format nvfp4` is set.
 
 The output file name is fixed for each set of options. The converter rejects other names.
 
@@ -161,9 +162,10 @@ The output file name is fixed for each set of options. The converter rejects oth
 | `radixark` | none | `qwen3_8_flash_next_125b_a6b_nvfp4.ninfer` | 134.8 GB |
 | `swift` | none | `swift_1_5_qwen3_8_flash_next_nvfp4.ninfer` | 186.0 GB |
 | `swift` | both 8-bit options | `swift_1_5_qwen3_8_flash_next_nvfp4_fp8ple_fp8proj.ninfer` | 130.5 GB |
+| `swift` | both 8-bit options and NVFP4 MTP experts | `swift_1_5_qwen3_8_flash_next_nvfp4_fp8ple_fp8proj_nvfp4mtp.ninfer` | 126.9 GB |
 
 The `radixark` profile with `--projection-format` adds `_fp8proj` to the name. The `swift`
-profile with only `--ple-format` adds `_fp8ple`.
+profile with only `--ple-format` adds `_fp8ple`. `--mtp-expert-format nvfp4` adds `_nvfp4mtp`.
 We measured only the Swift 8-bit combination. The other combinations are not measured.
 
 Convert Swift 1.5 with both 8-bit options:

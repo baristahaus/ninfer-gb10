@@ -11,7 +11,7 @@ __global__ void capture(const __nv_bfloat16* hyper, const __nv_bfloat16* normali
                         const ActivationDevice* c, int layer, int width, bool speculative_columns) {
     const int row = blockIdx.x, site = blockIdx.y;
     const auto control = c->rows[row];
-    if (!control.capture || !c->samples) return;
+    if (!control.capture || !c->samples || site > c->completion_capacity) return;
     const int local = site != 0 && speculative_columns ? site - 1 : valid[row] - 1;
     if (local < 0 || local >= width || local >= valid[row]) return;
     const int token    = row * width + local;
@@ -41,7 +41,7 @@ void activation_capture(const Tensor& hyper, const Tensor& normalized, const Ten
                         const Tensor& valid, const ActivationDevice* control, int layer, int width,
                         cudaStream_t stream, bool speculative_columns) {
     if (!control) return;
-    if (width <= 0 || (speculative_columns && width > 4))
+    if (width <= 0 || (speculative_columns && width > kActivationColumns))
         throw std::invalid_argument("activation_capture: verification_width check failed");
     for (const auto* t : {&hyper, &normalized, &gates, &mixed})
         if (t->dtype != DType::BF16 || !t->is_contiguous() || t->ne[1] != hyper.ne[1] ||

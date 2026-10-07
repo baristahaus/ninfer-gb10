@@ -1,5 +1,6 @@
 #include "models/qwen3_8_flash_next/impl/activation_control.h"
 #include "core/device.h"
+#include <ninfer/models/qwen3_8_flash_next/round_state.h>
 #include <algorithm>
 #include <bit>
 #include <chrono>
@@ -145,11 +146,18 @@ void ActivationControl::upload() {
     uploaded_valid_ = true;
 }
 
+static_assert(qwen3_8_flash_next::kMtpDecodeMaximumWidth <= ops::kActivationColumns);
+
 void ActivationControl::configure(const EngineOptions& options, std::string_view identity) {
     if (!identity.empty()) identities = Json::parse(identity);
     options_ = options;
     if (!options.capture_path.empty()) {
-        host_.completion_capacity = options.speculative.backend == SpeculativeBackend::Mtp ? 4 : 1;
+        const auto& speculative = options.speculative;
+        host_.completion_capacity =
+            speculative.backend != SpeculativeBackend::Mtp ? 1
+            : speculative.adaptive_draft_tokens
+                ? static_cast<int>(qwen3_8_flash_next::kMtpDecodeMaximumWidth)
+                : static_cast<int>(speculative.draft_tokens) + 1;
         const auto count = static_cast<std::size_t>(options.max_concurrency) *
                            (1 + host_.completion_capacity) * 48;
         samples_         = std::make_unique<DeviceBuffer>(count * ops::kActivationElements * 4);

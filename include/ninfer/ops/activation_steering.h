@@ -9,6 +9,7 @@ inline constexpr int kActivationLayers   = 48;
 inline constexpr int kActivationWidth    = 2560;
 inline constexpr int kActivationElements = 33280; // stream, normalized, gates, mixed
 inline constexpr int kActivationRows     = 8;     // one per active request row
+inline constexpr int kActivationColumns  = 8;     // widest MTP verification row
 
 struct ActivationRow {
     int lane        = 0;
@@ -30,7 +31,7 @@ struct ActivationDevice {
     const int* ranks        = nullptr;
     const int* masks        = nullptr;
     int norm_preserve       = 0;
-    int completion_capacity = 1; // Four target-verification columns for MTP, one otherwise.
+    int completion_capacity = 1; // Widest target-verification row for MTP, one otherwise.
     ActivationRow rows[kActivationRows]{};
     float* samples           = nullptr; // [concurrency,1+completion_capacity,48,33280]
     ActivationSample* checks = nullptr; // [concurrency,1+completion_capacity,48]

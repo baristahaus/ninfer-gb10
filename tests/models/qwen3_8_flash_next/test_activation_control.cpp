@@ -178,11 +178,22 @@ int main(int argc, char** argv) {
         {
             flash::ActivationControl mtp(device.stream);
             auto mtp_options = options;
-            mtp_options.speculative.backend = SpeculativeBackend::Mtp;
+            mtp_options.speculative.backend      = SpeculativeBackend::Mtp;
+            mtp_options.speculative.draft_tokens = 3;
             mtp.configure(mtp_options, "{}");
             ops::ActivationDevice mtp_header;
             CUDA_CHECK(cudaMemcpy(&mtp_header, mtp.device(), sizeof(mtp_header), cudaMemcpyDeviceToHost));
             require(mtp_header.completion_capacity == 4, "MTP capture capacity missing");
+            // Adaptive drafts verify up to the widest MTP row.
+            flash::ActivationControl adaptive(device.stream);
+            auto adaptive_options = options;
+            adaptive_options.speculative.backend               = SpeculativeBackend::Mtp;
+            adaptive_options.speculative.adaptive_draft_tokens = true;
+            adaptive.configure(adaptive_options, "{}");
+            ops::ActivationDevice adaptive_header;
+            CUDA_CHECK(cudaMemcpy(&adaptive_header, adaptive.device(), sizeof(adaptive_header),
+                                  cudaMemcpyDeviceToHost));
+            require(adaptive_header.completion_capacity == 8, "adaptive MTP capture capacity missing");
             const std::vector<TokenId> accepted{41, 99, 37, 47, 57, 67, 77};
             for (int committed = 1; committed <= 4; ++committed) {
                 mtp.begin(0, 100 + committed, prompt, true, {});

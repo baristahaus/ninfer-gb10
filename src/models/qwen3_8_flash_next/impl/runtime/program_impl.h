@@ -7355,6 +7355,9 @@ StartResult ProgramImplCore::start_request(MaterializationTransaction& transacti
         return StartResult{.sequence = handle};
     } catch (...) {
         if (destination && *destination < max_concurrency) {
+            // Startup may have queued work before a later check failed. Complete it before its
+            // pages, state slots or lane return to the pools.
+            (void)cudaStreamSynchronize(device.stream);
             const std::uint32_t lane = *destination;
             if (active_continuations[lane] < continuation_capacity) {
                 clear_lane_best_effort(active_sequence(lane), requests[lane]);
@@ -9473,6 +9476,10 @@ AbortResult ProgramImplCore::abort(SequenceHandle sequence) noexcept {
         return out;
     }
     SequenceState& state = active_sequence(lane);
+    // A non-final prefill chunk returns without waiting for the device, so cancellation can arrive
+    // while it still writes this lane's pages and state. A materialization admitted next restores
+    // into freed pages and slots on the transfer stream, which does not wait for compute.
+    (void)cudaStreamSynchronize(device.stream);
     if (!clear_lane_strict(state, request)) { return out; }
     state.deferred_fold.reset();
     out.timings     = request.timings;
@@ -10627,6 +10634,8 @@ void ProgramImplCore::clear_execution_failure_lanes(std::span<const std::uint32_
     // A concurrent resource transaction may pin or inspect these active owners. Engine-wide
     // cleanup aborts that transaction before releasing lanes, preserving the only safe order.
     if (has_context_transaction()) { return; }
+    // The failed unit's kernels may still be in flight on these lanes' pages and state.
+    (void)cudaStreamSynchronize(device.stream);
     for (const std::uint32_t lane : lanes) {
         if (lane >= max_concurrency || active_continuations[lane] >= continuation_capacity) {
             continue;

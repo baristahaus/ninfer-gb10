@@ -1,0 +1,8 @@
+Internal ctest changing into directory: /home/apollo11/ninfer-gb10/build
+Test project /home/apollo11/ninfer-gb10/build
+    Start 135: ninfer_qwen3_8_flash_next_real_test
+1/1 Test #135: ninfer_qwen3_8_flash_next_real_test ...   Passed  108.02 sec
+
+100% tests passed, 0 tests failed out of 1
+
+Total Test time (real) = 108.03 sec

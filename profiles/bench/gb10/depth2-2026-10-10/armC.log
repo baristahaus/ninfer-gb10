@@ -1,0 +1,12 @@
+[gb10 23:42:32] starting server on port 8000 (log: profiles/bench/gb10/long-context/ninfer-k3.log)
+[gb10 23:42:56] server healthy after 5s
+[gb10 23:42:56] ninfer-k3: long-context workload
+[gb10 23:45:45] stopping server (pid 277850)
+[gb10 23:45:48] starting server on port 8000 (log: profiles/bench/gb10/long-context/ninfer-k4.log)
+[gb10 23:46:13] server healthy after 5s
+[gb10 23:46:13] ninfer-k4: long-context workload
+[gb10 23:48:53] stopping server (pid 278418)
+[gb10 23:48:56] starting server on port 8000 (log: profiles/bench/gb10/long-context/ninfer-k5.log)
+[gb10 23:49:21] server healthy after 5s
+[gb10 23:49:21] ninfer-k5: long-context workload
+[gb10 23:52:01] stopping server (pid 278959)

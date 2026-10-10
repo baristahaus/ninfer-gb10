@@ -1,0 +1,18 @@
+model qwen3.8-flash-next-125b-a6b; 1.794 characters per token
+{"size": 15000, "task": "script", "rep": 0, "seed": 1001, "turn": 1, "prompt_tokens": 15638, "completion_tokens": 1536, "ttft_s": 7.164, "prefill_tok_s": 2182.9, "decode_tok_s": 63.95, "max_gap_s": 0.06, "finish": "length", "facts": {"service": true, "release": false, "pool": true, "change": true}}
+{"size": 15000, "task": "script", "rep": 0, "seed": 1001, "turn": 2, "prompt_tokens": 17228, "completion_tokens": 768, "ttft_s": 0.297, "prefill_tok_s": null, "decode_tok_s": 56.58, "max_gap_s": 0.06, "finish": "length"}
+{"size": 15000, "task": "script", "rep": 1, "seed": 1002, "turn": 1, "prompt_tokens": 15489, "completion_tokens": 1536, "ttft_s": 7.09, "prefill_tok_s": 2184.8, "decode_tok_s": 60.83, "max_gap_s": 0.062, "finish": "length", "facts": {"service": true, "release": true, "pool": true, "change": true}}
+{"size": 15000, "task": "script", "rep": 1, "seed": 1002, "turn": 2, "prompt_tokens": 17079, "completion_tokens": 468, "ttft_s": 0.29, "prefill_tok_s": null, "decode_tok_s": 60.16, "max_gap_s": 0.06, "finish": "stop"}
+{"size": 15000, "task": "edit", "rep": 0, "seed": 1003, "turn": 1, "prompt_tokens": 14995, "completion_tokens": 679, "ttft_s": 6.879, "prefill_tok_s": 2179.9, "decode_tok_s": 80.96, "max_gap_s": 0.062, "finish": "stop", "facts": {"namespace": true, "configmap": true, "log_append": false}}
+{"size": 15000, "task": "edit", "rep": 0, "seed": 1003, "turn": 2, "prompt_tokens": 15721, "completion_tokens": 688, "ttft_s": 0.25, "prefill_tok_s": null, "decode_tok_s": 80.04, "max_gap_s": 0.076, "finish": "stop"}
+{"size": 15000, "task": "edit", "rep": 1, "seed": 1004, "turn": 1, "prompt_tokens": 15066, "completion_tokens": 728, "ttft_s": 6.881, "prefill_tok_s": 2189.4, "decode_tok_s": 74.62, "max_gap_s": 0.075, "finish": "stop", "facts": {"namespace": true, "configmap": true, "log_append": false}}
+{"size": 15000, "task": "edit", "rep": 1, "seed": 1004, "turn": 2, "prompt_tokens": 15841, "completion_tokens": 672, "ttft_s": 0.248, "prefill_tok_s": null, "decode_tok_s": 80.06, "max_gap_s": 0.062, "finish": "stop"}
+{"vision": {"expected": "red", "answer": "", "ok": false, "error": "HTTP Error 400: Bad Request"}}
+{"yield": {"short_tokens": 2000, "large_tokens": 15000, "short_ttft_s": 1.583, "long_ttft_s": 9.222, "short_first_before_long_first": true}}
+
+| tokens | task | turn | n | TTFT s (median) | prefill tok/s | decode tok/s | max gap s | facts named (of 4) or bugs fixed (of 3, edit) per rep |
+|---:|---|---:|---:|---:|---:|---:|---:|---|
+| 15000 | script | 1 | 2 | 7.13 | 2184 | 62.4 | 0.06 | 3, 4 |
+| 15000 | script | 2 | 2 | 0.29 | nan | 58.4 | 0.06 |  |
+| 15000 | edit | 1 | 2 | 6.88 | 2185 | 77.8 | 0.07 | 2, 2 |
+| 15000 | edit | 2 | 2 | 0.25 | nan | 80.1 | 0.07 |  |

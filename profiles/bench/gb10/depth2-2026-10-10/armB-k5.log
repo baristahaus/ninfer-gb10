@@ -1,0 +1,2 @@
+profiles/bench/gb10/lk-parity-2026-10-10/parity_arm.sh: line 31: 276465 Aborted                 timeout 3600 "$BINARY" "$ART" --host 127.0.0.1 --port "$PORT" --max-context 73728 --max-concurrency 4 --kv-dtype fp8 --preserve-thinking --lm-head-draft --host-kv-mib 0 --prefill-chunk 4096 "${SPEC_FLAGS[@]}" > "$OUTDIR/$NAME.server.log" 2>&1
+server never became healthy; see profiles/bench/gb10/lk-parity-2026-10-10-r2/results/ours-k5/ours-k5.server.log

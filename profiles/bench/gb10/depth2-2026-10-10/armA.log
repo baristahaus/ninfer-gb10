@@ -1,0 +1,308 @@
+[gb10 22:48:05] pinning campaign to X925 cores: 5-9,15-19
+[gb10 22:48:05] label: depth2-fp8mtp-k3-r1
+[gb10 22:48:05] dir: profiles/bench/gb10/step7a-depth2-fp8mtp-k3-r1
+[gb10 22:48:05] dropping page cache before server start
+[gb10 22:48:06] starting server on port 8000 (log: profiles/bench/gb10/step7a-depth2-fp8mtp-k3-r1/server.log)
+[gb10 22:48:29] server healthy after 5s
+[gb10 22:48:29] phase 2: MTP acceptance serving run
+[gb10 22:54:04] phase 2 done: profiles/bench/gb10/step7a-depth2-fp8mtp-k3-r1/acceptance.json
+[gb10 22:54:04] stopping server (pid 232709)
+[gb10 22:54:07] summary: profiles/bench/gb10/step7a-depth2-fp8mtp-k3-r1/summary.md
+# Step 7a baseline: depth2-fp8mtp-k3-r1
+
+- Host: Linux 6.17.0-1029-nvidia aarch64; Ubuntu 24.04.4 LTS
+- Commit: 8bd44941
+- nvcc: release 13.0, V13.0.88
+- GPU/driver: NVIDIA GB10, 580.173.02
+- Artifact: qwen3_8_flash_next_125b_a6b_nvfp4_fp8_mtp.ninfer, 119G (multi-volume total)
+
+- Artifact: `/home/apollo11/ninfer-gb10/out/fp8mtp/qwen3_8_flash_next_125b_a6b_nvfp4_fp8_mtp.ninfer`
+- Serve args: --max-context 73728 --max-concurrency 1 --kv-dtype fp8 --spec mtp --draft-tokens 3 --lm-head-draft --preserve-thinking
+- KV dtype (perplexity): fp8
+- CPU: pinned to X925 cores 5-9,15-19 (taskset)
+
+## 1. Perplexity token scores (fixed corpus, default protocol)
+
+- report.json: missing or no overall section
+
+Product table (stdout):
+
+```
+(missing)
+```
+
+## 2. MTP acceptance (serving run, greedy, 1024 tokens/stream)
+
+- requests: 16, rounds: 6224
+- drafted: 18660, accepted: 9966
+- acceptance ratio (accepted/drafted): 0.534084
+- fallback steps: 9
+- per-position per-round: {'0': 0.716902, '1': 0.508033, '2': 0.376285}
+- generated tokens: 16215 total, 855-1024 per stream
+- wall time: 332s total
+
+## 3. TEB hardmode (--seed 42; single trial by default, TEB_TRIALS overrides)
+
+Report dir: `teb/`. Console output (tail):
+
+```
+(missing)
+```
+[gb10 22:54:07] pinning campaign to X925 cores: 5-9,15-19
+[gb10 22:54:07] label: depth2-fp8mtp-k3-r2
+[gb10 22:54:07] dir: profiles/bench/gb10/step7a-depth2-fp8mtp-k3-r2
+[gb10 22:54:07] dropping page cache before server start
+[gb10 22:54:07] starting server on port 8000 (log: profiles/bench/gb10/step7a-depth2-fp8mtp-k3-r2/server.log)
+[gb10 22:54:30] server healthy after 5s
+[gb10 22:54:30] phase 2: MTP acceptance serving run
+[gb10 23:00:05] phase 2 done: profiles/bench/gb10/step7a-depth2-fp8mtp-k3-r2/acceptance.json
+[gb10 23:00:05] stopping server (pid 233731)
+[gb10 23:00:09] summary: profiles/bench/gb10/step7a-depth2-fp8mtp-k3-r2/summary.md
+# Step 7a baseline: depth2-fp8mtp-k3-r2
+
+- Host: Linux 6.17.0-1029-nvidia aarch64; Ubuntu 24.04.4 LTS
+- Commit: 8bd44941
+- nvcc: release 13.0, V13.0.88
+- GPU/driver: NVIDIA GB10, 580.173.02
+- Artifact: qwen3_8_flash_next_125b_a6b_nvfp4_fp8_mtp.ninfer, 119G (multi-volume total)
+
+- Artifact: `/home/apollo11/ninfer-gb10/out/fp8mtp/qwen3_8_flash_next_125b_a6b_nvfp4_fp8_mtp.ninfer`
+- Serve args: --max-context 73728 --max-concurrency 1 --kv-dtype fp8 --spec mtp --draft-tokens 3 --lm-head-draft --preserve-thinking
+- KV dtype (perplexity): fp8
+- CPU: pinned to X925 cores 5-9,15-19 (taskset)
+
+## 1. Perplexity token scores (fixed corpus, default protocol)
+
+- report.json: missing or no overall section
+
+Product table (stdout):
+
+```
+(missing)
+```
+
+## 2. MTP acceptance (serving run, greedy, 1024 tokens/stream)
+
+- requests: 16, rounds: 6224
+- drafted: 18660, accepted: 9966
+- acceptance ratio (accepted/drafted): 0.534084
+- fallback steps: 9
+- per-position per-round: {'0': 0.716902, '1': 0.508033, '2': 0.376285}
+- generated tokens: 16215 total, 855-1024 per stream
+- wall time: 332s total
+
+## 3. TEB hardmode (--seed 42; single trial by default, TEB_TRIALS overrides)
+
+Report dir: `teb/`. Console output (tail):
+
+```
+(missing)
+```
+[gb10 23:00:09] pinning campaign to X925 cores: 5-9,15-19
+[gb10 23:00:09] label: depth2-fp8mtp-k4-r1
+[gb10 23:00:09] dir: profiles/bench/gb10/step7a-depth2-fp8mtp-k4-r1
+[gb10 23:00:09] dropping page cache before server start
+[gb10 23:00:09] starting server on port 8000 (log: profiles/bench/gb10/step7a-depth2-fp8mtp-k4-r1/server.log)
+[gb10 23:00:34] server healthy after 5s
+[gb10 23:00:34] phase 2: MTP acceptance serving run
+[gb10 23:06:16] phase 2 done: profiles/bench/gb10/step7a-depth2-fp8mtp-k4-r1/acceptance.json
+[gb10 23:06:16] stopping server (pid 234763)
+[gb10 23:06:19] summary: profiles/bench/gb10/step7a-depth2-fp8mtp-k4-r1/summary.md
+# Step 7a baseline: depth2-fp8mtp-k4-r1
+
+- Host: Linux 6.17.0-1029-nvidia aarch64; Ubuntu 24.04.4 LTS
+- Commit: 8bd44941
+- nvcc: release 13.0, V13.0.88
+- GPU/driver: NVIDIA GB10, 580.173.02
+- Artifact: qwen3_8_flash_next_125b_a6b_nvfp4_fp8_mtp.ninfer, 119G (multi-volume total)
+
+- Artifact: `/home/apollo11/ninfer-gb10/out/fp8mtp/qwen3_8_flash_next_125b_a6b_nvfp4_fp8_mtp.ninfer`
+- Serve args: --max-context 73728 --max-concurrency 1 --kv-dtype fp8 --spec mtp --draft-tokens 4 --lm-head-draft --preserve-thinking
+- KV dtype (perplexity): fp8
+- CPU: pinned to X925 cores 5-9,15-19 (taskset)
+
+## 1. Perplexity token scores (fixed corpus, default protocol)
+
+- report.json: missing or no overall section
+
+Product table (stdout):
+
+```
+(missing)
+```
+
+## 2. MTP acceptance (serving run, greedy, 1024 tokens/stream)
+
+- requests: 16, rounds: 5710
+- drafted: 22813, accepted: 10486
+- acceptance ratio (accepted/drafted): 0.45965
+- fallback steps: 4
+- per-position per-round: {'0': 0.705954, '1': 0.492119, '2': 0.359545, '3': 0.278809}
+- generated tokens: 16215 total, 855-1024 per stream
+- wall time: 339s total
+
+## 3. TEB hardmode (--seed 42; single trial by default, TEB_TRIALS overrides)
+
+Report dir: `teb/`. Console output (tail):
+
+```
+(missing)
+```
+[gb10 23:06:19] pinning campaign to X925 cores: 5-9,15-19
+[gb10 23:06:19] label: depth2-fp8mtp-k4-r2
+[gb10 23:06:19] dir: profiles/bench/gb10/step7a-depth2-fp8mtp-k4-r2
+[gb10 23:06:19] dropping page cache before server start
+[gb10 23:06:20] starting server on port 8000 (log: profiles/bench/gb10/step7a-depth2-fp8mtp-k4-r2/server.log)
+[gb10 23:06:43] server healthy after 5s
+[gb10 23:06:43] phase 2: MTP acceptance serving run
+[gb10 23:12:26] phase 2 done: profiles/bench/gb10/step7a-depth2-fp8mtp-k4-r2/acceptance.json
+[gb10 23:12:26] stopping server (pid 235836)
+[gb10 23:12:29] summary: profiles/bench/gb10/step7a-depth2-fp8mtp-k4-r2/summary.md
+# Step 7a baseline: depth2-fp8mtp-k4-r2
+
+- Host: Linux 6.17.0-1029-nvidia aarch64; Ubuntu 24.04.4 LTS
+- Commit: 8bd44941
+- nvcc: release 13.0, V13.0.88
+- GPU/driver: NVIDIA GB10, 580.173.02
+- Artifact: qwen3_8_flash_next_125b_a6b_nvfp4_fp8_mtp.ninfer, 119G (multi-volume total)
+
+- Artifact: `/home/apollo11/ninfer-gb10/out/fp8mtp/qwen3_8_flash_next_125b_a6b_nvfp4_fp8_mtp.ninfer`
+- Serve args: --max-context 73728 --max-concurrency 1 --kv-dtype fp8 --spec mtp --draft-tokens 4 --lm-head-draft --preserve-thinking
+- KV dtype (perplexity): fp8
+- CPU: pinned to X925 cores 5-9,15-19 (taskset)
+
+## 1. Perplexity token scores (fixed corpus, default protocol)
+
+- report.json: missing or no overall section
+
+Product table (stdout):
+
+```
+(missing)
+```
+
+## 2. MTP acceptance (serving run, greedy, 1024 tokens/stream)
+
+- requests: 16, rounds: 5710
+- drafted: 22813, accepted: 10486
+- acceptance ratio (accepted/drafted): 0.45965
+- fallback steps: 4
+- per-position per-round: {'0': 0.705954, '1': 0.492119, '2': 0.359545, '3': 0.278809}
+- generated tokens: 16215 total, 855-1024 per stream
+- wall time: 340s total
+
+## 3. TEB hardmode (--seed 42; single trial by default, TEB_TRIALS overrides)
+
+Report dir: `teb/`. Console output (tail):
+
+```
+(missing)
+```
+[gb10 23:12:29] pinning campaign to X925 cores: 5-9,15-19
+[gb10 23:12:29] label: depth2-fp8mtp-k5-r1
+[gb10 23:12:29] dir: profiles/bench/gb10/step7a-depth2-fp8mtp-k5-r1
+[gb10 23:12:29] dropping page cache before server start
+[gb10 23:12:30] starting server on port 8000 (log: profiles/bench/gb10/step7a-depth2-fp8mtp-k5-r1/server.log)
+[gb10 23:12:54] server healthy after 5s
+[gb10 23:12:54] phase 2: MTP acceptance serving run
+[gb10 23:18:50] phase 2 done: profiles/bench/gb10/step7a-depth2-fp8mtp-k5-r1/acceptance.json
+[gb10 23:18:50] stopping server (pid 236891)
+[gb10 23:18:53] summary: profiles/bench/gb10/step7a-depth2-fp8mtp-k5-r1/summary.md
+# Step 7a baseline: depth2-fp8mtp-k5-r1
+
+- Host: Linux 6.17.0-1029-nvidia aarch64; Ubuntu 24.04.4 LTS
+- Commit: 8bd44941
+- nvcc: release 13.0, V13.0.88
+- GPU/driver: NVIDIA GB10, 580.173.02
+- Artifact: qwen3_8_flash_next_125b_a6b_nvfp4_fp8_mtp.ninfer, 119G (multi-volume total)
+
+- Artifact: `/home/apollo11/ninfer-gb10/out/fp8mtp/qwen3_8_flash_next_125b_a6b_nvfp4_fp8_mtp.ninfer`
+- Serve args: --max-context 73728 --max-concurrency 1 --kv-dtype fp8 --spec mtp --draft-tokens 5 --lm-head-draft --preserve-thinking
+- KV dtype (perplexity): fp8
+- CPU: pinned to X925 cores 5-9,15-19 (taskset)
+
+## 1. Perplexity token scores (fixed corpus, default protocol)
+
+- report.json: missing or no overall section
+
+Product table (stdout):
+
+```
+(missing)
+```
+
+## 2. MTP acceptance (serving run, greedy, 1024 tokens/stream)
+
+- requests: 16, rounds: 5375
+- drafted: 26849, accepted: 10820
+- acceptance ratio (accepted/drafted): 0.402995
+- fallback steps: 5
+- per-position per-round: {'0': 0.703628, '1': 0.480558, '2': 0.351814, '3': 0.265488, '4': 0.211535}
+- generated tokens: 16215 total, 855-1024 per stream
+- wall time: 353s total
+
+## 3. TEB hardmode (--seed 42; single trial by default, TEB_TRIALS overrides)
+
+Report dir: `teb/`. Console output (tail):
+
+```
+(missing)
+```
+[gb10 23:18:53] pinning campaign to X925 cores: 5-9,15-19
+[gb10 23:18:53] label: depth2-fp8mtp-k5-r2
+[gb10 23:18:53] dir: profiles/bench/gb10/step7a-depth2-fp8mtp-k5-r2
+[gb10 23:18:53] dropping page cache before server start
+[gb10 23:18:54] starting server on port 8000 (log: profiles/bench/gb10/step7a-depth2-fp8mtp-k5-r2/server.log)
+[gb10 23:19:18] server healthy after 5s
+[gb10 23:19:18] phase 2: MTP acceptance serving run
+[gb10 23:25:13] phase 2 done: profiles/bench/gb10/step7a-depth2-fp8mtp-k5-r2/acceptance.json
+[gb10 23:25:13] stopping server (pid 273386)
+[gb10 23:25:16] summary: profiles/bench/gb10/step7a-depth2-fp8mtp-k5-r2/summary.md
+# Step 7a baseline: depth2-fp8mtp-k5-r2
+
+- Host: Linux 6.17.0-1029-nvidia aarch64; Ubuntu 24.04.4 LTS
+- Commit: 8bd44941
+- nvcc: release 13.0, V13.0.88
+- GPU/driver: NVIDIA GB10, 580.173.02
+- Artifact: qwen3_8_flash_next_125b_a6b_nvfp4_fp8_mtp.ninfer, 119G (multi-volume total)
+
+- Artifact: `/home/apollo11/ninfer-gb10/out/fp8mtp/qwen3_8_flash_next_125b_a6b_nvfp4_fp8_mtp.ninfer`
+- Serve args: --max-context 73728 --max-concurrency 1 --kv-dtype fp8 --spec mtp --draft-tokens 5 --lm-head-draft --preserve-thinking
+- KV dtype (perplexity): fp8
+- CPU: pinned to X925 cores 5-9,15-19 (taskset)
+
+## 1. Perplexity token scores (fixed corpus, default protocol)
+
+- report.json: missing or no overall section
+
+Product table (stdout):
+
+```
+(missing)
+```
+
+## 2. MTP acceptance (serving run, greedy, 1024 tokens/stream)
+
+- requests: 16, rounds: 5375
+- drafted: 26849, accepted: 10820
+- acceptance ratio (accepted/drafted): 0.402995
+- fallback steps: 5
+- per-position per-round: {'0': 0.703628, '1': 0.480558, '2': 0.351814, '3': 0.265488, '4': 0.211535}
+- generated tokens: 16215 total, 855-1024 per stream
+- wall time: 352s total
+
+## 3. TEB hardmode (--seed 42; single trial by default, TEB_TRIALS overrides)
+
+Report dir: `teb/`. Console output (tail):
+
+```
+(missing)
+```
+| run | acceptance | drafted | accepted | tok/s (sum over streams) |
+|---|---:|---:|---:|---:|
+| depth2-fp8mtp-k3-r1 | 0.5341 | 18660 | 9966 | 48.8 |
+| depth2-fp8mtp-k3-r2 | 0.5341 | 18660 | 9966 | 48.8 |
+| depth2-fp8mtp-k4-r1 | 0.4597 | 22813 | 10486 | 47.8 |
+| depth2-fp8mtp-k4-r2 | 0.4597 | 22813 | 10486 | 47.7 |
+| depth2-fp8mtp-k5-r1 | 0.4030 | 26849 | 10820 | 46.0 |
+| depth2-fp8mtp-k5-r2 | 0.4030 | 26849 | 10820 | 46.1 |

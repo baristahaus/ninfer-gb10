@@ -1,18 +1,18 @@
 model qwen3.8-flash-next-125b-a6b; 1.794 characters per token
-{"size": 15000, "task": "script", "rep": 0, "seed": 1001, "turn": 1, "prompt_tokens": 15638, "completion_tokens": 1536, "ttft_s": 7.182, "prefill_tok_s": 2177.5, "decode_tok_s": 60.77, "max_gap_s": 0.054, "finish": "length", "facts": {"service": true, "release": false, "pool": true, "change": true}}
-{"size": 15000, "task": "script", "rep": 0, "seed": 1001, "turn": 2, "prompt_tokens": 17228, "completion_tokens": 750, "ttft_s": 0.293, "prefill_tok_s": null, "decode_tok_s": 59.32, "max_gap_s": 0.054, "finish": "stop"}
-{"size": 15000, "task": "script", "rep": 1, "seed": 1002, "turn": 1, "prompt_tokens": 15489, "completion_tokens": 1536, "ttft_s": 7.108, "prefill_tok_s": 2179.2, "decode_tok_s": 59.81, "max_gap_s": 0.054, "finish": "length", "facts": {"service": true, "release": true, "pool": true, "change": true}}
-{"size": 15000, "task": "script", "rep": 1, "seed": 1002, "turn": 2, "prompt_tokens": 17079, "completion_tokens": 768, "ttft_s": 0.291, "prefill_tok_s": null, "decode_tok_s": 61.43, "max_gap_s": 0.054, "finish": "length"}
-{"size": 15000, "task": "edit", "rep": 0, "seed": 1003, "turn": 1, "prompt_tokens": 14995, "completion_tokens": 679, "ttft_s": 6.911, "prefill_tok_s": 2169.8, "decode_tok_s": 74.71, "max_gap_s": 0.055, "finish": "stop", "facts": {"namespace": true, "configmap": true, "log_append": false}}
-{"size": 15000, "task": "edit", "rep": 0, "seed": 1003, "turn": 2, "prompt_tokens": 15721, "completion_tokens": 688, "ttft_s": 0.247, "prefill_tok_s": null, "decode_tok_s": 73.79, "max_gap_s": 0.055, "finish": "stop"}
-{"size": 15000, "task": "edit", "rep": 1, "seed": 1004, "turn": 1, "prompt_tokens": 15066, "completion_tokens": 728, "ttft_s": 6.908, "prefill_tok_s": 2180.8, "decode_tok_s": 70.58, "max_gap_s": 0.055, "finish": "stop", "facts": {"namespace": true, "configmap": true, "log_append": false}}
-{"size": 15000, "task": "edit", "rep": 1, "seed": 1004, "turn": 2, "prompt_tokens": 15841, "completion_tokens": 672, "ttft_s": 0.245, "prefill_tok_s": null, "decode_tok_s": 73.74, "max_gap_s": 0.071, "finish": "stop"}
+{"size": 15000, "task": "script", "rep": 0, "seed": 1001, "turn": 1, "prompt_tokens": 15638, "completion_tokens": 1536, "ttft_s": 7.148, "prefill_tok_s": 2187.7, "decode_tok_s": 60.7, "max_gap_s": 0.054, "finish": "length", "facts": {"service": true, "release": false, "pool": true, "change": true}}
+{"size": 15000, "task": "script", "rep": 0, "seed": 1001, "turn": 2, "prompt_tokens": 17228, "completion_tokens": 750, "ttft_s": 0.289, "prefill_tok_s": null, "decode_tok_s": 59.29, "max_gap_s": 0.054, "finish": "stop"}
+{"size": 15000, "task": "script", "rep": 1, "seed": 1002, "turn": 1, "prompt_tokens": 15489, "completion_tokens": 1536, "ttft_s": 7.079, "prefill_tok_s": 2187.9, "decode_tok_s": 59.73, "max_gap_s": 0.054, "finish": "length", "facts": {"service": true, "release": true, "pool": true, "change": true}}
+{"size": 15000, "task": "script", "rep": 1, "seed": 1002, "turn": 2, "prompt_tokens": 17079, "completion_tokens": 768, "ttft_s": 0.29, "prefill_tok_s": null, "decode_tok_s": 61.39, "max_gap_s": 0.055, "finish": "length"}
+{"size": 15000, "task": "edit", "rep": 0, "seed": 1003, "turn": 1, "prompt_tokens": 14995, "completion_tokens": 679, "ttft_s": 6.883, "prefill_tok_s": 2178.5, "decode_tok_s": 74.73, "max_gap_s": 0.056, "finish": "stop", "facts": {"namespace": true, "configmap": true, "log_append": false}}
+{"size": 15000, "task": "edit", "rep": 0, "seed": 1003, "turn": 2, "prompt_tokens": 15721, "completion_tokens": 688, "ttft_s": 0.25, "prefill_tok_s": null, "decode_tok_s": 73.71, "max_gap_s": 0.07, "finish": "stop"}
+{"size": 15000, "task": "edit", "rep": 1, "seed": 1004, "turn": 1, "prompt_tokens": 15066, "completion_tokens": 728, "ttft_s": 6.895, "prefill_tok_s": 2185.0, "decode_tok_s": 70.33, "max_gap_s": 0.068, "finish": "stop", "facts": {"namespace": true, "configmap": true, "log_append": false}}
+{"size": 15000, "task": "edit", "rep": 1, "seed": 1004, "turn": 2, "prompt_tokens": 15841, "completion_tokens": 672, "ttft_s": 0.243, "prefill_tok_s": null, "decode_tok_s": 73.76, "max_gap_s": 0.07, "finish": "stop"}
 {"vision": {"expected": "red", "answer": "", "ok": false, "error": "HTTP Error 400: Bad Request"}}
-{"yield": {"short_tokens": 2000, "large_tokens": 15000, "short_ttft_s": 1.593, "long_ttft_s": 9.109, "short_first_before_long_first": true}}
+{"yield": {"short_tokens": 2000, "large_tokens": 15000, "short_ttft_s": 1.575, "long_ttft_s": 9.093, "short_first_before_long_first": true}}
 
 | tokens | task | turn | n | TTFT s (median) | prefill tok/s | decode tok/s | max gap s | facts named (of 4) or bugs fixed (of 3, edit) per rep |
 |---:|---|---:|---:|---:|---:|---:|---:|---|
-| 15000 | script | 1 | 2 | 7.14 | 2178 | 60.3 | 0.05 | 3, 4 |
-| 15000 | script | 2 | 2 | 0.29 | nan | 60.4 | 0.05 |  |
-| 15000 | edit | 1 | 2 | 6.91 | 2175 | 72.6 | 0.06 | 2, 2 |
-| 15000 | edit | 2 | 2 | 0.25 | nan | 73.8 | 0.06 |  |
+| 15000 | script | 1 | 2 | 7.11 | 2188 | 60.2 | 0.05 | 3, 4 |
+| 15000 | script | 2 | 2 | 0.29 | nan | 60.3 | 0.05 |  |
+| 15000 | edit | 1 | 2 | 6.89 | 2182 | 72.5 | 0.06 | 2, 2 |
+| 15000 | edit | 2 | 2 | 0.25 | nan | 73.7 | 0.07 |  |

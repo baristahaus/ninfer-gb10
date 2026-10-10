@@ -1,0 +1,15 @@
+[depth2 2026-10-10 22:45:43Z] gate start: build HEAD + ninfer_qwen3_8_flash_next_real_test (K=5 pass)
+[depth2 2026-10-10 22:46:17Z] gate: build rc=0
+[depth2 2026-10-10 22:48:05Z] gate: real test rc=0
+[depth2 2026-10-10 22:48:05Z] gate PASSED; starting arms
+[depth2 2026-10-10 22:48:05Z] arm A start: k_sweep K=3 4 5 REPEATS=2 NAME=depth2 (natural corpus, 1 request)
+[depth2 2026-10-10 23:25:16Z] arm A rc=0
+[depth2 2026-10-10 23:25:16Z] arm B start: parity ours-k3 (105 DGPP requests, conc 1/2/4)
+[depth2 2026-10-10 23:30:32Z] arm B k3 rc=0
+[depth2 2026-10-10 23:30:32Z] arm B start: parity ours-k4 (105 DGPP requests, conc 1/2/4)
+[depth2 2026-10-10 23:36:11Z] arm B k4 rc=0
+[depth2 2026-10-10 23:36:11Z] arm B start: parity ours-k5 (105 DGPP requests, conc 1/2/4)
+[depth2 2026-10-10 23:42:32Z] arm B k5 rc=1
+[depth2 2026-10-10 23:42:32Z] arm C start: long_context K=3 4 5 SIZES=15000 REPS=2 tasks=script,edit
+[depth2 2026-10-10 23:52:04Z] arm C rc=1
+[depth2 2026-10-10 23:52:04Z] campaign complete

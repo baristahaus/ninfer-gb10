@@ -1038,7 +1038,11 @@ bool fused_mix(Tensor& hyper, const Tensor* previous_block_output,
                Tensor& block_input, Tensor* injection, WorkspaceArena& workspace,
                cudaStream_t stream, const HyperConnectionActivation* activation) {
     const int tokens = hyper.ne[1];
-    if (tokens > kFusedMaxTokens || (activation != nullptr && activation->capture != nullptr)) {
+    // Decide before allocating: a device that cannot host the cooperative grid (fewer than 160
+    // SMs, e.g. GB10's 48) takes the general route, whose workspace capacity does not include
+    // these buffers.
+    if (tokens > kFusedMaxTokens || (activation != nullptr && activation->capture != nullptr) ||
+        fused_mix_grid() == 0) {
         return false;
     }
     Tensor staged      = workspace.alloc(DType::BF16, {kHyper, tokens});

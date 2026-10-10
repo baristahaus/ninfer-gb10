@@ -457,8 +457,12 @@ Method: `tools/gb10/long_context.sh` (tree `6cd02900`, `profiles/bench/gb10/long
 - **Decode:** does not depend on prompt length. K=3 leads DGPP by 25–35% at every size.
 - **Acceptance:** 1.82 tokens per round at K=1 and 2.92 at K=3, the same as on short prompts.
 - **Follow-up turns** start in 0.2–0.8 s. 22 of 24 recomputed only 43–55 prompt tokens. Two
-  recomputed the previous answer as well (1,595 tokens, 1.3 s); that partial miss is not yet
-  explained.
+  recomputed the previous answer as well (1,595 tokens, 1.3 s). No checkpoint was evicted. In
+  both, the follow-up carried the cut-off answer as 1,534 tokens instead of the 1,536 generated,
+  so the end-of-answer state did not match the new prompt and the answer was replayed from the
+  checkpoint before it (`private_response_replay`). The likely cause is the template trimming the
+  answer's trailing whitespace; the alternative is the answer text re-tokenizing differently. The
+  answer texts were not saved, so which one is unconfirmed.
 - **Planted facts:** every arm's answers named 3–4 of the 4.
 - **Interference** (a 60K prompt arriving while a 15K request decodes):
   - DGPP stalled the running request for 32.9 s in total, with gaps up to 2.4 s.

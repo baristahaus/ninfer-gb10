@@ -1,0 +1,3 @@
+2026-10-10 22:00:24.636  INFO  starting engine
+2026-10-10 22:00:25.511  ERROR startup failed | starting engine | 875 ms
+2026-10-10 22:00:25.511  FATAL server failed during startup | MTP draft window must be in [1,3]

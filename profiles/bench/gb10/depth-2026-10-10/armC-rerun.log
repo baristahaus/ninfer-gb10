@@ -1,0 +1,9 @@
+[gb10 22:09:49] starting server on port 8000 (log: profiles/bench/gb10/long-context/ninfer-k3.log)
+[gb10 22:10:13] server healthy after 5s
+[gb10 22:10:13] ninfer-k3: long-context workload
+[gb10 22:13:01] stopping server (pid 190268)
+[gb10 22:13:04] starting server on port 8000 (log: profiles/bench/gb10/long-context/ninfer-k5.log)
+Server exited during startup. Last log lines:
+2026-10-10 22:13:04.849  INFO  starting engine
+2026-10-10 22:13:05.664  ERROR startup failed | starting engine | 815 ms
+2026-10-10 22:13:05.664  FATAL server failed during startup | MTP draft window must be in [1,3]

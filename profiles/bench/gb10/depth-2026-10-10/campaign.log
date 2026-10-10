@@ -1,0 +1,11 @@
+[depth 2026-10-10 21:37:00Z] arm A start: k_sweep K=3 4 5 REPEATS=2 (natural corpus, 1 request)
+[depth 2026-10-10 21:49:09Z] arm A rc=1
+[depth 2026-10-10 21:49:09Z] arm B start: parity ours-k3 (105 DGPP requests, conc 1/2/4)
+[depth 2026-10-10 21:54:22Z] arm B k3 rc=0
+[depth 2026-10-10 21:54:22Z] arm B start: parity ours-k4 (105 DGPP requests, conc 1/2/4)
+[depth 2026-10-10 22:00:24Z] arm B k4 rc=1
+[depth 2026-10-10 22:00:24Z] arm B start: parity ours-k5 (105 DGPP requests, conc 1/2/4)
+[depth 2026-10-10 22:06:25Z] arm B k5 rc=1
+[depth 2026-10-10 22:06:25Z] arm C start: long_context K=3 5 SIZES=15000 REPS=2 tasks=script,edit
+[depth 2026-10-10 22:06:30Z] arm C rc=1
+[depth 2026-10-10 22:06:30Z] campaign complete

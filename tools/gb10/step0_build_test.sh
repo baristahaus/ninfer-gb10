@@ -3,6 +3,10 @@
 # Flash-Next real-artifact tests. Writes profiles/bench/gb10/step0/summary.md.
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 dir=$(step_dir step0)
+if [[ -n $(nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null) ]]; then
+    echo "GPU is held by another job; single-instance discipline: aborting." >&2
+    exit 1
+fi
 
 generator=()
 if [[ ! -f build/CMakeCache.txt ]] && command -v ninja >/dev/null; then generator=(-G Ninja); fi

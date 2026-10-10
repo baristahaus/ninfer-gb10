@@ -1,0 +1,76 @@
+From a511883428973502e3a7d3ef772b9bd49530a492 Mon Sep 17 00:00:00 2001
+From: baristahaus <baristahaus@users.noreply.github.com>
+Date: Sat, 10 Oct 2026 17:23:51 +0000
+Subject: [PATCH] fix(flash-next): accept reasoning effort none with disabled
+ thinking
+
+The OpenAI translation maps reasoning_effort "none" to disabled thinking and
+keeps ReasoningEffort::None, and the Flash-Next template rejected any set
+effort when thinking was disabled, so every chat request with
+reasoning_effort "none" failed with HTTP 400 ("reasoning effort cannot be
+combined with disabled thinking"). None is the effort of disabled thinking;
+the template now accepts it there and on toggle-only templates, and still
+rejects any other effort without thinking. The frontend test covers the
+pair.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01PB8TNZ3p817zVAp6aH4yrz
+---
+ .../impl/frontend/chat_template.cpp               |  8 ++++++--
+ tests/models/qwen3_8_flash_next/test_frontend.cpp | 15 +++++++++++++++
+ 2 files changed, 21 insertions(+), 2 deletions(-)
+
+diff --git a/src/models/qwen3_8_flash_next/impl/frontend/chat_template.cpp b/src/models/qwen3_8_flash_next/impl/frontend/chat_template.cpp
+index 463eb63d..baaedfc2 100644
+--- a/src/models/qwen3_8_flash_next/impl/frontend/chat_template.cpp
++++ b/src/models/qwen3_8_flash_next/impl/frontend/chat_template.cpp
+@@ -338,14 +338,18 @@ RenderedToolsSystemBlock render_tools_system_block(const std::vector<std::string
+ 
+ std::string_view resolve_reasoning_instructions(ChatTemplateSemantics semantics,
+                                                 const ChatRenderOptions& options) {
++    // Effort "none" is how OpenAI clients ask for no reasoning; the server maps it to disabled
++    // thinking, so it is consistent wherever thinking is off. Any other effort needs thinking.
++    const bool no_effort = !options.reasoning_effort ||
++                           *options.reasoning_effort == ReasoningEffort::None;
+     if (semantics == ChatTemplateSemantics::ThinkingToggle) {
+-        if (options.reasoning_effort) {
++        if (!no_effort) {
+             throw std::invalid_argument("loaded chat template does not support reasoning effort");
+         }
+         return {};
+     }
+     if (!options.enable_thinking) {
+-        if (options.reasoning_effort) {
++        if (!no_effort) {
+             throw std::invalid_argument(
+                 "reasoning effort cannot be combined with disabled thinking");
+         }
+diff --git a/tests/models/qwen3_8_flash_next/test_frontend.cpp b/tests/models/qwen3_8_flash_next/test_frontend.cpp
+index 3f6ac259..55d17991 100644
+--- a/tests/models/qwen3_8_flash_next/test_frontend.cpp
++++ b/tests/models/qwen3_8_flash_next/test_frontend.cpp
+@@ -55,6 +55,21 @@ int main() {
+             }
+             if (text != "READY 1") { throw std::runtime_error("output text was not preserved"); }
+         }
++        {
++            // OpenAI reasoning_effort "none": the server disables thinking and keeps the effort.
++            ninfer::PromptInput input;
++            ninfer::ChatMessage message;
++            message.role = ninfer::ChatRole::User;
++            message.parts.push_back(
++                {.kind = ninfer::MessagePartKind::Text, .text = "Reply READY."});
++            input.messages.push_back(std::move(message));
++            input.options.enable_thinking  = false;
++            input.options.reasoning_effort = ninfer::ReasoningEffort::None;
++            const auto prompt              = frontend.prepare(std::move(input));
++            if (prompt.summary().starts_in_reasoning) {
++                throw std::runtime_error("reasoning effort none started in reasoning");
++            }
++        }
+         std::cout << "OK Flash-Next default and explicit thinking output channels\n";
+         return 0;
+     } catch (const std::exception& error) {
+-- 
+2.43.0
+

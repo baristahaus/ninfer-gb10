@@ -1,9 +1,10 @@
 # lkarlslund/ninfer master on GB10
 
-Four patches that make `lkarlslund/ninfer` master (`8f574ee4`, 2026-10-07) build and run on GB10, so its
+Six patches that make `lkarlslund/ninfer` master (`8f574ee4`, 2026-10-07) build and run on GB10, so its
 Flash-Next work can be measured beside this fork before anything is cherry-picked. The first three change no
 behaviour on an RTX PRO 6000 except grid sizes there (188 SMs instead of the 5090's 170); 0004 fixes a
-startup crash that only shows with a batch-3 MTP decode graph.
+startup crash that only shows with a batch-3 MTP decode graph; 0005 and 0006 are the fixes found during
+the 2026-10-10 campaign. 0001-0003, 0005 and 0006 are also the upstream PRs in `share/lk-upstream/`.
 
 | patch | what | from this fork |
 |---|---|---|
@@ -11,6 +12,8 @@ startup crash that only shows with a batch-3 MTP decode graph.
 | 0002 | integrated devices size startup memory from `MemAvailable` less a 6 GiB reserve and the pending Host KV arena, after waiting up to 60 s for a just-exited process's memory | `7e23083c`, `7bfa75fb`, `b61f9867` |
 | 0003 | persistent grids sized from the device's SM count instead of the 5090's 170 (RMSNorm, RoPE, GDN chunked output, sparse-MoE prefill, QSA score, Flash-Next MoE grouped) | `589e4df1` |
 | 0004 | Flash-Next MTP RoPE layout decided by the element count, not a shape test on `ne[1]` (the shape test misread `{width,batch}` text positions as three-axis MRoPE whenever the decode batch was 3; the batch-3 MTP graph capture then threw a view element-count mismatch at startup) | `11f9e7a6` (already in this fork; lk master never received the fix) |
+| 0005 | the fused HyperConnection route is decided before its workspace is allocated (below 160 SMs it fell back with ~25.7 KB a token still held; the op test failed with `std::bad_alloc` on GB10) | new |
+| 0006 | Flash-Next template accepts `reasoning_effort` `none` with disabled thinking (OpenAI requests with `none` got HTTP 400) | new |
 
 Deliberately not ported:
 - our `yield` synchronize, because lk's low-latency round wait (`a9ccbabe`) answers the same wake-up cost;
@@ -19,10 +22,11 @@ Deliberately not ported:
 
 lk master already has the converter's chunked reads (the GB10 2 GiB read clamp). His new cooperative
 HyperConnection kernel sizes its grid from the device and falls back to the general route when the grid
-does not fit, so it is safe on 48 SMs.
+does not fit (on 48 SMs it always does), so it never deadlocks; 0005 fixes the workspace that fallback
+leaked.
 
-Checked in a sandbox without a GPU: the seven touched `.cu` files compile with nvcc 13.0.88 for
-`sm_121a`, and `model_instance.cpp` passes a syntax check. The full build has not run.
+0001-0004 built and served the 2026-10-10 campaign on GB10. 0005 and 0006 are compile-checked for
+`sm_121a`; their validation run is in `share/lk-upstream/README.md`.
 
 ## Apply and build
 
@@ -38,8 +42,9 @@ ctest --test-dir build --output-on-failure
 ## Artifact
 
 lk's binder picks its profile from the PLE table's format and reads each projection by its stored
-format. Our `fp8mtp` artifact uses the same `fp8_e4m3fn_row_bf16` format name, but stores the shared
-expert's gate and up as two halves of one parent, so expect the binder to refuse it. Try it first (a
+format. Our `fp8mtp` artifact uses the same `fp8_e4m3fn_row_bf16` format name, but lk's load plan
+requires the shared expert's down projection as exact BF16 and `fp8mtp` stores it as row-scaled
+FP8, so his binder refuses it (confirmed 2026-10-10). Try it first (a
 refusal costs seconds). If it is refused, convert with lk's converter from the same RadixArk source,
 with his equivalent of `fp8mtp`:
 
@@ -67,6 +72,43 @@ free disk first.
    with the lk server binary.
 4. Batch invariance: on the lk build at C4, the same 4-request replay twice; compare outputs (his
    `2fa4c756` claims a row's result does not depend on its batch). Our branch is not invariant at C4.
+
+## 8-bit arm (second campaign)
+
+The 2026-10-10 campaign (`profiles/bench/gb10/lk-parity-2026-10-10/`) compared the engines on the
+NVFP4 `v3_fork` entry, whose dense projections are BF16. Each engine's own 8-bit path was not
+measured, though that is where both spent their recent work. This arm measures each on its own
+8-bit artifact.
+
+1. **Convert lk's 8-bit artifact** on the lk build (the converter uses the GPU: one job at a time,
+   about 130 GB of disk):
+   ```bash
+   cd ~/lk-ninfer && python3 -m tools.convert.qwen3_8_flash_next_125b_a6b.convert      --model <the RadixArk NVFP4 source the v3_fork entry came from>      --out <dir>/lk_fp8.ninfer      --projection-format fp8_e4m3fn_row_bf16 --mtp-expert-format nvfp4
+   ```
+   Our counterpart is the existing `fp8mtp` entry. The two differ in what is 8-bit:
+   - lk keeps the shared-expert down projection, the GDN control and the HyperConnection injection
+     in BF16;
+   - `fp8mtp` makes the shared-expert down FP8 too, and its MTP layer uses the main layers'
+     formats.
+
+   So acceptance and quality can differ as well as speed.
+2. **Load gate:** `ninfer_qwen3_8_flash_next_load_plan_test` and the two Flash-Next real-artifact
+   tests on the lk build, with `NINFER_QWEN38_FLASH_NEXT_WEIGHTS` pointing at `lk_fp8`.
+3. **Parity,** with `profiles/bench/gb10/lk-parity-2026-10-10/parity_arm.sh` (same flags, C1/C2/C4,
+   five classes, three repeats):
+   - `lk8-k3`: the lk binary, `lk_fp8`, `--spec mtp --draft-tokens 3`;
+   - `lk8-auto`: the lk binary, `lk_fp8`, `--spec mtp`;
+   - `ours8-k3`: our binary at head, `fp8mtp`, `--spec mtp --draft-tokens 3` (a same-day rerun of
+     the October 3 rows, 59.89/91.53/121.39).
+4. **Acceptance:** `tools/gb10/k_sweep.sh` with `KS="3"` for both, with `SERVE_BIN` set per arm.
+5. **Quality check:** each engine's `ninfer-perplexity` on its own artifact, over the same 4K-window
+   corpus as our gate (`fp8mtp`: 3.9982). A speed lead bought with worse perplexity is not a lead.
+6. **If `lk8` trails at C4:** one nsys trace of a C4 K=3 round on the lk build. His FP8
+   HyperConnection relies on the fused route, which widens FP8 at the MMA. On GB10 the cooperative
+   grid does not fit (48 SMs; the route needs 160), so every mix takes the general route. That route
+   widens the whole 320×10240 FP8 Up matrix to BF16 in workspace on every call. If the trace shows
+   that, the gap is a GB10 routing artifact of his tree, not his FP8 design, and a small Up-widening
+   fix for his general route would be the useful upstream contribution.
 
 ## Cherry-pick candidates (pending the measurements above)
 

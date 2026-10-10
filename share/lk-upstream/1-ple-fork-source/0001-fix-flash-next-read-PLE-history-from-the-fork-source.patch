@@ -1,4 +1,4 @@
-From e5c4514486a048c685437f5b8273abccd444a01a Mon Sep 17 00:00:00 2001
+From 22013d99b79de56512526793b1b8133ea1ff1700 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Fri, 2 Oct 2026 00:24:30 +0000
 Subject: [PATCH] fix(flash-next): read PLE history from the fork source during
@@ -21,14 +21,14 @@ Claude-Session: https://claude.ai/code/session_01PB8TNZ3p817zVAp6aH4yrz
  include/ninfer/ops/flash_next_ple.h           | 11 +++---
  .../impl/runtime/text_context_impl.h          | 10 ++++--
  src/ops/launcher/flash_next_ple.cu            | 35 +++++++++++++------
- tests/ops/test_flash_next_ple.cpp             | 33 +++++++++++++----
- 5 files changed, 69 insertions(+), 26 deletions(-)
+ tests/ops/test_flash_next_ple.cpp             | 35 +++++++++++++++----
+ 5 files changed, 71 insertions(+), 26 deletions(-)
 
 diff --git a/docs/maintainer/qwen3.8-flash-next-125b-a6b-model.md b/docs/maintainer/qwen3.8-flash-next-125b-a6b-model.md
-index 61826570..d63c10a0 100644
+index 1f1f303d..2263979f 100644
 --- a/docs/maintainer/qwen3.8-flash-next-125b-a6b-model.md
 +++ b/docs/maintainer/qwen3.8-flash-next-125b-a6b-model.md
-@@ -62,8 +62,10 @@ bounded split route.
+@@ -69,8 +69,10 @@ bounded split route.
  Each GDN layer retains three previous BF16 convolution columns and 48 FP32 recurrent matrices of
  shape `[128,128]`. PLE retains nine previous BF16 convolution columns. QSA KV/index state, GDN
  state, PLE state, HyperConnection state, and MTP state participate together in prefix snapshots,
@@ -42,19 +42,19 @@ index 61826570..d63c10a0 100644
  ## MTP and Vision
  
 diff --git a/include/ninfer/ops/flash_next_ple.h b/include/ninfer/ops/flash_next_ple.h
-index 59adb554..38b03bab 100644
+index bd5e5735..cb23d7e0 100644
 --- a/include/ninfer/ops/flash_next_ple.h
 +++ b/include/ninfer/ops/flash_next_ple.h
 @@ -28,11 +28,14 @@ struct FlashNextPleWeights {
  
- // Exact Qwen3.8 Flash-Next PLE transform. `gathered_fp8` contains the 16 selected
- // 160-element table rows flattened to [2560,T]. The table itself remains file-backed.
+ // Exact Qwen3.8 Flash-Next PLE transform. `gathered` contains the 16 selected
+ // 160-element FP8 or BF16 table rows flattened to [2560,T]. The table stays file-backed.
 -// `conv_state` is BF16 [10240,9], oldest to newest, and is updated in place.
 +// The convolution history is BF16 [10240,9], oldest to newest: the transform reads
 +// `source_state` and writes the history after the last token to `destination_state`. The two
 +// may be the same tensor (in-place continuation); distinct tensors must not overlap, and
 +// `source_state` is then left unchanged (a StateImage fork continuing from a checkpoint).
- void flash_next_ple(const Tensor& hyper, const Tensor& gathered_fp8,
+ void flash_next_ple(const Tensor& hyper, const Tensor& gathered,
 -                    const FlashNextPleWeights& weights, Tensor& conv_state,
 -                    Tensor& destination, WorkspaceArena& workspace, cudaStream_t stream,
 -                    Bf16GemmContext* bf16_gemm = nullptr);
@@ -65,7 +65,7 @@ index 59adb554..38b03bab 100644
  // Exact-B selected-slot transition. Inputs and output are flattened [rows,W,B]; state is
  // [10240,9,Slots]. Each row reads source_slots[b] and publishes its final valid state to
 diff --git a/src/models/qwen3_8_flash_next/impl/runtime/text_context_impl.h b/src/models/qwen3_8_flash_next/impl/runtime/text_context_impl.h
-index 2c3631c1..6f9a46f7 100644
+index f4e20fb3..1fe4bd36 100644
 --- a/src/models/qwen3_8_flash_next/impl/runtime/text_context_impl.h
 +++ b/src/models/qwen3_8_flash_next/impl/runtime/text_context_impl.h
 @@ -1351,10 +1351,14 @@ void TextContext::run_flash_next_layers(Tensor& x, Phase ph) {
@@ -87,7 +87,7 @@ index 2c3631c1..6f9a46f7 100644
              ops::residual_add(ple_output, hyper, stream);
          }
 diff --git a/src/ops/launcher/flash_next_ple.cu b/src/ops/launcher/flash_next_ple.cu
-index 1455742d..1f9fb6cb 100644
+index 13b32654..777cb929 100644
 --- a/src/ops/launcher/flash_next_ple.cu
 +++ b/src/ops/launcher/flash_next_ple.cu
 @@ -10,6 +10,7 @@
@@ -132,10 +132,10 @@ index 1455742d..1f9fb6cb 100644
          }
      }
  }
-@@ -306,12 +311,21 @@ std::size_t flash_next_ple_workspace_capacity_bytes(std::int32_t tokens) {
+@@ -319,12 +324,21 @@ std::size_t flash_next_ple_workspace_capacity_bytes(std::int32_t tokens) {
  }
  
- void flash_next_ple(const Tensor& hyper, const Tensor& gathered_fp8,
+ void flash_next_ple(const Tensor& hyper, const Tensor& gathered,
 -                    const FlashNextPleWeights& weights, Tensor& conv_state,
 -                    Tensor& destination, WorkspaceArena& workspace, cudaStream_t stream,
 -                    Bf16GemmContext* bf16_gemm) {
@@ -144,9 +144,9 @@ index 1455742d..1f9fb6cb 100644
 +                    cudaStream_t stream, Bf16GemmContext* bf16_gemm) {
      NINFER_PERF_SCOPE("ple.prefill", hyper.ne[1], 1, 0, flash_next_work::ple(hyper.ne[1]));
  
--    validate(hyper, gathered_fp8, weights, conv_state, destination);
-+    validate(hyper, gathered_fp8, weights, source_state, destination);
-+    validate(hyper, gathered_fp8, weights, destination_state, destination);
+-    validate(hyper, gathered, weights, conv_state, destination);
++    validate(hyper, gathered, weights, source_state, destination);
++    validate(hyper, gathered, weights, destination_state, destination);
 +    if (source_state.data != destination_state.data) {
 +        const auto* source_begin = static_cast<const std::byte*>(source_state.data);
 +        const auto* target_begin = static_cast<const std::byte*>(destination_state.data);
@@ -157,8 +157,8 @@ index 1455742d..1f9fb6cb 100644
 +    }
      const int tokens = hyper.ne[1];
      auto scope = workspace.scope();
-     Tensor embedding = workspace.alloc(DType::BF16, {kHidden, tokens});
-@@ -338,7 +352,8 @@ void flash_next_ple(const Tensor& hyper, const Tensor& gathered_fp8,
+     Tensor embedding = embedding_from_table(gathered, weights, workspace, stream);
+@@ -347,7 +361,8 @@ void flash_next_ple(const Tensor& hyper, const Tensor& gathered,
      dilated_conv_kernel<<<40, 256, 0, stream>>>(
          static_cast<const __nv_bfloat16*>(normalized.data),
          static_cast<const __nv_bfloat16*>(weights.convolution.data),
@@ -169,21 +169,21 @@ index 1455742d..1f9fb6cb 100644
          static_cast<__nv_bfloat16*>(destination.data), tokens);
      CUDA_CHECK(cudaGetLastError());
 diff --git a/tests/ops/test_flash_next_ple.cpp b/tests/ops/test_flash_next_ple.cpp
-index 13b2c20a..6dce8345 100644
+index 7e78aa7f..618555ab 100644
 --- a/tests/ops/test_flash_next_ple.cpp
 +++ b/tests/ops/test_flash_next_ple.cpp
 @@ -56,7 +56,9 @@ double represented_bf16(double value) {
      return bf16_to_f32(f32_to_bf16(static_cast<float>(value)));
  }
  
--int run() {
+-int run(DType ple_dtype) {
 +// fork: the history continues from a checkpoint slot into a distinct slot whose prior content
 +// is unrelated; the checkpoint must stay unchanged and the stale content must never be read.
-+int run(bool fork) {
++int run(DType ple_dtype, bool fork) {
      std::vector<float> hyper(kHyper * kTokens), key_norm(kHyper), query_norm(kHyper), conv_norm(kHyper), state(kHyper * kState);
      fill_uniform(hyper, 1701, -0.5F, 0.5F);
      fill_uniform(key_norm, 1702, -0.08F, 0.08F);
-@@ -154,11 +156,17 @@ int run() {
+@@ -164,11 +166,17 @@ int run(DType ple_dtype) {
      DeviceBuffer d_conv_norm = to_device(encode(conv_norm));
      DeviceBuffer d_conv_weight = to_device(encode(conv_weight));
      DeviceBuffer d_scale = to_device(encode(std::vector<float>{embedding_scale}));
@@ -195,15 +195,15 @@ index 13b2c20a..6dce8345 100644
 +    DeviceBuffer d_destination_state = to_device(fork ? encode(stale) : state_bits);
      GuardedDeviceBuffer d_output(expected.size() * sizeof(std::uint16_t));
      Tensor hyper_tensor(d_hyper.p, DType::BF16, {kHyper, kTokens});
-     Tensor gathered_tensor(d_gathered.p, DType::FP8_E4M3FN, {kHidden, kTokens});
+     Tensor gathered_tensor(d_gathered.p, ple_dtype, {kHidden, kTokens});
      Tensor state_tensor(d_state.p, DType::BF16, {kHyper, kState});
 +    Tensor destination_state_tensor(fork ? d_destination_state.p : d_state.p, DType::BF16,
 +                                    {kHyper, kState});
      Tensor output_tensor(d_output.data(), DType::BF16, {kHyper, kTokens});
      ops::FlashNextPleWeights weights{
          .key_projection = bf16_weight(d_key_weight, kHyper, kHidden),
-@@ -170,11 +178,22 @@ int run() {
-         .embedding_scale = Tensor(d_scale.p, DType::BF16, {1}),
+@@ -181,11 +189,22 @@ int run(DType ple_dtype) {
+             ? Tensor{} : Tensor(d_scale.p, DType::BF16, {1}),
      };
      WorkspaceArena workspace(ops::flash_next_ple_workspace_capacity_bytes(kTokens));
 -    ops::flash_next_ple(hyper_tensor, gathered_tensor, weights, state_tensor, output_tensor, workspace, nullptr);
@@ -229,12 +229,14 @@ index 13b2c20a..6dce8345 100644
      return failures;
  }
  
-@@ -183,7 +202,7 @@ int run() {
+@@ -194,7 +213,9 @@ int run(DType ple_dtype) {
  int main() {
      if (ninfer::test::cuda_unavailable()) { return 77; }
      try {
--        const int failures = run();
-+        const int failures = run(false) + run(true);
+-        const int failures = run(ninfer::DType::FP8_E4M3FN) + run(ninfer::DType::BF16);
++        const int failures = run(ninfer::DType::FP8_E4M3FN, false) +
++                             run(ninfer::DType::BF16, false) +
++                             run(ninfer::DType::FP8_E4M3FN, true) + run(ninfer::DType::BF16, true);
          std::cout << (failures == 0 ? "OK" : "FAIL") << " Flash-Next PLE\n";
          return failures == 0 ? 0 : 1;
      } catch (const std::exception& error) {

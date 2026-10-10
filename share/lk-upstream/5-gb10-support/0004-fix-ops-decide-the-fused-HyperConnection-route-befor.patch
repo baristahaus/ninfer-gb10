@@ -1,0 +1,42 @@
+From 32cc4ce06c93f4c9d898ee35f5f4f59d4c53f82d Mon Sep 17 00:00:00 2001
+From: baristahaus <baristahaus@users.noreply.github.com>
+Date: Sat, 10 Oct 2026 17:23:18 +0000
+Subject: [PATCH 4/4] fix(ops): decide the fused HyperConnection route before
+ allocating its workspace
+
+fused_mix allocated its staging, partials and square sums (about 25.7 KB a
+token) before launch_fused_mix found that the device cannot host the
+cooperative grid, then returned false with those buffers still held. The
+general route that follows is sized by
+hyperconnection_mix_workspace_capacity_bytes, which does not include them,
+so on a device below 160 SMs (GB10: 48 SMs give 54 columns a CTA against
+the 16 the Up tile allows) the op test runs out of workspace
+(std::bad_alloc in finish_mix). fused_mix now checks fused_mix_grid() first.
+Devices that take the fused route are unchanged.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01PB8TNZ3p817zVAp6aH4yrz
+---
+ src/ops/launcher/hyperconnection.cu | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/src/ops/launcher/hyperconnection.cu b/src/ops/launcher/hyperconnection.cu
+index dfaae9c0..669a0e19 100644
+--- a/src/ops/launcher/hyperconnection.cu
++++ b/src/ops/launcher/hyperconnection.cu
+@@ -1038,7 +1038,11 @@ bool fused_mix(Tensor& hyper, const Tensor* previous_block_output,
+                Tensor& block_input, Tensor* injection, WorkspaceArena& workspace,
+                cudaStream_t stream, const HyperConnectionActivation* activation) {
+     const int tokens = hyper.ne[1];
+-    if (tokens > kFusedMaxTokens || (activation != nullptr && activation->capture != nullptr)) {
++    // Decide before allocating: a device that cannot host the cooperative grid (fewer than 160
++    // SMs, e.g. GB10's 48) takes the general route, whose workspace capacity does not include
++    // these buffers.
++    if (tokens > kFusedMaxTokens || (activation != nullptr && activation->capture != nullptr) ||
++        fused_mix_grid() == 0) {
+         return false;
+     }
+     Tensor staged      = workspace.alloc(DType::BF16, {kHyper, tokens});
+-- 
+2.43.0
+

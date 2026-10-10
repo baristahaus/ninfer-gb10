@@ -1,8 +1,8 @@
 **Title:** fix(flash-next): decide MTP RoPE layout by element count, not a batch-3 shape test
 
-**Target:** lkarlsund's NInfer fork, `master` at `2aa87467`.
-**Head:** `baristahaus/ninfer-gb10` branch `upstream/flash-next-mtp-rope-layout` (`c1bd1a5e`).
-Independent of the PLE fork fix.
+**Target:** `lkarlslund/ninfer6000` `master` (`8f574ee4`).
+**Head:** `baristahaus/ninfer-gb10` branch `upstream/ninfer6000/mtp-rope-layout` (one commit).
+Independent of the other PRs in this set.
 
 ## Problem and scope
 
@@ -30,15 +30,10 @@ The element count decides the layout:
 
 ## Verification
 
-- **Downstream fork (`baristahaus/ninfer-gb10`, NVIDIA GB10, `sm_121a`):** the same change has been
-  in service since 2026-09-29. Before it, C3, C4 and C8 MTP serving failed at startup. After it,
-  C4 MTP decode under 4×256-token concurrent load runs, both with graphs and with
-  `--no-cuda-graph`.
-- **On `master` (`2aa87467`):** reproduced on GB10. C4, MTP draft 1, `--no-cuda-graph`, four
-  concurrent requests: all four fail with HTTP 500 ("requested 18, available 6"), while a single
-  request succeeds. This commit is only compile-checked on `master` (`sm_121a`, 125B runtime TU).
-- **Not verified:**
-  - the rebased commit run end-to-end on `master`;
-  - RTX PRO 6000.
-
-  The failing condition depends only on batch size, so it should reproduce there too.
+- **On `master` (`8f574ee4`), NVIDIA GB10:** reproduced at startup with `--max-concurrency 4` and
+  MTP, for every draft count: "view element count mismatch: requested 36, available 12" (K=3),
+  27/9 (K=2), 18/6 (K=1). With this commit the same server prepares its graphs in 2.5 s and served
+  a full C1/C2/C4 load run (105 requests, five prompt classes) at K=1 and K=3, and with adaptive
+  drafts.
+- The condition depends only on the decode batch reaching three rows, so it also applies on
+  RTX PRO 6000 at `--max-concurrency` 3 or more. It has not run there.

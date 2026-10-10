@@ -1,7 +1,8 @@
 **Title:** fix(flash-next): read PLE history from the fork source during prefill
 
-**Target:** lkarlsund's NInfer fork (the 125B-A6B Flash-Next runtime's home), `master` at `2aa87467`.
-**Head:** `baristahaus/ninfer-gb10` branch `upstream/flash-next-ple-fork-source` (`e5c45144`).
+**Target:** `lkarlslund/ninfer6000` `master` (`8f574ee4`).
+**Head:** `baristahaus/ninfer-gb10` branch `upstream/ninfer6000/ple-fork-source` (one commit).
+Independent of the other PRs in this set.
 
 ## Problem and scope
 
@@ -55,34 +56,30 @@ that ignores the selectors.
 
 ## Verification
 
-**Unit test.** `test_flash_next_ple` now runs the existing in-place case and a fork case. The fork
-case fills the destination with unrelated values and requires all of the following:
+**Unit test.** `test_flash_next_ple` now runs the in-place case and a fork case for both FP8 and
+BF16 tables. The fork case fills the destination with unrelated values and requires:
 - the output and the destination history match the independent FP64 oracle;
 - the source history is left bit-for-bit unchanged.
 
-**What was measured.** I verified the fix on a downstream fork, on NVIDIA GB10 (`sm_121a`,
-CUDA 13.0), with `qwen3_8_flash_next_125b_a6b_nvfp4_fp8_mtp.ninfer`. That fork carries
-GB10-specific changes. This commit is the same fix rebased onto `master`. On `master` it is only
-compile-checked (`sm_121a`): the op, its test and the 125B runtime TU. It has not run on
-RTX PRO 6000.
+**Rebase.** On `master` the op takes `gathered` (FP8 or BF16 rows) and builds its embedding with
+`embedding_from_table`; the fix keeps both and only splits the history into source and destination.
+Compile-checked on `master` for `sm_121a`: the op, its test and the 125B runtime TU.
 
-The probe: `ninfer-serve --max-context 73728 --kv-dtype fp8 --preserve-thinking`, a 73-token
-system + user chat prompt, greedy, 256 output tokens, cold first request,
-`--max-concurrency 1` vs `4`.
+**Measured downstream** (`baristahaus/ninfer-gb10`, NVIDIA GB10, `sm_121a`, CUDA 13.0, the
+`nvfp4_fp8_mtp` artifact). Probe: `ninfer-serve --max-context 73728 --kv-dtype fp8
+--preserve-thinking`, a 73-token system + user chat prompt, greedy, 256 output tokens, cold
+first request, `--max-concurrency 1` vs `4`:
 
 | Build | MTP draft 1 | MTP off |
 |---|---|---|
 | before | C1 ≠ C4 | C1 ≠ C4 |
 | after | C1 == C4 | C1 == C4 |
 
-- The fixed output differs from both of the old C1 and C4 outputs, as expected when each old
-  configuration read different stale history.
-- Real-artifact test goldens: bitwise unchanged (the canonical prompt does not fork).
-- Op tests `test_flash_next_ple` (in-place and fork) and `test_gdn_replay_fold`: pass.
-- C4 MTP decode speed: unchanged within run-to-run variation (22.5 tok/s vs 22.2–22.5 before).
-  The fix only changes which slot one prefill launch reads.
+- The fixed output differs from both old outputs, as expected when each old configuration read
+  different stale history.
+- Real-artifact goldens: bitwise unchanged (the canonical prompt does not fork).
+- C4 MTP decode speed: unchanged within run-to-run variation; the fix only changes which slot one
+  prefill launch reads.
 
-**Not verified (an RTX PRO 6000 run of the probe above, before and after, would close the first two):**
-- RTX PRO 6000;
-- the rebased commit run end-to-end on `master`;
-- multimodal prefill through the fork path (same schedule code, not exercised).
+**Not verified:** RTX PRO 6000; multimodal prefill through the fork path (same schedule code, not
+exercised).

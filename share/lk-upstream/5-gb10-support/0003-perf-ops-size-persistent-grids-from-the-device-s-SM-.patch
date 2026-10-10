@@ -1,0 +1,359 @@
+From 78b6474e35175ef0d8b74d3d5f55ce85fca56604 Mon Sep 17 00:00:00 2001
+From: baristahaus <baristahaus@users.noreply.github.com>
+Date: Sat, 10 Oct 2026 14:17:40 +0000
+Subject: [PATCH 3/4] perf(ops): size persistent grids from the device's SM
+ count
+
+Seven sites sized one resident wave from the RTX 5090's 170 SMs (170, 510,
+680, 1020, 5440). On GB10 (48 SMs) they oversubscribe by 3.5x; on an RTX PRO
+6000 (188) they leave SMs idle. device_sm_count() queries the device once,
+falling back to 170, and the RMSNorm prefetch gate, RoPE wave capacity, GDN
+chunked output, sparse-MoE prefill, QSA score and Flash-Next MoE grouped
+grids scale from it. Every one of these kernels strides its work by
+gridDim.x, so the grid size changes speed only. Ported from
+baristahaus/ninfer-gb10 589e4df1.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01PB8TNZ3p817zVAp6aH4yrz
+---
+ src/ops/basic_sources.cmake                   |  1 +
+ src/ops/common/device_info.cu                 | 30 +++++++++++++++++++
+ src/ops/common/device_info.h                  | 17 +++++++++++
+ src/ops/launcher/rmsnorm.cu                   | 10 +++----
+ src/ops/launcher/rope.cu                      |  7 +++--
+ .../gated_delta_net/chunked/output.cu         |  8 ++---
+ .../softmax_attention/qsa/flash_next_qsa.cu   |  6 +++-
+ .../sparse_moe/flash_next/flash_next_moe.cu   | 22 +++++++++-----
+ .../prefill/sparse_moe_prefill_kernels.cu     | 10 +++----
+ 9 files changed, 85 insertions(+), 26 deletions(-)
+ create mode 100644 src/ops/common/device_info.cu
+ create mode 100644 src/ops/common/device_info.h
+
+diff --git a/src/ops/basic_sources.cmake b/src/ops/basic_sources.cmake
+index 22970bf6..8b452899 100644
+--- a/src/ops/basic_sources.cmake
++++ b/src/ops/basic_sources.cmake
+@@ -16,6 +16,7 @@ target_sources(ninfer_ops PRIVATE
+   "${CMAKE_CURRENT_LIST_DIR}/launcher/prepare_ragged_prefix.cu"
+   "${CMAKE_CURRENT_LIST_DIR}/launcher/prepare_masked_block.cu"
+   "${CMAKE_CURRENT_LIST_DIR}/launcher/residual_add.cu"
++  "${CMAKE_CURRENT_LIST_DIR}/common/device_info.cu"
+   "${CMAKE_CURRENT_LIST_DIR}/launcher/rmsnorm.cu"
+   "${CMAKE_CURRENT_LIST_DIR}/launcher/rmsnorm_pack_tail.cu"
+   "${CMAKE_CURRENT_LIST_DIR}/launcher/rope.cu"
+diff --git a/src/ops/common/device_info.cu b/src/ops/common/device_info.cu
+new file mode 100644
+index 00000000..9891552b
+--- /dev/null
++++ b/src/ops/common/device_info.cu
+@@ -0,0 +1,30 @@
++#include "ops/common/device_info.h"
++
++#include <cstdio>
++#include <cuda_runtime.h>
++
++namespace ninfer::ops {
++namespace {
++
++constexpr int kReferenceSmCount = 170; // RTX 5090
++
++int query_sm_count() {
++    int device = 0;
++    if (cudaGetDevice(&device) != cudaSuccess) { return kReferenceSmCount; }
++    int count = 0;
++    if (cudaDeviceGetAttribute(&count, cudaDevAttrMultiProcessorCount, device) != cudaSuccess) {
++        return kReferenceSmCount;
++    }
++    if (count <= 0) { return kReferenceSmCount; }
++    std::fprintf(stderr, "ninfer: persistent grids sized for %d SMs\n", count);
++    return count;
++}
++
++} // namespace
++
++int device_sm_count() {
++    static const int count = query_sm_count();
++    return count;
++}
++
++} // namespace ninfer::ops
+diff --git a/src/ops/common/device_info.h b/src/ops/common/device_info.h
+new file mode 100644
+index 00000000..55362ad9
+--- /dev/null
++++ b/src/ops/common/device_info.h
+@@ -0,0 +1,17 @@
++#pragma once
++
++namespace ninfer::ops {
++
++/**
++ * Multiprocessor count of the active CUDA device, queried once and cached.
++ *
++ * Persistent-grid launchers size one resident wave from this value. Sizing from
++ * a hardcoded reference-part count leaves multiprocessors idle on a device with
++ * more SMs (RTX PRO 6000: 188) or oversubscribes one with fewer (GB10: 48).
++ *
++ * Returns the reference RTX 5090 count if the device query fails, so a launcher
++ * always receives a positive, usable value.
++ */
++int device_sm_count();
++
++} // namespace ninfer::ops
+diff --git a/src/ops/launcher/rmsnorm.cu b/src/ops/launcher/rmsnorm.cu
+index 23a6cba1..746dc8b8 100644
+--- a/src/ops/launcher/rmsnorm.cu
++++ b/src/ops/launcher/rmsnorm.cu
+@@ -1,5 +1,6 @@
+ // ninfer::ops - RMSNorm launcher: finite semantic dispatch over general row geometries.
+ #include "ops/launcher/rmsnorm.h"
++#include "ops/common/device_info.h"
+ 
+ #include "ops/kernel/rmsnorm.cuh"
+ #include "core/device.h"
+@@ -15,9 +16,8 @@ namespace {
+ // prefetch is the only source of overlap and those kernels run at 0.83x to 0.96x; above it a
+ // second resident block already supplies that overlap and only the register cost is left (35 -> 50
+ // on the warp kernel), which measures 1.02x to 1.14x. Swept over grid size on both gated shapes
+-// the crossing sits between 176 and 192 blocks; this is the 170 SMs of this part, a literal
+-// because nothing in the tree queries the device, so it is not portable.
+-constexpr std::int64_t kRmsPrefetchBlocks = 170;
++// the crossing sits between 176 and 192 blocks on the 5090: one block per SM, so gate on the
++// active device's SM count (device_sm_count() falls back to the 5090's 170 if the query fails).
+ 
+ template <RmsEpilogue Epilogue>
+ void launch_rmsnorm(const Tensor& x, const Tensor& weight, const Tensor* z, Tensor& out,
+@@ -74,7 +74,7 @@ void launch_rmsnorm(const Tensor& x, const Tensor& weight, const Tensor* z, Tens
+         constexpr int kWarpsPerBlock = kBlock / kWarpSize;
+         const auto blocks = static_cast<unsigned int>((rows + kWarpsPerBlock - 1) / kWarpsPerBlock);
+         if constexpr (kGateOnGrid) {
+-            if (blocks > kRmsPrefetchBlocks) {
++            if (blocks > device_sm_count()) {
+                 rmsnorm_warp_bf16x2_kernel<Epilogue, kBlock, false><<<blocks, kBlock, 0, stream>>>(
+                     reinterpret_cast<const __nv_bfloat162*>(x_bf16),
+                     reinterpret_cast<const __nv_bfloat162*>(w_bf16),
+@@ -107,7 +107,7 @@ void launch_rmsnorm(const Tensor& x, const Tensor& weight, const Tensor* z, Tens
+                 reinterpret_cast<__nv_bfloat162*>(out_bf16), d, rows, eps);
+     } else if (aligned2 && d > 3072 && d <= 8192 && d % 1024 == 0) {
+         if constexpr (kGateOnGrid) {
+-            if (rows > kRmsPrefetchBlocks) {
++            if (rows > device_sm_count()) {
+                 rmsnorm_cta_bf16x2_kernel<Epilogue, 512, 8, false>
+                     <<<static_cast<unsigned int>(rows), 512, 0, stream>>>(
+                         reinterpret_cast<const __nv_bfloat162*>(x_bf16),
+diff --git a/src/ops/launcher/rope.cu b/src/ops/launcher/rope.cu
+index 03ca1835..654cbb53 100644
+--- a/src/ops/launcher/rope.cu
++++ b/src/ops/launcher/rope.cu
+@@ -1,5 +1,6 @@
+ // ninfer::ops - rope launcher: private token-count tuning and generic fallback.
+ #include "ops/launcher/rope.h"
++#include "ops/common/device_info.h"
+ 
+ #include "core/device.h" // CUDA_CHECK
+ #include "ops/kernel/rope.cuh"
+@@ -13,8 +14,8 @@ constexpr int kLargeBlock               = 256;
+ constexpr int kFullChunkBlock           = 192;
+ constexpr int kSmallBlock               = 128;
+ constexpr int kDefaultChunkTargetTokens = 1024;
+-// RTX 5090 has 170 SMs and admits six of these 256-thread CTAs per SM.
+-constexpr int kLargeBlockWaveCapacity = 1020;
++// Large-block wave capacity: six 256-thread CTAs per SM of the active device
++// (6 x device_sm_count()); device_sm_count() falls back to the 5090's 170 SMs.
+ 
+ template <RopeKernelMode Mode>
+ inline constexpr bool kTextMode =
+@@ -48,7 +49,7 @@ void launch_fixed(const Tensor& positions, Tensor* q, Tensor* k, cudaStream_t st
+     if constexpr (kTextMode<Mode>) {
+         if (tokens <= 6) {
+             block = (QHeads + KHeads) * 32;
+-        } else if (tokens <= kLargeBlockWaveCapacity) {
++        } else if (tokens <= 6 * device_sm_count()) {
+             block = kLargeBlock;
+         } else if (tokens <= kDefaultChunkTargetTokens) {
+             block = kFullChunkBlock;
+diff --git a/src/ops/linear_attention/gated_delta_net/chunked/output.cu b/src/ops/linear_attention/gated_delta_net/chunked/output.cu
+index 24cd2802..9123f167 100644
+--- a/src/ops/linear_attention/gated_delta_net/chunked/output.cu
++++ b/src/ops/linear_attention/gated_delta_net/chunked/output.cu
+@@ -1,4 +1,5 @@
+ #include "ops/linear_attention/gated_delta_net/chunked/launch.h"
++#include "ops/common/device_info.h"
+ #include "ops/linear_attention/gated_delta_net/chunked/output.cuh"
+ 
+ namespace ninfer::ops::detail::gated_delta_net::chunked {
+@@ -6,9 +7,7 @@ namespace {
+ 
+ namespace kernel = output;
+ 
+-constexpr std::int64_t kRtx5090SmCount = 170;
+-constexpr std::int64_t kCtasPerSm      = 4;
+-constexpr std::int64_t kTargetCtas     = kRtx5090SmCount * kCtasPerSm;
++constexpr std::int64_t kCtasPerSm = 4; // of the active device (device_sm_count())
+ 
+ template <bool MULTI_JOB>
+ cudaError_t launch_fixed(const chunk_output_config& cfg, dim3 grid, head_map qk_map, int chunks) {
+@@ -43,7 +42,8 @@ cudaError_t launch_output(const chunk_output_config& cfg) {
+     // Keep at most one resident RTX 5090 wave and distribute chunks evenly
+     // across it. Small grids retain one logical job per CTA.
+     const std::int64_t logical_jobs   = NT * cfg.H_v;
+-    const std::int64_t jobs_per_block = (logical_jobs + kTargetCtas - 1) / kTargetCtas;
++    const std::int64_t target_ctas    = device_sm_count() * kCtasPerSm;
++    const std::int64_t jobs_per_block = (logical_jobs + target_ctas - 1) / target_ctas;
+     const std::int64_t grid_chunks    = (NT + jobs_per_block - 1) / jobs_per_block;
+     NINFER_GATED_DELTA_NET_PROPAGATE(v.check_grid(grid_chunks, cfg.H_v));
+ 
+diff --git a/src/ops/softmax_attention/qsa/flash_next_qsa.cu b/src/ops/softmax_attention/qsa/flash_next_qsa.cu
+index 2317f81b..85166670 100644
+--- a/src/ops/softmax_attention/qsa/flash_next_qsa.cu
++++ b/src/ops/softmax_attention/qsa/flash_next_qsa.cu
+@@ -1,4 +1,5 @@
+ #include "ninfer/ops/flash_next_qsa.h"
++#include "ops/common/device_info.h"
+ 
+ #include "ops/flash_next_work.h"
+ 
+@@ -2023,7 +2024,10 @@ void flash_next_qsa(const Tensor& input, const Tensor& cache_positions,
+                     static_cast<const int*>(table_rows.data), width, group_extent,
+                     score_stride, static_cast<float*>(scores.data));
+             } else {
+-                const int score_blocks = std::min(510, (group_extent + 7) / 8);
++                // Persistent wave cap: 3 blocks per SM of the active device (510 on the
++                // 5090). The kernel strides groups by gridDim.x, so any grid is correct.
++                const int score_blocks =
++                    std::min(3 * device_sm_count(), (group_extent + 7) / 8);
+                 score_groups_batched_kernel<<<dim3(score_blocks, tokens), 256, 0, stream>>>(
+                     static_cast<const __nv_bfloat16*>(index_query.data),
+                     static_cast<const __nv_bfloat16*>(cache.auxiliary_pages[0].data),
+diff --git a/src/ops/sparse_moe/flash_next/flash_next_moe.cu b/src/ops/sparse_moe/flash_next/flash_next_moe.cu
+index 99670ed0..a4b2917a 100644
+--- a/src/ops/sparse_moe/flash_next/flash_next_moe.cu
++++ b/src/ops/sparse_moe/flash_next/flash_next_moe.cu
+@@ -1,4 +1,5 @@
+ #include "ninfer/ops/flash_next_moe.h"
++#include "ops/common/device_info.h"
+ 
+ #include "ops/flash_next_work.h"
+ 
+@@ -29,6 +30,11 @@
+ namespace ninfer::ops {
+ namespace {
+ 
++// One resident persistent wave of the active device: 3 blocks per SM (510 on the 5090;
++// device_sm_count() falls back to its 170 SMs). The grouped GEMMs stride their work list by
++// gridDim.x, so any grid is correct.
++int persistent_moe_blocks() { return 3 * ninfer::ops::device_sm_count(); }
++
+ constexpr int kHidden                 = 2560;
+ constexpr int kExperts                = 512;
+ constexpr int kTop                    = 10;
+@@ -992,7 +998,7 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
+         if (decode_grouped) {
+             constexpr int kGateRowsPerBlock = DecodeGroupedSchedule::kBlockN / 2;
+             const int gate_blocks =
+-                std::min(510, assignments * (kIntermediate / kGateRowsPerBlock));
++                std::min(persistent_moe_blocks(), assignments * (kIntermediate / kGateRowsPerBlock));
+             detail::nvfp4_w4a4_mma_kernel<GroupedGateGeometry, DecodeGroupedSchedule,
+                                           detail::Nvfp4IdentityEpilogue, GroupedSiluOutput,
+                                           GroupedGateRows, true, GroupedWork<GroupedGateRows>>
+@@ -1006,7 +1012,7 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
+             detail::nvfp4_w4a4_mma_kernel<GroupedGateGeometry, LargeGroupedSchedule,
+                                           detail::Nvfp4IdentityEpilogue, GroupedSiluOutput,
+                                           GroupedGateRows, true, GroupedWork<GroupedGateRows>>
+-                <<<510, LargeGroupedSchedule::kThreads, 0, stream>>>(
++                <<<persistent_moe_blocks(), LargeGroupedSchedule::kThreads, 0, stream>>>(
+                     gate_input, static_cast<const std::uint8_t*>(weights.routed_gate_up.codes),
+                     static_cast<const std::uint8_t*>(weights.routed_gate_up.scales), assignments,
+                     1.0F, detail::Nvfp4IdentityEpilogue{},
+@@ -1016,7 +1022,7 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
+             detail::nvfp4_w4a4_mma_kernel<GroupedGateGeometry, GroupedGateSchedule,
+                                           detail::Nvfp4IdentityEpilogue, GroupedSiluOutput,
+                                           GroupedGateRows, true, GroupedWork<GroupedGateRows>>
+-                <<<510, GroupedGateSchedule::kThreads, 0, stream>>>(
++                <<<persistent_moe_blocks(), GroupedGateSchedule::kThreads, 0, stream>>>(
+                     gate_input, static_cast<const std::uint8_t*>(weights.routed_gate_up.codes),
+                     static_cast<const std::uint8_t*>(weights.routed_gate_up.scales), assignments,
+                     1.0F, detail::Nvfp4IdentityEpilogue{},
+@@ -1044,7 +1050,7 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
+                                                      kHidden};
+         if (decode_grouped) {
+             constexpr int kDownRowsPerBlock = DecodeGroupedSchedule::kBlockN;
+-            const int down_blocks = std::min(510, assignments * (kHidden / kDownRowsPerBlock));
++            const int down_blocks = std::min(persistent_moe_blocks(), assignments * (kHidden / kDownRowsPerBlock));
+             detail::nvfp4_w4a4_mma_kernel<GroupedDownGeometry, DecodeGroupedSchedule,
+                                           detail::Nvfp4IdentityEpilogue, GroupedOutput,
+                                           GroupedDownRows, false, GroupedWork<GroupedDownRows>>
+@@ -1058,7 +1064,7 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
+             detail::nvfp4_w4a4_mma_kernel<GroupedDownGeometry, LargeGroupedSchedule,
+                                           detail::Nvfp4IdentityEpilogue, GroupedOutput,
+                                           GroupedDownRows, false, GroupedWork<GroupedDownRows>>
+-                <<<510, LargeGroupedSchedule::kThreads, 0, stream>>>(
++                <<<persistent_moe_blocks(), LargeGroupedSchedule::kThreads, 0, stream>>>(
+                     down_input, static_cast<const std::uint8_t*>(weights.routed_down.codes),
+                     static_cast<const std::uint8_t*>(weights.routed_down.scales), assignments, 1.0F,
+                     detail::Nvfp4IdentityEpilogue{},
+@@ -1068,7 +1074,7 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
+             detail::nvfp4_w4a4_mma_kernel<GroupedDownGeometry, GroupedDownSchedule,
+                                           detail::Nvfp4IdentityEpilogue, GroupedOutput,
+                                           GroupedDownRows, false, GroupedWork<GroupedDownRows>>
+-                <<<510, GroupedDownSchedule::kThreads, 0, stream>>>(
++                <<<persistent_moe_blocks(), GroupedDownSchedule::kThreads, 0, stream>>>(
+                     down_input, static_cast<const std::uint8_t*>(weights.routed_down.codes),
+                     static_cast<const std::uint8_t*>(weights.routed_down.scales), assignments, 1.0F,
+                     detail::Nvfp4IdentityEpilogue{},
+@@ -1111,7 +1117,7 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
+             assignments);
+         Tensor gate_up = workspace.alloc(DType::BF16, {2 * kIntermediate, assignments});
+         detail::bf16_grouped_gemm_mma_kernel<Bf16GroupedGateGeometry, Bf16GroupedSchedule>
+-            <<<510, Bf16GroupedSchedule::kThreads, Bf16GroupedSchedule::kSharedBytes, stream>>>(
++            <<<persistent_moe_blocks(), Bf16GroupedSchedule::kThreads, Bf16GroupedSchedule::kSharedBytes, stream>>>(
+                 static_cast<const __nv_bfloat16*>(packed_input.data),
+                 static_cast<const __nv_bfloat16*>(weights.routed_gate_up.codes),
+                 static_cast<const int*>(offsets.data), static_cast<const int*>(job_experts.data),
+@@ -1122,7 +1128,7 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
+             static_cast<__nv_bfloat16*>(routed_activation.data), assignments);
+         Tensor grouped_output = workspace.alloc(DType::BF16, {kHidden, assignments});
+         detail::bf16_grouped_gemm_mma_kernel<Bf16GroupedDownGeometry, Bf16GroupedSchedule>
+-            <<<510, Bf16GroupedSchedule::kThreads, Bf16GroupedSchedule::kSharedBytes, stream>>>(
++            <<<persistent_moe_blocks(), Bf16GroupedSchedule::kThreads, Bf16GroupedSchedule::kSharedBytes, stream>>>(
+                 static_cast<const __nv_bfloat16*>(routed_activation.data),
+                 static_cast<const __nv_bfloat16*>(weights.routed_down.codes),
+                 static_cast<const int*>(offsets.data), static_cast<const int*>(job_experts.data),
+diff --git a/src/ops/sparse_moe/prefill/sparse_moe_prefill_kernels.cu b/src/ops/sparse_moe/prefill/sparse_moe_prefill_kernels.cu
+index 3d9fea13..987a48d9 100644
+--- a/src/ops/sparse_moe/prefill/sparse_moe_prefill_kernels.cu
++++ b/src/ops/sparse_moe/prefill/sparse_moe_prefill_kernels.cu
+@@ -1,4 +1,5 @@
+ #include "core/weight.h"
++#include "ops/common/device_info.h"
+ #include "ops/sparse_moe/prefill/sparse_moe_prefill.h"
+ 
+ #include "core/device.h"
+@@ -288,11 +289,10 @@ constexpr int kExpertStages = 2;
+ constexpr int kGateUpNarrowStages = 6;
+ constexpr int kExpertWarps        = 8;
+ constexpr int kExpertThreads      = 32 * kExpertWarps;
+-constexpr int kRtx5090SmCount     = 170;
+-// Upper bound on the persistent grid. The routed GEMMs stride their work list by gridDim.x,
++// Upper bound on the persistent grid: 32 blocks per SM of the active device
++// (32 x device_sm_count()). The routed GEMMs stride their work list by gridDim.x,
+ // so any grid is correct; this caps the launch when the work list is long.
+ constexpr int kPrefillMaxBlocksPerSm = 32;
+-constexpr int kPrefillMaxBlocks      = kPrefillMaxBlocksPerSm * kRtx5090SmCount;
+ 
+ // The narrow routed gate/up ships in both depths and the route picks one. A job is one nonempty
+ // column tile of one expert, so more than one job per touched expert means an expert's rows
+@@ -1249,8 +1249,8 @@ void sparse_moe_prefill_launch(const Tensor& x, const SparseMoeWeights& weights,
+         const int max_route_jobs     = assignments / route_job_bn + kExperts;
+         const int routed_gate_work   = max_route_jobs * (kIntermediate / (kExpertBM / 2));
+         const int routed_down_work   = max_route_jobs * (kHidden / kExpertBM);
+-        const int routed_gate_blocks = std::min(routed_gate_work, kPrefillMaxBlocks);
+-        const int routed_down_blocks = std::min(routed_down_work, kPrefillMaxBlocks);
++        const int routed_gate_blocks = std::min(routed_gate_work, kPrefillMaxBlocksPerSm * device_sm_count());
++        const int routed_down_blocks = std::min(routed_down_work, kPrefillMaxBlocksPerSm * device_sm_count());
+         sparse_moe_prefill_scan_kernel<<<1, kExpertThreads, 0, stream>>>(
+             tile_counts, tile_bases, offsets, route_job_experts, route_job_columns, route_job_count,
+             route_tiles, route_job_bn, tokens, adaptive);
+-- 
+2.43.0
+

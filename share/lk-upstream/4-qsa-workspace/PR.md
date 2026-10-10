@@ -1,8 +1,8 @@
 **Title:** fix(ops): size the QSA workspace for every call up to its row count
 
-**Target:** lkarlsund's NInfer fork, `master` at `2aa87467`.
-**Head:** `baristahaus/ninfer-gb10` branch `upstream/flash-next-qsa-workspace` (`1737b647`).
-Independent of the PLE and MTP RoPE fixes.
+**Target:** `lkarlslund/ninfer6000` `master` (`8f574ee4`).
+**Head:** `baristahaus/ninfer-gb10` branch `upstream/ninfer6000/qsa-workspace` (one commit).
+Independent of the other PRs in this set.
 
 ## Problem and scope
 
@@ -41,9 +41,9 @@ match.
 
 ## Verification
 
-- Compile-checked on `master` (`sm_121a`): `flash_next_qsa.cu` against `master`'s own headers,
-  and `test_flash_next_qsa`.
+- Applies to `master` unchanged. Compile-checked there (`sm_121a`): `flash_next_qsa.cu` and
+  `test_flash_next_qsa`.
 - The same change has run downstream since 2026-09-30, covered by that fork's QSA op tests and
   serving runs on GB10.
-- The table above was computed from the capacity formula on `master`, not measured.
-- Not verified on `master` at runtime, and not on RTX PRO 6000.
+- The table above was computed from the capacity formula, not measured. Not run on `master`, and
+  not on RTX PRO 6000.

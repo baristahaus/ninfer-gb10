@@ -1,4 +1,4 @@
-From c1bd1a5e5ea97fc6e26bdfefff93bfcaa3ad197c Mon Sep 17 00:00:00 2001
+From 80e4f80b1e176cb9e4e968a633aa7fc347fab361 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Fri, 2 Oct 2026 01:25:35 +0000
 Subject: [PATCH] fix(flash-next): decide MTP RoPE layout by element count, not
@@ -19,7 +19,7 @@ Claude-Session: https://claude.ai/code/session_01PB8TNZ3p817zVAp6aH4yrz
  1 file changed, 9 insertions(+), 2 deletions(-)
 
 diff --git a/src/models/qwen3_8_flash_next/impl/runtime/text_context_impl.h b/src/models/qwen3_8_flash_next/impl/runtime/text_context_impl.h
-index 2c3631c1..6d70b2ac 100644
+index f4e20fb3..24dff847 100644
 --- a/src/models/qwen3_8_flash_next/impl/runtime/text_context_impl.h
 +++ b/src/models/qwen3_8_flash_next/impl/runtime/text_context_impl.h
 @@ -521,13 +521,20 @@ void TextContext::mtp_forward_flash_next(const Tensor& ids, const Tensor& hidden

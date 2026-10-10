@@ -25,7 +25,7 @@ remain shared Ops where their semantic contracts genuinely coincide.
 | routed experts / selected experts | 512 / 10 |
 | routed and shared expert width | 640 |
 | HyperConnection streams / low-rank width | 4 / 320 |
-| MTP layers / maximum draft tokens | 1 / 3 |
+| MTP layers / maximum draft tokens | 1 / 5 |
 | Vision depth / hidden / intermediate | 27 / 1152 / 4304 |
 | Vision merger output | 2560 |
 

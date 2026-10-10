@@ -1,0 +1,41 @@
+From 601c7369b4da42d5d50a0449873a7185866a2fa9 Mon Sep 17 00:00:00 2001
+From: baristahaus <baristahaus@users.noreply.github.com>
+Date: Sat, 10 Oct 2026 15:35:24 +0000
+Subject: [PATCH] fix(models): decide Flash-Next MTP RoPE layout by element
+ count
+
+The shape test on rope_positions.ne[1] mistook [width,batch] text positions for three-axis MRoPE whenever the decode batch was 3. The MTP decode graph capture then viewed the {(K+1),3} text position tensor as {(K+1),3,3} and threw 'view element count mismatch: requested 9(K+1), available 3(K+1)' at startup for every draft count K. Decide the layout by the element count and reject any other, as the ninfer-gb10 fork does.
+---
+ .../impl/runtime/text_context_impl.h                  | 11 +++++++++--
+ 1 file changed, 9 insertions(+), 2 deletions(-)
+
+diff --git a/src/models/qwen3_8_flash_next/impl/runtime/text_context_impl.h b/src/models/qwen3_8_flash_next/impl/runtime/text_context_impl.h
+index f4e20fb3..24dff847 100644
+--- a/src/models/qwen3_8_flash_next/impl/runtime/text_context_impl.h
++++ b/src/models/qwen3_8_flash_next/impl/runtime/text_context_impl.h
+@@ -521,13 +521,20 @@ void TextContext::mtp_forward_flash_next(const Tensor& ids, const Tensor& hidden
+                              stream);
+ 
+     Tensor cache_positions = positions.view({width, batch});
++    // Three-axis MRoPE positions hold three values per token ([T,3] or [width,batch,3]); text
++    // positions hold one ([width,batch]). The element count decides: a shape test on ne[1]
++    // mistook [width,batch] text positions for [T,3] whenever batch was 3.
+     Tensor mrope_positions;
+-    if (rope_positions.ne[2] == 3 || rope_positions.ne[1] == 3) {
++    const std::int64_t rope_elements = rope_positions.numel();
++    if (rope_elements == 3LL * tokens) {
+         mrope_positions = rope_positions.view({width, batch, 3});
+-    } else {
++    } else if (rope_elements == tokens) {
+         mrope_positions = work_.alloc(DType::I32, {width, batch, 3});
+         ops::flash_next_expand_text_positions(rope_positions.view({width, batch}), mrope_positions,
+                                               stream);
++    } else {
++        throw std::invalid_argument("Flash-Next MTP RoPE positions must hold one or three values "
++                                    "per token");
+     }
+     Tensor valid;
+     if (active_valid_columns_ != nullptr) {
+-- 
+2.43.0
+

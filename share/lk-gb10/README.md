@@ -1,14 +1,16 @@
 # lkarlslund/ninfer master on GB10
 
-Three patches that make `lkarlslund/ninfer` master (`8f574ee4`, 2026-10-07) build and run on GB10, so its
-Flash-Next work can be measured beside this fork before anything is cherry-picked. They change no
-behaviour on an RTX PRO 6000 except grid sizes there (188 SMs instead of the 5090's 170).
+Four patches that make `lkarlslund/ninfer` master (`8f574ee4`, 2026-10-07) build and run on GB10, so its
+Flash-Next work can be measured beside this fork before anything is cherry-picked. The first three change no
+behaviour on an RTX PRO 6000 except grid sizes there (188 SMs instead of the 5090's 170); 0004 fixes a
+startup crash that only shows with a batch-3 MTP decode graph.
 
 | patch | what | from this fork |
 |---|---|---|
 | 0001 | CMake accepts `121a`; both family runtimes accept compute capability 12.1 | `589e4df1` |
 | 0002 | integrated devices size startup memory from `MemAvailable` less a 6 GiB reserve and the pending Host KV arena, after waiting up to 60 s for a just-exited process's memory | `7e23083c`, `7bfa75fb`, `b61f9867` |
 | 0003 | persistent grids sized from the device's SM count instead of the 5090's 170 (RMSNorm, RoPE, GDN chunked output, sparse-MoE prefill, QSA score, Flash-Next MoE grouped) | `589e4df1` |
+| 0004 | Flash-Next MTP RoPE layout decided by the element count, not a shape test on `ne[1]` (the shape test misread `{width,batch}` text positions as three-axis MRoPE whenever the decode batch was 3; the batch-3 MTP graph capture then threw a view element-count mismatch at startup) | `11f9e7a6` (already in this fork; lk master never received the fix) |
 
 Deliberately not ported:
 - our `yield` synchronize, because lk's low-latency round wait (`a9ccbabe`) answers the same wake-up cost;

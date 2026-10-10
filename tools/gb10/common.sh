@@ -37,7 +37,7 @@ fi
 NVCC=${NVCC:-$(command -v nvcc || echo /usr/local/cuda/bin/nvcc)}
 export CUDACXX=${CUDACXX:-$NVCC}
 OUT_ROOT=profiles/bench/gb10
-SERVE_BIN=build/apps/ninfer-serve
+SERVE_BIN=${SERVE_BIN:-build/apps/ninfer-serve}
 BENCH_BIN=build/bench/ninfer_bench
 BASE_URL="http://127.0.0.1:$PORT"
 SUMMARIZE=("$PYTHON" tools/gb10/summarize.py)

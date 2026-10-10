@@ -1,0 +1,111 @@
+{
+ "requests": 16,
+ "rounds": 6222,
+ "drafted_tokens": 18643,
+ "accepted_tokens": 10137,
+ "acceptance_ratio": 0.543743,
+ "fallback_steps": 9,
+ "accepted_per_position_per_round": {
+  "0": 0.723079,
+  "1": 0.522019,
+  "2": 0.384121
+ },
+ "streams": [
+  {
+   "stream": "wikitext-00",
+   "domain": "english_reference",
+   "seconds": 28.1,
+   "generated_tokens": 1024
+  },
+  {
+   "stream": "wikitext-01",
+   "domain": "english_reference",
+   "seconds": 29.41,
+   "generated_tokens": 1024
+  },
+  {
+   "stream": "wikitext-02",
+   "domain": "english_reference",
+   "seconds": 31.4,
+   "generated_tokens": 1024
+  },
+  {
+   "stream": "wikitext-03",
+   "domain": "english_reference",
+   "seconds": 30.43,
+   "generated_tokens": 1024
+  },
+  {
+   "stream": "pg19-00",
+   "domain": "english_long_form",
+   "seconds": 33.4,
+   "generated_tokens": 1024
+  },
+  {
+   "stream": "pg19-01",
+   "domain": "english_long_form",
+   "seconds": 32.12,
+   "generated_tokens": 1024
+  },
+  {
+   "stream": "pg19-02",
+   "domain": "english_long_form",
+   "seconds": 33.48,
+   "generated_tokens": 1024
+  },
+  {
+   "stream": "pg19-03",
+   "domain": "english_long_form",
+   "seconds": 27.79,
+   "generated_tokens": 1024
+  },
+  {
+   "stream": "zhwiki-00",
+   "domain": "chinese_reference",
+   "seconds": 32.6,
+   "generated_tokens": 1024
+  },
+  {
+   "stream": "zhwiki-01",
+   "domain": "chinese_reference",
+   "seconds": 30.16,
+   "generated_tokens": 1024
+  },
+  {
+   "stream": "zhwiki-02",
+   "domain": "chinese_reference",
+   "seconds": 35.45,
+   "generated_tokens": 1024
+  },
+  {
+   "stream": "zhwiki-03",
+   "domain": "chinese_reference",
+   "seconds": 33.33,
+   "generated_tokens": 1024
+  },
+  {
+   "stream": "ninfer-00",
+   "domain": "ninfer_code",
+   "seconds": 27.46,
+   "generated_tokens": 1024
+  },
+  {
+   "stream": "ninfer-01",
+   "domain": "ninfer_code",
+   "seconds": 31.41,
+   "generated_tokens": 1024
+  },
+  {
+   "stream": "ninfer-02",
+   "domain": "ninfer_code",
+   "seconds": 29.67,
+   "generated_tokens": 1024
+  },
+  {
+   "stream": "ninfer-03",
+   "domain": "ninfer_code",
+   "seconds": 29.39,
+   "generated_tokens": 1024
+  }
+ ]
+}

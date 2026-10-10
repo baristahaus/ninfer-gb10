@@ -1,0 +1,30 @@
+[
+ {
+  "class": "prose",
+  "finish": "length",
+  "chars": 1356,
+  "wall_s": 18.72,
+  "text": "The Roman Republic was born in 509 BCE from the ashes of the monarchy, a pivotal moment when the last king, Tarquin the Proud, was overthrown by a coalition of aristocrats led by Lucius Junius Brutus and Lucius Tarquinius Collatinus. This revolution was driven by deep-seated resentment against royal tyranny, particularly following the infamous rape of Lucretia, which served as the catalyst for the expulsion of the Tarquin dynasty. In the vacuum left by the kings, the Romans established a new political structure designed to prevent any single individual from accumulating excessive power. The core of this new system was the consulship, where two consuls were elected annually to serve as chief executives, each possessing the right to veto the other\u2019s decisions, thereby ensuring a balance of power. Alongside the consuls, the Senate emerged as the most influential deliberative body, composed primarily of former magistrates who advised on foreign policy, legislation, and financial matters, while the popular assemblies retained the power to elect officials and pass laws, creating a complex interplay between aristocratic influence and democratic participation that would define the early Republic.\n\nIn its initial centuries, the Republic was characterized by intense social stratification and internal conflict known as the Conflict of the Orders"
+ },
+ {
+  "class": "code",
+  "finish": "length",
+  "chars": 1060,
+  "wall_s": 11.84,
+  "text": "```python\n\"\"\"\nModule for parsing OpenAI-style SSE (Server-Sent Events) streams of chat completion chunks.\n\nThis module provides functionality to parse a stream of Server-Sent Events (SSE)\nthat contain JSON-encoded chat completion chunks, as returned by the OpenAI API\nwhen streaming responses. It aggregates all chunks into a single message object.\n\"\"\"\n\nimport json\nfrom dataclasses import dataclass, field\nfrom typing import Optional\n\n\n@dataclass\nclass ChatCompletionChunk:\n    \"\"\"Represents a single chunk from an OpenAI chat completion stream.\"\"\"\n    \n    id: str = \"\"\n    object: str = \"chat.completion.chunk\"\n    created: int = 0\n    model: str = \"\"\n    choices: list[dict] = field(default_factory=list)\n\n\n@dataclass\nclass Message:\n    \"\"\"Represents a complete chat completion message assembled from streamed chunks.\"\"\"\n    \n    role: str = \"assistant\"\n    content: str = \"\"\n    finish_reason: Optional[str] = None\n\n\ndef parse_sse_stream(sse_lines: list[str]) -> Message:\n    \"\"\"\n    Parse a list of SSE lines into a single Message object.\n    \n    Args:\n"
+ },
+ {
+  "class": "json",
+  "finish": "length",
+  "chars": 685,
+  "wall_s": 9.23,
+  "text": "[\n  {\n    \"country\": \"United States\",\n    \"capital\": \"Washington, D.C.\",\n    \"population_millions\": 331.9,\n    \"currency\": \"US Dollar\"\n  },\n  {\n    \"country\": \"China\",\n    \"capital\": \"Beijing\",\n    \"population_millions\": 1425.7,\n    \"currency\": \"Renminbi\"\n  },\n  {\n    \"country\": \"India\",\n    \"capital\": \"New Delhi\",\n    \"population_millions\": 1428.6,\n    \"currency\": \"Indian Rupee\"\n  },\n  {\n    \"country\": \"Indonesia\",\n    \"capital\": \"Jakarta\",\n    \"population_millions\": 277.5,\n    \"currency\": \"Indonesian Rupiah\"\n  },\n  {\n    \"country\": \"Pakistan\",\n    \"capital\": \"Islamabad\",\n    \"population_millions\": 240.5,\n    \"currency\": \"Pakistani Rupee\"\n  },\n  {\n    \"country\": \"Brazil\",\n   "
+ },
+ {
+  "class": "math",
+  "finish": "length",
+  "chars": 833,
+  "wall_s": 11.1,
+  "text": "Here is the step-by-step solution to the problem, followed by the generalization of the formula and verification with two additional examples.\n\n### Part 1: Step-by-Step Solution for the Specific Problem\n\n**Given:**\n*   Distance between City A and City B ($D$) = $450$ km.\n*   Speed of Train from A ($v_A$) = $60$ km/h.\n*   Speed of Train from B ($v_B$) = $90$ km/h.\n*   Time delay: Train B leaves 30 minutes after Train A.\n\n#### Step 1: Convert units to be consistent\nThe speeds are in km/h, but the delay is in minutes. We must convert the delay into hours.\n$$ \\text{Delay} (t_{delay}) = 30 \\text{ minutes} = \\frac{30}{60} \\text{ hours} = 0.5 \\text{ hours} $$\n\n#### Step 2: Define variables\nLet $t$ be the time (in hours) that **Train A** has been traveling when they meet.\nSince Train B starts 0.5 hours later, the time Train B has"
+ }
+]

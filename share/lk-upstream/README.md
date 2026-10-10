@@ -78,16 +78,17 @@ in this set is compile-only anymore.
 
 ## Sending
 
-The five head branches were pushed to `baristahaus/ninfer-gb10` on 2026-10-10, each built from its
-folder with `git am` on `8f574ee4`. Each PR's title is its `PR.md` **Title** line; its body is
-`PR.md` from "Problem and scope" down, which follows his pull request template.
+Sent 2026-10-10. The five head branches are in `baristahaus/ninfer-gb10`, each built from its
+folder with `git am` on `8f574ee4`; each PR's head is the
+pushed branch tip. Each PR's title is its `PR.md` **Title** line; its body is `PR.md` from "Problem
+and scope" down, which follows his pull request template.
 
-| # | head branch | open the PR |
+| # | head branch | PR |
 |---|---|---|
-| 1 | `upstream/ninfer6000/ple-fork-source` | [compare](https://github.com/lkarlslund/ninfer6000/compare/master...baristahaus:ninfer-gb10:upstream/ninfer6000/ple-fork-source?expand=1) |
-| 2 | `upstream/ninfer6000/mtp-rope-layout` | [compare](https://github.com/lkarlslund/ninfer6000/compare/master...baristahaus:ninfer-gb10:upstream/ninfer6000/mtp-rope-layout?expand=1) |
-| 3 | `upstream/ninfer6000/reasoning-effort-none` | [compare](https://github.com/lkarlslund/ninfer6000/compare/master...baristahaus:ninfer-gb10:upstream/ninfer6000/reasoning-effort-none?expand=1) |
-| 4 | `upstream/ninfer6000/qsa-workspace` | [compare](https://github.com/lkarlslund/ninfer6000/compare/master...baristahaus:ninfer-gb10:upstream/ninfer6000/qsa-workspace?expand=1) |
-| 5 | `upstream/ninfer6000/gb10-support` | [compare](https://github.com/lkarlslund/ninfer6000/compare/master...baristahaus:ninfer-gb10:upstream/ninfer6000/gb10-support?expand=1) |
+| 1 | `upstream/ninfer6000/ple-fork-source` | [lkarlslund/ninfer6000#5](https://github.com/lkarlslund/ninfer6000/pull/5) |
+| 2 | `upstream/ninfer6000/mtp-rope-layout` | [lkarlslund/ninfer6000#4](https://github.com/lkarlslund/ninfer6000/pull/4) |
+| 3 | `upstream/ninfer6000/reasoning-effort-none` | [lkarlslund/ninfer6000#3](https://github.com/lkarlslund/ninfer6000/pull/3) |
+| 4 | `upstream/ninfer6000/qsa-workspace` | [lkarlslund/ninfer6000#6](https://github.com/lkarlslund/ninfer6000/pull/6) |
+| 5 | `upstream/ninfer6000/gb10-support` | [lkarlslund/ninfer6000#7](https://github.com/lkarlslund/ninfer6000/pull/7) |
 
 The September `upstream/flash-next-*` branches stay as they are; nothing here rewrites them.

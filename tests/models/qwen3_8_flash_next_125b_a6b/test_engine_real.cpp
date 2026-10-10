@@ -314,21 +314,27 @@ int exercise_prefill_yield(ninfer::Engine& engine) {
 }
 
 int exercise_cancelled_prefill_restore(const char* artifact, const CrossPathFixture& fixture) {
-    // One lane and no extra Device StateImage slot: a long prefill takes the only slot, so the
-    // finished conversation's checkpoint state moves to Host and its follow-up restores it into
-    // the slot the long prefill used. Cancelling the long prefill mid-prompt releases that slot at
-    // a boundary where its last enqueued chunk may still be writing it, and the queued follow-up is
-    // admitted at once. The follow-up must match its output after an uncancelled long request.
-    ninfer::EngineOptions options            = engine_options(artifact);
-    options.max_context                      = 4096;
-    options.kv_capacity                      = ninfer::KvCapacityPolicy::explicit_capacity(4096);
-    options.max_concurrency                  = 1;
-    options.context_cache.device_state_slots = 0;
-    options.enable_vision                    = false;
+    // One lane, and a KV pool no larger than one request's context: a long request's reservation
+    // takes the whole pool, so a finished 2,800-token conversation's KV moves to Host and its
+    // follow-up restores those pages into pool pages the long request held. Cancelling the long
+    // prefill mid-prompt frees its pages at a boundary where its last enqueued chunk may still be
+    // writing them, and the queued follow-up is admitted at once. The follow-up must match its
+    // output after an uncancelled long request. The conversation is long so that keeping its KV on
+    // Host is cheaper than recomputing it; a short checkpoint is released instead.
+    ninfer::EngineOptions options = engine_options(artifact);
+    options.max_context           = 4096;
+    options.kv_capacity           = ninfer::KvCapacityPolicy::explicit_capacity(4096);
+    options.max_concurrency       = 1;
+    options.enable_vision         = false;
     ninfer::Engine engine(std::move(options));
 
-    const auto conversation = repeated_sentence_prompt(26);
-    const auto long_prompt  = repeated_sentence_prompt(200);
+    const auto conversation = repeated_sentence_prompt(186);
+    // Six chunks, diverging from the conversation at its first content token.
+    auto long_prompt         = repeated_sentence_prompt(100);
+    long_prompt[3]           = 2716;
+    const auto host_restores = [](const ninfer::RuntimeStats& stats) {
+        return stats.main_kv_h2d_pages + stats.state_h2d_count;
+    };
     const auto first =
         engine.generate(engine.prepare_tokens(conversation), greedy_options(12, false));
     std::vector<ninfer::TokenId> follow_up = conversation;
@@ -344,7 +350,7 @@ int exercise_cancelled_prefill_restore(const char* artifact, const CrossPathFixt
         engine.generate(engine.prepare_tokens(follow_up), greedy_options(8, true));
     const auto reference_after = engine.runtime_stats();
     if (reference.reused_prompt_tokens != expected_reuse ||
-        reference_after.state_h2d_count == reference_before.state_h2d_count) {
+        host_restores(reference_after) == host_restores(reference_before)) {
         std::cerr << "Flash-Next cancellation fixture did not restore from Host (reused "
                   << reference.reused_prompt_tokens << ", expected " << expected_reuse << ")\n";
         return 1;
@@ -375,11 +381,11 @@ int exercise_cancelled_prefill_restore(const char* artifact, const CrossPathFixt
         return 1;
     }
     if (resumed.reused_prompt_tokens != expected_reuse ||
-        after.state_h2d_count == before.state_h2d_count ||
+        host_restores(after) == host_restores(before) ||
         resumed.generated_token_ids != reference.generated_token_ids) {
         std::cerr << "Flash-Next follow-up restored after a cancelled prefill differs (reused "
                   << resumed.reused_prompt_tokens << ", Host restores "
-                  << after.state_h2d_count - before.state_h2d_count << ")\n";
+                  << host_restores(after) - host_restores(before) << ")\n";
         print_tokens("after cancellation", resumed.generated_token_ids);
         print_tokens("reference", reference.generated_token_ids);
         return 1;

@@ -349,9 +349,16 @@ int main() {
     const auto& expected_prefix   = canonical_output();
     const CrossPathFixture fixture = cross_path_fixture(recipe);
     try {
-        for (const auto head : {ninfer::ProposalHead::Full, ninfer::ProposalHead::Optimized}) {
+        // Both proposal heads at the default window, and the full head at the widest window.
+        const std::pair<ninfer::ProposalHead, std::uint32_t> mtp_configs[] = {
+            {ninfer::ProposalHead::Full, 3},
+            {ninfer::ProposalHead::Optimized, 3},
+            {ninfer::ProposalHead::Full, 5},
+        };
+        for (const auto& [head, drafts] : mtp_configs) {
             auto options = engine_options(artifact);
             options.speculative.proposal_head = head;
+            options.speculative.draft_tokens  = drafts;
             ninfer::Engine engine(options);
             const ninfer::LoadSummary load = engine.load_summary();
             if (load.architecture != "Qwen3_8FlashNextForCausalLM" ||

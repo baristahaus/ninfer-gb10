@@ -227,9 +227,12 @@ supported explicit type retain untyped inference. NInfer does not apply defaults
 properties, perform recursive JSON Schema validation, or use constrained decoding.
 
 String parameters preserve function/tool-call markers and balanced nested
-`<parameter=...>...</parameter>` text as value bytes. The Qwen wire format has no delimiter escape,
-so an unmatched nested parameter opener or a standalone `</parameter>` cannot be represented
-unambiguously; either makes that tool-call region ordinary content. Later content is still examined:
+`<parameter=...>...</parameter>` text as value bytes. The Qwen wire format has no delimiter escape:
+a `</parameter>` ends a value only where the call continues, that is, where the next non-whitespace
+text is `<parameter=` or `</function>`; any other standalone `</parameter>` is value text. A value
+that itself contains `</parameter>` followed by `<parameter=` or `</function>` cannot be told
+apart from the end of the value and is split there. An unmatched nested parameter opener makes
+that tool-call region ordinary content. Later content is still examined:
 the first complete `<tool_call>` region that consumes the remainder of the response becomes the
 structured turn, and any quoted markup before it stays ordinary content.
 

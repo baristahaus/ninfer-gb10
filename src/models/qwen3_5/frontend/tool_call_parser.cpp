@@ -538,8 +538,16 @@ private:
 
             --depth;
             if (depth == 0) {
-                value_end = close;
-                return true;
+                // The value ends only where the call's structure continues: at the next parameter
+                // or the function close. Any other standalone close is value text.
+                std::size_t next = close + kParamClose.size();
+                skip_format_whitespace(text_, next);
+                if (starts_with_at(text_, next, kParamOpen) ||
+                    starts_with_at(text_, next, kFunctionClose)) {
+                    value_end = close;
+                    return true;
+                }
+                depth = 1;
             }
             scan = close + kParamClose.size();
         }

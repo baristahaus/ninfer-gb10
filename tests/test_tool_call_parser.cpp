@@ -214,19 +214,30 @@ int test_string_values_preserve_embedded_tool_markup() {
     return failures;
 }
 
-int test_unrepresentable_parameter_delimiters_fall_back() {
-    const auto contract = contract_for("bash", Json{{"command", Json{{"type", "string"}}}});
+int test_parameter_delimiters_in_string_values() {
+    const auto contract = contract_for("bash", Json{{"command", Json{{"type", "string"}}},
+                                                    {"note", Json{{"type", "string"}}}});
     const std::string unmatched_open =
         tool_call("bash", {{"command", "echo '<parameter=unterminated>'"}});
-    const std::string standalone_close = tool_call("bash", {{"command", "echo '</parameter>'"}});
 
     int failures = 0;
     failures += check_rejected(unmatched_open, contract,
                                ninfer::ToolCallParseFallbackReason::MalformedStructure,
                                "unbalanced nested parameter open was silently repaired");
-    failures += check_rejected(standalone_close, contract,
-                               ninfer::ToolCallParseFallbackReason::MalformedStructure,
-                               "standalone parameter close was guessed to be string content");
+
+    // A close ends a value only where the call continues with the next parameter or the function
+    // close; any other standalone close is value text.
+    const std::string quoted_close = "echo '</parameter>'";
+    const std::string prose_close  = "End each value with </parameter> on its own line.";
+    const auto standalone = fi::parse_qwen_tool_call_output(
+        tool_call("bash", {{"command", quoted_close}, {"note", prose_close}}), 64, contract);
+    failures += check(standalone.is_tool_call_response && standalone.tool_calls.size() == 1,
+                      "standalone parameter close inside a value rejected the call");
+    if (standalone.tool_calls.size() == 1) {
+        const Json args = Json::parse(standalone.tool_calls.front().arguments_json);
+        failures += check(args.at("command") == quoted_close && args.at("note") == prose_close,
+                          "standalone parameter close changed the value bytes");
+    }
     return failures;
 }
 
@@ -829,7 +840,7 @@ int main() {
     failures += test_multiple_calls();
     failures += test_declared_strings_preserve_text();
     failures += test_string_values_preserve_embedded_tool_markup();
-    failures += test_unrepresentable_parameter_delimiters_fall_back();
+    failures += test_parameter_delimiters_in_string_values();
     failures += test_declared_json_types();
     failures += test_boolean_boundary();
     failures += test_exact_integer_boundary();

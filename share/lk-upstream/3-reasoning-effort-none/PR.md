@@ -35,7 +35,11 @@ thinking on is unchanged.
 - `tests/models/qwen3_8_flash_next/test_frontend.cpp` gains a case: thinking off with
   `ReasoningEffort::None` prepares a prompt that starts in content, not reasoning. The test needs
   `NINFER_QWEN38_FLASH_NEXT_WEIGHTS`, as before.
-- Compile-checked on `master` (`sm_121a`): the template and the test.
+- On `master` (NVIDIA GB10, `sm_121a`, with the other fixes from this set stacked): the frontend
+  test passes, including the new case.
 - Found driving a `master` build with the DGPP load client on NVIDIA GB10: `"reasoning_effort":
   "none"` returned 400, and the `chat_template_kwargs` form returned 200.
-- Not yet run end-to-end with this commit; see the validation run in this set's README.
+- With this commit, a `--max-concurrency 4` MTP server answers `"reasoning_effort": "none"` with
+  200: no reasoning, 580 content characters, starting in content. The same request without the
+  field spent its budget in reasoning (307 characters, no content), so `none` really turns
+  thinking off.

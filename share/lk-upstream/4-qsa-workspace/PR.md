@@ -41,9 +41,8 @@ match.
 
 ## Verification
 
-- Applies to `master` unchanged. Compile-checked there (`sm_121a`): `flash_next_qsa.cu` and
-  `test_flash_next_qsa`.
+- Applies to `master` unchanged. On NVIDIA GB10 (`sm_121a`, with the other fixes from this set
+  stacked) `test_flash_next_qsa` and both Flash-Next real-artifact tests pass.
 - The same change has run downstream since 2026-09-30, covered by that fork's QSA op tests and
   serving runs on GB10.
-- The table above was computed from the capacity formula, not measured. Not run on `master`, and
-  not on RTX PRO 6000.
+- The table above was computed from the capacity formula, not measured. Not run on RTX PRO 6000.

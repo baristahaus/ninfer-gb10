@@ -56,6 +56,6 @@ On NVIDIA GB10 (`sm_121a`, CUDA 13.0.88), `master` plus the first three commits 
 - it served full load runs: 105 requests per arm, five prompt classes, at C1, C2 and C4, at K=1 and
   K=3 and with adaptive drafts.
 
-The fourth commit is compile-checked on `master` (`sm_121a`); its op test run is part of this set's
-validation run. On RTX PRO 6000 the third commit changes grid sizes (188 SMs instead of 170); it has
+With all four commits (and the other fixes from this set stacked), ctest is 130/135 with one skip:
+the four failures are the same Qwen3.5 artifact gaps, and `hyperconnection` passes. On RTX PRO 6000 the third commit changes grid sizes (188 SMs instead of 170); it has
 not run there.

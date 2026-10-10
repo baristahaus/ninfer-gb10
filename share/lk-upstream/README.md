@@ -6,11 +6,11 @@ series applies to `master` on its own, and all five stack without conflicts in t
 
 | # | PR | Why he wants it | Verified on his `master` |
 |---|---|---|---|
-| 1 | `fix(flash-next)`: read PLE history from the fork source during prefill | output changes with `--max-concurrency` after a context-cache capture (his code still updates the destination slot in place) | compile only; the fix was measured downstream |
+| 1 | `fix(flash-next)`: read PLE history from the fork source during prefill | output changes with `--max-concurrency` after a context-cache capture (his code still updates the destination slot in place) | yes, GB10: op test, C1 == C4 probe with CUDA graphs and MTP |
 | 2 | `fix(flash-next)`: MTP RoPE layout by element count | MTP with `--max-concurrency` 3 or more fails at startup | yes, GB10: the full load campaign ran on it |
-| 3 | `fix(flash-next)`: reasoning effort `none` with disabled thinking | every OpenAI request with `"reasoning_effort": "none"` gets HTTP 400 | compile only |
-| 4 | `fix(ops)`: QSA workspace for every call up to its row count | latent capacity under-count for short calls | compile only |
-| 5 | GB10 (`sm_121a`) support: build gate, MemAvailable sizing, SM-count grids, fused HyperConnection fallback | his engine on a DGX Spark | first three commits yes (built, ctest, full campaign); the fourth compile only |
+| 3 | `fix(flash-next)`: reasoning effort `none` with disabled thinking | every OpenAI request with `"reasoning_effort": "none"` gets HTTP 400 | yes, GB10: frontend test, server returns 200 in content |
+| 4 | `fix(ops)`: QSA workspace for every call up to its row count | latent capacity under-count for short calls | yes, GB10: op test and real-artifact tests |
+| 5 | GB10 (`sm_121a`) support: build gate, MemAvailable sizing, SM-count grids, fused HyperConnection fallback | his engine on a DGX Spark | yes, GB10: ctest 130/135 (the rest are Qwen3.5 artifact gaps), full campaign |
 
 Dropped from the September drafts:
 - the PLE page-in overlap, because his own `f202d3f2` already starts every row's page read ahead;

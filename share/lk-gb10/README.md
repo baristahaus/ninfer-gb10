@@ -25,8 +25,8 @@ HyperConnection kernel sizes its grid from the device and falls back to the gene
 does not fit (on 48 SMs it always does), so it never deadlocks; 0005 fixes the workspace that fallback
 leaked.
 
-0001-0004 built and served the 2026-10-10 campaign on GB10. 0005 and 0006 are compile-checked for
-`sm_121a`; their validation run is in `share/lk-upstream/README.md`.
+0001-0004 built and served the 2026-10-10 campaign on GB10. 0005 and 0006 passed the same day's
+validation run in `share/lk-upstream/README.md`.
 
 ## Apply and build
 

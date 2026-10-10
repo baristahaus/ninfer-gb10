@@ -63,7 +63,10 @@ BF16 tables. The fork case fills the destination with unrelated values and requi
 
 **Rebase.** On `master` the op takes `gathered` (FP8 or BF16 rows) and builds its embedding with
 `embedding_from_table`; the fix keeps both and only splits the history into source and destination.
-Compile-checked on `master` for `sm_121a`: the op, its test and the 125B runtime TU.
+On `master` (NVIDIA GB10, `sm_121a`, with the other fixes from this set stacked): `test_flash_next_ple`
+passes all four cases, and the probe below gives identical output at `--max-concurrency` 1 and 4
+(`text_sha` `0c278864308114e4`, 1125 chars, 73 prompt tokens) with CUDA graphs and MTP K=3, on two
+fresh servers with caches dropped. Both Flash-Next real-artifact tests pass.
 
 **Measured downstream** (`baristahaus/ninfer-gb10`, NVIDIA GB10, `sm_121a`, CUDA 13.0, the
 `nvfp4_fp8_mtp` artifact). Probe: `ninfer-serve --max-context 73728 --kv-dtype fp8

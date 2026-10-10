@@ -98,9 +98,9 @@ fi
         echo "## $(basename "$f" .txt)"
         echo
         sed -n '/^| tokens/,$p' "$f"
-        grep -h '"interference"' "$f" | sed 's/^/interference: /'
-        grep -h '"yield"' "$f" | sed 's/^/yield: /'
-        grep -h '"backfill"' "$f" | sed 's/^/backfill: /'
+        grep -h '"interference"' "$f" | sed 's/^/interference: /' || true
+        grep -h '"yield"' "$f" | sed 's/^/yield: /' || true
+        grep -h '"backfill"' "$f" | sed 's/^/backfill: /' || true
     done
 } >"$dir/summary.md"
 log "summary: $dir/summary.md"

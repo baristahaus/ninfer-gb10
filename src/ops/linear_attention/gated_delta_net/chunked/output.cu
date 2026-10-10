@@ -1,4 +1,5 @@
 #include "ops/linear_attention/gated_delta_net/chunked/launch.h"
+#include "ops/common/device_info.h"
 #include "ops/linear_attention/gated_delta_net/chunked/output.cuh"
 
 namespace ninfer::ops::detail::gated_delta_net::chunked {
@@ -6,9 +7,7 @@ namespace {
 
 namespace kernel = output;
 
-constexpr std::int64_t kRtx5090SmCount = 170;
-constexpr std::int64_t kCtasPerSm      = 4;
-constexpr std::int64_t kTargetCtas     = kRtx5090SmCount * kCtasPerSm;
+constexpr std::int64_t kCtasPerSm = 4; // of the active device (device_sm_count())
 
 template <bool MULTI_JOB>
 cudaError_t launch_fixed(const chunk_output_config& cfg, dim3 grid, head_map qk_map, int chunks) {
@@ -43,7 +42,8 @@ cudaError_t launch_output(const chunk_output_config& cfg) {
     // Keep at most one resident RTX 5090 wave and distribute chunks evenly
     // across it. Small grids retain one logical job per CTA.
     const std::int64_t logical_jobs   = NT * cfg.H_v;
-    const std::int64_t jobs_per_block = (logical_jobs + kTargetCtas - 1) / kTargetCtas;
+    const std::int64_t target_ctas    = device_sm_count() * kCtasPerSm;
+    const std::int64_t jobs_per_block = (logical_jobs + target_ctas - 1) / target_ctas;
     const std::int64_t grid_chunks    = (NT + jobs_per_block - 1) / jobs_per_block;
     NINFER_GATED_DELTA_NET_PROPAGATE(v.check_grid(grid_chunks, cfg.H_v));
 

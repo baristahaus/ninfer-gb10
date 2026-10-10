@@ -16,6 +16,7 @@ target_sources(ninfer_ops PRIVATE
   "${CMAKE_CURRENT_LIST_DIR}/launcher/prepare_ragged_prefix.cu"
   "${CMAKE_CURRENT_LIST_DIR}/launcher/prepare_masked_block.cu"
   "${CMAKE_CURRENT_LIST_DIR}/launcher/residual_add.cu"
+  "${CMAKE_CURRENT_LIST_DIR}/common/device_info.cu"
   "${CMAKE_CURRENT_LIST_DIR}/launcher/rmsnorm.cu"
   "${CMAKE_CURRENT_LIST_DIR}/launcher/rmsnorm_pack_tail.cu"
   "${CMAKE_CURRENT_LIST_DIR}/launcher/rope.cu"

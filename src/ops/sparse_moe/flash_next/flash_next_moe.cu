@@ -1,4 +1,5 @@
 #include "ninfer/ops/flash_next_moe.h"
+#include "ops/common/device_info.h"
 
 #include "ops/flash_next_work.h"
 
@@ -28,6 +29,11 @@
 
 namespace ninfer::ops {
 namespace {
+
+// One resident persistent wave of the active device: 3 blocks per SM (510 on the 5090;
+// device_sm_count() falls back to its 170 SMs). The grouped GEMMs stride their work list by
+// gridDim.x, so any grid is correct.
+int persistent_moe_blocks() { return 3 * ninfer::ops::device_sm_count(); }
 
 constexpr int kHidden                 = 2560;
 constexpr int kExperts                = 512;
@@ -992,7 +998,7 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
         if (decode_grouped) {
             constexpr int kGateRowsPerBlock = DecodeGroupedSchedule::kBlockN / 2;
             const int gate_blocks =
-                std::min(510, assignments * (kIntermediate / kGateRowsPerBlock));
+                std::min(persistent_moe_blocks(), assignments * (kIntermediate / kGateRowsPerBlock));
             detail::nvfp4_w4a4_mma_kernel<GroupedGateGeometry, DecodeGroupedSchedule,
                                           detail::Nvfp4IdentityEpilogue, GroupedSiluOutput,
                                           GroupedGateRows, true, GroupedWork<GroupedGateRows>>
@@ -1006,7 +1012,7 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
             detail::nvfp4_w4a4_mma_kernel<GroupedGateGeometry, LargeGroupedSchedule,
                                           detail::Nvfp4IdentityEpilogue, GroupedSiluOutput,
                                           GroupedGateRows, true, GroupedWork<GroupedGateRows>>
-                <<<510, LargeGroupedSchedule::kThreads, 0, stream>>>(
+                <<<persistent_moe_blocks(), LargeGroupedSchedule::kThreads, 0, stream>>>(
                     gate_input, static_cast<const std::uint8_t*>(weights.routed_gate_up.codes),
                     static_cast<const std::uint8_t*>(weights.routed_gate_up.scales), assignments,
                     1.0F, detail::Nvfp4IdentityEpilogue{},
@@ -1016,7 +1022,7 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
             detail::nvfp4_w4a4_mma_kernel<GroupedGateGeometry, GroupedGateSchedule,
                                           detail::Nvfp4IdentityEpilogue, GroupedSiluOutput,
                                           GroupedGateRows, true, GroupedWork<GroupedGateRows>>
-                <<<510, GroupedGateSchedule::kThreads, 0, stream>>>(
+                <<<persistent_moe_blocks(), GroupedGateSchedule::kThreads, 0, stream>>>(
                     gate_input, static_cast<const std::uint8_t*>(weights.routed_gate_up.codes),
                     static_cast<const std::uint8_t*>(weights.routed_gate_up.scales), assignments,
                     1.0F, detail::Nvfp4IdentityEpilogue{},
@@ -1044,7 +1050,7 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
                                                      kHidden};
         if (decode_grouped) {
             constexpr int kDownRowsPerBlock = DecodeGroupedSchedule::kBlockN;
-            const int down_blocks = std::min(510, assignments * (kHidden / kDownRowsPerBlock));
+            const int down_blocks = std::min(persistent_moe_blocks(), assignments * (kHidden / kDownRowsPerBlock));
             detail::nvfp4_w4a4_mma_kernel<GroupedDownGeometry, DecodeGroupedSchedule,
                                           detail::Nvfp4IdentityEpilogue, GroupedOutput,
                                           GroupedDownRows, false, GroupedWork<GroupedDownRows>>
@@ -1058,7 +1064,7 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
             detail::nvfp4_w4a4_mma_kernel<GroupedDownGeometry, LargeGroupedSchedule,
                                           detail::Nvfp4IdentityEpilogue, GroupedOutput,
                                           GroupedDownRows, false, GroupedWork<GroupedDownRows>>
-                <<<510, LargeGroupedSchedule::kThreads, 0, stream>>>(
+                <<<persistent_moe_blocks(), LargeGroupedSchedule::kThreads, 0, stream>>>(
                     down_input, static_cast<const std::uint8_t*>(weights.routed_down.codes),
                     static_cast<const std::uint8_t*>(weights.routed_down.scales), assignments, 1.0F,
                     detail::Nvfp4IdentityEpilogue{},
@@ -1068,7 +1074,7 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
             detail::nvfp4_w4a4_mma_kernel<GroupedDownGeometry, GroupedDownSchedule,
                                           detail::Nvfp4IdentityEpilogue, GroupedOutput,
                                           GroupedDownRows, false, GroupedWork<GroupedDownRows>>
-                <<<510, GroupedDownSchedule::kThreads, 0, stream>>>(
+                <<<persistent_moe_blocks(), GroupedDownSchedule::kThreads, 0, stream>>>(
                     down_input, static_cast<const std::uint8_t*>(weights.routed_down.codes),
                     static_cast<const std::uint8_t*>(weights.routed_down.scales), assignments, 1.0F,
                     detail::Nvfp4IdentityEpilogue{},
@@ -1111,7 +1117,7 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
             assignments);
         Tensor gate_up = workspace.alloc(DType::BF16, {2 * kIntermediate, assignments});
         detail::bf16_grouped_gemm_mma_kernel<Bf16GroupedGateGeometry, Bf16GroupedSchedule>
-            <<<510, Bf16GroupedSchedule::kThreads, Bf16GroupedSchedule::kSharedBytes, stream>>>(
+            <<<persistent_moe_blocks(), Bf16GroupedSchedule::kThreads, Bf16GroupedSchedule::kSharedBytes, stream>>>(
                 static_cast<const __nv_bfloat16*>(packed_input.data),
                 static_cast<const __nv_bfloat16*>(weights.routed_gate_up.codes),
                 static_cast<const int*>(offsets.data), static_cast<const int*>(job_experts.data),
@@ -1122,7 +1128,7 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
             static_cast<__nv_bfloat16*>(routed_activation.data), assignments);
         Tensor grouped_output = workspace.alloc(DType::BF16, {kHidden, assignments});
         detail::bf16_grouped_gemm_mma_kernel<Bf16GroupedDownGeometry, Bf16GroupedSchedule>
-            <<<510, Bf16GroupedSchedule::kThreads, Bf16GroupedSchedule::kSharedBytes, stream>>>(
+            <<<persistent_moe_blocks(), Bf16GroupedSchedule::kThreads, Bf16GroupedSchedule::kSharedBytes, stream>>>(
                 static_cast<const __nv_bfloat16*>(routed_activation.data),
                 static_cast<const __nv_bfloat16*>(weights.routed_down.codes),
                 static_cast<const int*>(offsets.data), static_cast<const int*>(job_experts.data),

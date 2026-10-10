@@ -1,4 +1,5 @@
 #include "ninfer/ops/flash_next_qsa.h"
+#include "ops/common/device_info.h"
 
 #include "ops/flash_next_work.h"
 
@@ -2023,7 +2024,10 @@ void flash_next_qsa(const Tensor& input, const Tensor& cache_positions,
                     static_cast<const int*>(table_rows.data), width, group_extent,
                     score_stride, static_cast<float*>(scores.data));
             } else {
-                const int score_blocks = std::min(510, (group_extent + 7) / 8);
+                // Persistent wave cap: 3 blocks per SM of the active device (510 on the
+                // 5090). The kernel strides groups by gridDim.x, so any grid is correct.
+                const int score_blocks =
+                    std::min(3 * device_sm_count(), (group_extent + 7) / 8);
                 score_groups_batched_kernel<<<dim3(score_blocks, tokens), 256, 0, stream>>>(
                     static_cast<const __nv_bfloat16*>(index_query.data),
                     static_cast<const __nv_bfloat16*>(cache.auxiliary_pages[0].data),

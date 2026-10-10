@@ -1,5 +1,6 @@
 // ninfer::ops - rope launcher: private token-count tuning and generic fallback.
 #include "ops/launcher/rope.h"
+#include "ops/common/device_info.h"
 
 #include "core/device.h" // CUDA_CHECK
 #include "ops/kernel/rope.cuh"
@@ -13,8 +14,8 @@ constexpr int kLargeBlock               = 256;
 constexpr int kFullChunkBlock           = 192;
 constexpr int kSmallBlock               = 128;
 constexpr int kDefaultChunkTargetTokens = 1024;
-// RTX 5090 has 170 SMs and admits six of these 256-thread CTAs per SM.
-constexpr int kLargeBlockWaveCapacity = 1020;
+// Large-block wave capacity: six 256-thread CTAs per SM of the active device
+// (6 x device_sm_count()); device_sm_count() falls back to the 5090's 170 SMs.
 
 template <RopeKernelMode Mode>
 inline constexpr bool kTextMode =
@@ -48,7 +49,7 @@ void launch_fixed(const Tensor& positions, Tensor* q, Tensor* k, cudaStream_t st
     if constexpr (kTextMode<Mode>) {
         if (tokens <= 6) {
             block = (QHeads + KHeads) * 32;
-        } else if (tokens <= kLargeBlockWaveCapacity) {
+        } else if (tokens <= 6 * device_sm_count()) {
             block = kLargeBlock;
         } else if (tokens <= kDefaultChunkTargetTokens) {
             block = kFullChunkBlock;

@@ -502,6 +502,86 @@ int run_case(const Case& test_case, std::uint32_t seed,
     return failures;
 }
 
+// Runs the Op over `partitions` (distinct-state calls chained through two state buffers) and
+// returns the BF16 output bits and the final FP32 state bits.
+struct SplitRun {
+    std::vector<std::uint16_t> out;
+    std::vector<std::uint32_t> state;
+};
+
+SplitRun run_partitions(const gdn_ref::Inputs& in, const Case& test_case,
+                        const std::vector<int>& partitions) {
+    const float scale = 1.0F / std::sqrt(static_cast<float>(kStateDim));
+    DeviceInputs device(in);
+    DeviceBuffer state_a(in.state.size() * sizeof(float));
+    DeviceBuffer state_b(in.state.size() * sizeof(float));
+    DeviceBuffer out(in.v.size() * sizeof(std::uint16_t));
+    state_a.copy_from_host(in.state.data(), in.state.size() * sizeof(float));
+    Tensor q(device.q.p, DType::BF16, {kStateDim, test_case.qk_heads, test_case.tokens});
+    Tensor k(device.k.p, DType::BF16, {kStateDim, test_case.qk_heads, test_case.tokens});
+    Tensor v(device.v.p, DType::BF16, {kStateDim, test_case.value_heads, test_case.tokens});
+    Tensor g(device.g.p, DType::FP32, {test_case.value_heads, test_case.tokens});
+    Tensor beta(device.beta.p, DType::FP32, {test_case.value_heads, test_case.tokens});
+    Tensor output(out.p, DType::BF16, {kStateDim, test_case.value_heads, test_case.tokens});
+    const int maximum_call = *std::max_element(partitions.begin(), partitions.end());
+    DeviceBuffer scratch(std::max<std::size_t>(
+        ops::gated_delta_net_workspace_capacity_bytes(test_case.qk_heads, test_case.value_heads, 1,
+                                                      maximum_call),
+        256));
+    WorkspaceArena workspace(DeviceSpan{scratch.p, scratch.bytes});
+    void* current     = state_a.p;
+    void* destination = state_b.p;
+    int begin         = 0;
+    for (int length : partitions) {
+        Tensor input_state(current, DType::FP32, {kStateDim, kStateDim, test_case.value_heads});
+        Tensor output_state(destination, DType::FP32,
+                            {kStateDim, kStateDim, test_case.value_heads});
+        Tensor os = output.slice(2, begin, length);
+        ops::gated_delta_net(q.slice(2, begin, length), k.slice(2, begin, length),
+                             v.slice(2, begin, length), g.slice(1, begin, length),
+                             beta.slice(1, begin, length), scale, test_case.normalize_qk,
+                             workspace, input_state, output_state, os, execution());
+        begin += length;
+        std::swap(current, destination);
+    }
+    cuda_synchronize();
+    return {from_device<std::uint16_t>(out.p, in.v.size()),
+            from_device<std::uint32_t>(current, in.state.size())};
+}
+
+// Prefill splits a prompt into chunks whose lengths are multiples of 64, except the last. The
+// output and final state must not depend on that split, so a prompt's first token cannot change
+// with the prefill chunk size or with a prefill that parks and resumes at a chunk boundary.
+// `expect_exact` false records the outcome without failing: a final piece under 16 tokens runs
+// the recurrent route, which agrees with the chunked route only to rounding.
+int split_invariance_case(const Case& test_case, std::uint32_t seed,
+                          const std::vector<int>& partitions, bool expect_exact) {
+    const gdn_ref::Inputs in = make_inputs(test_case, seed);
+    const SplitRun whole     = run_partitions(in, test_case, {test_case.tokens});
+    const SplitRun split     = run_partitions(in, test_case, partitions);
+    std::string label        = std::string("split invariance ") + test_case.name + " T=" +
+                        std::to_string(test_case.tokens) +
+                        (test_case.normalize_qk ? " normalized" : " raw") + " calls=";
+    for (std::size_t i = 0; i < partitions.size(); ++i) {
+        label += (i == 0 ? "" : "+") + std::to_string(partitions[i]);
+    }
+    std::size_t out_diffs = 0;
+    for (std::size_t i = 0; i < whole.out.size(); ++i) { out_diffs += whole.out[i] != split.out[i]; }
+    std::size_t state_diffs = 0;
+    for (std::size_t i = 0; i < whole.state.size(); ++i) {
+        state_diffs += whole.state[i] != split.state[i];
+    }
+    std::cout << "GDN_SPLIT " << label << " output_bits_differ=" << out_diffs << "/"
+              << whole.out.size() << " state_bits_differ=" << state_diffs << "/"
+              << whole.state.size() << (expect_exact ? "" : " (recorded, not required)")
+              << std::endl;
+    if (expect_exact && (out_diffs != 0 || state_diffs != 0)) {
+        std::cerr << label << ": a chunk-aligned split changed the result\n";
+        return 1;
+    }
+    return 0;
+}
+
 int batch_update_case(const Case& test_case, const std::vector<int>& source_slots,
                       const std::vector<int>& destination_slots, int slots, std::uint32_t seed) {
     if (test_case.tokens != 1) { throw std::logic_error("batch_update_case requires W=1"); }
@@ -768,6 +848,20 @@ int main() {
         failures += run_case({"zero beta", 1, 3, 17, normalize}, 14517U, InputPattern::ZeroBeta);
         failures +=
             run_case({"unit beta", 1, 3, 257, normalize}, 14657U, InputPattern::UnitBeta, true);
+    }
+
+    // Chunk-aligned prefill splits, Flash-Next's GDN geometry (16/48, as the 27B): the GB10
+    // default chunk (4096) and the discrete default (1024) against one call, and a short prompt.
+    for (bool normalize : {true, false}) {
+        failures += split_invariance_case({"flash-next", 16, 48, 4409, normalize}, 15409U,
+                                          {4096, 313}, true);
+        failures += split_invariance_case({"flash-next", 16, 48, 4409, normalize}, 15409U,
+                                          {1024, 1024, 1024, 1024, 313}, true);
+        failures += split_invariance_case({"flash-next", 16, 48, 313, normalize}, 15313U,
+                                          {256, 57}, true);
+        // A final piece under 16 tokens takes the recurrent route: recorded, not required.
+        failures += split_invariance_case({"flash-next", 16, 48, 4100, normalize}, 15410U,
+                                          {4096, 4}, false);
     }
 
     // The production decode path updates selected state-pool slots in place at width one.

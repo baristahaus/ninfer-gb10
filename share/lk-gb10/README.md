@@ -68,15 +68,16 @@ free disk first.
 
 ## Cherry-pick candidates (pending the measurements above)
 
-Correctness, to take regardless of the benchmark:
-- `535e9f28` GDN prefill chunk-invariance. A prompt's first token could depend on how prefill was
-  chunked, because full chunks staged normalized q/k while tail-only calls normalized in-kernel. Our tree
-  has the same code. It matters more now that our default chunk is 4096 and a yielded prefill resumes
-  mid-prompt.
-- `68409b45` ordinary CUDA graph replay. Compare it with our own capture-safe valid-columns fix before
-  taking it.
-- `3509dcde` chunked GDN precision (FP16 U/v_new, rounded TF32 WY inverse). This changes numerics, so it
-  needs our perplexity and drift gate.
+Correctness:
+- `535e9f28` (GDN prefill chunk-invariance) does not apply here. This fork took upstream's two-stage GDN
+  in the `e31bc99b` merge, which has no "chunked prefix plus recurrent tail" split: a call of 16 or more
+  tokens runs entirely chunked, a shorter call runs recurrent. The same class of question is open here
+  instead. `tests/ops/test_gated_delta_net.cpp` now checks bitwise that chunk-aligned splits (4096+313,
+  4×1024+313, 256+57) reproduce one call. It records, without requiring, the one known divergence: a
+  final piece under 16 tokens (4096+4) takes the recurrent route.
+- `68409b45` ordinary CUDA graph replay and `3509dcde` chunked GDN precision were written against lk's
+  older GDN and graph code. Check each against this fork's merged code before porting; `3509dcde` would
+  need re-deriving on the two-stage kernels and then our perplexity and drift gate.
 
 Features, decided by step 2:
 - `532778a5` and `d96e6315`: adaptive MTP, 1..7 drafts with a graph family per width. Porting it means

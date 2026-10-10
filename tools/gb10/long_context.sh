@@ -10,13 +10,13 @@
 #   KS="3" CHUNKS="1024 4096 8192" KV_CAPACITY=auto DGPP=0 DRIVER_ARGS=--no-followup \
 #       OUT=long-context-chunks tools/gb10/long_context.sh   # prefill-chunk sweep
 #
-# The server runs at the production 262,144 context with vision. The default arm pins the KV
-# pool at 73,728 tokens (KV_CAPACITY default), so a 60K prompt cannot be admitted beside a
-# running 15K request (no_feasible_plan) and simply waits. KV_CAPACITY=auto sizes the pool
-# from free memory (capped by the 262,144 context), so the interference probe measures the two
-# requests actually sharing the GPU. CHUNKS sets --prefill-chunk per arm ("default" leaves the
-# server's device default, 4096 on GB10); LONG_PREFILL_WAIT_MS sets --long-prefill-wait-ms and
-# DECODE_SHARES the --prefill-decode-share arms ("default" leaves the server's 50).
+# The server runs at the production 262,144 context with vision. --kv-capacity must be at
+# least --max-context, so the pool cannot be pinned below the context; the default
+# (KV_CAPACITY=auto) sizes it from free memory, capped by the 262,144 context, so the
+# interference probe measures the two requests actually sharing the GPU. CHUNKS sets
+# --prefill-chunk per arm ("default" leaves the server's device default, 4096 on GB10);
+# LONG_PREFILL_WAIT_MS sets --long-prefill-wait-ms and DECODE_SHARES the
+# --prefill-decode-share arms ("default" leaves the server's 50).
 #
 # NInfer runs with two lanes (the interference probe needs both) and a request log, so the
 # summaries carry server-side prefill seconds, recomputed prompt tokens on follow-ups and MTP
@@ -27,7 +27,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 KS=${KS:-1 3}
 CHUNKS=${CHUNKS:-default}
 DECODE_SHARES=${DECODE_SHARES:-default}
-KV_CAPACITY=${KV_CAPACITY:-73728}
+KV_CAPACITY=${KV_CAPACITY:-auto}
 DGPP=${DGPP:-1}
 SIZES=${SIZES:-15000,30000,60000}
 REPS=${REPS:-2}

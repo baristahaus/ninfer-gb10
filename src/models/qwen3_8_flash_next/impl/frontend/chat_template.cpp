@@ -338,14 +338,18 @@ RenderedToolsSystemBlock render_tools_system_block(const std::vector<std::string
 
 std::string_view resolve_reasoning_instructions(ChatTemplateSemantics semantics,
                                                 const ChatRenderOptions& options) {
+    // Effort "none" is how OpenAI clients ask for no reasoning; the server maps it to disabled
+    // thinking, so it is consistent wherever thinking is off. Any other effort needs thinking.
+    const bool no_effort = !options.reasoning_effort ||
+                           *options.reasoning_effort == ReasoningEffort::None;
     if (semantics == ChatTemplateSemantics::ThinkingToggle) {
-        if (options.reasoning_effort) {
+        if (!no_effort) {
             throw std::invalid_argument("loaded chat template does not support reasoning effort");
         }
         return {};
     }
     if (!options.enable_thinking) {
-        if (options.reasoning_effort) {
+        if (!no_effort) {
             throw std::invalid_argument(
                 "reasoning effort cannot be combined with disabled thinking");
         }

@@ -55,6 +55,21 @@ int main() {
             }
             if (text != "READY 1") { throw std::runtime_error("output text was not preserved"); }
         }
+        {
+            // OpenAI reasoning_effort "none": the server disables thinking and keeps the effort.
+            ninfer::PromptInput input;
+            ninfer::ChatMessage message;
+            message.role = ninfer::ChatRole::User;
+            message.parts.push_back(
+                {.kind = ninfer::MessagePartKind::Text, .text = "Reply READY."});
+            input.messages.push_back(std::move(message));
+            input.options.enable_thinking  = false;
+            input.options.reasoning_effort = ninfer::ReasoningEffort::None;
+            const auto prompt              = frontend.prepare(std::move(input));
+            if (prompt.summary().starts_in_reasoning) {
+                throw std::runtime_error("reasoning effort none started in reasoning");
+            }
+        }
         std::cout << "OK Flash-Next default and explicit thinking output channels\n";
         return 0;
     } catch (const std::exception& error) {

@@ -63,10 +63,12 @@ BF16 tables. The fork case fills the destination with unrelated values and requi
 
 **Rebase.** On `master` the op takes `gathered` (FP8 or BF16 rows) and builds its embedding with
 `embedding_from_table`; the fix keeps both and only splits the history into source and destination.
-On `master` (NVIDIA GB10, `sm_121a`, with the other fixes from this set stacked): `test_flash_next_ple`
-passes all four cases, and the probe below gives identical output at `--max-concurrency` 1 and 4
-(`text_sha` `0c278864308114e4`, 1125 chars, 73 prompt tokens) with CUDA graphs and MTP K=3, on two
-fresh servers with caches dropped. Both Flash-Next real-artifact tests pass.
+
+**On `master`** (NVIDIA GB10, `sm_121a`, with the other fixes from this set stacked, the NVFP4
+artifact with BF16 dense projections):
+- `test_flash_next_ple` passes all four cases, and both Flash-Next real-artifact tests pass;
+- the 73-token probe prompt below (greedy, 256 tokens, cold, two fresh servers with CUDA graphs and
+  MTP K=3) gives identical output at `--max-concurrency` 1 and 4.
 
 **Measured downstream** (`baristahaus/ninfer-gb10`, NVIDIA GB10, `sm_121a`, CUDA 13.0, the
 `nvfp4_fp8_mtp` artifact). Probe: `ninfer-serve --max-context 73728 --kv-dtype fp8
@@ -85,4 +87,5 @@ first request, `--max-concurrency 1` vs `4`:
   prefill launch reads.
 
 **Not verified:** RTX PRO 6000; multimodal prefill through the fork path (same schedule code, not
-exercised).
+exercised); the unpatched C1 vs C4 comparison on `master` itself (the "before" row is from the
+downstream fork, which had the same in-place destination update).

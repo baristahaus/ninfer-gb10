@@ -78,7 +78,16 @@ in this set is compile-only anymore.
 
 ## Sending
 
-Pushing the five head branches (`upstream/ninfer6000/*` in `baristahaus/ninfer-gb10`) and opening
-the PRs are external actions: they need the owner's go-ahead. The branches are built from these
-folders with `git am` on `8f574ee4`, one branch per folder. The September `upstream/flash-next-*`
-branches stay as they are; nothing here rewrites them.
+The five head branches were pushed to `baristahaus/ninfer-gb10` on 2026-10-10, each built from its
+folder with `git am` on `8f574ee4`. Each PR's title is its `PR.md` **Title** line; its body is
+`PR.md` from "Problem and scope" down, which follows his pull request template.
+
+| # | head branch | open the PR |
+|---|---|---|
+| 1 | `upstream/ninfer6000/ple-fork-source` | [compare](https://github.com/lkarlslund/ninfer6000/compare/master...baristahaus:ninfer-gb10:upstream/ninfer6000/ple-fork-source?expand=1) |
+| 2 | `upstream/ninfer6000/mtp-rope-layout` | [compare](https://github.com/lkarlslund/ninfer6000/compare/master...baristahaus:ninfer-gb10:upstream/ninfer6000/mtp-rope-layout?expand=1) |
+| 3 | `upstream/ninfer6000/reasoning-effort-none` | [compare](https://github.com/lkarlslund/ninfer6000/compare/master...baristahaus:ninfer-gb10:upstream/ninfer6000/reasoning-effort-none?expand=1) |
+| 4 | `upstream/ninfer6000/qsa-workspace` | [compare](https://github.com/lkarlslund/ninfer6000/compare/master...baristahaus:ninfer-gb10:upstream/ninfer6000/qsa-workspace?expand=1) |
+| 5 | `upstream/ninfer6000/gb10-support` | [compare](https://github.com/lkarlslund/ninfer6000/compare/master...baristahaus:ninfer-gb10:upstream/ninfer6000/gb10-support?expand=1) |
+
+The September `upstream/flash-next-*` branches stay as they are; nothing here rewrites them.

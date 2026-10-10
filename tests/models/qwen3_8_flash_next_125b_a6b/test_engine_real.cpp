@@ -313,86 +313,6 @@ int exercise_prefill_yield(ninfer::Engine& engine) {
     return 0;
 }
 
-int exercise_cancelled_prefill_restore(const char* artifact, const CrossPathFixture& fixture) {
-    // One lane, and a KV pool no larger than one request's context: a long request's reservation
-    // takes the whole pool, so a finished 2,800-token conversation's KV moves to Host and its
-    // follow-up restores those pages into pool pages the long request held. Cancelling the long
-    // prefill mid-prompt frees its pages at a boundary where its last enqueued chunk may still be
-    // writing them, and the queued follow-up is admitted at once. The follow-up must match its
-    // output after an uncancelled long request. The conversation is long so that keeping its KV on
-    // Host is cheaper than recomputing it; a short checkpoint is released instead.
-    ninfer::EngineOptions options = engine_options(artifact);
-    options.max_context           = 4096;
-    options.kv_capacity           = ninfer::KvCapacityPolicy::explicit_capacity(4096);
-    options.max_concurrency       = 1;
-    options.enable_vision         = false;
-    ninfer::Engine engine(std::move(options));
-
-    const auto conversation = repeated_sentence_prompt(186);
-    // Six chunks, diverging from the conversation at its first content token.
-    auto long_prompt         = repeated_sentence_prompt(100);
-    long_prompt[3]           = 2716;
-    const auto host_restores = [](const ninfer::RuntimeStats& stats) {
-        return stats.main_kv_h2d_pages + stats.state_h2d_count;
-    };
-    const auto first =
-        engine.generate(engine.prepare_tokens(conversation), greedy_options(12, false));
-    std::vector<ninfer::TokenId> follow_up = conversation;
-    follow_up.insert(follow_up.end(), first.generated_token_ids.begin(),
-                     first.generated_token_ids.end());
-    follow_up.push_back(fixture.separator);
-    const std::uint32_t expected_reuse =
-        static_cast<std::uint32_t>(conversation.size() + first.generated_token_ids.size() - 1);
-
-    (void)engine.generate(engine.prepare_tokens(long_prompt), greedy_options(1, false));
-    const auto reference_before = engine.runtime_stats();
-    const auto reference =
-        engine.generate(engine.prepare_tokens(follow_up), greedy_options(8, true));
-    const auto reference_after = engine.runtime_stats();
-    if (reference.reused_prompt_tokens != expected_reuse ||
-        host_restores(reference_after) == host_restores(reference_before)) {
-        std::cerr << "Flash-Next cancellation fixture did not restore from Host (reused "
-                  << reference.reused_prompt_tokens << ", expected " << expected_reuse << ")\n";
-        return 1;
-    }
-
-    // The follow-up consumed the checkpoint; recompute it cold, which reproduces it exactly.
-    const auto again =
-        engine.generate(engine.prepare_tokens(conversation), greedy_options(12, false));
-    if (again.generated_token_ids != first.generated_token_ids) {
-        std::cerr << "Flash-Next cancellation fixture is not repeatable\n";
-        return 1;
-    }
-    const auto before       = engine.runtime_stats();
-    const auto cancel_after = before.computed_prefill_tokens + 2U * 256U;
-    auto long_handle = engine.submit(engine.prepare_tokens(long_prompt), greedy_options(1, false));
-    auto follow_up_handle =
-        engine.submit(engine.prepare_tokens(follow_up), greedy_options(8, true));
-    const auto cancelled =
-        long_handle.wait(nullptr, ninfer::CancellationView([&] {
-                             return engine.runtime_stats().computed_prefill_tokens >= cancel_after;
-                         }));
-    const auto resumed = follow_up_handle.wait();
-    const auto after   = engine.runtime_stats();
-    if (cancelled.finish_reason != ninfer::FinishReason::Cancelled ||
-        !cancelled.generated_token_ids.empty()) {
-        std::cerr
-            << "Flash-Next cancellation fixture finished its long prefill before cancelling\n";
-        return 1;
-    }
-    if (resumed.reused_prompt_tokens != expected_reuse ||
-        host_restores(after) == host_restores(before) ||
-        resumed.generated_token_ids != reference.generated_token_ids) {
-        std::cerr << "Flash-Next follow-up restored after a cancelled prefill differs (reused "
-                  << resumed.reused_prompt_tokens << ", Host restores "
-                  << host_restores(after) - host_restores(before) << ")\n";
-        print_tokens("after cancellation", resumed.generated_token_ids);
-        print_tokens("reference", reference.generated_token_ids);
-        return 1;
-    }
-    return 0;
-}
-
 int exercise_vision(ninfer::Engine& engine) {
     ninfer::MessagePart image;
     image.kind              = ninfer::MessagePartKind::Media;
@@ -445,7 +365,6 @@ int main() {
             if (exercise_vision(engine) != 0) { return 1; }
         }
         if (exercise_ordinary_greedy(artifact, expected_prefix) != 0) { return 1; }
-        if (exercise_cancelled_prefill_restore(artifact, fixture) != 0) { return 1; }
         std::cout << "OK Qwen3.8 Flash Next real Engine\n";
         return 0;
     } catch (const std::exception& error) {

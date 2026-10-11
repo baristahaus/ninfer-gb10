@@ -1,0 +1,12 @@
+[san-op 2026-10-11T14:27:09Z] start; HEAD 0e27e166; GPU idle (util 0%, no apps); free memory 112G available
+[san-op 2026-10-11T14:27:09Z] building ninfer_flash_next_moe_test (freshness)
+[san-op 2026-10-11T14:27:10Z] test binary ready
+[san-op 2026-10-11T14:27:10Z] running compute-sanitizer --tool racecheck --racecheck-report all
+[san-op 2026-10-11T14:27:51Z] racecheck done rc=0 (0 = clean, nonzero = findings or failure)
+[san-op 2026-10-11T14:27:51Z] running compute-sanitizer --tool synccheck 
+[san-op 2026-10-11T14:28:10Z] synccheck done rc=0 (0 = clean, nonzero = findings or failure)
+[san-op 2026-10-11T14:28:10Z] running compute-sanitizer --tool initcheck 
+[san-op 2026-10-11T14:28:29Z] initcheck done rc=0 (0 = clean, nonzero = findings or failure)
+[san-op 2026-10-11T14:28:29Z] running compute-sanitizer --tool memcheck 
+[san-op 2026-10-11T14:28:49Z] memcheck done rc=0 (0 = clean, nonzero = findings or failure)
+[san-op 2026-10-11T14:28:49Z] done

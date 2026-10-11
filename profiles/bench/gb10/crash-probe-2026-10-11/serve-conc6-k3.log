@@ -1,0 +1,8 @@
+2026-10-11 13:25:45.126  INFO  starting engine
+2026-10-11 13:25:45.986  INFO  loading weights | 70.2 GiB
+2026-10-11 13:25:55.997  INFO    loading weights 52.8% | 37.1 GiB/70.2 GiB | 5.01 GiB/s | ETA 6.6s
+2026-10-11 13:26:02.619  INFO  weights ready | 70.2 GiB | 16.6s | 4.22 GiB/s
+2026-10-11 13:26:03.199  INFO  pinning host state | 882.5 MiB
+2026-10-11 13:26:03.512  INFO  host state pinned | 882.5 MiB | 313 ms
+ninfer: persistent grids sized for 48 SMs
+/home/apollo11/ninfer-gb10/src/core/device.cu:182: CUDA_CHECK(cudaStreamSynchronize(stream)) failed: cudaErrorIllegalAddress: an illegal memory access was encountered

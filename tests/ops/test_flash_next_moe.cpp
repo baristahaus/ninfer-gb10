@@ -1,3 +1,4 @@
+#include "poison_device_state.h"
 #include "ninfer/ops/flash_next_moe.h"
 #include "core/device.h"
 #include "core/weight_view.h"
@@ -417,11 +418,17 @@ int run_nvfp4() {
         return expected;
     };
 
-    const auto run_rows = [&](int tokens) {
+    // poisoned: the workspace is filled with 0xFF bytes (BF16 NaN) and every SM's shared memory
+    // with an out-of-range expert id before the call, as an Engine round leaves them.
+    const auto run_rows = [&](int tokens, bool poisoned = false) {
         GuardedDeviceBuffer d_output(static_cast<std::size_t>(kHidden) * tokens * 2);
         Tensor in(d_input.p, DType::BF16, {kHidden, tokens});
         Tensor out(d_output.data(), DType::BF16, {kHidden, tokens});
         WorkspaceArena workspace(ops::flash_next_moe_workspace_capacity_bytes(tokens));
+        if (poisoned) {
+            test::poison_device_bytes(workspace.base(), workspace.capacity(), 0xFF);
+            test::poison_shared_memory(0x7FFF0320U);
+        }
         ops::flash_next_moe(in, weights, out, workspace, nullptr);
         cuda_synchronize();
         std::vector<double> got =
@@ -471,6 +478,16 @@ int run_nvfp4() {
                   << stats.maximum_absolute_reference << '\n';
         if (tokens == kMaxTokens) { report_tokens(label, shared, got, want); }
         failures += verify_reduction(label, got, want, kNvfp4MoeCriterion);
+    }
+    // The fused-grouping verify shapes again, after stale state an Engine round can leave: a
+    // read of an unwritten workspace or shared slot then faults or misroutes instead of passing.
+    for (const int tokens : {18, 20, 22, 24, 32}) {
+        auto [got, guard_failures] = run_rows(tokens, true);
+        failures += guard_failures;
+        const std::vector<double> want(expected.begin(),
+                                       expected.begin() + static_cast<std::ptrdiff_t>(got.size()));
+        failures += verify_reduction("Flash-Next NVFP4 MoE poisoned T=" + std::to_string(tokens),
+                                     got, want, kNvfp4MoeCriterion);
     }
 
     // One dominant expert per token: token t gives slot t score 30 and nine other slots

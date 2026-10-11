@@ -1,0 +1,4 @@
+[1/4] Building CXX object src/ops/CMakeFiles/ninfer_ops.dir/linear/linear.cpp.o
+[2/4] Linking CXX static library CMakeFiles/ninfer_ops.dir/cmake_device_link.o
+[3/4] Linking CXX static library src/ops/libninfer_ops.a
+[4/4] Linking CXX executable apps/ninfer-serve

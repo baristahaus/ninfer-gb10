@@ -1,0 +1,8 @@
+Internal ctest changing into directory: /home/apollo11/ninfer-gb10/build
+Test project /home/apollo11/ninfer-gb10/build
+    Start 117: ninfer_linear_bf16_a16_test
+1/1 Test #117: ninfer_linear_bf16_a16_test ......   Passed   13.23 sec
+
+100% tests passed, 0 tests failed out of 1
+
+Total Test time (real) =  13.24 sec

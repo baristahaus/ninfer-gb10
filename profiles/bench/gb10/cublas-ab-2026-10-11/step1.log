@@ -1,0 +1,6 @@
+[ab-step1 2026-10-11T16:30:11Z] start; HEAD 3dc6b8b1; GPU idle (util 0%, no apps)
+[ab-step1 2026-10-11T16:30:11Z] test binary ready
+[ab-step1 2026-10-11T16:30:25Z] ctest rc=0
+[ab-step1 2026-10-11T16:30:25Z] verdict: 
+[ab-step1 2026-10-11T16:30:28Z] GPU clean after run (util 0%, no apps)
+[ab-step1 2026-10-11T16:30:28Z] done

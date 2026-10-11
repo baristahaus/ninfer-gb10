@@ -1,0 +1,36 @@
+[ic-run 2026-10-11T14:41:38Z] start; HEAD e1cda7af; GPU idle (util 0%, no apps); free memory 113G available
+[ic-run 2026-10-11T14:41:38Z] artifact: /home/apollo11/ninfer-gb10/out/fp8mtp/qwen3_8_flash_next_125b_a6b_nvfp4_fp8_mtp.ninfer
+[ic-run 2026-10-11T14:41:38Z] building ninfer-serve (freshness, unpatched)
+[ic-run 2026-10-11T14:41:38Z] serve binary ready
+[ic-run 2026-10-11T14:41:38Z] launching initcheck on the unpatched server (port 8001, max-concurrency 6)
+[ic-run 2026-10-11T14:41:40Z] process exited rc=1 (expected: the unpatched fault during graph preparation)
+[ic-run 2026-10-11T14:41:43Z] no dead context: GPU clean (util 0%, no apps)
+[ic-run 2026-10-11T14:41:43Z] summary: 0 ERROR SUMMARY line(s); log 2 lines
+[ic-run 2026-10-11T14:41:43Z] done
+[ic-run 2026-10-11T14:43:38Z] start; HEAD e1cda7af; GPU idle (util 0%, no apps); free memory 113G available
+[ic-run 2026-10-11T14:43:38Z] artifact: /home/apollo11/ninfer-gb10/out/fp8mtp/qwen3_8_flash_next_125b_a6b_nvfp4_fp8_mtp.ninfer
+[ic-run 2026-10-11T14:43:38Z] building ninfer-serve (freshness, unpatched)
+[ic-run 2026-10-11T14:43:38Z] serve binary ready
+[ic-run 2026-10-11T14:43:38Z] process exited rc=1 (expected: the unpatched fault during graph preparation)
+[ic-run 2026-10-11T14:43:41Z] no dead context: GPU clean (util 0%, no apps)
+[ic-run 2026-10-11T14:43:41Z] summary: 0 ERROR SUMMARY line(s); log 2 lines
+[ic-run 2026-10-11T14:43:41Z] done
+[ic-run 2026-10-11T14:45:26Z] start; HEAD e1cda7af; GPU idle (util 0%, no apps); free memory 112G available
+[ic-run 2026-10-11T14:45:26Z] artifact: /home/apollo11/ninfer-gb10/out/fp8mtp/qwen3_8_flash_next_125b_a6b_nvfp4_fp8_mtp.ninfer
+[ic-run 2026-10-11T14:45:26Z] building ninfer-serve (freshness, unpatched)
+[ic-run 2026-10-11T14:45:26Z] serve binary ready
+[ic-run 2026-10-11T14:45:27Z] preflight ok: sanitizer accepted the target (attempt 1)
+[ic-run 2026-10-11T14:45:27Z] process exited rc=1 (expected: the unpatched fault during graph preparation)
+[ic-run 2026-10-11T14:45:30Z] no dead context: GPU clean (util 0%, no apps)
+[ic-run 2026-10-11T14:45:30Z] summary: 0 ERROR SUMMARY line(s); log 2 lines
+[ic-run 2026-10-11T14:45:30Z] done
+[ic-run 2026-10-11T14:46:59Z] start; HEAD e1cda7af; GPU idle (util 0%, no apps); free memory 113G available
+[ic-run 2026-10-11T14:46:59Z] artifact: /home/apollo11/ninfer-gb10/out/fp8mtp/qwen3_8_flash_next_125b_a6b_nvfp4_fp8_mtp.ninfer
+[ic-run 2026-10-11T14:46:59Z] building ninfer-serve (freshness, unpatched)
+[ic-run 2026-10-11T14:46:59Z] serve binary ready
+[ic-run 2026-10-11T14:47:00Z] preflight ok: sanitizer accepted the target (attempt 1)
+[ic-run 2026-10-11T14:47:00Z] launching initcheck on the unpatched server (port 8001, max-concurrency 6)
+[ic-run 2026-10-11T14:52:12Z] process exited rc=11 (expected: the unpatched fault during graph preparation)
+[ic-run 2026-10-11T14:52:15Z] REBOOT REQUIRED: no compute app but util 96% - dead context held (phantom counter)
+[ic-run 2026-10-11T14:52:15Z] summary: 2 ERROR SUMMARY line(s); log 1066 lines
+[ic-run 2026-10-11T14:52:15Z] done

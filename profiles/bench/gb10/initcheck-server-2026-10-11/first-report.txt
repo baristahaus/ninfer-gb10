@@ -1,0 +1,21 @@
+========= Host API memory access error at host access to 0xf8d2252a2a00 of size 8,320 bytes
+=========     Uninitialized access to 0xf8d2252a2a00 on access by cudaMemcpy source
+=========     Saved host backtrace up to driver entry point at error
+=========         Host Frame: cuMemcpyDtoHAsync_v2 [0x3439f3] in libcuda.so.1
+=========         Host Frame:  [0x4443f] in libcudart.so.13
+=========         Host Frame:  [0x1a0ab] in libcudart.so.13
+=========         Host Frame: cudaMemcpyAsync [0x6a4d3] in libcudart.so.13
+=========         Host Frame: ninfer::models::qwen3_8_flash_next::detail::qwen3_8_flash_next_125b_a6b_runtime::schedule::mtp_decode_batch_body(ninfer::models::qwen3_8_flash_next::detail::qwen3_8_flash_next_125b_a6b_runtime::schedule::MtpBatchContext&, int, unsigned int, ninfer::models::qwen3_8_flash_next::detail::qwen3_8_flash_next_125b_a6b_runtime::schedule::MtpCausalAttentionEnvelopes)::{lambda()#1}::operator()() const [0x46f14f] in ninfer-serve
+=========         Host Frame: ninfer::models::qwen3_8_flash_next::detail::qwen3_8_flash_next_125b_a6b_runtime::schedule::mtp_decode_batch(ninfer::models::qwen3_8_flash_next::detail::qwen3_8_flash_next_125b_a6b_runtime::schedule::MtpBatchContext&, int, unsigned int, ninfer::models::qwen3_8_flash_next::detail::qwen3_8_flash_next_125b_a6b_runtime::schedule::MtpCausalAttentionEnvelopes, ninfer::DecodeGraphExecutable*) [0x46f61b] in ninfer-serve
+=========         Host Frame: ninfer::models::qwen3_8_flash_next::detail::qwen3_8_flash_next_125b_a6b_runtime::ProgramImplCore::prepare_graphs() [0x47032b] in ninfer-serve
+=========         Host Frame: ninfer::models::qwen3_8_flash_next::detail::qwen3_8_flash_next_125b_a6b_runtime::ProgramImplCore::ProgramImplCore(ninfer::models::qwen3_8_flash_next_125b_a6b::RuntimeModelView const&, ninfer::models::qwen3_8_flash_next::detail::SequencePlanImpl<ninfer::models::qwen3_8_flash_next_125b_a6b::detail::Variant> const&, ninfer::DeviceContext&, ninfer::StartupObserver const&) [0x472917] in ninfer-serve
+=========         Host Frame: std::unique_ptr<ninfer::models::qwen3_8_flash_next::Program<ninfer::models::qwen3_8_flash_next_125b_a6b::detail::Variant>, std::default_delete<ninfer::models::qwen3_8_flash_next::Program<ninfer::models::qwen3_8_flash_next_125b_a6b::detail::Variant> > > ninfer::models::qwen3_8_flash_next::create_program<ninfer::models::qwen3_8_flash_next_125b_a6b::detail::Variant>(ninfer::models::qwen3_8_flash_next_125b_a6b::detail::Variant::ModelView const&, ninfer::models::qwen3_8_flash_next_125b_a6b::detail::Variant::WeightsProfile, ninfer::models::qwen3_8_flash_next::SequencePlan<ninfer::models::qwen3_8_flash_next_125b_a6b::detail::Variant>&&, ninfer::DeviceContext&, ninfer::StartupObserver const&) [0x474de3] in ninfer-serve
+=========         Host Frame: ninfer::models::qwen3_8_flash_next_125b_a6b::Package::create_program(ninfer::models::qwen3_8_flash_next_125b_a6b::detail::LoadedModel const&, ninfer::models::qwen3_8_flash_next::SequencePlan<ninfer::models::qwen3_8_flash_next_125b_a6b::detail::Variant>&&, ninfer::DeviceContext&, ninfer::StartupObserver const&) [0x3d32eb] in ninfer-serve
+=========         Host Frame: ninfer::runtime::construct_flash_next(ninfer::EngineOptions const&, ninfer::DeviceContext&, ninfer::artifact::Reader&, std::chrono::time_point<std::chrono::_V2::steady_clock, std::chrono::duration<long, std::ratio<1l, 1000000000l> > >) [0x289fd3] in ninfer-serve
+=========         Host Frame: ninfer::runtime::construct_model(ninfer::EngineOptions const&, ninfer::DeviceContext&) [0x28c36f] in ninfer-serve
+=========         Host Frame: ninfer::Engine::Impl::Impl(ninfer::EngineOptions) [0x22d777] in ninfer-serve
+=========         Host Frame: ninfer::Engine::Engine(ninfer::EngineOptions) [0x2029c3] in ninfer-serve
+=========         Host Frame: ninfer::serve::GenerationService::GenerationService(ninfer::serve::ServeOptions, ninfer::StartupObserver) [0x9e897] in ninfer-serve
+=========         Host Frame: void std::_Construct<ninfer::serve::GenerationService, ninfer::serve::ServeOptions&, ninfer::StartupObserver>(ninfer::serve::GenerationService*, ninfer::serve::ServeOptions&, ninfer::StartupObserver&&) [0x81bd3] in ninfer-serve
+=========         Host Frame: main [0x5b2f3] in ninfer-serve
+========= 

@@ -101,7 +101,10 @@ real-artifact goldens; the two that change numerics are noted; measured effects 
   - PLE history read from the fork source during prefill (concurrency-dependent output after a
     context capture; this one changes outputs);
   - the QSA workspace sized for every call;
-  - shutdown drain and integrated-memory startup wait.
+  - shutdown drain and integrated-memory startup wait;
+  - MTP at six to eight concurrent requests no longer crashes at startup. CUDA graphs keep BF16
+    GEMMs off cuBLAS, which now starts at 49 columns. The batched QSA route writes zeros for
+    inactive columns instead of leaving stale workspace (see the lessons below).
 - Overlapped PLE row page-ins: C4 long generations +18%.
 - MoE decode:
   - expert-grouped decode from 8 rows;
@@ -168,6 +171,44 @@ The full record: [docs/performance/qwen3.8-flash-next-125b-a6b.md](docs/performa
 
 Build and tests: `tools/gb10/step0_build_test.sh` (ctest 141/141 plus the Flash-Next real-artifact
 tests).
+
+### Lessons from the six-to-eight-request MTP crash (2026-10-11)
+
+With MTP, a Flash-Next server at `--max-concurrency` 6–8 crashed while preparing its CUDA graphs.
+The MoE routing kernel read past its shared memory because one row's 512 router scores were all
+NaN. Two separate bugs produced that same symptom:
+
+- A cuBLAS GEMM captured into the verify graph gave NaN scores at 24 rows. The same GEMM was
+  correct run directly and in a graph on its own. We never found out why.
+- The batched QSA attention route, used for every call over 16 columns, skipped inactive columns
+  and left their output as whatever the workspace held. The MTP head's per-round pass always has
+  such columns. So this was a hazard on every serving round, not only at startup.
+
+What we take from it:
+
+1. **A failure that changes with the build is a read of memory nobody wrote.** Two diagnostic
+   builds, initcheck and a poisoned op test all came up clean, because they changed what the
+   unwritten bytes happened to contain. Look for the missing write; another layer of
+   instrumentation that moves memory around won't find it.
+2. **One symptom can have two causes.** After the cuBLAS fix, six requests passed by luck and
+   eight still crashed. A fix is verified only at the exact production shape. Our real-artifact
+   test passed with the bug present because it ran with a 512-token context. It now runs eight
+   requests at 73,728 tokens.
+3. **Tests should poison what they expect to be written.** The QSA op test had an inactive column
+   but never checked it, and its workspace started zeroed. No test called the cuBLAS route at all;
+   the MoE test passes no GEMM context. The QSA test now poisons its workspace with NaN, and a new
+   linear test covers the cuBLAS route at verify widths with a NaN-filled output.
+4. **Decode the fault address from the machine code.** Without the 1 KB of shared memory the
+   hardware reserves, the faulting address decoded to expert 800 and led to a wrong theory. With
+   it, it decoded to 512, the value top-10 selection leaves when every score is NaN. That pointed
+   the search upstream, to whichever op produced the NaN.
+5. **Sanitizers have blind spots.** initcheck does not see TMA or `cp.async` loads. Its only
+   reports were whole-struct copies that never mattered. The tool that found the cause was a scan
+   for non-finite values after every stage, built to replace the bad expert instead of faulting.
+   It named the first bad stage on its first run at the failing shape.
+6. **Keep vendor libraries out of captured graphs.** cuBLAS was correct when called directly and
+   when captured alone, but not inside the model's graph. Every decode and verify shape now runs
+   on our own kernels, and a `static_assert` ties the widest captured shape to the cutoff.
 
 NInfer is a from-scratch C++/CUDA inference engine for Qwen3.5 Dense/MoE and Qwen3.8 Flash-Next
 on one Blackwell GPU. The 27B/35B models target RTX 5090; Flash-Next targets RTX PRO 6000. It runs text, image, and video prompts through a local CLI or

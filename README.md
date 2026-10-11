@@ -210,6 +210,19 @@ What we take from it:
    when captured alone, but not inside the model's graph. Every decode and verify shape now runs
    on our own kernels, and a `static_assert` ties the widest captured shape to the cutoff.
 
+### The six- and eight-request MTP runs (2026-10-11)
+
+After the crash fixes, MTP (K=3) serves at six and eight concurrent requests. In a sweep on one
+server sized for eight requests (8000-character prompts, a fixed 512 output tokens), aggregate
+decode is 87.4 tok/s at six requests and 100.3 at eight. The same sweep gives 45.3 at one request
+and 81.5 at four, below the figures above. A control run of the published protocol on the same
+code reproduces those figures within 1.4% (60.7 / 92.3 / 122.3 at 1 / 2 / 4), so the gap is the
+sweep's protocol, not a regression. A discriminator (the sweep's own requests at one and four on
+a `--max-concurrency 4` server) gives 45.0 and 77.5, the sweep's rows rather than the published
+figures, so the eight-lane server sizing is ruled out; the 8000-character prompts, the fixed
+512-token length, and the prompt set are not isolated. Records:
+profiles/bench/gb10/concurrency-sweep-2026-10-11/ and control-2026-10-11/.
+
 NInfer is a from-scratch C++/CUDA inference engine for Qwen3.5 Dense/MoE and Qwen3.8 Flash-Next
 on one Blackwell GPU. The 27B/35B models target RTX 5090; Flash-Next targets RTX PRO 6000. It runs text, image, and video prompts through a local CLI or
 OpenAI-/Anthropic-compatible HTTP APIs. The runtime is deliberately specialized: one GPU, one

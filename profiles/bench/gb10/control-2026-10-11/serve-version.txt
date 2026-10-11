@@ -1,0 +1,3 @@
+2026-10-11 19:08:36.677  INFO  starting engine
+2026-10-11 19:08:36.978  ERROR startup failed | starting engine | 301 ms
+2026-10-11 19:08:36.978  FATAL server failed during startup | NInfer accepts only .ninfer artifacts

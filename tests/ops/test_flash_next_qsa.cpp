@@ -38,6 +38,30 @@ void store_bf16(DeviceBuffer& storage, std::size_t element, float value) {
     storage.copy_from_host(&bits, sizeof(bits), element * sizeof(bits));
 }
 
+// Every byte of the workspace becomes a BF16/FP32 NaN, so an output a route leaves unwritten
+// reads as non-finite.
+void poison_workspace(WorkspaceArena& workspace) {
+    workspace.reset();
+    cuda_check(cudaMemset(workspace.base(), 0xff, workspace.capacity()), "cudaMemset");
+}
+
+// The inactive final column's projected output is exactly zero on every route: its attention
+// output is zero, never the workspace's previous contents.
+int verify_inactive_column(const std::string& label, const GuardedDeviceBuffer& destination,
+                           int column) {
+    const auto values =
+        from_device_bf16(destination.data(), static_cast<std::size_t>(kHidden) * (column + 1));
+    for (int row = 0; row < kHidden; ++row) {
+        const double value = values[static_cast<std::size_t>(column) * kHidden + row];
+        if (value != 0.0) {
+            std::cerr << label << ": inactive column row " << row << " is " << value
+                      << ", expected 0\n";
+            return 1;
+        }
+    }
+    return 0;
+}
+
 int run(int kPrefillTokens) {
     constexpr std::size_t kFullContextPrefillWorkspace = 2909048832ULL;
     if (ops::flash_next_qsa_workspace_capacity_bytes(8192, 262144) !=
@@ -355,7 +379,7 @@ int run(int kPrefillTokens) {
         DeviceBuffer d_selected = to_device_i32(selected);
         Tensor selected_tensor(d_selected.p, DType::I32, {2051, kPrefillTokens});
         d_prefill_destination.fill();
-        prefill_workspace.reset();
+        poison_workspace(prefill_workspace);
         ops::flash_next_qsa(
             Tensor(d_prefill_input.p, DType::BF16, {kHidden, kPrefillTokens}),
             Tensor(d_prefill_positions.p, DType::I32, {kPrefillTokens, 1}),
@@ -366,6 +390,8 @@ int run(int kPrefillTokens) {
             prefill_destination, prefill_workspace, nullptr, nullptr,
             {.reused_indices = &selected_tensor});
         cuda_synchronize();
+        failures +=
+            verify_inactive_column("QSA neighboring selections", d_prefill_destination, active);
         auto actual = from_device_bf16(d_prefill_destination.data(), oracle.size());
         actual.resize(static_cast<std::size_t>(active) * kHidden);
         oracle.resize(actual.size());
@@ -389,7 +415,7 @@ int run(int kPrefillTokens) {
     DeviceBuffer d_dense_positions = to_device_i32(dense_positions);
     DeviceBuffer d_dense_selected = to_device_i32(std::vector<int>(2051 * kPrefillTokens, 1 << 30));
     Tensor dense_selected(d_dense_selected.p, DType::I32, {2051, kPrefillTokens});
-    prefill_workspace.reset();
+    poison_workspace(prefill_workspace);
     ops::flash_next_qsa(
         Tensor(d_prefill_input.p, DType::BF16, {kHidden, kPrefillTokens}),
         Tensor(d_dense_positions.p, DType::I32, {kPrefillTokens, 1}),
@@ -401,6 +427,7 @@ int run(int kPrefillTokens) {
         prefill_destination, prefill_workspace, nullptr, nullptr,
         {.selected_indices = &dense_selected});
     cuda_synchronize();
+    failures += verify_inactive_column("QSA dense wide route", d_prefill_destination, active);
     std::vector<int> dense_expected(2051 * kPrefillTokens, -1);
     for (int token = 0; token < active; ++token) {
         for (int index = 0; index <= dense_positions[token]; ++index) {

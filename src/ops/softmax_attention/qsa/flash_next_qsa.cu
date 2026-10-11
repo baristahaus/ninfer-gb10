@@ -925,6 +925,15 @@ __device__ __forceinline__ void selected_attention_batched_body(
                     partial_numerator[base + d + 1] = 0.0F;
                 }
             }
+        } else {
+            // An inactive column's output is zero, as the split reduction writes it; it is never
+            // left as the workspace's previous contents.
+            for (int item = tid; item < kHeadsPerKv * kHeadDim;
+                 item += static_cast<int>(blockDim.x)) {
+                const int head = kv_head * kHeadsPerKv + item / kHeadDim;
+                output[item % kHeadDim + kHeadDim * (head + static_cast<std::int64_t>(kQueryHeads) *
+                                                                token)] = __float2bfloat16_rn(0.0F);
+            }
         }
         return;
     }

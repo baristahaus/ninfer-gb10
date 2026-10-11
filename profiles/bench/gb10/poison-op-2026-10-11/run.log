@@ -1,0 +1,8 @@
+[poison-op 2026-10-11T14:32:25Z] start; HEAD ef5c1e2b; GPU idle (util 0%, no apps); free memory 113G available
+[poison-op 2026-10-11T14:32:25Z] building ninfer_flash_next_moe_test (poisoned)
+[poison-op 2026-10-11T14:32:27Z] test binary ready
+[poison-op 2026-10-11T14:32:27Z] running the poisoned MoE op test
+[poison-op 2026-10-11T14:32:31Z] test rc=0
+[poison-op 2026-10-11T14:32:31Z] test passed
+[poison-op 2026-10-11T14:32:31Z] poisoned lines: 0
+[poison-op 2026-10-11T14:32:31Z] done (test rc=0)

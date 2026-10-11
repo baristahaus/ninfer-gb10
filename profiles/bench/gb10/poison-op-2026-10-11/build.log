@@ -1,0 +1,7 @@
+[0/1] Re-running CMake...
+-- Configuring done (0.1s)
+-- Generating done (0.1s)
+-- Build files have been written to: /home/apollo11/ninfer-gb10/build
+[1/3] Building CUDA object tests/CMakeFiles/ninfer_flash_next_moe_test.dir/ops/poison_device_state.cu.o
+[2/3] Building CXX object tests/CMakeFiles/ninfer_flash_next_moe_test.dir/ops/test_flash_next_moe.cpp.o
+[3/3] Linking CXX executable tests/ninfer_flash_next_moe_test

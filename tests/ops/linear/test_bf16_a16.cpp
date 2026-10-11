@@ -361,8 +361,86 @@ int run_narrow_triple_case(DeviceWeight (&weights)[3], std::int32_t tokens) {
     return failures;
 }
 
+// The Program-owned BF16 GEMM context overload, as the Flash-Next schedules call it: eager, and
+// captured once and replayed with a sign-flipped activation, at every MTP verify row count
+// (batch x width up to 8 x 6). The output starts as NaN, so an unwritten element fails too.
+int run_context_case(DeviceWeight& weight, ops::Bf16GemmContext& context_gemm,
+                     DeviceContext& context, std::int32_t tokens, bool replay) {
+    const std::int32_t rows                    = weight.host.n;
+    const std::int32_t hidden                  = weight.host.k;
+    std::vector<std::uint16_t> activation_bits = make_activation_bits(hidden, tokens);
+    DeviceBuffer device_activation             = to_device(activation_bits);
+    const std::size_t outputs                  = static_cast<std::size_t>(rows) * tokens;
+    GuardedDeviceBuffer guarded_output(outputs * sizeof(std::uint16_t));
+    guarded_output.fill(0xff);
+    Tensor x(device_activation.p, DType::BF16, {hidden, tokens});
+    Tensor output(guarded_output.data(), DType::BF16, {rows, tokens});
+    const auto launch = [&] {
+        ops::linear(x, weight.view(), output, context.stream, &context_gemm);
+    };
+    cuda_synchronize();
+    if (replay) {
+        DecodeGraphDefinition definition;
+        DecodeGraphExecutable graph;
+        definition.capture(context.stream, launch);
+        graph.instantiate(definition);
+        for (auto& bits : activation_bits) bits ^= 0x8000;
+        device_activation.copy_from_host(activation_bits.data(), device_activation.bytes);
+        cuda_synchronize();
+        graph.launch(context.stream);
+    } else {
+        launch();
+    }
+    cuda_synchronize(context.stream);
+
+    const std::string label = "BF16 GEMM context [" + std::to_string(rows) + "," +
+                              std::to_string(hidden) + "] T=" + std::to_string(tokens) +
+                              (replay ? " graph" : " eager");
+    int failures                   = guarded_output.verify_guards(label);
+    const auto output_bits         = from_device<std::uint16_t>(guarded_output.data(), outputs);
+    const std::vector<float> input = materialize(activation_bits);
+    for (std::size_t index = 0; index < output_bits.size(); ++index) {
+        if (!std::isfinite(bf16_to_f32(output_bits[index]))) {
+            std::cerr << label << ": output row " << index % rows << " token " << index / rows
+                      << " is not finite\n";
+            ++failures;
+            break;
+        }
+    }
+    std::vector<double> actual;
+    std::vector<double> expected;
+    for (const std::int32_t row : sampled_rows(rows)) {
+        for (std::int32_t token = 0; token < tokens; ++token) {
+            actual.push_back(
+                bf16_to_f32(output_bits[static_cast<std::size_t>(token) * rows + row]));
+            expected.push_back(dot_fp64(
+                weight.host, row,
+                std::span<const float>(input.data() + static_cast<std::size_t>(token) * hidden,
+                                       hidden)));
+        }
+    }
+    failures += verify_reduction(label, actual, expected, kA16Tolerance);
+    failures += weight.verify_preserved(label + " weight");
+    return failures;
+}
+
 int run_bf16_linear() {
     int failures = 0;
+    {
+        // Flash-Next BF16 projections reached with T > 16: the MoE router and the PLE
+        // projections.
+        DeviceContext context;
+        ops::Bf16GemmContext context_gemm(context.stream);
+        DeviceWeight router(make_patterned(512, 2560, 443U));
+        DeviceWeight ple_key(make_patterned(10240, 2560, 449U));
+        DeviceWeight ple_value(make_patterned(2560, 2560, 457U));
+        for (DeviceWeight* weight : {&router, &ple_key, &ple_value}) {
+            for (int tokens = 1; tokens <= 48; ++tokens) {
+                failures += run_context_case(*weight, context_gemm, context, tokens, false);
+                failures += run_context_case(*weight, context_gemm, context, tokens, true);
+            }
+        }
+    }
     DeviceWeight attention_weight(make_patterned(14336, 5120, 401U));
     DeviceWeight output_weight(make_patterned(5120, 6144, 409U));
     for (DeviceWeight* weight : {&attention_weight, &output_weight}) {

@@ -53,6 +53,11 @@
 namespace ninfer::models::qwen3_8_flash_next::detail::NINFER_QWEN38_FLASH_NEXT_RUNTIME_NS::
     schedule {
 namespace {
+// Every decode and MTP verify call a CUDA Graph captures stays on NInfer's BF16 kernels; the
+// vendor backend is never captured (see ops::Bf16GemmContext).
+static_assert(static_cast<std::int64_t>(kMaximumConcurrency) * kMtpDecodeMaximumWidth <
+                  ninfer::ops::kBf16GemmContextMinimumTokens,
+              "a captured Flash-Next verify width reaches the cuBLAS route");
 
 void copy_i32(const std::int32_t* source, Tensor& destination, cudaStream_t stream) {
     if (source == nullptr || destination.dtype != DType::I32 || !destination.is_contiguous() ||

@@ -12,9 +12,16 @@
 
 namespace ninfer::ops {
 
-// Program-owned dense-BF16 execution resource.  Large-T registered BF16
-// projections may use the vendor tensor-core backend; decode and graph shapes
-// remain on NInfer's fixed CUDA kernels.
+// Smallest column count routed to the vendor backend. A model that captures larger shapes must
+// assert that they stay below it.
+inline constexpr std::int32_t kBf16GemmContextMinimumTokens = 49;
+
+// Program-owned dense-BF16 execution resource. Registered BF16 projections with at least
+// kBf16GemmContextMinimumTokens columns use the vendor tensor-core backend; every smaller call,
+// which includes every decode and MTP verify shape a CUDA Graph captures, stays on NInfer's fixed
+// CUDA kernels. On GB10 a cuBLAS GEMM captured into the Flash-Next 24-row verify graph produced
+// non-finite router scores that crashed graph preparation, although the same GEMM is correct
+// eager and captured alone (ninfer-gb10-dnf, 2026-10-11).
 class Bf16GemmContext {
 public:
     explicit Bf16GemmContext(cudaStream_t stream);

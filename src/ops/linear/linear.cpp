@@ -163,7 +163,8 @@ void linear(const Tensor& x, const Weight& w, Tensor& out, cudaStream_t stream) 
 void linear(const Tensor& x, const Weight& w, Tensor& out, cudaStream_t stream,
             Bf16GemmContext* bf16_gemm) {
     validate_linear_semantics(x, w, out, LinearPolicy::A16Only);
-    if (bf16_gemm != nullptr && w.qtype == QType::BF16 && x.ne[1] > 16) {
+    if (bf16_gemm != nullptr && w.qtype == QType::BF16 &&
+        x.ne[1] >= kBf16GemmContextMinimumTokens) {
         bf16_gemm->launch(x, w, out, stream);
         return;
     }

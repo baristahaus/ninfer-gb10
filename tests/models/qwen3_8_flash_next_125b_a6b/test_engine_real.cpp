@@ -340,6 +340,45 @@ int exercise_vision(ninfer::Engine& engine) {
     return 0;
 }
 
+// Full concurrency prepares and replays the widest MTP verify graph (8 rows x 4 columns). Each
+// such graph once ran its BF16 router through cuBLAS, which on GB10 left non-finite scores and
+// crashed graph preparation from 24 rows (ninfer-gb10-dnf). Identical requests in one batch must
+// also produce identical outputs: a lane that differs was computed from another lane's state.
+int exercise_full_batch_verify(const char* artifact) {
+    ninfer::EngineOptions options = engine_options(artifact);
+    options.max_concurrency       = ninfer::kMaximumConcurrency;
+    options.max_pending_requests  = ninfer::kMaximumConcurrency;
+    options.kv_capacity =
+        ninfer::KvCapacityPolicy::explicit_capacity(512U * ninfer::kMaximumConcurrency);
+    options.enable_vision = false;
+    ninfer::Engine engine(std::move(options));
+    const auto before = engine.runtime_stats();
+    std::vector<ninfer::GenerationHandle> handles;
+    for (std::uint32_t lane = 0; lane < ninfer::kMaximumConcurrency; ++lane) {
+        handles.push_back(
+            engine.submit(engine.prepare_tokens(canonical_prompt()), greedy_options(12, false)));
+    }
+    std::vector<ninfer::GenerationResult> results;
+    for (auto& handle : handles) { results.push_back(handle.wait()); }
+    const auto after = engine.runtime_stats();
+    for (const auto& result : results) {
+        if (result.generated_token_ids.size() != 12 ||
+            result.speculative.backend != ninfer::SpeculativeBackend::Mtp ||
+            result.generated_token_ids != results.front().generated_token_ids) {
+            std::cerr << "Flash-Next full-concurrency MTP lanes disagree or did not complete\n";
+            for (const auto& lane : results) { print_tokens("lane", lane.generated_token_ids); }
+            return 1;
+        }
+    }
+    if (after.decode_row_rounds - before.decode_row_rounds <=
+        4 * (after.decode_rounds - before.decode_rounds)) {
+        std::cerr
+            << "Flash-Next full-concurrency fixture averaged four rows or fewer per decode round\n";
+        return 1;
+    }
+    return 0;
+}
+
 } // namespace
 
 int main() {
@@ -365,6 +404,7 @@ int main() {
             if (exercise_vision(engine) != 0) { return 1; }
         }
         if (exercise_ordinary_greedy(artifact, expected_prefix) != 0) { return 1; }
+        if (exercise_full_batch_verify(artifact) != 0) { return 1; }
         std::cout << "OK Qwen3.8 Flash Next real Engine\n";
         return 0;
     } catch (const std::exception& error) {

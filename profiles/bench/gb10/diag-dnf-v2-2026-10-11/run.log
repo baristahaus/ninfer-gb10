@@ -1,0 +1,15 @@
+[diag-run 2026-10-11T14:20:54Z] start; HEAD 610708c5; GPU idle (util 0%, no apps); free memory 113G available
+[diag-run 2026-10-11T14:20:54Z] artifact: /home/apollo11/ninfer-gb10/out/fp8mtp/qwen3_8_flash_next_125b_a6b_nvfp4_fp8_mtp.ninfer
+[diag-run 2026-10-11T14:20:54Z] applying share/diag-dnf/nonfinite-scan.patch (v2)
+[diag-run 2026-10-11T14:20:54Z] building ninfer-serve (instrumented)
+[diag-run 2026-10-11T14:21:27Z] build OK
+[diag-run 2026-10-11T14:21:27Z] launching server (port 8001, max-concurrency 6, draft-tokens 3)
+[diag-run 2026-10-11T14:21:53Z] diag report complete; stopping server
+[diag-run 2026-10-11T14:21:56Z] server stopped
+[diag-run 2026-10-11T14:21:56Z] collecting lines containing [diag
+[diag-run 2026-10-11T14:21:56Z] collected 13 [diag lines
+[diag-run 2026-10-11T14:21:56Z] dropping the diag patch (git checkout + scoped clean)
+[diag-run 2026-10-11T14:21:56Z] patch dropped; working tree back to 610708c5
+[diag-run 2026-10-11T14:21:56Z] rebuilding clean ninfer-serve
+[diag-run 2026-10-11T14:22:29Z] clean rebuild OK
+[diag-run 2026-10-11T14:22:29Z] done

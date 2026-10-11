@@ -132,10 +132,10 @@ index 6b49fd4d..e5c289cc 100644
    "${CMAKE_CURRENT_LIST_DIR}/launcher/residual_add.cu"
 diff --git a/src/ops/launcher/diag_nonfinite.cu b/src/ops/launcher/diag_nonfinite.cu
 new file mode 100644
-index 00000000..5b8134c3
+index 00000000..bf4bc1c1
 --- /dev/null
 +++ b/src/ops/launcher/diag_nonfinite.cu
-@@ -0,0 +1,86 @@
+@@ -0,0 +1,100 @@
 +#include "ninfer/ops/diag_nonfinite.h"
 +
 +#include "core/device.h"
@@ -153,6 +153,8 @@ index 00000000..5b8134c3
 +constexpr int kLayers  = 50;
 +constexpr int kStages  = 8;
 +constexpr int kSlots   = kColumns * kLayers * kStages;
++int enqueued[kColumns]   = {};
++int skipped              = 0;
 +
 +struct Record {
 +    int* host   = nullptr;
@@ -190,13 +192,18 @@ index 00000000..5b8134c3
 +} // namespace
 +
 +void diag_check_nonfinite(const Tensor& tensor, int layer, int stage, cudaStream_t stream) {
-+    if (tensor.dtype != DType::BF16 || tensor.data == nullptr || !tensor.is_contiguous()) return;
++    if (tensor.dtype != DType::BF16 || tensor.data == nullptr || !tensor.is_contiguous()) {
++        ++skipped;
++        return;
++    }
 +    const int rows    = static_cast<int>(tensor.ne[0]);
 +    const int columns = rows == 0 ? 0 : static_cast<int>(tensor.numel() / rows);
 +    if (columns <= 0 || columns >= kColumns || layer < 0 || layer >= kLayers || stage < 0 ||
 +        stage >= kStages) {
++        ++skipped;
 +        return;
 +    }
++    ++enqueued[columns];
 +    int* slot = record().device + (columns * kLayers + layer) * kStages + stage;
 +    scan_kernel<<<columns, 256, 0, stream>>>(static_cast<const __nv_bfloat16*>(tensor.data), rows,
 +                                             slot);
@@ -219,23 +226,54 @@ index 00000000..5b8134c3
 +        }
 +    }
 +    std::fprintf(stderr, "[diag %s] %d non-finite records\n", label, hits);
++    for (int c = 0; c < kColumns; ++c) {
++        if (enqueued[c] != 0) {
++            std::fprintf(stderr, "[diag %s] scans enqueued at columns=%d: %d\n", label, c,
++                         enqueued[c]);
++        }
++    }
++    std::fprintf(stderr, "[diag %s] scans skipped (dtype, layout or width): %d\n", label, skipped);
 +}
 +
 +} // namespace ninfer::ops
 diff --git a/src/ops/sparse_moe/flash_next/flash_next_moe.cu b/src/ops/sparse_moe/flash_next/flash_next_moe.cu
-index 6abf9fa9..88906d8c 100644
+index 6abf9fa9..bd927ba4 100644
 --- a/src/ops/sparse_moe/flash_next/flash_next_moe.cu
 +++ b/src/ops/sparse_moe/flash_next/flash_next_moe.cu
-@@ -166,7 +166,7 @@ __global__ void __launch_bounds__(kRouteWarps * 32)
+@@ -1,3 +1,4 @@
++#include "ninfer/ops/diag_nonfinite.h"
+ #include "ninfer/ops/flash_next_moe.h"
+ 
+ #include "ops/flash_next_work.h"
+@@ -165,8 +166,26 @@ __global__ void __launch_bounds__(kRouteWarps * 32)
+                     best_id = other_id;
                  }
              }
++            if (best_id >= kExperts) {
++                int nonfinite = 0;
++                float largest = -__int_as_float(0x7f800000);
++#pragma unroll
++                for (int j = 0; j < kExperts / 32; ++j) {
++                    nonfinite += isfinite(values[j]) ? 0 : 1;
++                    largest = fmaxf(largest, values[j]);
++                }
++                for (int offset = 16; offset != 0; offset >>= 1) {
++                    nonfinite += __shfl_xor_sync(kFull, nonfinite, offset);
++                    largest = fmaxf(largest, __shfl_xor_sync(kFull, largest, offset));
++                }
++                if (lane == 0) {
++                    printf("[diag] top10: tokens %d row %d rank %d best_id %d taken-lane0 %x "
++                           "nonfinite scores %d max score %g\n",
++                           tokens, token, rank, best_id, taken, nonfinite, largest);
++                }
++            }
              top_values[rank] = best;
 -            top_ids[rank]    = best_id;
 +            top_ids[rank]    = best_id < kExperts ? best_id : rank;
              if ((best_id & 31) == lane) { taken |= 1U << (best_id >> 5); }
          }
          if (lane == 0) {
-@@ -240,7 +240,12 @@ __global__ void __launch_bounds__(kRouteWarps * 32)
+@@ -240,7 +259,12 @@ __global__ void __launch_bounds__(kRouteWarps * 32)
      __syncthreads();
      if (tid < assignments) {
          // Rank among the earlier tokens that chose the same expert (each token's ten are distinct).
@@ -249,3 +287,12 @@ index 6abf9fa9..88906d8c 100644
          const int before = (tid / kTop) * kTop;
          int rank         = 0;
          for (int a = 0; a < before; ++a) { rank += group_ids[a] == expert ? 1 : 0; }
+@@ -925,6 +949,8 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
+     auto scope    = workspace.scope();
+     Tensor scores = workspace.alloc(DType::BF16, {kExperts, tokens});
+     linear(input, weights.router, scores, stream, bf16_gemm);
++    diag_check_nonfinite(input, 49, 0, stream);
++    diag_check_nonfinite(scores, 49, 1, stream);
+     Tensor ids          = workspace.alloc(DType::I32, {kTop, tokens});
+     Tensor alpha        = workspace.alloc(DType::FP32, {kTop, tokens});
+     Tensor shared_alpha = workspace.alloc(DType::FP32, {tokens});

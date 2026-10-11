@@ -7,13 +7,20 @@ at 24 rows against their oracles, so those rows arrive non-finite from earlier i
 `nonfinite-scan.patch` is a temporary diagnostic, not product code. Applied on the branch head it:
 
 - scans BF16 activations for non-finite values after each stage of every target layer and of the
-  MTP head, recording per call width, layer and stage the first bad token column;
-- replaces an out-of-range expert id in the routing pass (printing it) instead of faulting, so
-  graph preparation completes;
-- prints the record to stderr after graph preparation.
+  MTP head, and inside the MoE op its router input and 512-wide router scores, recording per call
+  width, layer and stage the first bad token column;
+- prints from the routing kernel whenever its top-10 step finds no valid expert for a row: the row,
+  the rank, the invalid id, the row's count of non-finite scores and its largest score. It then
+  substitutes a valid id so graph preparation completes;
+- after graph preparation, prints the record, the number of scans enqueued per call width and the
+  number skipped.
 
 Stages: 0 input, 1 after PLE, 2 hyper state before the mixer, 3 mixer input, 4 mixer output,
-5 MoE input, 6 MoE output. Layer 48 is the MTP head (0 its hidden input, 1 its hyper state).
+5 MoE input, 6 MoE output. Layer 48 is the MTP head (0 its hidden input, 1 its hyper state). Layer
+49 is inside the MoE op, for every MoE call: 0 router input, 1 router scores.
+
+v1 (2026-10-11) recorded no non-finite activation at 24 columns. Its top-10 clamp substituted
+invalid ids silently, so it could not show whether they occurred; v2 prints them.
 
 ## Run (one GPU job; reboot first if a crashed context is still held)
 
@@ -26,5 +33,5 @@ build/apps/ninfer-serve <fp8mtp entry> --port 8001 --max-concurrency 6 --kv-dtyp
 git checkout -- . && git clean -fd include/ninfer/ops src/ops/launcher   # drop the patch
 ```
 
-Send every `[diag ...]` line. The first stage, in layer order, whose `columns=24` record names
+Send every line containing `[diag`, including the `top10` lines from the routing kernel. The first stage, in layer order, whose `columns=24` record names
 column 22 or below is where the bad rows are produced.

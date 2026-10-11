@@ -457,7 +457,8 @@ int run_nvfp4() {
     }
     upload_router(shared);
     const std::vector<double> expected = oracle(shared);
-    for (const int tokens : {1, 2, 8, 16, 17, 40}) {
+    // 20 and 24 rows bracket the verify shapes where four or more requests start to fault.
+    for (const int tokens : {1, 2, 8, 16, 17, 20, 22, 24, 32, 40}) {
         auto [got, guard_failures] = run_rows(tokens);
         failures += guard_failures;
         const std::vector<double> want(expected.begin(),

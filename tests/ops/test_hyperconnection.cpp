@@ -222,8 +222,9 @@ int run() {
         // T=1 GEMV, T=2/3 (3 is the MTP verify width), 8, 9, 16 and 33 sliced-K, T=65 tiled GEMM;
         // the FP8 up projection (K=320) ends its GEMV rows in a predicated phase and its sliced-K
         // in a partial group, and runs 64-wide GEMM K tiles. FP8 at 2..64 tokens takes the fused
-        // up-mix route; 8, 16 and 33 reach each of its token tiles.
-        for (const int tokens : {1, 2, 3, 8, 9, 16, 33, 65}) {
+        // up-mix route; 8, 16 and 33 reach each of its token tiles. 20, 24 and 32 are verify
+        // shapes of four to eight requests.
+        for (const int tokens : {1, 2, 3, 8, 9, 16, 20, 24, 32, 33, 65}) {
             failures += run_case(tokens, format);
         }
     }

@@ -24,8 +24,8 @@ void poison_shared_memory(std::uint32_t pattern) {
     int sms   = 0;
     CUDA_CHECK(cudaDeviceGetAttribute(&bytes, cudaDevAttrMaxSharedMemoryPerBlockOptin, device));
     CUDA_CHECK(cudaDeviceGetAttribute(&sms, cudaDevAttrMultiProcessorCount, device));
-    CUDA_CHECK(cudaFuncSetAttribute(fill_shared_memory,
-                                    cudaFuncAttributeMaxDynamicSharedMemorySize, bytes));
+    CUDA_CHECK(cudaFuncSetAttribute(fill_shared_memory, cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                    bytes));
     // Several waves of maximal blocks on every SM leave the pattern across each SM's shared
     // memory carve-out for the next kernel to find.
     fill_shared_memory<<<sms * 4, 1024, static_cast<std::size_t>(bytes)>>>(

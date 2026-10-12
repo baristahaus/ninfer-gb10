@@ -98,3 +98,22 @@ ninfer_add_test(ninfer_qwen3_5_visual_scatter_test
 set_tests_properties(
   ninfer_qwen3_5_visual_scatter_test
   PROPERTIES SKIP_RETURN_CODE 77)
+
+# Standalone repros for the open 5090-test engine bugs (ninfer-gb10-hdt, ninfer-gb10-dn9).
+# They are skipped under plain CTest (no artifact) and run individually with
+# NINFER_TEST_ARTIFACT set to the 27B artifact. See docs/maintainer/5090-test-guidance.md.
+ninfer_add_test(ninfer_qwen3_5_repro_vision_reuse_divergence
+  SOURCES "${CMAKE_CURRENT_LIST_DIR}/repro_vision_reuse_divergence.cpp"
+  LIBRARIES ninfer_engine)
+
+set_tests_properties(
+  ninfer_qwen3_5_repro_vision_reuse_divergence
+  PROPERTIES SKIP_RETURN_CODE 77)
+
+ninfer_add_test(ninfer_qwen3_5_repro_host_restore_state
+  SOURCES "${CMAKE_CURRENT_LIST_DIR}/repro_host_restore_state.cpp"
+  LIBRARIES ninfer_engine)
+
+set_tests_properties(
+  ninfer_qwen3_5_repro_host_restore_state
+  PROPERTIES SKIP_RETURN_CODE 77)

@@ -330,6 +330,7 @@ ProgramImpl::reserve_materialization(AdmissionCandidate&& plan, PreparedPromptDa
             .vision_plan        = std::move(request_plan.vision),
             .vision             = nullptr,
             .capture_groups     = std::move(request_plan.capture_groups),
+            .split_frontiers    = std::move(request_plan.split_frontiers),
             .base               = request_plan.reuse_base,
             .cursor             = request_plan.reuse_base,
             .prompt_tokens      = prompt_tokens,

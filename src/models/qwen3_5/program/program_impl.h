@@ -186,6 +186,11 @@ struct RequestBasePlanImpl {
     std::optional<qwen3_5::RewriteCheckpointSpec> rewrite_checkpoint;
     std::vector<CaptureGroup> capture_groups;
     std::vector<CaptureGroup> shared_candidates;
+    // Semantic frontiers where the prefill chunk always splits (capture/checkpoint boundaries).
+    // Populated from the prepared prompt whenever the identity is reusable and the context cache
+    // is enabled, independent of allow_prefix_reuse: the flag gates whether a checkpoint is
+    // taken at a frontier, never the chunk decomposition of the current request.
+    std::vector<std::uint32_t> split_frontiers;
     qwen3_5::detail::PrefixShortlistDigests prefix_digests;
     std::uint32_t prefix_identity_tag = 0;
     bool allow_prefix_reuse           = false;
@@ -243,6 +248,7 @@ struct AdmissionCandidateImpl : ResourceCandidateState {
     std::optional<VisionPrefillPlan> vision;
     std::vector<CaptureGroup> capture_groups;
     std::vector<CaptureGroup> shared_candidates;
+    std::vector<std::uint32_t> split_frontiers;
     ops::SamplingConfig sampling;
     std::uint32_t text_kv_page_entitlement    = 0;
     std::uint32_t backend_kv_page_entitlement = 0;
@@ -414,6 +420,8 @@ struct RequestControl {
         std::vector<CaptureGroup> capture_groups;
         std::size_t next_capture            = 0;
         std::uint64_t pending_capture_offer = 0;
+        std::vector<std::uint32_t> split_frontiers;
+        std::size_t next_split              = 0;
         std::uint32_t base                  = 0;
         std::uint32_t cursor                = 0;
         std::uint32_t prompt_tokens         = 0;

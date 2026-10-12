@@ -11,13 +11,13 @@ environment was restored to its pre-battery state.
 
 ## The two open bugs
 
-| Bug | Beads | Symptom | Artifact |
-|---|---|---|---|
-| #7 — vision + reuse flag divergence | `ninfer-gb10-hdt` | `allow_prefix_reuse` changes the computation with no cache hit | groupwise flips the greedy token; nvfp4 below the margin |
-| #8 — host-restore state materialization | `ninfer-gb10-dn9` | `state_h2d` stays flat on restore (KV pages upload, state images do not) | nvfp4 + optimized head only; groupwise (Full head) passes |
+| Bug | Beads | Status | Symptom | Artifact |
+|---|---|---|---|---|
+| #7 — vision + reuse flag divergence | `ninfer-gb10-hdt` | **FIXED** (see below) | `allow_prefix_reuse` changes the computation with no cache hit | both artifacts; groupwise flips the greedy token |
+| #8 — host-restore state materialization | `ninfer-gb10-dn9` | **OPEN, re-attributed** | `state_h2d` stays flat on restore (KV pages upload, state images do not) | both artifacts, both heads |
 
-Both need the 27B artifacts (groupwise and nvfp4) and a GPU. They are open to whoever picks the
-beads issue up; the repro programs and the code-path references below are enough to start cold.
+Both need the 27B artifacts (groupwise and nvfp4) and a GPU. Bug #8 remains open; the repro
+program and the code-path references below are enough to start cold.
 
 ## Bug #7 — vision + reuse flag divergence (`ninfer-gb10-hdt`)
 
@@ -34,49 +34,33 @@ The flag alone changes the computation. No cache hit, no MTP, no prior request. 
 prompts are unaffected. Both artifacts compute the perturbation, but only the groupwise (Q4/Q5)
 margins flip the greedy token; the nvfp4 margins are large enough that the token is unchanged.
 
-**Why it is a bug.** `allow_prefix_reuse` is a *participation* flag: it gates whether the
-continuation is *published* for later reuse. It must not change the *computation* of the current
-request. When there is no reuse, both flag values must produce the identical prompt state.
+**Root cause (confirmed on the 5090).** `allow_prefix_reuse=true` builds capture groups whose
+frontiers split the prefill chunk (`split_frontier = capture_frontier` in `prefill.cpp`). The
+vision prompt carries a rewrite-checkpoint capture at token 75 (the user-message boundary), so
+the reuse-enabled prefill ran two chunks [0,75) + [75,82) while the flag-disabled prefill ran one
+chunk [0,82). The chunked prefill's floating-point arithmetic is chunk-decomposition-dependent
+(two-stage GDN association and chunk-boundary continuation), so the split changes the computed
+prompt state at ULP level; the first generated token's logits differ and prompts with tight
+top-1/top-2 margins flip the greedy token. The capture offer/transaction itself is
+computation-neutral (verified: split without offer still diverges, no split with the flag on
+matches the flag-off chain exactly). The text-only control takes the same message-boundary split
+(frontier 8 of 15) and stays identical only because its margin is wide - the perturbation is
+prompt-independent, the *flip* is margin-dependent.
 
-**Code path (the gate).** `src/models/qwen3_5/program/planning/request_plan.cpp:256-257`:
+**Fix (landed).** Chunk splits at semantic capture frontiers are now a structural property of the
+prompt: `RequestBasePlanImpl::split_frontiers` collects the identity's rewrite-checkpoint frontier
+and every prepared cache opportunity whenever the identity is reusable and the context cache is
+enabled, independent of `allow_prefix_reuse`. The staged prefill walks `split_frontiers` next to
+the capture groups and splits the chunk at the earliest pending frontier. The flag gates only the
+checkpoint/publication (capture groups and offers remain flag-gated); the chunk decomposition -
+and with it the computed state - no longer depends on it. Both flag values now produce the same
+chain on both artifacts; the flag-off chain on tight-margin prompts changes to the split-chunked
+chain (both routes were always valid chunkings; they are now consistent).
 
-```cpp
-base->summary.publish_continuation =
-    options.allow_prefix_reuse && prompt.identity.reusable && context_cache.enabled;
-```
-
-When `publish_continuation` is true, the plan additionally:
-- assigns `prefix_digests` and sets `prefix_identity_tag` (`request_plan.cpp:321-324`);
-- builds the `capture_groups` via the `add_capture` lambda (`request_plan.cpp:326-342`);
-- and the prefill copies the flag onto the request (`prefill.cpp:646`), which the commit path
-  uses to decide the finish disposition (`transactions/commit.cpp:598`).
-
-So the flag changes the *planning* (page allocation, state layout, capture bookkeeping) before
-any reuse decision. That is the perturbation.
-
-**Hypothesis (to confirm, not assumed).** The vision prompt's identity is what makes
-`prompt.identity.reusable` change the capture plan's shape: the media tokens put the prompt on a
-planning branch that a text-only prompt does not take, so the `publish_continuation` flag flips a
-different materialization shape for vision than for text. The materialization path then computes
-a numerically perturbed prompt state. The fix direction: make the materialization path
-*independent* of `publish_continuation` when there is no reuse — the flag should gate
-publication, not the computation.
-
-**Next steps.**
-1. Run the repro: `NINFER_TEST_ARTIFACT=<artifact> ./build/tests/ninfer_qwen3_5_repro_vision_reuse_divergence`
-   on both artifacts. Confirm: groupwise diverges, nvfp4 identical.
-2. Diff the materialization plan (page allocation, state slots, `capture_groups`,
-   `prefix_digests`, `prefix_identity_tag`) for `allow_prefix_reuse=true` vs `false` on the
-   vision prompt — that pins exactly which field diverges. Add a trace at
-   `request_plan.cpp:321` and at the prefill's plan copy (`prefill.cpp:646`).
-3. Confirm the same diff is *empty* for a text-only prompt (validates the vision-specific
-   hypothesis).
-4. Locate the first divergent value in the prompt state (KV, state image, or the vision
-   transient). The perturbation is numerical, so a `memcmp`-style diff of the prefill output
-   between the two flag values is the discriminating experiment.
-5. Fix so that `publish_continuation` does not change the computation when there is no reuse.
-   This is an upstream bug (merge base `e31bc99b`); the fork barely touched these files. Fix the
-   fork and upstream it.
+Validated on the RTX 5090: the repro exits 0 on both artifacts (vision and text controls
+identical), and the prefix real test's vision scenario - the check that originally caught the
+bug - passes on the groupwise artifact. This is an upstream-inherited bug (merge base
+`e31bc99b`); the fix should be upstreamed.
 
 **Provenance note.** The exact token sequences above are from the 5090 battery on the groupwise
 artifact. The repro program prints the sequences for whatever artifact it is run against; do not
@@ -92,8 +76,15 @@ images** — `state_h2d_count` stays flat:
 path=1 reused=316 outputs=2 state=0 degraded=1
 ```
 
-Groupwise (Full head) passes the identical scenario; only the nvfp4 artifact with the optimized
-proposal head fails.
+Groupwise (Full head) and nvfp4 (optimized head) fail identically (corrected attribution — see
+below).
+
+**Corrected attribution (2026-10-12, verified on the 5090).** The original "groupwise passes"
+claim was wrong: it came from the focused `pressure-resume` scenario, which maps to
+`exercise_pressure_partial_spill_and_resume` - a different function from the host-restore check.
+The artifact-aware repro runs the identical scenario on the groupwise artifact and fails the
+same way (`state_d2h=1` after pressure, `state_h2d=0` after restore). Bug #8 is not
+optimized-head-specific; the `host_state_restore` gate does not fire for either head.
 
 **Code path (the gate).** `src/models/qwen3_5/program/transactions/materialization.cpp:657`:
 
@@ -119,28 +110,32 @@ The KV pages are restored via `prepare_kv_restores` (`materialization.cpp:831-84
 `begin_host_to_device` is never called and `state_h2d` stays flat. `host_state_restore` is only
 set when the state image's residency is exactly `HostOnly`.
 
-**Hypothesis (to confirm, not assumed).** The optimized proposal head has a different state-image
-layout (slot count, or a split across multiple state images) than the Full head. The pressure /
-demotion path handles the Full head's layout but not the optimized head's, so the optimized
-head's state image either (a) stays on Device (residency `DeviceOnly` — never demoted), or (b)
-gets a residency label the `HostOnly` gate does not match. Either way `host_state_restore` stays
-null.
+**Hypothesis (superseded — the optimized-head layout was not the cause).** The state image IS
+demoted to Host for both heads (`state_d2h=1` after the pressure pass), so the question is why
+the restore gate at `materialization.cpp:657` does not match. Either the residency label after
+demotion is not `HostOnly` (a `Both`/`DeviceOnly` label the gate misses), or the restored
+request binds the state through a path that skips the `host_state_restore` selection entirely.
 
 **Next steps.**
-1. Run the repro: `NINFER_TEST_ARTIFACT=<nvfp4> ./build/tests/ninfer_qwen3_5_repro_host_restore_state`
-   and confirm `state_h2d` stays flat (the failure line). Run on groupwise and confirm it passes.
+1. Run the repro on both artifacts: `NINFER_TEST_ARTIFACT=<artifact>
+   ./build/tests/ninfer_qwen3_5_repro_host_restore_state`. Both currently fail with
+   `state_h2d=0` on restore (the corrected expectation - the original "groupwise passes" note
+   was wrong).
 2. **Discriminating experiment A** — dump the state image's residency right after the pressure
-   pass (before the restore). Add a trace at `materialization.cpp:646` (the `residency` read).
-   Is it `HostOnly`, `DeviceOnly`, or `Both` for the optimized head?
-   - `DeviceOnly` → the demotion path did not demote the optimized head's state image. Look at
-     the pressure / demotion path for a layout-specific branch.
-   - `Both` → the demotion ran but the residency label does not match the `HostOnly` gate. Look
-     at the gate at `materialization.cpp:657`.
-   - `HostOnly` → the gate matched but the upload path dropped it. Look at `materialization.cpp:848`
-     and `state_store->begin_host_to_device`.
-3. **Discriminating experiment B** — compare the demotion's `state_d2h_count` for the optimized
-   vs Full head. If the optimized head's `state_d2h` did not increase during the pressure pass,
-   the state image never went to Host (confirms hypothesis (a)).
+   pass (before the restore). Add a trace at `materialization.cpp:657` (the `residency` read).
+   Is it `HostOnly`, `DeviceOnly`, or `Both` after the verified demotion?
+   - `DeviceOnly`/`Both` → the demotion ran but the gate at `materialization.cpp:657` does not
+     match the actual residency; the restore path skips the state upload.
+   - `HostOnly` → the gate matched but the upload path dropped it. Look at
+     `materialization.cpp:848` and `state_store->begin_host_to_device`, and at how the restored
+     request selects its state source (`selected_state` / `PrivateSourceMode`).
+3. **Discriminating experiment B** — trace which state source the restored request binds: the
+   demoted checkpoint's Host replica, or a device-resident fallback. If the request binds a
+   device fallback without uploading, the accounting check is right but the binding path skips
+   the Host materialization - decide whether the contract is "upload the Host state" or "any
+   valid state source", and fix the gate or the check accordingly. Read `ninfer-gb10-10l`
+   (own-source checkpoint demotion at the reusing follow-up's admission) first: it is the
+   adjacent demote-vs-drop design question and a fix here may constrain it.
 4. Fix so the optimized head's state images are demoted to Host and restored on resume. This is
    a host-replica-path bug; fix the fork and upstream it.
 
@@ -179,16 +174,20 @@ NINFER_TEST_ARTIFACT=/path/to/27b.ninfer ./build/tests/ninfer_qwen3_5_repro_visi
 NINFER_TEST_ARTIFACT=/path/to/27b.ninfer ./build/tests/ninfer_qwen3_5_repro_host_restore_state
 ```
 
-- Bug #7 repro: exit 0 = identical token sequences (correct), exit 1 = divergence (bug).
-- Bug #8 repro: exit 0 = `state_h2d` increased (correct), exit 1 = `state_h2d` flat (bug).
+- Bug #7 repro (FIXED): exit 0 = identical token sequences on the vision and text controls.
+  The vision divergence and the text-only control both print their chains; a regression exits 1.
+- Bug #8 repro (open): exit 0 = `state_h2d` increased (correct), exit 1 = `state_h2d` flat (bug).
+  Runs on both artifacts (the proposal head is selected from the artifact).
 
 Both print the full stat / token lines on failure so the next session can pick up the evidence
 without re-deriving it.
 
 ## Out of scope for this branch
 
-- The fixes themselves (they need the 27B artifacts and a GPU, which the GB10 workstation does
-  not have). This branch is the *handoff*: repros + guidance + beads issues.
-- The hardware fix (machine-side, owner is the 5090 operator).
+- Bug #8's fix (in progress; see the bug #8 section for the corrected attribution and the
+  discriminating experiments).
+- The hardware fix (machine-side, owner is the 5090 operator; the 2026-10-12 EXPO change was
+  verified clean on the 5090 with the bit-flip discriminator - 900 GiB of traffic, zero flips).
 - The MoE real test (needs a v3 35B-A3B artifact; the local one is a v2 container) and the
-  Flash-Next real tests (need the 125B-A6B artifact). Both are skipped by design.
+  Flash-Next real tests (need the 125B-A6B artifact, which does not fit the 32 GB card; NInfer
+  has no host-RAM weight offloading). Both are skipped by design.

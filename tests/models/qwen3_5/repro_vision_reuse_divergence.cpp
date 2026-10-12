@@ -9,8 +9,11 @@
 // Build against the fork's libraries and run with NINFER_TEST_ARTIFACT set to the 27B artifact:
 //   NINFER_TEST_ARTIFACT=<groupwise|nvfp4 .ninfer> ./repro_vision_reuse_divergence
 //
-// Expected on the groupwise (Q4/Q5) artifact: divergence (the margins flip the greedy token).
-// Expected on the nvfp4 artifact: identical (the perturbation is present but below the margin).
+// Expected on both artifacts after the 2026-10-12 fix: exit 0 - the flag does not change the
+// computation on the vision prompt or the text-only control (both flags take the same
+// structural capture-frontier splits, so the chunk decomposition is flag-invariant). Before the
+// fix the groupwise vision run diverged: reuse=false -> 27775 383 279 2099 3766, reuse=true ->
+// 760 2099 18126 264 5215.
 // The exact observed token sequences (groupwise) were:
 //   allow_prefix_reuse=false -> 27775 383 279 2099 3766
 //   allow_prefix_reuse=true  -> 760 2099 18126 264 5215
@@ -40,10 +43,10 @@ std::vector<std::uint8_t> gradient_ppm(int width = 64, int height = 64) {
 
 ninfer::PromptInput vision_input() {
     ninfer::MessagePart image;
-    image.kind             = ninfer::MessagePartKind::Media;
-    image.media.kind       = ninfer::MediaKind::Image;
-    image.media.bytes      = gradient_ppm();
-    image.media.media_type = "image/x-portable-pixmap";
+    image.kind              = ninfer::MessagePartKind::Media;
+    image.media.kind        = ninfer::MediaKind::Image;
+    image.media.bytes       = gradient_ppm();
+    image.media.media_type  = "image/x-portable-pixmap";
     image.media.source_name = "inline.ppm";
 
     ninfer::ChatMessage message;
@@ -60,16 +63,30 @@ ninfer::PromptInput vision_input() {
     return input;
 }
 
+ninfer::PromptInput text_input() {
+    ninfer::ChatMessage message;
+    message.role = ninfer::ChatRole::User;
+    message.parts.push_back(ninfer::MessagePart{
+        .kind = ninfer::MessagePartKind::Text, .text = "Reply briefly.", .media = {}});
+
+    ninfer::PromptInput input;
+    input.messages.push_back(std::move(message));
+    input.options.enable_thinking   = false;
+    input.context_cache.session_key = "repro-vision-reuse";
+    input.context_cache.retention   = ninfer::CacheRetentionHint::LiveSession;
+    return input;
+}
+
 std::vector<ninfer::TokenId> generate(const char* artifact, bool reuse) {
     ninfer::EngineOptions options;
-    options.artifact_path              = artifact;
-    options.max_context                = 4096;
-    options.kv_capacity                = ninfer::KvCapacityPolicy::explicit_capacity(4096);
-    options.prefill_chunk              = 1024;
-    options.speculative.backend        = ninfer::SpeculativeBackend::None;
-    options.enable_vision              = true;
-    options.max_concurrency            = 1;
-    options.max_pending_requests       = 1;
+    options.artifact_path                    = artifact;
+    options.max_context                      = 4096;
+    options.kv_capacity                      = ninfer::KvCapacityPolicy::explicit_capacity(4096);
+    options.prefill_chunk                    = 1024;
+    options.speculative.backend              = ninfer::SpeculativeBackend::None;
+    options.enable_vision                    = true;
+    options.max_concurrency                  = 1;
+    options.max_pending_requests             = 1;
     options.context_cache.device_state_slots = 4;
 
     ninfer::Engine engine(options);
@@ -81,6 +98,29 @@ std::vector<ninfer::TokenId> generate(const char* artifact, bool reuse) {
 
     const ninfer::GenerationResult result =
         engine.generate(engine.prepare(vision_input()), request);
+    return result.generated_token_ids;
+}
+
+std::vector<ninfer::TokenId> generate_text(const char* artifact, bool reuse) {
+    ninfer::EngineOptions options;
+    options.artifact_path                    = artifact;
+    options.max_context                      = 4096;
+    options.kv_capacity                      = ninfer::KvCapacityPolicy::explicit_capacity(4096);
+    options.prefill_chunk                    = 1024;
+    options.speculative.backend              = ninfer::SpeculativeBackend::None;
+    options.enable_vision                    = true;
+    options.max_concurrency                  = 1;
+    options.max_pending_requests             = 1;
+    options.context_cache.device_state_slots = 4;
+
+    ninfer::Engine engine(options);
+    ninfer::RequestOptions request;
+    request.execution.requested_output_tokens = 5;
+    request.execution.sampling.temperature    = 0.0F;
+    request.execution.allow_prefix_reuse      = reuse;
+    request.stop.include_model_defaults       = false;
+
+    const ninfer::GenerationResult result = engine.generate(engine.prepare(text_input()), request);
     return result.generated_token_ids;
 }
 
@@ -104,11 +144,31 @@ int main() {
     const std::vector<ninfer::TokenId> with_reuse = generate(artifact, /*reuse=*/true);
     print("allow_prefix_reuse=false:", no_reuse);
     print("allow_prefix_reuse=true: ", with_reuse);
+
+    // Text-only control: the same flag pair on a chat-shaped token prompt with no media. The
+    // capture plan still applies (the message-boundary capture exists for text prompts too), so
+    // a divergence here would mean the capture split itself is inexact; no divergence means the
+    // vision item's interaction with the capture split is the trigger.
+    const std::vector<ninfer::TokenId> text_no_reuse   = generate_text(artifact, /*reuse=*/false);
+    const std::vector<ninfer::TokenId> text_with_reuse = generate_text(artifact, /*reuse=*/true);
+    print("text reuse=false:      ", text_no_reuse);
+    print("text reuse=true:       ", text_with_reuse);
+
     if (no_reuse == with_reuse) {
-        std::cout << "ok: the flag did not change the computation\n";
-        return 0;
+        if (text_no_reuse == text_with_reuse) {
+            std::cout << "ok: the flag did not change the computation (vision or text)\n";
+            return 0;
+        }
+        std::cerr << "BUG: allow_prefix_reuse changed the text-only computation too\n";
+        return 1;
+    }
+    if (text_no_reuse != text_with_reuse) {
+        std::cerr << "BUG: allow_prefix_reuse changed both the vision and the text-only "
+                     "computation\n";
+        return 1;
     }
     std::cerr << "BUG: allow_prefix_reuse changed the computation with no cache hit and a fresh "
-                "encode (reused_prompt_tokens=0 on both runs)\n";
+                 "encode (reused_prompt_tokens=0 on both runs); the text-only control is "
+                 "identical, so the divergence is vision-specific\n";
     return 1;
 }

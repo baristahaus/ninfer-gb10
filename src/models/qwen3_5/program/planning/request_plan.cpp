@@ -255,6 +255,29 @@ RequestBasePlan ProgramImpl::plan_request(const PreparedPromptData& prompt,
     base->allow_prefix_reuse             = options.allow_prefix_reuse;
     base->summary.publish_continuation =
         options.allow_prefix_reuse && prompt.identity.reusable && context_cache.enabled;
+    // Chunk splits at semantic capture frontiers are a structural property of the prompt: the
+    // prefill always splits where a checkpoint could be taken, so allow_prefix_reuse gates only
+    // the checkpoint/publication, never the chunk decomposition (and with it the computed
+    // state) of the current request. The frontiers mirror the capture-group sources exactly:
+    // the identity's rewrite checkpoint and every prepared cache opportunity.
+    if (prompt.identity.reusable && context_cache.enabled) {
+        base->split_frontiers.clear();
+        const auto add_split_frontier = [&](std::uint32_t frontier) {
+            if (frontier == 0 || frontier > base->summary.prompt_tokens) { return; }
+            const auto inserted = std::lower_bound(base->split_frontiers.begin(),
+                                                    base->split_frontiers.end(), frontier);
+            if (inserted == base->split_frontiers.end() || *inserted != frontier) {
+                base->split_frontiers.insert(inserted, frontier);
+            }
+        };
+        if (prompt.identity.rewrite_checkpoint) {
+            add_split_frontier(prompt.identity.rewrite_checkpoint->frontier);
+        }
+        for (const qwen3_5::PreparedCacheOpportunity& opportunity :
+             base->context_cache.opportunities) {
+            add_split_frontier(opportunity.frontier);
+        }
+    }
     const std::uint32_t reserved_context_tokens =
         base->summary.prompt_tokens + (base->summary.effective_output_tokens == 0
                                            ? 0U
@@ -678,6 +701,10 @@ std::optional<AdmissionCandidate> ProgramImpl::inspect_lane(
         if (group.frontier >= plan->reuse_base) {
             plan->shared_candidates.push_back(std::move(group));
         }
+    }
+    plan->split_frontiers.reserve(base.split_frontiers.size());
+    for (const std::uint32_t frontier : base.split_frontiers) {
+        if (frontier > plan->reuse_base) { plan->split_frontiers.push_back(frontier); }
     }
     plan->summary.reusable_prompt_tokens = plan->reuse_base;
     plan->summary.prefix_reuse_path      = plan->reuse;

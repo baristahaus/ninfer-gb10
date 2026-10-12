@@ -1066,6 +1066,17 @@ runtime::PrefillStepResult ProgramImpl::advance_prefill(SequenceState& sequence,
                               staged.capture_groups[staged.next_capture].frontier)
                         : std::nullopt;
                 std::optional<std::uint32_t> split_frontier = capture_frontier;
+                // Structural capture frontiers split the chunk for every request, including
+                // requests that publish no continuation: the chunk decomposition must not
+                // depend on allow_prefix_reuse.
+                while (staged.next_split < staged.split_frontiers.size() &&
+                       staged.split_frontiers[staged.next_split] <= staged.cursor) {
+                    ++staged.next_split;
+                }
+                if (staged.next_split < staged.split_frontiers.size() &&
+                    (!split_frontier || staged.split_frontiers[staged.next_split] < *split_frontier)) {
+                    split_frontier = staged.split_frontiers[staged.next_split];
+                }
                 const auto rewrite_split                    = std::upper_bound(
                     staged.prompt.identity.rewrite_execution_frontiers.begin(),
                     staged.prompt.identity.rewrite_execution_frontiers.end(), staged.cursor);

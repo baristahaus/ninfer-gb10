@@ -126,7 +126,8 @@ NInfer is a from-scratch C++/CUDA inference engine for maximum single-GPU perfor
 Qwen3.5 Dense/MoE and the fixed Qwen3.8 Flash-Next 125B-A6B architecture. V3 artifacts supply
 model configuration, encoded objects, logical bindings, Uses and selected component resources.
 Official 27B/35B recipes target RTX 5090; Flash-Next NVFP4 targets RTX PRO 6000 Blackwell.
-The implementation is compiled for `sm_120a` (RTX 5090 / RTX PRO 6000) and `sm_121a` (GB10).
+This is the GB10 fork. The default build target is `sm_121a` (GB10 Grace Blackwell);
+`sm_120a` (RTX 5090 / RTX PRO 6000) is the upstream reference target and remains supported.
 Text, image/video Vision, MTP, prefix reuse, CLI,
 OpenAI/Anthropic serving and measurement share the public `.ninfer` Engine route. The Qwen3.5
 family additionally supports DFlash/DFlash2 with the corresponding companion components.
@@ -374,7 +375,7 @@ These are conventional project resources, not a checklist of resources every tas
 | conversion report | `out/qwen3_6_27b.ninfer.conversion.json` |
 | normal build | `build/` |
 | profiler output | `profiles/ncu/`, `profiles/nsys/`, `profiles/bench/` |
-| hardware/toolchain | RTX 5090, `sm_120a`, CUDA 13.1 |
+| hardware/toolchain | GB10 (Grace Blackwell), `sm_121a` (default); `sm_120a` upstream reference, CUDA 13.0.88 |
 
 Use the selected Python 3.11 interpreter explicitly. Do not install or upgrade dependencies unless
 the task requires it. Never select an artifact by glob, modification time, or an unqualified

@@ -21,8 +21,9 @@ plus selected fixes cherry-picked from giveen/ninfer-ext (see below).
 
 ### What this fork changes
 
-1. **GB10 SM format (kernel sizing).** The architecture gate now accepts `sm_121a`
-   alongside `sm_120a` (CMake + runtime capability check). Every launch constant
+1. **GB10 SM format (kernel sizing).** The architecture gate defaults to `sm_121a`
+   (GB10); `sm_120a` (the upstream reference target) is still accepted (CMake + runtime
+   capability check). Every launch constant
    derived from the 5090's 170 SMs (170/510/680/1020/5440) is replaced by a runtime
    `device_sm_count()` query (`src/ops/common/device_info.{h,cu}`; cached, 170 fallback).
    The persistent-grid kernels stride their work list by `gridDim.x`, so grid sizing is

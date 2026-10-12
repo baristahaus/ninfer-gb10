@@ -1,11 +1,12 @@
 cmake_minimum_required(VERSION 3.28)
 
-# The implementation targets Blackwell consumer/edge SoCs: sm_120a (RTX 5090)
-# and sm_121a (GB10 Grace Blackwell). Validate the architecture before CUDA
+# NInfer GB10 fork. The default build target is sm_121a (GB10 Grace
+# Blackwell); sm_120a (RTX 5090 / RTX PRO 6000) is the upstream reference
+# target and remains supported. Validate the architecture before CUDA
 # compiler detection so CMake never injects a generic host-toolchain default
 # or accepts an unsupported target.
 if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
-  set(CMAKE_CUDA_ARCHITECTURES 120a CACHE STRING "CUDA architectures to build")
+  set(CMAKE_CUDA_ARCHITECTURES 121a CACHE STRING "CUDA architectures to build")
 endif()
 if(NOT (CMAKE_CUDA_ARCHITECTURES STREQUAL "120a" OR
         CMAKE_CUDA_ARCHITECTURES STREQUAL "121a"))

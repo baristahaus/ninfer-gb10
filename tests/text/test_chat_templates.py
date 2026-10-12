@@ -97,8 +97,17 @@ class ChatTemplates(unittest.TestCase):
         default = TEMPLATES["qwen3_8"].render(
             messages=[message("user", "hello")], add_generation_prompt=True
         )
-        self.assertIn("Reasoning effort is set to xhigh.", default)
+        # The default effort is now medium: no reasoning instruction is prepended.
+        self.assertNotIn("Reasoning effort is set to", default)
         self.assertTrue(default.endswith("<|im_start|>assistant\n<think>\n"))
+        # An explicit xhigh still gets the xhigh instruction.
+        xhigh = TEMPLATES["qwen3_8"].render(
+            messages=[message("user", "hello")],
+            add_generation_prompt=True,
+            reasoning_effort="xhigh",
+        )
+        self.assertIn("Reasoning effort is set to xhigh.", xhigh)
+        self.assertTrue(xhigh.endswith("<|im_start|>assistant\n<think>\n"))
 
     def test_tools_and_instruction_preamble(self):
         tools = [

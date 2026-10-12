@@ -27,6 +27,15 @@ constexpr Sha256Digest kReasoningEffortTemplateDigest{
     0xd3, 0xe2, 0xa7, 0x25, 0xb6, 0xc2, 0x58, 0x6a, 0xaa, 0x3a, 0x8a, 0xf9, 0xd7, 0xa8, 0x10, 0x41,
 };
 
+// Reasoning-effort template revision that defaults to medium (no injected instruction)
+// instead of xhigh. Existing artifacts carry the earlier revision
+// (kReasoningEffortTemplateDigest); both resolve to ReasoningEffort semantics and both use the
+// shared value_or(ReasoningEffort::Medium) default in resolve_reasoning_instructions.
+constexpr Sha256Digest kMediumDefaultReasoningEffortTemplateDigest{
+    0x12, 0xbc, 0xf0, 0x70, 0x10, 0xde, 0x1c, 0xac, 0x84, 0x4b, 0x47, 0x84, 0x51, 0xd1, 0x1e, 0xfd,
+    0x16, 0xb0, 0x45, 0x99, 0x5b, 0x3b, 0xd4, 0x56, 0x43, 0x78, 0xce, 0xcf, 0x92, 0x87, 0x20, 0x05,
+};
+
 constexpr std::string_view kLowReasoningInstructions =
     "Reasoning effort is set to low. Keep your thinking brief and focused, moving directly to "
     "the conclusion without unnecessary elaboration.";
@@ -355,7 +364,7 @@ std::string_view resolve_reasoning_instructions(ChatTemplateSemantics semantics,
         return {};
     }
 
-    switch (options.reasoning_effort.value_or(ReasoningEffort::XHigh)) {
+    switch (options.reasoning_effort.value_or(ReasoningEffort::Medium)) {
     case ReasoningEffort::Low:
         return kLowReasoningInstructions;
     case ReasoningEffort::Medium:
@@ -419,7 +428,8 @@ CompiledChatTemplate CompiledChatTemplate::resolve(std::string_view source) {
     if (digest == kThinkingToggleTemplateDigest) {
         return CompiledChatTemplate(ChatTemplateSemantics::ThinkingToggle);
     }
-    if (digest == kReasoningEffortTemplateDigest) {
+    if (digest == kReasoningEffortTemplateDigest ||
+        digest == kMediumDefaultReasoningEffortTemplateDigest) {
         return CompiledChatTemplate(ChatTemplateSemantics::ReasoningEffort);
     }
     throw std::invalid_argument("unsupported frontend/chat_template.jinja (sha256 " +

@@ -57,7 +57,7 @@ set_tests_properties(
 
 ninfer_add_test(ninfer_qwen3_5_vision_workspace_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/test_vision_workspace.cpp"
-  LIBRARIES ninfer_model_runtime ninfer_engine)
+  LIBRARIES ninfer_model_runtime ninfer_engine ninfer::json)
 
 set_tests_properties(
   ninfer_qwen3_5_vision_workspace_test
@@ -65,7 +65,7 @@ set_tests_properties(
 
 ninfer_add_test(ninfer_qwen3_5_dflash2_real_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/test_engine_dflash2_real.cpp"
-  LIBRARIES ninfer_engine)
+  LIBRARIES ninfer_engine ninfer::json)
 
 set_tests_properties(
   ninfer_qwen3_5_dflash2_real_test
@@ -73,7 +73,7 @@ set_tests_properties(
 
 ninfer_add_test(ninfer_qwen3_5_moe_real_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/test_engine_moe_real.cpp"
-  LIBRARIES ninfer_engine)
+  LIBRARIES ninfer_engine ninfer::json)
 
 set_tests_properties(
   ninfer_qwen3_5_moe_real_test
@@ -81,7 +81,7 @@ set_tests_properties(
 
 ninfer_add_test(ninfer_qwen3_5_dflash_real_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/test_engine_dflash_real.cpp"
-  LIBRARIES ninfer_engine)
+  LIBRARIES ninfer_engine ninfer::json)
 
 set_tests_properties(
   ninfer_qwen3_5_dflash_real_test

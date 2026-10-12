@@ -541,12 +541,29 @@ int exercise_host_restore(const char* artifact) {
         return 1;
     }
 
+    // Regeneration restore: only the user turn is replaced, so the identity match stops at the
+    // turn boundary and the reuse binds the typed rewrite checkpoint that the pressure demoted
+    // to Host. The State image and the KV pages must both come back from Host. (The endpoint
+    // keeps riding the active-concurrency Device slot by design — the pressure planner demotes
+    // the typed rewrite first as the less destructive relief — so a continuation follow-up that
+    // reproduces the assistant turn would match the full endpoint and bind it zero-copy with no
+    // State upload; the regeneration shape is what exercises the Host-to-Device State path.)
+    ninfer::PromptInput regeneration = retained_input();
+    ninfer::ChatMessage replacement;
+    replacement.role = ninfer::ChatRole::User;
+    replacement.parts.push_back(
+        ninfer::MessagePart{.kind  = ninfer::MessagePartKind::Text,
+                            .text  = "Answer the question differently this time.",
+                            .media = {}});
+    regeneration.messages.push_back(std::move(replacement));
+
     const ninfer::GenerationResult restored =
-        engine.generate(engine.prepare(std::move(continuation)), options(2, true));
+        engine.generate(engine.prepare(regeneration), options(2, true));
     const ninfer::RuntimeStats after_restore = engine.runtime_stats();
     if (restored.generated_token_ids.size() != 2 ||
         restored.prefix_reuse_path != ninfer::PrefixReusePath::PrivateTurnClosure ||
         restored.reused_prompt_tokens == 0 ||
+        restored.reused_prompt_tokens >= retained.prompt.prompt_tokens ||
         after_restore.state_h2d_count <= after_pressure.state_h2d_count ||
         after_restore.main_kv_h2d_pages <= after_pressure.main_kv_h2d_pages ||
         after_restore.backend_kv_h2d_pages <= after_pressure.backend_kv_h2d_pages) {
@@ -559,6 +576,39 @@ int exercise_host_restore(const char* artifact) {
                   << " backend=" << after_restore.backend_kv_h2d_pages
                   << " degraded=" << after_restore.pressure_private_owners_degraded
                   << " evicted=" << after_restore.pressure_private_owners_evicted << '\n';
+        return 1;
+    }
+
+    // Negative control: the same regeneration prompt probes the same frontiers with the same
+    // digests, so it reuses the regeneration's committed checkpoints. Those are Device-resident
+    // (committed by the live request), so no further State or KV upload may happen.
+    ninfer::PromptInput control_prompt = retained_input();
+    ninfer::ChatMessage replacement_again;
+    replacement_again.role = ninfer::ChatRole::User;
+    replacement_again.parts.push_back(
+        ninfer::MessagePart{.kind  = ninfer::MessagePartKind::Text,
+                            .text  = "Answer the question differently this time.",
+                            .media = {}});
+    control_prompt.messages.push_back(std::move(replacement_again));
+
+    const ninfer::GenerationResult control_result =
+        engine.generate(engine.prepare(control_prompt), options(2, true));
+    const ninfer::RuntimeStats after_control = engine.runtime_stats();
+    if (control_result.generated_token_ids.size() != 2 ||
+        control_result.reused_prompt_tokens == 0 ||
+        after_control.state_h2d_count != after_restore.state_h2d_count ||
+        after_control.main_kv_h2d_pages != after_restore.main_kv_h2d_pages ||
+        after_control.backend_kv_h2d_pages != after_restore.backend_kv_h2d_pages) {
+        std::cerr << "Device-resident reuse uploaded redundantly (or failed to reuse): path="
+                  << static_cast<int>(control_result.prefix_reuse_path)
+                  << " reused=" << control_result.reused_prompt_tokens
+                  << " outputs=" << control_result.generated_token_ids.size()
+                  << " state=" << after_control.state_h2d_count << " (expected "
+                  << after_restore.state_h2d_count << ")"
+                  << " main=" << after_control.main_kv_h2d_pages << " (expected "
+                  << after_restore.main_kv_h2d_pages << ")"
+                  << " backend=" << after_control.backend_kv_h2d_pages << " (expected "
+                  << after_restore.backend_kv_h2d_pages << ")\n";
         return 1;
     }
 
@@ -820,16 +870,16 @@ int exercise_anthropic_prefix_regression(const char* artifact) {
         input.context_cache.allow_engine_automatic_shared_prefixes = false;
         for (std::uint32_t count = 1; count <= input.options.tool_jsons.size(); ++count) {
             input.context_cache.markers.push_back(ninfer::PromptCacheMarker{
-                   .kind             = ninfer::PromptCacheMarkerKind::SharedStablePrefix,
-                   .evidence         = ninfer::SharedCandidateEvidence::ExplicitBoundary,
-                   .location         = ninfer::PromptCacheMarkerLocation::ToolBoundary,
-                   .after_tool_count = count,
+                .kind             = ninfer::PromptCacheMarkerKind::SharedStablePrefix,
+                .evidence         = ninfer::SharedCandidateEvidence::ExplicitBoundary,
+                .location         = ninfer::PromptCacheMarkerLocation::ToolBoundary,
+                .after_tool_count = count,
             });
         }
         ninfer::ChatMessage user;
         user.role = ninfer::ChatRole::User;
         user.parts.push_back(ninfer::MessagePart{
-               .kind = ninfer::MessagePartKind::Text, .text = std::move(question), .media = {}});
+            .kind = ninfer::MessagePartKind::Text, .text = std::move(question), .media = {}});
         input.messages.push_back(std::move(user));
         return input;
     };
@@ -1337,8 +1387,8 @@ int exercise_rewrite_checkpoints(ninfer::Engine& engine, RewriteCheckpointCacheT
         const ninfer::RuntimeStats final_stats   = engine.runtime_stats();
         const std::uint64_t initial_degradations = initial_stats.pressure_private_owners_degraded +
                                                    initial_stats.pressure_shared_owners_degraded;
-        const std::uint64_t final_degradations = final_stats.pressure_private_owners_degraded +
-                                                 final_stats.pressure_shared_owners_degraded;
+        const std::uint64_t final_degradations   = final_stats.pressure_private_owners_degraded +
+                                                   final_stats.pressure_shared_owners_degraded;
         if (final_degradations <= initial_degradations ||
             final_stats.pressure_private_owners_evicted !=
                 initial_stats.pressure_private_owners_evicted ||
@@ -1588,10 +1638,10 @@ int exercise_vision(ninfer::Engine& engine) {
                   << "finish_reason=" << static_cast<int>(stopped.finish_reason)
                   << " generated=" << stopped.generated_token_ids.size()
                   << " rounds=" << stopped.speculative.rounds
-                  << " reused=" << stopped.reused_prompt_tokens
-                  << " last=" << (stopped.generated_token_ids.empty()
-                                      ? -1
-                                      : static_cast<int>(stopped.generated_token_ids.back()))
+                  << " reused=" << stopped.reused_prompt_tokens << " last="
+                  << (stopped.generated_token_ids.empty()
+                          ? -1
+                          : static_cast<int>(stopped.generated_token_ids.back()))
                   << " stop=" << static_cast<int>(stop_options.stop.token_ids.front())
                   << "\n  baseline tokens: " << print_tokens(mtp_baseline.generated_token_ids)
                   << "\n  stopped tokens:  " << print_tokens(stopped.generated_token_ids) << '\n';
@@ -1766,8 +1816,8 @@ int exercise_pressure_partial_spill_and_resume(const char* artifact) {
         after_pressure.pressure_checkpoints_dropped - before_pressure.pressure_checkpoints_dropped;
     const std::uint64_t pressure_degraded = after_pressure.pressure_private_owners_degraded -
                                             before_pressure.pressure_private_owners_degraded;
-    const std::uint64_t pressure_evicted = after_pressure.pressure_private_owners_evicted -
-                                           before_pressure.pressure_private_owners_evicted;
+    const std::uint64_t pressure_evicted  = after_pressure.pressure_private_owners_evicted -
+                                            before_pressure.pressure_private_owners_evicted;
     if (short_b.generated_token_ids.size() != 1 || pressure_main_pages != 4 ||
         pressure_spill_pages != 4 || pressure_drops != 1 || pressure_degraded != 1 ||
         pressure_evicted != 0 ||
@@ -2006,7 +2056,7 @@ int exercise_concurrent_resource_settlement(const char* artifact) {
     const ninfer::RuntimeStats before_pressure = engine.runtime_stats();
     const ninfer::GenerationResult pressure    = engine.generate(
         engine.prepare(session_turn("publication-pressure",
-                                       "Give one deterministic token for the pressure request.")),
+                                    "Give one deterministic token for the pressure request.")),
         fixed_output(1));
     const ninfer::RuntimeStats after_pressure = engine.runtime_stats();
     if (pressure.generated_token_ids.size() != 1 ||
@@ -2204,7 +2254,8 @@ int main() {
             options.context_cache.device_state_slots  = 2;
             options.context_cache.max_shared_prefixes = 0;
             ninfer::Engine engine(std::move(options));
-            result = exercise_rewrite_checkpoints(engine, RewriteCheckpointCacheTopology::PrivateOnly);
+            result =
+                exercise_rewrite_checkpoints(engine, RewriteCheckpointCacheTopology::PrivateOnly);
         } else if (scenario == "stream-observations") {
             auto options          = engine_options(artifact);
             options.enable_vision = false;

@@ -6,6 +6,8 @@
 
 #include "models/qwen3_5/frontend/prepared_prompt.h"
 
+#include "artifact/reader.h"
+
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
@@ -29,10 +31,14 @@ int main() {
         }
         CUDA_CHECK(status);
         ninfer::DeviceContext device;
+        ninfer::artifact::Reader artifact_reader(artifact);
+        const ninfer::ProposalHead artifact_head =
+            artifact_reader.directory().component("text").proposal ? ninfer::ProposalHead::Optimized
+                                                                   : ninfer::ProposalHead::Full;
         ninfer::models::LoadOptions selected;
         selected.vision        = true;
         selected.speculative   = ninfer::SpeculativeBackend::Mtp;
-        selected.proposal_head = ninfer::ProposalHead::Optimized;
+        selected.proposal_head = artifact_head;
         auto model             = qwen::load_model(artifact, selected, device);
         const qwen::execution::Parameters parameters(*model);
         const auto capacity = [&](std::uint32_t max_context) {
@@ -43,7 +49,7 @@ int main() {
             options.kv_cache            = ninfer::KvCacheStorage::Fp8E4M3Row256;
             options.speculative.backend = ninfer::SpeculativeBackend::Mtp;
             options.speculative.draft_tokens         = 3;
-            options.speculative.proposal_head        = ninfer::ProposalHead::Optimized;
+            options.speculative.proposal_head        = artifact_head;
             options.enable_vision                    = true;
             options.use_cuda_graph                   = false;
             options.context_cache.device_state_slots = 1;

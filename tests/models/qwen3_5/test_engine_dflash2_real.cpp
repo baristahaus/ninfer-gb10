@@ -1,4 +1,6 @@
 #include "ninfer/engine.h"
+
+#include "artifact/reader.h"
 #include "speculative_page_boundary.h"
 
 #include <algorithm>
@@ -67,11 +69,21 @@ int main(int argc, char** argv) {
         std::cout << "skip: NINFER_TEST_ARTIFACT is not set\n";
         return 77;
     }
+    ninfer::artifact::Reader artifact_reader(artifact);
+    if (!artifact_reader.directory().components.contains("dflash2")) {
+        std::cout << "skip: artifact binds no dflash2 component\n";
+        return 77;
+    }
+    // Without an explicit head argument, select the strongest head the artifact carries.
+    const ninfer::ProposalHead artifact_head =
+        artifact_reader.directory().component("text").proposal ? ninfer::ProposalHead::Optimized
+                                                               : ninfer::ProposalHead::Full;
     try {
-        const auto k         = argc > 1 ? static_cast<unsigned>(std::stoul(argv[1])) : 15U;
-        const bool graph     = argc > 2 ? std::stoi(argv[2]) != 0 : true;
-        const bool optimized = argc > 3 ? std::stoi(argv[3]) != 0 : true;
-        const auto batch     = argc > 4 ? static_cast<unsigned>(std::stoul(argv[4])) : 8U;
+        const auto k     = argc > 1 ? static_cast<unsigned>(std::stoul(argv[1])) : 15U;
+        const bool graph = argc > 2 ? std::stoi(argv[2]) != 0 : true;
+        const bool optimized =
+            argc > 3 ? (std::stoi(argv[3]) != 0) : artifact_head == ninfer::ProposalHead::Optimized;
+        const auto batch = argc > 4 ? static_cast<unsigned>(std::stoul(argv[4])) : 8U;
         ninfer::EngineOptions options;
         options.artifact_path   = artifact;
         options.max_context     = 2304;

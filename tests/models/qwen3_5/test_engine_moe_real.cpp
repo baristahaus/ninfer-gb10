@@ -1,5 +1,7 @@
 #include "ninfer/engine.h"
 
+#include "artifact/reader.h"
+
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
@@ -10,6 +12,13 @@
 
 namespace {
 
+// Select the strongest proposal head the artifact carries.
+ninfer::ProposalHead artifact_proposal_head(const char* artifact) {
+    ninfer::artifact::Reader reader(artifact);
+    return reader.directory().component("text").proposal ? ninfer::ProposalHead::Optimized
+                                                         : ninfer::ProposalHead::Full;
+}
+
 ninfer::EngineOptions engine_options(const char* artifact) {
     ninfer::EngineOptions options;
     options.artifact_path             = artifact;
@@ -19,7 +28,7 @@ ninfer::EngineOptions engine_options(const char* artifact) {
     options.kv_cache                  = ninfer::KvCacheStorage::Int8Group64;
     options.speculative.backend       = ninfer::SpeculativeBackend::Mtp;
     options.speculative.draft_tokens  = 3;
-    options.speculative.proposal_head = ninfer::ProposalHead::Optimized;
+    options.speculative.proposal_head = artifact_proposal_head(artifact);
     options.enable_vision             = true;
     options.use_cuda_graph            = true;
     return options;
@@ -31,7 +40,7 @@ ninfer::EngineOptions maximum_engine_options(const char* artifact) {
     options.kv_capacity               = ninfer::KvCapacityPolicy::explicit_capacity(262144);
     options.speculative.backend       = ninfer::SpeculativeBackend::Mtp;
     options.speculative.draft_tokens  = 5;
-    options.speculative.proposal_head = ninfer::ProposalHead::Optimized;
+    options.speculative.proposal_head = artifact_proposal_head(artifact);
     return options;
 }
 
@@ -253,6 +262,16 @@ int main() {
     if (artifact == nullptr || *artifact == '\0') {
         std::cout << "skip: NINFER_TEST_ARTIFACT is not set\n";
         return 77;
+    }
+    {
+        // This test requires a Qwen3.5 MoE artifact (the 35B recipe); skip on dense artifacts.
+        ninfer::artifact::Reader reader(artifact);
+        const std::string architecture =
+            reader.directory().component("text").config.at("architectures").at(0);
+        if (architecture != "Qwen3_5MoeForCausalLM") {
+            std::cout << "skip: artifact is not a Qwen3.5 MoE model: " << architecture << '\n';
+            return 77;
+        }
     }
 
     {

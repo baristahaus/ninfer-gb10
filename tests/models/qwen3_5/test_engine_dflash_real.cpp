@@ -1,4 +1,6 @@
 #include "ninfer/engine.h"
+
+#include "artifact/reader.h"
 #include "speculative_page_boundary.h"
 
 #include <algorithm>
@@ -37,12 +39,19 @@ ninfer::EngineOptions dflash_engine_options(const char* artifact, ninfer::Propos
     return options;
 }
 
+// Select the strongest proposal head the artifact carries.
+ninfer::ProposalHead artifact_proposal_head(const char* artifact) {
+    ninfer::artifact::Reader reader(artifact);
+    return reader.directory().component("text").proposal ? ninfer::ProposalHead::Optimized
+                                                         : ninfer::ProposalHead::Full;
+}
+
 ninfer::EngineOptions dflash_vision_engine_options(const char* artifact) {
-    ninfer::EngineOptions options =
-        dflash_engine_options(artifact, ninfer::ProposalHead::Optimized, 4096);
-    options.prefill_chunk   = 1024;
-    options.max_concurrency = 2;
-    options.enable_vision   = true;
+    const ninfer::ProposalHead head = artifact_proposal_head(artifact);
+    ninfer::EngineOptions options   = dflash_engine_options(artifact, head, 4096);
+    options.prefill_chunk           = 1024;
+    options.max_concurrency         = 2;
+    options.enable_vision           = true;
     return options;
 }
 
@@ -379,6 +388,13 @@ int main() {
         std::cout << "skip: NINFER_TEST_ARTIFACT is not set\n";
         return 77;
     }
+    {
+        ninfer::artifact::Reader reader(artifact);
+        if (!reader.directory().components.contains("dflash")) {
+            std::cout << "skip: artifact binds no dflash component\n";
+            return 77;
+        }
+    }
 
     const std::vector<ninfer::TokenId> prompt{
         248045, 846,    198, 109266, 3709,  96220, 117443, 97913,
@@ -407,7 +423,7 @@ int main() {
         }
     }
 
-    ninfer::Engine engine(dflash_engine_options(artifact, ninfer::ProposalHead::Optimized, 4352));
+    ninfer::Engine engine(dflash_engine_options(artifact, artifact_proposal_head(artifact), 4352));
     if (const int result = verify_dflash_load(engine); result != 0) { return result; }
     ninfer::test::speculative_page_boundary(engine);
     engine.reset_memory_peaks();

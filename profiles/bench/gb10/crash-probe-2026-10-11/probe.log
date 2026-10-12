@@ -1,8 +1,0 @@
-[probe 2026-10-11 13:25:11Z] start; free memory 113G available
-[probe 2026-10-11 13:25:11Z] building (incremental)
-[probe 2026-10-11 13:25:44Z] build rc=0
-[probe 2026-10-11 13:25:44Z] conc 6: starting server (K=3)
-[probe 2026-10-11 13:26:09Z] conc 6: CRASH (exit rc=134); marker: /home/apollo11/ninfer-gb10/src/core/device.cu:182: CUDA_CHECK(cudaStreamSynchronize(stream)) failed: cudaErrorIllegalAddress: an illegal memory access was encountered; log: profiles/bench/gb10/crash-probe-2026-10-11/serve-conc6-k3.log
-[probe 2026-10-11 13:26:09Z] conc 6 crashed - compute-sanitizer memcheck on the smallest crashing config
-[probe 2026-10-11 13:28:53Z] memcheck rc=6; first report: profiles/bench/gb10/crash-probe-2026-10-11/memcheck-first-report.txt
-[probe 2026-10-11 13:28:53Z] REBOOT REQUIRED before the next GPU job (crashed context left unreaped)

@@ -809,7 +809,15 @@ curl http://127.0.0.1:8080/v1/models \
   -H 'Authorization: Bearer local-secret'
 ```
 
-`--cors` adds permissive browser CORS headers. It is disabled by default.
+`--cors` makes browser pages able to call the server. Every response carries
+`Access-Control-Allow-Origin: *`, including errors and streamed responses. An `OPTIONS`
+preflight is answered without credentials, with a 600-second `Access-Control-Max-Age`, and the
+allowed request headers cover the `Authorization` and `X-API-Key` credentials plus the headers
+the OpenAI and Anthropic JavaScript SDKs send (`x-stainless-*`, `openai-organization`,
+`anthropic-dangerous-direct-browser-access`). Chromium's Private Network Access preflight
+(`Access-Control-Request-Private-Network`) is acknowledged. The grant is `*` because the API key,
+not the origin, is the credential, so enable `--cors` only with an `--api-key` configured. It is
+disabled by default.
 
 ## Server options
 

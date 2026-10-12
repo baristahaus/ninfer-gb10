@@ -1,6 +1,7 @@
 #include "serve/http_server.h"
 
 #include "serve/anthropic_messages.h"
+#include "serve/cors.h"
 #include "serve/http_transport.h"
 #include "serve/openai_common.h"
 #include "serve/request_log.h"
@@ -345,17 +346,12 @@ void HttpServer::register_routes() {
         return handle_unrendered_http_error(options_, request, response);
     });
     if (options_.enable_cors) {
-        server_.set_default_headers(
-            {{"Access-Control-Allow-Origin", "*"},
-             {"Access-Control-Expose-Headers", "x-request-id, request-id"},
-             {"Access-Control-Allow-Headers",
-              "Authorization, Content-Type, X-API-Key, anthropic-version, anthropic-beta, "
-              "anthropic-user-profile-id"},
-             {"Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS"}});
-        // CORS preflight: browsers send OPTIONS with no credentials before the real
-        // request; answer it without auth so the actual GET/POST can carry the key.
-        server_.Options(R"(.*)",
-                        [](const httplib::Request&, httplib::Response& res) { res.status = 204; });
+        apply_cors_defaults(server_);
+        // Browsers send OPTIONS with no credentials before the real request; the preflight is
+        // answered without auth so the actual GET/POST can carry the key.
+        server_.Options(R"(.*)", [](const httplib::Request& request, httplib::Response& response) {
+            answer_cors_preflight(request, response);
+        });
     }
 
     server_.set_pre_routing_handler([this](const httplib::Request& req, httplib::Response& res) {

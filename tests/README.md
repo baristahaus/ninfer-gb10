@@ -117,6 +117,9 @@ The real loading test accepts an explicit artifact path and optional component s
   --artifact out/qwen3_6_27b.ninfer --vision --speculative mtp --proposal optimized
 ```
 
+`--proposal optimized` requires an artifact binding the indexed proposal head; pass
+`--proposal full` for artifacts whose text component carries no `proposal` object.
+
 Add `--host-only` to check semantic binding without uploading weights. This does not construct a
 Program or establish native Op support.
 
@@ -183,6 +186,10 @@ python3 tools/smoke/serve_thinking_preservation.py \
   --artifact out/qwen3_6_35b_a3b.ninfer --backend dflash
 ```
 
+The server is started with `--lm-head-draft` (the optimized proposal head). Pass
+`--no-lm-head-draft` for artifacts whose text component carries no `proposal` object; they serve
+the same fixture through the full head.
+
 The shared messages are in
 [`fixtures/serve/qwen3_6_thinking_preservation.json`](fixtures/serve/qwen3_6_thinking_preservation.json).
 
@@ -216,12 +223,17 @@ and prefix restore. Zero extra Device StateImage slots exercise Host snapshot/re
 ```bash
 cmake --build build -j --target ninfer_qwen3_5_dflash2_real_test
 NINFER_TEST_ARTIFACT=out/qwen3_8_27b.ninfer \
-  build/tests/ninfer_qwen3_5_dflash2_real_test 15 1 1 8
+  build/tests/ninfer_qwen3_5_dflash2_real_test 15 1 0 8
 NINFER_TEST_ARTIFACT=out/qwen3_8_27b.ninfer \
   build/tests/ninfer_qwen3_5_dflash2_real_test 7 1 0 2 bf16 1 0
 NINFER_TEST_ARTIFACT=out/qwen3_8_27b_nvfp4.ninfer \
   build/tests/ninfer_qwen3_5_dflash2_real_test 2 0 0 2 int8
 ```
+
+The `optimized head` argument selects the indexed proposal head and requires an artifact whose
+text component binds a `proposal` object; artifacts without one run every scenario through the
+full head instead. The int8-KV example requires an nvfp4 artifact converted with the dflash2
+component.
 
 Arguments are K, Graph enabled, optimized head enabled, maximum B, target KV (`bf16` or `int8`),
 Vision enabled, and extra Device StateImage slots. Defaults are `15 1 1 8 bf16 0 3`. Run GPU

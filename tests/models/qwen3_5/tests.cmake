@@ -41,7 +41,7 @@ set_tests_properties(
 
 ninfer_add_test(ninfer_qwen3_5_prefix_real_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/test_engine_prefix_real.cpp"
-  LIBRARIES ninfer_engine)
+  LIBRARIES ninfer_engine ninfer::json)
 
 set_tests_properties(
   ninfer_qwen3_5_prefix_real_test

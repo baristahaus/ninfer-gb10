@@ -271,6 +271,11 @@ def main() -> None:
     )
     parser.add_argument("--startup-timeout", type=float, default=600.0)
     parser.add_argument("--port", type=int, default=0)
+    parser.add_argument(
+        "--no-lm-head-draft",
+        action="store_true",
+        help="omit --lm-head-draft for artifacts without the optimized proposal head",
+    )
     args = parser.parse_args()
 
     artifact = args.artifact.resolve()
@@ -316,9 +321,10 @@ def main() -> None:
             args.backend,
             "--draft-tokens",
             "3",
-            "--lm-head-draft",
             "--greedy",
         ]
+        if not args.no_lm_head_draft:
+            command.insert(1, "--lm-head-draft")
         with server_log.open("w", encoding="utf-8") as output:
             process = subprocess.Popen(
                 command,

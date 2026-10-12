@@ -533,11 +533,18 @@ def exercise(base_url: str, model: str) -> dict[str, Any]:
     blocks = anthropic.get("content")
     if not isinstance(blocks, list) or not blocks:
         raise ContractError("Anthropic response content is empty")
+    anthropic_usage = anthropic.get("usage")
     anthropic_input_tokens, _ = require_usage(
-        anthropic.get("usage"), "input_tokens", "output_tokens"
+        anthropic_usage, "input_tokens", "output_tokens"
     )
-    if anthropic_input_tokens != input_tokens:
-        raise ContractError("Anthropic usage input_tokens differs from count_tokens")
+    cache_read = anthropic_usage.get("cache_read_input_tokens") or 0
+    if not isinstance(cache_read, int) or cache_read < 0:
+        raise ContractError("Anthropic usage cache_read_input_tokens is invalid")
+    if anthropic_input_tokens + cache_read != input_tokens:
+        raise ContractError(
+            "Anthropic usage prompt accounting differs from count_tokens: "
+            f"input={anthropic_input_tokens} cache_read={cache_read} count={input_tokens}"
+        )
 
     return {
         "format": "ninfer_serve_contract_v2",

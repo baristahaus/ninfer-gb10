@@ -1,5 +1,7 @@
 #include "ninfer/engine.h"
 
+#include "artifact/reader.h"
+
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
@@ -13,6 +15,15 @@
 
 namespace {
 
+// Select the strongest proposal head the artifact carries. Artifacts without the optimized
+// proposal object (for example conversions made before it existed, or family artifacts that
+// never carried one) still exercise every prefix/state scenario through the Full head.
+ninfer::ProposalHead artifact_proposal_head(const char* artifact) {
+    ninfer::artifact::Reader reader(artifact);
+    return reader.directory().component("text").proposal ? ninfer::ProposalHead::Optimized
+                                                         : ninfer::ProposalHead::Full;
+}
+
 ninfer::EngineOptions engine_options(const char* artifact) {
     ninfer::EngineOptions options;
     options.artifact_path                    = artifact;
@@ -21,7 +32,7 @@ ninfer::EngineOptions engine_options(const char* artifact) {
     options.prefill_chunk                    = 1024;
     options.speculative.backend              = ninfer::SpeculativeBackend::Mtp;
     options.speculative.draft_tokens         = 3;
-    options.speculative.proposal_head        = ninfer::ProposalHead::Optimized;
+    options.speculative.proposal_head        = artifact_proposal_head(artifact);
     options.enable_vision                    = true;
     options.max_concurrency                  = 1;
     options.max_pending_requests             = 1;
@@ -37,7 +48,7 @@ ninfer::EngineOptions host_restore_engine_options(const char* artifact) {
     options.prefill_chunk                        = 256;
     options.speculative.backend                  = ninfer::SpeculativeBackend::Mtp;
     options.speculative.draft_tokens             = 3;
-    options.speculative.proposal_head            = ninfer::ProposalHead::Optimized;
+    options.speculative.proposal_head            = artifact_proposal_head(artifact);
     options.max_concurrency                      = 1;
     options.max_pending_requests                 = 1;
     options.context_cache.device_state_slots     = 1;
@@ -57,7 +68,7 @@ ninfer::EngineOptions shared_replacement_engine_options(const char* artifact) {
     options.prefill_chunk                        = 256;
     options.speculative.backend                  = ninfer::SpeculativeBackend::Mtp;
     options.speculative.draft_tokens             = 3;
-    options.speculative.proposal_head            = ninfer::ProposalHead::Optimized;
+    options.speculative.proposal_head            = artifact_proposal_head(artifact);
     options.max_concurrency                      = 1;
     options.max_pending_requests                 = 1;
     options.context_cache.device_state_slots     = 1;
@@ -77,7 +88,7 @@ ninfer::EngineOptions anthropic_prefix_regression_engine_options(const char* art
     options.prefill_chunk                    = 512;
     options.speculative.backend              = ninfer::SpeculativeBackend::Mtp;
     options.speculative.draft_tokens         = 3;
-    options.speculative.proposal_head        = ninfer::ProposalHead::Optimized;
+    options.speculative.proposal_head        = artifact_proposal_head(artifact);
     options.max_concurrency                  = 1;
     options.max_pending_requests             = 1;
     options.context_cache.device_state_slots = 1;
@@ -97,7 +108,7 @@ ninfer::EngineOptions shared_rewrite_materialization_engine_options(const char* 
     options.kv_cache                         = ninfer::KvCacheStorage::Fp8E4M3Row256;
     options.speculative.backend              = ninfer::SpeculativeBackend::Mtp;
     options.speculative.draft_tokens         = 3;
-    options.speculative.proposal_head        = ninfer::ProposalHead::Optimized;
+    options.speculative.proposal_head        = artifact_proposal_head(artifact);
     options.max_concurrency                  = 1;
     options.max_pending_requests             = 1;
     options.context_cache.device_state_slots = 2;
@@ -135,7 +146,7 @@ ninfer::EngineOptions last_alias_engine_options(const char* artifact) {
     options.prefill_chunk                        = 256;
     options.speculative.backend                  = ninfer::SpeculativeBackend::Mtp;
     options.speculative.draft_tokens             = 3;
-    options.speculative.proposal_head            = ninfer::ProposalHead::Optimized;
+    options.speculative.proposal_head            = artifact_proposal_head(artifact);
     options.max_concurrency                      = 1;
     options.max_pending_requests                 = 1;
     options.context_cache.device_state_slots     = 3;
@@ -155,7 +166,7 @@ ninfer::EngineOptions concurrent_engine_options(const char* artifact) {
     options.prefill_chunk                    = 256;
     options.speculative.backend              = ninfer::SpeculativeBackend::Mtp;
     options.speculative.draft_tokens         = 3;
-    options.speculative.proposal_head        = ninfer::ProposalHead::Optimized;
+    options.speculative.proposal_head        = artifact_proposal_head(artifact);
     options.max_concurrency                  = 8;
     options.max_pending_requests             = 8;
     options.context_cache.device_state_slots = 16;
@@ -230,8 +241,17 @@ ninfer::PromptInput chinese_chat(bool enable_thinking) {
 }
 
 int exercise_registered_frontend(const ninfer::Engine& engine) {
-    if (engine.count_tokens(chinese_chat(true)) != 16) {
-        std::cerr << "registered tokenizer/chat template changed the thinking prompt golden\n";
+    // Both registered Qwen3.8 template generations are accepted. Artifacts converted with the
+    // current medium-default template render 16 tokens; artifacts converted before the
+    // 2026-10-12 template change embed the xhigh default and inject the reasoning instruction
+    // (58 tokens for this prompt). Any other count means the registered-template rendering
+    // changed in the engine or the artifact carries an unknown template.
+    const std::uint32_t thinking_count = engine.count_tokens(chinese_chat(true));
+    if (thinking_count != 16 && thinking_count != 58) {
+        std::cerr << "registered tokenizer/chat template changed the thinking prompt golden: got "
+                  << thinking_count
+                  << " tokens, expected 16 (medium-default template) or 58 "
+                     "(pre-2026-10-12 xhigh-default template)\n";
         return 1;
     }
     if (engine.count_tokens(chinese_chat(false)) != 18) {
@@ -1553,10 +1573,28 @@ int exercise_vision(ninfer::Engine& engine) {
     stop_options.stop.token_ids.push_back(mtp_baseline.generated_token_ids[1]);
     const ninfer::GenerationResult stopped =
         engine.generate(engine.prepare(first_input(image_bytes)), stop_options);
+    auto print_tokens = [](const std::vector<ninfer::TokenId>& tokens) {
+        std::string out;
+        for (const ninfer::TokenId token : tokens) {
+            out += std::to_string(token);
+            out += ' ';
+        }
+        return out;
+    };
     if (stopped.finish_reason != ninfer::FinishReason::StopToken ||
         stopped.generated_token_ids.empty() || stopped.speculative.rounds == 0 ||
         stopped.generated_token_ids.back() != stop_options.stop.token_ids.front()) {
-        std::cerr << "multimodal custom stop did not terminate at the selected token\n";
+        std::cerr << "multimodal custom stop did not terminate at the selected token: "
+                  << "finish_reason=" << static_cast<int>(stopped.finish_reason)
+                  << " generated=" << stopped.generated_token_ids.size()
+                  << " rounds=" << stopped.speculative.rounds
+                  << " reused=" << stopped.reused_prompt_tokens
+                  << " last=" << (stopped.generated_token_ids.empty()
+                                      ? -1
+                                      : static_cast<int>(stopped.generated_token_ids.back()))
+                  << " stop=" << static_cast<int>(stop_options.stop.token_ids.front())
+                  << "\n  baseline tokens: " << print_tokens(mtp_baseline.generated_token_ids)
+                  << "\n  stopped tokens:  " << print_tokens(stopped.generated_token_ids) << '\n';
         return 1;
     }
     const ninfer::GenerationResult stopped_reuse =
@@ -2130,44 +2168,55 @@ int main() {
     const char* selected            = std::getenv("NINFER_PREFIX_REAL_SCENARIO");
     const std::string_view scenario = selected ? selected : "all";
     int result                      = 0;
-    if (scenario == "vision") {
-        ninfer::Engine engine(engine_options(artifact));
-        result = exercise_vision(engine);
-    } else if (scenario == "all") {
-        result = exercise_artifact(artifact);
-    } else if (scenario == "concurrent") {
-        result = exercise_concurrent_resource_settlement(artifact);
-    } else if (scenario == "anthropic-prefix-regression") {
-        result = exercise_anthropic_prefix_regression(artifact);
-    } else if (scenario == "shared-rewrite-materialization") {
-        result = exercise_shared_rewrite_materialization(artifact);
-    } else if (scenario == "pressure-resume") {
-        result = exercise_pressure_partial_spill_and_resume(artifact);
-    } else if (scenario == "private-checkpoint-pressure") {
-        result = exercise_private_checkpoint_pressure_retention(artifact);
-    } else if (scenario == "source-pressure-protection") {
-        result = exercise_materialization_source_pressure_protection(artifact);
-    } else if (scenario == "shared-replacement") {
-        result = exercise_shared_replacement_and_full_capacity_reuse(artifact);
-    } else if (scenario == "private-long-anchor") {
-        result = exercise_private_long_anchor_capture_and_replacement(artifact);
-    } else if (scenario == "rewrite-checkpoint-shared") {
-        ninfer::Engine engine(shared_replacement_engine_options(artifact));
-        result = exercise_rewrite_checkpoints(engine, RewriteCheckpointCacheTopology::SharedAlias);
-    } else if (scenario == "rewrite-checkpoint") {
-        auto options                              = engine_options(artifact);
-        options.context_cache.device_state_slots  = 2;
-        options.context_cache.max_shared_prefixes = 0;
-        ninfer::Engine engine(std::move(options));
-        result = exercise_rewrite_checkpoints(engine, RewriteCheckpointCacheTopology::PrivateOnly);
-    } else if (scenario == "stream-observations") {
-        auto options          = engine_options(artifact);
-        options.enable_vision = false;
-        options.context_cache = ninfer::ContextCacheOptions{.enabled = false};
-        ninfer::Engine engine(std::move(options));
-        result = exercise_stream_observations(engine);
-    } else {
-        throw std::invalid_argument("unknown prefix integration scenario");
+    try {
+        std::cerr << "proposal head: "
+                  << (artifact_proposal_head(artifact) == ninfer::ProposalHead::Optimized
+                          ? "optimized"
+                          : "full")
+                  << '\n';
+        if (scenario == "vision") {
+            ninfer::Engine engine(engine_options(artifact));
+            result = exercise_vision(engine);
+        } else if (scenario == "all") {
+            result = exercise_artifact(artifact);
+        } else if (scenario == "concurrent") {
+            result = exercise_concurrent_resource_settlement(artifact);
+        } else if (scenario == "anthropic-prefix-regression") {
+            result = exercise_anthropic_prefix_regression(artifact);
+        } else if (scenario == "shared-rewrite-materialization") {
+            result = exercise_shared_rewrite_materialization(artifact);
+        } else if (scenario == "pressure-resume") {
+            result = exercise_pressure_partial_spill_and_resume(artifact);
+        } else if (scenario == "private-checkpoint-pressure") {
+            result = exercise_private_checkpoint_pressure_retention(artifact);
+        } else if (scenario == "source-pressure-protection") {
+            result = exercise_materialization_source_pressure_protection(artifact);
+        } else if (scenario == "shared-replacement") {
+            result = exercise_shared_replacement_and_full_capacity_reuse(artifact);
+        } else if (scenario == "private-long-anchor") {
+            result = exercise_private_long_anchor_capture_and_replacement(artifact);
+        } else if (scenario == "rewrite-checkpoint-shared") {
+            ninfer::Engine engine(shared_replacement_engine_options(artifact));
+            result =
+                exercise_rewrite_checkpoints(engine, RewriteCheckpointCacheTopology::SharedAlias);
+        } else if (scenario == "rewrite-checkpoint") {
+            auto options                              = engine_options(artifact);
+            options.context_cache.device_state_slots  = 2;
+            options.context_cache.max_shared_prefixes = 0;
+            ninfer::Engine engine(std::move(options));
+            result = exercise_rewrite_checkpoints(engine, RewriteCheckpointCacheTopology::PrivateOnly);
+        } else if (scenario == "stream-observations") {
+            auto options          = engine_options(artifact);
+            options.enable_vision = false;
+            options.context_cache = ninfer::ContextCacheOptions{.enabled = false};
+            ninfer::Engine engine(std::move(options));
+            result = exercise_stream_observations(engine);
+        } else {
+            throw std::invalid_argument("unknown prefix integration scenario");
+        }
+    } catch (const std::exception& error) {
+        std::cerr << error.what() << '\n';
+        return 1;
     }
     if (result == 0) { std::cout << "ok\n"; }
     return result;

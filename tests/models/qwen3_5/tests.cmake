@@ -112,7 +112,7 @@ set_tests_properties(
 
 ninfer_add_test(ninfer_qwen3_5_repro_host_restore_state
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/repro_host_restore_state.cpp"
-  LIBRARIES ninfer_engine)
+  LIBRARIES ninfer_engine ninfer::json)
 
 set_tests_properties(
   ninfer_qwen3_5_repro_host_restore_state

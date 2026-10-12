@@ -15,10 +15,15 @@
 // Build against the fork's libraries and run with NINFER_TEST_ARTIFACT set to the 27B artifact:
 //   NINFER_TEST_ARTIFACT=<groupwise|nvfp4 .ninfer> ./repro_host_restore_state
 //
+// The proposal head is selected from the artifact (Optimized when the text component binds a
+// proposal object, Full otherwise) so both artifacts run: groupwise exercises the Full-head
+// control path, nvfp4 the optimized-head path.
 // Expected on groupwise (Full head): ok (state_h2d increases).
 // Expected on nvfp4 (optimized head): BUG (state_h2d stays flat, state=0 in the failure line).
 
 #include "ninfer/engine.h"
+
+#include "artifact/reader.h"
 
 #include <cstdint>
 #include <cstdlib>
@@ -28,6 +33,13 @@
 
 namespace {
 
+// Select the strongest proposal head the artifact carries (mirrors the prefix real test).
+ninfer::ProposalHead artifact_proposal_head(const char* artifact) {
+    ninfer::artifact::Reader reader(artifact);
+    return reader.directory().component("text").proposal ? ninfer::ProposalHead::Optimized
+                                                         : ninfer::ProposalHead::Full;
+}
+
 ninfer::EngineOptions host_restore_engine_options(const char* artifact) {
     ninfer::EngineOptions options;
     options.artifact_path                        = artifact;
@@ -36,7 +48,7 @@ ninfer::EngineOptions host_restore_engine_options(const char* artifact) {
     options.prefill_chunk                        = 256;
     options.speculative.backend                  = ninfer::SpeculativeBackend::Mtp;
     options.speculative.draft_tokens             = 3;
-    options.speculative.proposal_head            = ninfer::ProposalHead::Optimized;
+    options.speculative.proposal_head            = artifact_proposal_head(artifact);
     options.max_concurrency                      = 1;
     options.max_pending_requests                 = 1;
     options.context_cache.device_state_slots     = 1;
@@ -74,11 +86,8 @@ ninfer::PromptInput retained_input() {
 }
 
 void print_stats(const char* label, const ninfer::RuntimeStats& s) {
-    std::cout << label
-              << " state_d2h=" << s.state_d2h_count
-              << " state_h2d=" << s.state_h2d_count
-              << " main_kv_d2h=" << s.main_kv_d2h_pages
-              << " main_kv_h2d=" << s.main_kv_h2d_pages
+    std::cout << label << " state_d2h=" << s.state_d2h_count << " state_h2d=" << s.state_h2d_count
+              << " main_kv_d2h=" << s.main_kv_d2h_pages << " main_kv_h2d=" << s.main_kv_h2d_pages
               << " backend_kv_d2h=" << s.backend_kv_d2h_pages
               << " backend_kv_h2d=" << s.backend_kv_h2d_pages
               << " degraded=" << s.pressure_private_owners_degraded
@@ -94,71 +103,76 @@ int main() {
         return 2;
     }
 
-    ninfer::Engine engine(host_restore_engine_options(artifact));
+    try {
+        ninfer::Engine engine(host_restore_engine_options(artifact));
 
-    // 1. Establish a retained MTP checkpoint on a live session.
-    const ninfer::GenerationResult retained =
-        engine.generate(engine.prepare(retained_input()), make_options(5, /*reuse=*/true));
-    if (retained.prompt.prompt_tokens <= 256 || retained.generated_token_ids.size() != 5) {
-        std::cerr << "source request did not complete: prompt=" << retained.prompt.prompt_tokens
-                  << " outputs=" << retained.generated_token_ids.size() << '\n';
+        // 1. Establish a retained MTP checkpoint on a live session.
+        const ninfer::GenerationResult retained =
+            engine.generate(engine.prepare(retained_input()), make_options(5, /*reuse=*/true));
+        if (retained.prompt.prompt_tokens <= 256 || retained.generated_token_ids.size() != 5) {
+            std::cerr << "source request did not complete: prompt=" << retained.prompt.prompt_tokens
+                      << " outputs=" << retained.generated_token_ids.size() << '\n';
+            return 1;
+        }
+
+        // 2. Build the continuation (source + assistant + followup).
+        ninfer::PromptInput continuation = retained_input();
+        ninfer::ChatMessage assistant;
+        assistant.role              = ninfer::ChatRole::Assistant;
+        assistant.reasoning_content = retained.reasoning;
+        assistant.parts.push_back(ninfer::MessagePart{
+            .kind = ninfer::MessagePartKind::Text, .text = retained.content, .media = {}});
+        continuation.messages.push_back(std::move(assistant));
+        ninfer::ChatMessage followup;
+        followup.role = ninfer::ChatRole::User;
+        followup.parts.push_back(ninfer::MessagePart{
+            .kind = ninfer::MessagePartKind::Text, .text = "Continue briefly.", .media = {}});
+        continuation.messages.push_back(std::move(followup));
+
+        // 3. Pressure: demote the checkpoint to Host.
+        const ninfer::RuntimeStats before_pressure = engine.runtime_stats();
+        const ninfer::GenerationResult pressure_result =
+            engine.generate(engine.prepare(continuation), make_options(2, /*reuse=*/false));
+        const ninfer::RuntimeStats after_pressure = engine.runtime_stats();
+        print_stats("after_pressure", after_pressure);
+        if (pressure_result.generated_token_ids.size() != 2 ||
+            after_pressure.state_d2h_count <= before_pressure.state_d2h_count ||
+            after_pressure.main_kv_d2h_pages <= before_pressure.main_kv_d2h_pages) {
+            std::cerr << "Host pressure did not demote the complete MTP checkpoint\n";
+            return 1;
+        }
+
+        // 4. Restore: the state images must come back from Host.
+        const ninfer::GenerationResult restored =
+            engine.generate(engine.prepare(continuation), make_options(2, /*reuse=*/true));
+        const ninfer::RuntimeStats after_restore = engine.runtime_stats();
+        print_stats("after_restore ", after_restore);
+
+        if (restored.generated_token_ids.size() != 2 ||
+            restored.prefix_reuse_path != ninfer::PrefixReusePath::PrivateTurnClosure ||
+            restored.reused_prompt_tokens == 0) {
+            std::cerr << "restore did not reuse the demoted checkpoint: path="
+                      << static_cast<int>(restored.prefix_reuse_path)
+                      << " reused=" << restored.reused_prompt_tokens << '\n';
+            return 1;
+        }
+        if (after_restore.state_h2d_count <= after_pressure.state_h2d_count) {
+            std::cerr << "BUG: state images were not materialized from Host on restore "
+                         "(state_h2d stayed flat): path="
+                      << static_cast<int>(restored.prefix_reuse_path)
+                      << " reused=" << restored.reused_prompt_tokens
+                      << " outputs=" << restored.generated_token_ids.size()
+                      << " state_h2d=" << after_restore.state_h2d_count
+                      << " main_kv_h2d=" << after_restore.main_kv_h2d_pages
+                      << " backend_kv_h2d=" << after_restore.backend_kv_h2d_pages
+                      << " degraded=" << after_restore.pressure_private_owners_degraded
+                      << " evicted=" << after_restore.pressure_private_owners_evicted << '\n';
+            return 1;
+        }
+        std::cout << "ok: the state images were materialized from Host on restore\n";
+        return 0;
+    } catch (const std::exception& error) {
+        std::cerr << error.what() << '\n';
         return 1;
     }
-
-    // 2. Build the continuation (source + assistant + followup).
-    ninfer::PromptInput continuation = retained_input();
-    ninfer::ChatMessage assistant;
-    assistant.role              = ninfer::ChatRole::Assistant;
-    assistant.reasoning_content = retained.reasoning;
-    assistant.parts.push_back(ninfer::MessagePart{
-        .kind = ninfer::MessagePartKind::Text, .text = retained.content, .media = {}});
-    continuation.messages.push_back(std::move(assistant));
-    ninfer::ChatMessage followup;
-    followup.role = ninfer::ChatRole::User;
-    followup.parts.push_back(ninfer::MessagePart{
-        .kind = ninfer::MessagePartKind::Text, .text = "Continue briefly.", .media = {}});
-    continuation.messages.push_back(std::move(followup));
-
-    // 3. Pressure: demote the checkpoint to Host.
-    const ninfer::RuntimeStats before_pressure = engine.runtime_stats();
-    const ninfer::GenerationResult pressure_result =
-        engine.generate(engine.prepare(continuation), make_options(2, /*reuse=*/false));
-    const ninfer::RuntimeStats after_pressure = engine.runtime_stats();
-    print_stats("after_pressure", after_pressure);
-    if (pressure_result.generated_token_ids.size() != 2 ||
-        after_pressure.state_d2h_count <= before_pressure.state_d2h_count ||
-        after_pressure.main_kv_d2h_pages <= before_pressure.main_kv_d2h_pages) {
-        std::cerr << "Host pressure did not demote the complete MTP checkpoint\n";
-        return 1;
-    }
-
-    // 4. Restore: the state images must come back from Host.
-    const ninfer::GenerationResult restored =
-        engine.generate(engine.prepare(continuation), make_options(2, /*reuse=*/true));
-    const ninfer::RuntimeStats after_restore = engine.runtime_stats();
-    print_stats("after_restore ", after_restore);
-
-    if (restored.generated_token_ids.size() != 2 ||
-        restored.prefix_reuse_path != ninfer::PrefixReusePath::PrivateTurnClosure ||
-        restored.reused_prompt_tokens == 0) {
-        std::cerr << "restore did not reuse the demoted checkpoint: path="
-                  << static_cast<int>(restored.prefix_reuse_path)
-                  << " reused=" << restored.reused_prompt_tokens << '\n';
-        return 1;
-    }
-    if (after_restore.state_h2d_count <= after_pressure.state_h2d_count) {
-        std::cerr << "BUG: state images were not materialized from Host on restore "
-                    "(state_h2d stayed flat): path="
-                  << static_cast<int>(restored.prefix_reuse_path)
-                  << " reused=" << restored.reused_prompt_tokens
-                  << " outputs=" << restored.generated_token_ids.size()
-                  << " state_h2d=" << after_restore.state_h2d_count
-                  << " main_kv_h2d=" << after_restore.main_kv_h2d_pages
-                  << " backend_kv_h2d=" << after_restore.backend_kv_h2d_pages
-                  << " degraded=" << after_restore.pressure_private_owners_degraded
-                  << " evicted=" << after_restore.pressure_private_owners_evicted << '\n';
-        return 1;
-    }
-    std::cout << "ok: the state images were materialized from Host on restore\n";
-    return 0;
 }

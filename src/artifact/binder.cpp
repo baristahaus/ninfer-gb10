@@ -41,6 +41,21 @@ ParameterReference Binder::parameter(std::string_view name, Shape shape, Residen
     return binding(std::string(name), found->second, std::move(shape), residency, exact_format);
 }
 
+void Binder::set_tier(ObjectHandle object, std::uint64_t hot_rows) {
+    auto& demand      = demands_.at(object.index);
+    const auto& shape = reader_.geometry(object).shape;
+    if (demand.device || demand.host || demand.tier_hot_rows != 0 || shape.size() != 2 ||
+        shape[0] == 0 || shape[1] == 0 || hot_rows == 0 || hot_rows >= shape[0]) {
+        throw ArtifactError("tiered bank requires an untouched two-dimensional object with a "
+                            "strict hot-row prefix");
+    }
+    demand.tier_hot_rows = hot_rows;
+}
+
+std::uint64_t Binder::tier_hot_rows(ObjectHandle object) const {
+    return demands_.at(object.index).tier_hot_rows;
+}
+
 ParameterReference Binder::binding(std::string name, const Binding& binding, Shape shape,
                                    Residency residency, std::optional<QType> exact_format) {
     if (weight_element_count(shape) != binding.elements ||
@@ -48,11 +63,36 @@ ParameterReference Binder::binding(std::string name, const Binding& binding, Sha
          reader_.directory().tensor(binding.parts.at(0).object).shape != shape)) {
         throw ArtifactError(name + ": logical shape differs from Binding coverage");
     }
-    for (const auto& part : binding.parts) {
+    Binding bound = binding;
+    for (auto& part : bound.parts) {
         const auto& geometry = reader_.geometry(part.object);
         if (exact_format && geometry.format != *exact_format) {
             throw ArtifactError(name +
                                 ": representation does not match its mathematical value type");
+        }
+        const auto tier_hot_rows = demands_.at(part.object.index).tier_hot_rows;
+        if (tier_hot_rows != 0) {
+            // SP-4 tiered bank: both residencies address the mini-banks. Device parts keep
+            // their hot-prefix ranges unchanged; Host parts shift suffix-relative into the
+            // pinned-host warm mini-bank.
+            auto& demand = demands_.at(part.object.index);
+            const auto hot_elements = checked_mul(tier_hot_rows, geometry.shape[1], "hot rows");
+            if (residency == Residency::Device) {
+                if (part.end > hot_elements) {
+                    throw ArtifactError(name + ": device part exceeds the tiered hot prefix");
+                }
+                demand.device = true;
+            } else if (residency == Residency::Host) {
+                if (part.begin < hot_elements) {
+                    throw ArtifactError(name + ": tiered warm part starts inside the hot prefix");
+                }
+                demand.host = true;
+                part.begin -= hot_elements;
+                part.end -= hot_elements;
+            } else {
+                throw ArtifactError(name + ": tiered banks do not support value residency");
+            }
+            continue;
         }
         if (residency == Residency::Device) {
             require_device(part.object);
@@ -60,7 +100,7 @@ ParameterReference Binder::binding(std::string name, const Binding& binding, Sha
             (void)host_object(part.object);
         }
     }
-    return {std::move(name), std::move(shape), binding, residency};
+    return {std::move(name), std::move(shape), std::move(bound), residency};
 }
 
 const Use& Binder::use(std::string_view parameter, std::string_view input) const {
@@ -162,8 +202,9 @@ MaterializationPlan Binder::finish() && {
     plan.owned_value_bytes = owned_value_bytes_;
     for (std::size_t i = 0; i < demands_.size(); ++i) {
         auto& demand = demands_[i];
+        const ObjectHandle handle{i};
+        if (demand.tier_hot_rows != 0) { continue; }
         if (demand.device) {
-            const ObjectHandle handle{i};
             const auto& geometry = reader_.geometry(handle);
             const auto offset =
                 align_up(plan.device_capacity_bytes, demand.alignment, "device offset");
@@ -171,8 +212,25 @@ MaterializationPlan Binder::finish() && {
             plan.device_capacity_bytes = checked_add(offset, geometry.bytes, "device capacity");
         }
         if (demand.host) {
-            plan.host_objects.push_back({ObjectHandle{i}, std::move(demand.host_data)});
+            plan.host_objects.push_back({handle, std::move(demand.host_data)});
         }
+    }
+    // SP-4 tiered banks follow the plain device objects so the arena's sequential allocation
+    // order matches the plan offsets: the device carries only each compact hot mini-bank; the
+    // pinned-host warm mini-bank is allocated and filled by the materializer.
+    for (std::size_t i = 0; i < demands_.size(); ++i) {
+        auto& demand = demands_[i];
+        // A tier mark without any bound part is inert: the component owning the bank was not
+        // selected, so the bank materializes nowhere (matching its plain unbound peers).
+        if (demand.tier_hot_rows == 0 || (!demand.device && !demand.host)) { continue; }
+        const ObjectHandle handle{i};
+        const auto& geometry = reader_.geometry(handle);
+        const auto hot_bytes = checked_mul(
+            demand.tier_hot_rows, geometry.bytes / geometry.shape[0], "tiered hot bytes");
+        const auto offset = align_up(plan.device_capacity_bytes, demand.alignment, "device offset");
+        plan.tier_objects.push_back(
+            {handle, offset, hot_bytes, demand.alignment, demand.tier_hot_rows});
+        plan.device_capacity_bytes = checked_add(offset, hot_bytes, "device capacity");
     }
     return plan;
 }

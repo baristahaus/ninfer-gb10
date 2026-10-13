@@ -46,6 +46,13 @@ public:
     [[nodiscard]] const Reader& reader() const noexcept { return reader_; }
 
     void require_device(ObjectHandle object, std::uint64_t alignment = 256);
+    // Declares a routed expert bank as tier-split (strategy SP-4 phase 2a): the first
+    // `hot_rows` rows of the object materialize on the device as a compact hot mini-bank,
+    // the remaining rows live in a pinned-host warm mini-bank, and Host-residency parts on
+    // this object address the warm mini-bank at suffix-relative element ranges.
+    void set_tier(ObjectHandle object, std::uint64_t hot_rows);
+    // SP-4 tiered bank state: the registered hot-row prefix, or zero for an untiered object.
+    [[nodiscard]] std::uint64_t tier_hot_rows(ObjectHandle object) const;
     [[nodiscard]] std::span<const std::byte> host_object(ObjectHandle object);
     [[nodiscard]] ObjectHandle resource(std::string_view component, std::string_view role);
     [[nodiscard]] HostValues values(const Binding& binding, std::optional<QType> format = {});
@@ -57,6 +64,9 @@ private:
         bool host               = false;
         std::uint64_t alignment = 256;
         std::vector<std::byte> host_data;
+        // SP-4 tiered bank: nonzero marks the split; device/host demands then describe the
+        // hot and warm mini-banks instead of the whole object.
+        std::uint64_t tier_hot_rows = 0;
     };
 
     const Reader& reader_;

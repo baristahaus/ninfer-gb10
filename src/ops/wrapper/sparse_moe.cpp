@@ -152,10 +152,40 @@ void validate_weights(const SparseMoeWeights& weights, std::vector<AddressRange>
         weights.shared_down.qtype != QType::Q8_G32_FP16) {
         throw std::invalid_argument("sparse_moe: shared weights must be Q8");
     }
-    require_quantized(weights.routed_gate_up, kRoutedGateRows, kHidden, "routed_gate_up", ranges);
-    require_quantized(weights.routed_down, kRoutedDownRows, kIntermediate, "routed_down", ranges);
     require_quantized(weights.shared_gate_up, kSharedGateRows, kHidden, "shared_gate_up", ranges);
     require_quantized(weights.shared_down, kHidden, kIntermediate, "shared_down", ranges);
+    // SP-4 phase 2a: a tiered bank splits its routed experts at `tiered_hot_experts`. The
+    // device banks carry the hot expert prefix; the pinned-host warm twins carry the suffix
+    // in expert order. An untiered bank keeps full-bank device shapes and null warm twins.
+    const auto warm_gate_up_null = weights.warm_routed_gate_up.qdata == nullptr &&
+                                   weights.warm_routed_gate_up.scales == nullptr;
+    const auto warm_down_null    = weights.warm_routed_down.qdata == nullptr &&
+                                  weights.warm_routed_down.scales == nullptr;
+    if (weights.tiered_hot_experts == 0) {
+        if (!warm_gate_up_null || !warm_down_null) {
+            throw std::invalid_argument("sparse_moe: warm twins require a tiered boundary");
+        }
+        require_quantized(weights.routed_gate_up, kRoutedGateRows, kHidden, "routed_gate_up",
+                          ranges);
+        require_quantized(weights.routed_down, kRoutedDownRows, kIntermediate, "routed_down",
+                          ranges);
+        return;
+    }
+    const auto hot  = static_cast<std::int32_t>(weights.tiered_hot_experts);
+    const auto warm = kExperts - hot;
+    if (hot <= 0 || hot >= kExperts) {
+        throw std::invalid_argument("sparse_moe: tiered boundary must be a strict expert prefix");
+    }
+    if (warm_gate_up_null || warm_down_null) {
+        throw std::invalid_argument("sparse_moe: tiered banks require warm twins");
+    }
+    require_quantized(weights.routed_gate_up, hot * kExpertRows, kHidden, "routed_gate_up",
+                      ranges);
+    require_quantized(weights.routed_down, hot * kHidden, kIntermediate, "routed_down", ranges);
+    require_quantized(weights.warm_routed_gate_up, warm * kExpertRows, kHidden,
+                      "warm_routed_gate_up", ranges);
+    require_quantized(weights.warm_routed_down, warm * kHidden, kIntermediate, "warm_routed_down",
+                      ranges);
 }
 
 } // namespace

@@ -21,8 +21,7 @@ WeightId Bindings::parameter(std::string name, artifact::Shape shape,
         throw artifact::ArtifactError(name + ": duplicate model parameter declaration");
     }
     PendingWeight pending;
-    pending.reference =
-        binder.parameter(name, std::move(shape), artifact::Residency::Device, exact_format);
+    pending.reference = bind_parameter(name, shape, exact_format);
     for (const auto& input : inputs) {
         const auto& use = binder.use(name, input);
         if (!use.activation_policy) {
@@ -62,6 +61,30 @@ WeightId Bindings::parameter(std::string name, artifact::Shape shape,
     parameters_.emplace(std::move(name), id);
     weights.push_back(std::move(pending));
     return id;
+}
+
+// SP-4 phase 2a: a parameter's residency follows its parts' tier state. A part inside a
+// tiered bank's hot prefix stays Device-resident; a part at or past the boundary becomes
+// Host-resident and addresses the pinned-host warm mini-bank. A parameter mixing hot and
+// warm parts falls through as Host and the binder rejects its hot part at the prefix check.
+artifact::ParameterReference
+Bindings::bind_parameter(const std::string& name, const artifact::Shape& shape,
+                         const std::optional<QType>& exact_format) {
+    const auto& directory = binder.reader().directory();
+    const auto found      = directory.bindings.find(name);
+    if (found == directory.bindings.end()) {
+        throw artifact::ArtifactError("missing logical parameter " + name);
+    }
+    auto residency = artifact::Residency::Device;
+    for (const auto& part : found->second.parts) {
+        const auto hot_rows = binder.tier_hot_rows(part.object);
+        if (hot_rows == 0) { continue; }
+        const auto& geometry = binder.reader().geometry(part.object);
+        const auto hot_elements =
+            artifact::checked_mul(hot_rows, geometry.shape[1], "tiered hot rows");
+        if (part.begin >= hot_elements) { residency = artifact::Residency::Host; }
+    }
+    return binder.binding(name, found->second, shape, residency, exact_format);
 }
 
 WeightId Bindings::direct(std::string name, artifact::Shape shape, QType format) {

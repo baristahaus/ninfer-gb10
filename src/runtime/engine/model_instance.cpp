@@ -380,6 +380,7 @@ ConstructedModel construct_model(const EngineOptions& options, DeviceContext& de
     summary.context_cost           = std::move(context_cost.summary);
     summary.tier_plan_banks        = tier_plan_banks;
     summary.tier_plan_warm_experts = tier_plan_warm_experts;
+    summary.tier_pinned_warm_bytes = stats.tier_pinned_warm_bytes;
     return {std::move(instance), std::move(summary), std::move(context_cost.model)};
 }
 

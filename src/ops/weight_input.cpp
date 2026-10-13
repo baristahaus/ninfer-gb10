@@ -77,6 +77,34 @@ LinearPolicy common_policy(std::span<const WeightInput> inputs) {
     return result;
 }
 
+// SP-4 phase 2a: every expert view must reference exactly one parent region owner.
+const WeightParent* view_parent(const WeightInput& input) {
+    require(!input.weight.parts.empty(), "expert view has no parent region");
+    const auto* parent = input.weight.parts.front().parent;
+    for (const auto& part : input.weight.parts) {
+        require(part.parent == parent, "expert view spans multiple parents");
+    }
+    return parent;
+}
+
+// SP-4 phase 2a: returns the first suffix view index — where the pinned-host warm parent
+// begins — or the span size when the bank is untiered (every view shares one parent).
+// Exactly one parent change is representable.
+std::size_t tiered_boundary(std::span<const WeightInput> inputs) {
+    require(!inputs.empty(), "expert bank is empty");
+    const auto* hot = view_parent(inputs.front());
+    for (std::size_t i = 1; i < inputs.size(); ++i) {
+        const auto* parent = view_parent(inputs[i]);
+        if (parent == hot) { continue; }
+        for (std::size_t j = i + 1; j < inputs.size(); ++j) {
+            require(view_parent(inputs[j]) == parent,
+                    "tiered routed bank requires one hot/warm parent split");
+        }
+        return i;
+    }
+    return inputs.size();
+}
+
 SingleProjectionWeight single(std::span<const WeightInput> inputs) {
     auto view         = concatenate_rows(inputs);
     const auto region = contiguous_weight_region(view);
@@ -235,20 +263,49 @@ prepare_sparse_moe_weights(const WeightInput& router, const WeightInput& shared_
                 matrix(shared_down) == std::vector<std::uint64_t>{2048, 512},
             "SparseMoe shared expert geometry differs");
     const std::array router_inputs{router, shared_score};
-    const auto router_bank  = single(router_inputs);
-    const auto gate_up_bank = single(expert_gate_up);
-    const auto down_bank    = single(expert_down);
-    const auto shared       = prepare_linear_swiglu_weight(shared_gate, shared_up);
-    const auto down         = prepare_linear_weight(shared_down);
-    const auto gate_format  = gate_up_bank.weight.qtype;
-    const auto down_format  = down_bank.weight.qtype;
+    const auto router_bank = single(router_inputs);
+    const auto shared      = prepare_linear_swiglu_weight(shared_gate, shared_up);
+    const auto down        = prepare_linear_weight(shared_down);
+    const auto gate_format = view_parent(expert_gate_up.front())->geometry.format;
+    const auto down_format = view_parent(expert_down.front())->geometry.format;
     require(router_bank.weight.qtype == QType::BF16 && shared.weight.qtype == QType::Q8_G32_FP16 &&
                 down.weight.qtype == QType::Q8_G32_FP16 &&
                 ((gate_format == QType::Q4_G64_FP16 &&
                   (down_format == QType::Q5_G64_FP16 || down_format == QType::Q6_G64_FP16)) ||
                  (gate_format == QType::Q8_G32_FP16 && down_format == QType::Q8_G32_FP16)),
             "SparseMoe native bank formats are unsupported");
-    return {router_bank.weight, gate_up_bank.weight, down_bank.weight, shared.weight, down.weight};
+    // SP-4 phase 2a: a tiered layer splits its routed expert views at one positional parent
+    // boundary — the device hot mini-bank's parent for the prefix, the pinned-host warm
+    // mini-bank's parent for the suffix. Gate and up views pair per expert; down views are
+    // one per expert, so both banks must split at the same expert boundary.
+    const auto gate_up_split = tiered_boundary(expert_gate_up);
+    const auto down_split    = tiered_boundary(expert_down);
+    if (gate_up_split == expert_gate_up.size() && down_split == expert_down.size()) {
+        const auto gate_up_bank = single(expert_gate_up);
+        const auto down_bank    = single(expert_down);
+        return {router_bank.weight, gate_up_bank.weight, down_bank.weight, shared.weight,
+                down.weight};
+    }
+    require(gate_up_split != expert_gate_up.size() && down_split != expert_down.size(),
+            "tiered routed banks must split together");
+    require(gate_up_split > 0 && gate_up_split % 2 == 0 && down_split > 0 &&
+                down_split < expert_down.size(),
+            "tiered routed views must split inside the expert range");
+    const auto hot_experts = gate_up_split / 2;
+    require(down_split == hot_experts,
+             "tiered gate/up and down banks must split at the same expert boundary");
+    const auto hot_gate_up = single(expert_gate_up.first(gate_up_split));
+    const auto warm_gate_up = single(expert_gate_up.last(expert_gate_up.size() - gate_up_split));
+    const auto hot_down     = single(expert_down.first(down_split));
+    const auto warm_down    = single(expert_down.last(expert_down.size() - down_split));
+    return {router_bank.weight,
+            hot_gate_up.weight,
+            hot_down.weight,
+            shared.weight,
+            down.weight,
+            warm_gate_up.weight,
+            warm_down.weight,
+            static_cast<std::uint32_t>(hot_experts)};
 }
 
 } // namespace ninfer::ops

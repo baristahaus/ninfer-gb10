@@ -50,10 +50,12 @@ LoadPlan plan_load(const artifact::Reader& reader, LoadOptions options) {
     out->options   = options;
     out->config    = parse_config(reader.directory(), options);
     out->tier_plan = artifact::parse_tier_plan(reader.directory().metadata);
+    artifact::Binder binder(reader);
     if (out->tier_plan) {
-        // A tier plan is declarative until the tiered materialization consumes it, but it must
-        // describe real banks: every named object resolves to a tensor whose row count is
-        // exactly experts * rows_per_expert.
+        // Strategy SP-4 phase 2a consumes the plan positionally: every named object resolves
+        // to a tensor whose row count is exactly experts * rows_per_expert, the hot tier is
+        // the expert prefix [0, hot), and the warm and cold tiers share the pinned-host warm
+        // mini-bank that the tiered materialization fills from the same suffix.
         for (const auto& bank : out->tier_plan->banks) {
             const auto handle = reader.directory().object_index.find(bank.object);
             if (handle == reader.directory().object_index.end()) {
@@ -66,9 +68,18 @@ LoadPlan plan_load(const artifact::Reader& reader, LoadOptions options) {
                 throw artifact::ArtifactError("tier_plan bank " + bank.object +
                                               " shape does not match experts * rows_per_expert");
             }
+            for (std::size_t i = 0; i < bank.hot.size(); ++i) {
+                if (bank.hot[i] != i) {
+                    throw artifact::ArtifactError(
+                        "tier_plan bank " + bank.object +
+                        ": tiered materialization requires the positional hot prefix");
+                }
+            }
+            if (bank.hot.size() == bank.experts) { continue; }
+            binder.set_tier(handle->second,
+                            static_cast<std::uint64_t>(bank.hot.size()) * bank.rows_per_expert);
         }
     }
-    artifact::Binder binder(reader);
     out->resources = loading::bind_resources(binder, out->config);
     loading::Bindings bindings(binder);
     const auto& text  = out->config.text;

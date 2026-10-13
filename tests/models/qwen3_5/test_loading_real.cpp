@@ -22,8 +22,9 @@ namespace qwen = ninfer::models::qwen3_5;
 using ninfer::test::artifact_fixture::require;
 
 struct Sample {
-    std::uint64_t offset;
-    std::vector<std::byte> bytes;
+    std::uint64_t parent_offset = 0;  // offset within the resident parent's storage
+    bool host = false;                // pinned-host warm mini-bank samples compare in place
+    std::vector<std::byte> bytes;    // original v3 bytes
 };
 
 void check_selection(const qwen::LoadPlan& plan, const LoadOptions& options) {
@@ -64,6 +65,15 @@ void check_selection(const qwen::LoadPlan& plan, const LoadOptions& options) {
     std::set<std::size_t> parents;
     std::uint64_t end = 0;
     for (const auto& item : plan.materialization().device_objects) {
+        require(parents.insert(item.object.index).second,
+                "device parent was planned more than once");
+        require(item.offset >= end && item.offset % item.alignment == 0,
+                "device placement overlaps or is unaligned");
+        end = item.offset + item.bytes;
+    }
+    // SP-4 tiered banks follow the plain device objects: each hot mini-bank placement
+    // continues the same arena prefix.
+    for (const auto& item : plan.materialization().tier_objects) {
         require(parents.insert(item.object.index).second,
                 "device parent was planned more than once");
         require(item.offset >= end && item.offset % item.alignment == 0,
@@ -226,6 +236,7 @@ int main(int argc, char** argv) {
         std::unique_ptr<qwen::Model> model;
         std::map<std::string, std::vector<Sample>> samples;
         std::uint64_t expected_h2d = 0;
+        std::size_t expected_parents = 0;
         {
             artifact::Reader reader(path);
             auto plan = qwen::plan_load(reader, options);
@@ -242,6 +253,7 @@ int main(int argc, char** argv) {
                 const auto& object   = reader.directory().tensor(item.object);
                 const auto& geometry = reader.geometry(item.object);
                 expected_h2d += object.bytes;
+                expected_parents += 1;
                 const auto size = std::min<std::uint64_t>(64, object.bytes);
                 std::set<std::uint64_t> offsets{0, (object.bytes - size) / 2, object.bytes - size};
                 if (geometry.high_bytes) { offsets.insert(geometry.high_offset); }
@@ -249,7 +261,49 @@ int main(int argc, char** argv) {
                 for (const auto offset : offsets) {
                     const auto count = std::min<std::uint64_t>(size, object.bytes - offset);
                     samples[object.id].push_back(
-                        {offset, reader.read_range(object.offset + offset, count)});
+                        {offset, false, reader.read_range(object.offset + offset, count)});
+                }
+            }
+            // SP-4 tiered banks: verify the split per plane. Each plane's hot-row bytes land
+            // packed in the device hot mini-bank; the warm-row suffix lands packed in the
+            // pinned-host warm mini-bank, both in expert order.
+            for (const auto& item : plan.materialization().tier_objects) {
+                const auto& object   = reader.directory().tensor(item.object);
+                const auto& geometry = reader.geometry(item.object);
+                const auto rows      = geometry.shape[0];
+                const auto hot_rows  = item.hot_rows;
+                const auto warm_rows = rows - hot_rows;
+                expected_h2d += item.bytes;
+                expected_parents += 2;
+                const std::uint64_t plane_per[3] = {geometry.code_bytes_per_row,
+                                                     geometry.high_bytes_per_row,
+                                                     geometry.scale_bytes_per_row};
+                const std::uint64_t plane_base[3] = {0, geometry.high_offset,
+                                                      geometry.scale_offset};
+                const auto sample_at = [&](std::uint64_t parent_offset, std::uint64_t file_offset,
+                                           bool host) {
+                    const auto count = std::min<std::uint64_t>(64, object.bytes - file_offset);
+                    samples[object.id].push_back(
+                        {parent_offset, host,
+                         reader.read_range(object.offset + file_offset, count)});
+                };
+                std::uint64_t hot_packed  = 0;
+                std::uint64_t warm_packed = 0;
+                for (std::size_t plane = 0; plane < 3; ++plane) {
+                    const auto hot_len  = plane_per[plane] * hot_rows;
+                    const auto warm_len = plane_per[plane] * warm_rows;
+                    if (hot_len != 0) {
+                        sample_at(hot_packed, plane_base[plane], false);
+                        sample_at(hot_packed + hot_len - 64, plane_base[plane] + hot_len - 64,
+                                  false);
+                    }
+                    if (warm_len != 0) {
+                        sample_at(warm_packed, plane_base[plane] + hot_len, true);
+                        sample_at(warm_packed + warm_len - 64,
+                                  plane_base[plane] + hot_len + warm_len - 64, true);
+                    }
+                    hot_packed += hot_len;
+                    warm_packed += warm_len;
                 }
             }
             device = std::make_unique<DeviceContext>();
@@ -265,15 +319,24 @@ int main(int argc, char** argv) {
                 const auto* parent = weight.view.parts[i].parent;
                 if (!visited.insert(parent).second) { continue; }
                 for (const auto& sample : samples.at(weight.source_objects[i])) {
-                    std::vector<std::byte> received(sample.bytes.size());
-                    CUDA_CHECK(cudaMemcpy(received.data(), parent->data + sample.offset,
-                                          received.size(), cudaMemcpyDeviceToHost));
-                    require(received == sample.bytes,
-                            "resident parent differs from original v3 bytes");
+                    if (sample.host != parent->host) { continue; }
+                    if (parent->host) {
+                        require(std::equal(parent->data + sample.parent_offset,
+                                           parent->data + sample.parent_offset +
+                                               sample.bytes.size(),
+                                           sample.bytes.begin()),
+                                "resident parent differs from original v3 bytes");
+                    } else {
+                        std::vector<std::byte> received(sample.bytes.size());
+                        CUDA_CHECK(cudaMemcpy(received.data(), parent->data + sample.parent_offset,
+                                              received.size(), cudaMemcpyDeviceToHost));
+                        require(received == sample.bytes,
+                                "resident parent differs from original v3 bytes");
+                    }
                 }
             }
         }
-        require(visited.size() == samples.size(),
+        require(visited.size() == expected_parents,
                 "some resident parents are not reachable from model weights");
         check_native_inputs(*model);
         const auto ids = model->resources().tokenizer->encode("Hello");

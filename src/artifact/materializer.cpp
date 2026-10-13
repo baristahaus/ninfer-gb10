@@ -173,7 +173,7 @@ MaterializedArtifact materialize(const Reader& reader, MaterializationPlan&& pla
             const auto& geometry = reader.geometry(placement.object);
             const auto divisor =
                 read_divisor(reader, placement.object, geometry, storage.host_data, out.stats_);
-            storage.host = WeightParent{geometry, storage.host_data.data(), divisor};
+            storage.host = WeightParent{geometry, storage.host_data.data(), divisor, true};
         }
     }
     std::vector<CopyRange> ranges;
@@ -201,6 +201,93 @@ MaterializedArtifact materialize(const Reader& reader, MaterializationPlan&& pla
                               checked_add(segment.file_offset, segment.bytes, "copy range"),
                               static_cast<std::byte*>(storage.data) + segment.destination_offset});
         }
+    }
+    // SP-4 tiered banks (phase 2a): compact hot mini-banks on the device, pinned-host warm
+    // mini-banks. Allocated after the plain device objects so the arena's sequential offsets
+    // match the plan; each bank reads once and splits per plane. The upload window starts
+    // here so the tiered synchronous uploads count toward upload_seconds.
+    const auto upload_start = std::chrono::steady_clock::now();
+    for (const auto& tier : plan.tier_objects) {
+        const auto& geometry = reader.geometry(tier.object);
+        const auto rows      = geometry.shape[0];
+        if (geometry.shape.size() != 2 || rows == 0 || geometry.shape[1] == 0 ||
+            tier.hot_rows == 0 || tier.hot_rows >= rows || geometry.bytes % rows != 0 ||
+            tier.bytes != geometry.bytes / rows * tier.hot_rows) {
+            throw ArtifactError("tiered placement does not divide into per-row mini-banks");
+        }
+        if (geometry.layout == QuantLayout::BlockScaleK16M128x4 && tier.hot_rows % 128 != 0) {
+            throw ArtifactError("tiered swizzled-scale split requires 128-row tile alignment");
+        }
+        const auto warm_rows = rows - tier.hot_rows;
+        auto& storage        = out.objects_.at(tier.object.index);
+        if (storage.device || storage.host || storage.pinned.has_value()) {
+            throw ArtifactError("duplicate tiered placement");
+        }
+        auto hot_storage = out.arena_->alloc_bytes(static_cast<std::size_t>(tier.bytes),
+                                                   static_cast<std::size_t>(tier.alignment));
+        const auto hot_offset = static_cast<std::uint64_t>(static_cast<std::byte*>(hot_storage.data) -
+                                                            static_cast<std::byte*>(out.arena_->base()));
+        if (hot_offset != tier.offset) {
+            throw ArtifactError("tiered device offset differs from materialization plan");
+        }
+        auto staging = reader.read_object(tier.object);
+        out.stats_.read_bytes =
+            checked_add(out.stats_.read_bytes, staging.size(), "tiered read bytes");
+        const auto divisor = read_divisor(reader, tier.object, geometry, staging, out.stats_);
+        // The packed mini-banks: each plane's hot prefix and warm suffix, in plane order.
+        const std::array<std::pair<std::uint64_t, std::uint64_t>, 3> planes{{
+            {0, geometry.code_bytes_per_row},
+            {geometry.high_offset, geometry.high_bytes_per_row},
+            {geometry.scale_offset, geometry.scale_bytes_per_row},
+        }};
+        std::vector<std::byte> hot_packed(static_cast<std::size_t>(tier.bytes));
+        storage.pinned.emplace(
+            static_cast<std::size_t>(geometry.bytes / rows * warm_rows));
+        std::uint64_t hot_plane = 0;
+        std::uint64_t warm_plane = 0;
+        for (const auto& [object_offset, per_row] : planes) {
+            if (per_row == 0) { continue; }
+            const auto hot_len  = checked_mul(per_row, tier.hot_rows, "tiered hot plane");
+            const auto warm_len = checked_mul(per_row, warm_rows, "tiered warm plane");
+            std::memcpy(hot_packed.data() + hot_plane, staging.data() + object_offset,
+                        static_cast<std::size_t>(hot_len));
+            std::memcpy(static_cast<std::byte*>(storage.pinned->data()) + warm_plane,
+                        staging.data() + object_offset + hot_len,
+                        static_cast<std::size_t>(warm_len));
+            hot_plane  = checked_add(hot_plane, hot_len, "tiered hot plane offset");
+            warm_plane = checked_add(warm_plane, warm_len, "tiered warm plane offset");
+        }
+        if (hot_plane != tier.bytes || warm_plane != storage.pinned->size()) {
+            throw ArtifactError("tiered plane split does not cover the mini-banks");
+        }
+        // The scaled mini-bank geometries: the same plane structure at the split row counts.
+        const auto mini_geometry = [&](std::uint64_t mini_rows) {
+            WeightGeometry mini = geometry;
+            mini.shape[0]       = mini_rows;
+            mini.elements       = checked_mul(mini_rows, geometry.shape[1], "tiered elements");
+            mini.bytes          = geometry.bytes / rows * mini_rows;
+            mini.code_bytes     = checked_mul(geometry.code_bytes_per_row, mini_rows, "codes");
+            mini.high_bytes     = checked_mul(geometry.high_bytes_per_row, mini_rows, "high");
+            mini.scale_bytes    = checked_mul(geometry.scale_bytes_per_row, mini_rows, "scales");
+            mini.high_offset    = mini.code_bytes;
+            mini.scale_offset   = checked_add(mini.code_bytes, mini.high_bytes, "scale offset");
+            mini.divisor_offset = 0;
+            return mini;
+        };
+        storage.device = WeightParent{mini_geometry(tier.hot_rows),
+                                      static_cast<const std::byte*>(hot_storage.data), divisor};
+        storage.host   = WeightParent{mini_geometry(warm_rows),
+                                      static_cast<const std::byte*>(storage.pinned->data()),
+                                      divisor, true};
+        // One-shot synchronous upload: the staging and packed buffers are per-bank locals.
+        check_cuda(cudaMemcpy(hot_storage.data, hot_packed.data(), hot_packed.size(),
+                              cudaMemcpyHostToDevice),
+                   "tiered hot upload");
+        out.stats_.h2d_bytes = checked_add(out.stats_.h2d_bytes, hot_packed.size(), "tiered h2d");
+        out.stats_.retained_host_bytes = checked_add(
+            out.stats_.retained_host_bytes, storage.pinned->size(), "tiered warm bytes");
+        out.stats_.tier_pinned_warm_bytes = checked_add(
+            out.stats_.tier_pinned_warm_bytes, storage.pinned->size(), "tiered warm bytes");
     }
     if (ranges.empty()) {
         phase.complete();
@@ -245,7 +332,6 @@ MaterializedArtifact materialize(const Reader& reader, MaterializationPlan&& pla
     std::size_t next_slot  = 0;
     std::size_t next_range = 0;
     std::uint64_t copied   = 0;
-    const auto start       = std::chrono::steady_clock::now();
     for (const auto& span : spans) {
         for (auto source = span.begin; source < span.end; source += slot_bytes) {
             auto& slot = *slots[next_slot++ % slot_count];
@@ -288,9 +374,9 @@ MaterializedArtifact materialize(const Reader& reader, MaterializationPlan&& pla
     if (copied != total || next_range != ranges.size()) {
         throw ArtifactError("incomplete device upload");
     }
-    out.stats_.h2d_bytes = copied;
+    out.stats_.h2d_bytes = checked_add(out.stats_.h2d_bytes, copied, "h2d bytes");
     out.stats_.upload_seconds =
-        std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - upload_start).count();
     slots.clear();
     phase.complete(copied, total);
     return out;

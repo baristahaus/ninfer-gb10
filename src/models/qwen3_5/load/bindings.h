@@ -38,6 +38,10 @@ public:
     std::vector<PendingWeight> weights;
 
 private:
+    [[nodiscard]] artifact::ParameterReference
+    bind_parameter(const std::string& name, const artifact::Shape& shape,
+                   const std::optional<QType>& exact_format);
+
     std::map<std::string, WeightId, std::less<>> parameters_;
 };
 

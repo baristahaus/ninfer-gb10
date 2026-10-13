@@ -1177,6 +1177,8 @@ struct LoadSummary {
     // one: the planned banks and the experts planned outside the Device tier across them.
     std::uint32_t tier_plan_banks      = 0;
     std::uint64_t tier_plan_warm_experts = 0;
+    // SP-4 phase 2a: pinned-host bytes retained by the tiered banks' warm mini-banks.
+    std::uint64_t tier_pinned_warm_bytes = 0;
 };
 
 } // namespace ninfer

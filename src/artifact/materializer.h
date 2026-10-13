@@ -27,6 +27,18 @@ struct HostPlacement {
     std::vector<std::byte> data;
 };
 
+// SP-4 tiered routed bank (phase 2a): the first `hot_rows` rows of the object materialize as
+// a compact hot mini-bank on the device at `offset`; the remaining rows live in a pinned-host
+// warm mini-bank that the materializer allocates and fills. Device-residency parts address the
+// hot prefix unchanged; Host-residency parts address the warm mini-bank suffix-relative.
+struct TierPlacement {
+    ObjectHandle object;
+    std::uint64_t offset      = 0;
+    std::uint64_t bytes       = 0;  // hot mini-bank bytes on the device.
+    std::uint64_t alignment   = 256;
+    std::uint64_t hot_rows    = 0;
+};
+
 struct MaterializationPlan {
     const Reader* source                = nullptr;
     std::size_t object_count            = 0;
@@ -35,6 +47,7 @@ struct MaterializationPlan {
     std::uint64_t owned_value_bytes     = 0;
     std::vector<DevicePlacement> device_objects;
     std::vector<HostPlacement> host_objects;
+    std::vector<TierPlacement> tier_objects;
 };
 
 struct MaterializationStats {
@@ -43,6 +56,8 @@ struct MaterializationStats {
     std::uint64_t h2d_bytes  = 0;
     std::uint64_t device_capacity_bytes = 0;
     std::uint64_t retained_host_bytes   = 0;
+    // SP-4 tiered banks: the pinned-host warm mini-bank bytes retained after load.
+    std::uint64_t tier_pinned_warm_bytes = 0;
     std::uint64_t owned_value_bytes     = 0;
     std::uint64_t peak_staging_bytes    = 0;
     std::size_t device_object_count     = 0;
@@ -74,6 +89,9 @@ private:
         std::optional<WeightParent> device;
         std::optional<WeightParent> host;
         std::vector<std::byte> host_data;
+        // SP-4 tiered bank: the pinned warm mini-bank's storage (core PinnedHostBuffer);
+        // `host` holds its parent.
+        std::optional<PinnedHostBuffer> pinned;
     };
 
     std::unique_ptr<DeviceArena> arena_;

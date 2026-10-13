@@ -57,6 +57,9 @@ struct WeightParent {
     WeightGeometry geometry;
     const std::byte* data      = nullptr;
     float weight_scale_divisor = 0.0F;
+    // True when `data` addresses host memory (SP-4 warm mini-banks, host-resident objects);
+    // false for device-resident storage.
+    bool host = false;
 };
 
 struct WeightRegion {

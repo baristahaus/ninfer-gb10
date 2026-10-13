@@ -3,6 +3,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -87,18 +88,10 @@ ninfer::SamplingOverrides resolve_sampling_overrides(const SamplingParams& reque
     return sampling;
 }
 
-std::vector<const ToolDefinition*> effective_tools(const GenerationRequest& request) {
-    std::vector<const ToolDefinition*> tools;
-    if (!request.uses_tools()) { return tools; }
-    tools.reserve(request.tools.size());
-    for (const ToolDefinition& tool : request.tools) { tools.push_back(&tool); }
-    return tools;
-}
-
 std::string render_tool_definition(const ToolDefinition& tool) {
     using Json  = RequestJson;
     Json schema = Json::parse(tool.input_schema_json);
-    Json function{{"name", tool.name}, {"parameters", std::move(schema)}, {"strict", false}};
+    Json function{{"name", tool.name}, {"parameters", std::move(schema)}, {"strict", tool.strict}};
     if (!tool.description.empty()) { function["description"] = tool.description; }
     if (tool.input_examples_json) {
         function["input_examples"] = Json::parse(*tool.input_examples_json);
@@ -199,37 +192,6 @@ ninfer::PromptInput to_prompt_input(const GenerationRequest& request,
                                     const MediaAcquirer& acquire_media) {
     ninfer::PromptInput input;
 
-    // Prompt-level output directives. NInfer has no constrained decoding, so a JSON
-    // response_format and tool_choice "required" are enforced with a directive text
-    // appended as a trailing part of the final turn (the last user message, or the
-    // trailing tool result of an agentic loop), after the main loop below. The JSON
-    // instruction comes first and the tool-call directive last, so it takes precedence
-    // over conflicting guidance. The prefix up to the final turn stays byte-stable
-    // between turns, so a directive change re-prefills only the tail, and the client's
-    // system/developer turns keep their position and cache markers.
-    std::string directive;
-    const bool json_format = request.response_format.kind == ResponseFormatKind::JsonObject ||
-                             request.response_format.kind == ResponseFormatKind::JsonSchema;
-    const bool tool_directive =
-        request.tool_choice.mode == ToolChoiceMode::Required && !request.tools.empty();
-    if (json_format) {
-        directive =
-            "You must respond with a single valid JSON object. Do not include any text "
-            "outside the JSON object. Do not wrap it in markdown code fences.";
-        if (request.response_format.kind == ResponseFormatKind::JsonSchema) {
-            directive += "\n\nThe JSON object must conform to this JSON Schema:\n" +
-                         request.response_format.schema_json;
-        }
-    }
-    // The tool-call directive goes last: after the JSON instruction, so it takes
-    // precedence over conflicting "answer directly" guidance. Prompt-level
-    // enforcement only; NInfer has no constrained decoding.
-    if (tool_directive) {
-        if (!directive.empty()) { directive += "\n\n"; }
-        directive += "IMPORTANT: You MUST call a tool in your reply. Never answer the "
-                    "user directly with plain text; produce your answer through a tool "
-                    "call. This overrides any earlier instruction to answer directly.";
-    }
     input.messages.reserve(request.messages.size());
     for (std::size_t turn_index = 0; turn_index < request.messages.size(); ++turn_index) {
         const ChatTurn& turn = request.messages[turn_index];
@@ -317,38 +279,27 @@ ninfer::PromptInput to_prompt_input(const GenerationRequest& request,
         }
     }
 
-    if (!directive.empty()) {
-        if (request.messages.empty()) {
-            // No turn to anchor the directive to (the API parsers reject such
-            // requests): keep it visible as a synthetic leading system block.
-            ninfer::ChatMessage instruction;
-            instruction.role = ChatRole::System;
-            ninfer::MessagePart part;
-            part.text = std::move(directive);
-            instruction.parts.push_back(std::move(part));
-            input.messages.push_back(std::move(instruction));
-        } else {
-            std::size_t anchor = request.messages.size() - 1U;
-            for (std::size_t turn_index = request.messages.size(); turn_index-- > 0;) {
-                const ChatRole role = request.messages[turn_index].role;
-                if (role == ChatRole::User || role == ChatRole::Tool) {
-                    anchor = turn_index;
-                    break;
-                }
+    input.options.continuation              = request.continuation;
+    input.options.enable_thinking           = semantics.enable_thinking;
+    input.options.reasoning_effort          = semantics.reasoning_effort;
+    input.options.preserve_thinking         = semantics.preserve_thinking;
+    input.options.chat_template_kwargs_json = semantics.chat_template_kwargs_json;
+    input.options.add_vision_id             = false;
+    // A family that enforces tool choices keeps every declaration and its cache markers in the
+    // prompt, so a selection change never alters the prefix; the grammar applies the choice. A
+    // family without token constraints honors tool_choice none and an allowed_tools subset only by
+    // declaring just the selectable tools.
+    std::vector<const ToolDefinition*> tools;
+    if (semantics.output_constraints || request.uses_tools()) {
+        const auto& allowed = request.tool_choice.allowed_names;
+        tools.reserve(request.tools.size());
+        for (const ToolDefinition& tool : request.tools) {
+            if (semantics.output_constraints || !allowed ||
+                std::find(allowed->begin(), allowed->end(), tool.name) != allowed->end()) {
+                tools.push_back(&tool);
             }
-            ninfer::MessagePart tail;
-            tail.text = std::move(directive);
-            input.messages[anchor].parts.push_back(std::move(tail));
         }
     }
-
-    input.options.continuation                     = request.continuation;
-    input.options.enable_thinking                  = semantics.enable_thinking;
-    input.options.reasoning_effort                 = semantics.reasoning_effort;
-    input.options.preserve_thinking                = semantics.preserve_thinking;
-    input.options.chat_template_kwargs_json        = semantics.chat_template_kwargs_json;
-    input.options.add_vision_id                    = false;
-    const std::vector<const ToolDefinition*> tools = effective_tools(request);
     input.options.tool_jsons.reserve(tools.size());
     for (std::size_t index = 0; index < tools.size(); ++index) {
         input.options.tool_jsons.push_back(render_tool_definition(*tools[index]));
@@ -371,6 +322,10 @@ ninfer::RequestOptions to_request_options(const GenerationRequest& request,
                                           const ResolvedPromptSemantics& semantics,
                                           bool allow_prefix_reuse) {
     ninfer::RequestOptions options;
+    options.constraint  = request.constraint;
+    options.tool_choice = request.tool_choice;
+    // Without token constraints the allowed subset is already the declared tool set.
+    if (!semantics.output_constraints) { options.tool_choice.allowed_names.reset(); }
     options.execution.requested_output_tokens = static_cast<std::uint32_t>(request.max_tokens);
     options.execution.allow_prefix_reuse      = allow_prefix_reuse;
     if (semantics.enable_thinking != false) {
@@ -379,8 +334,9 @@ ninfer::RequestOptions to_request_options(const GenerationRequest& request,
     }
     options.execution.sampling             = resolve_sampling_overrides(request.sampling, server);
     options.output.raw                     = false;
-    options.output.preserve_special_tokens = request.uses_tools() || request.has_tool_history();
-    options.output.tool_name_max_length = static_cast<std::uint32_t>(request.tool_name_max_length);
+    const bool tool_constraint = semantics.output_constraints && request.constrains_tools();
+    options.output.preserve_special_tokens = !request.constraint && !tool_constraint &&
+                                             (request.uses_tools() || request.has_tool_history());
     options.stop.include_model_defaults = !request.ignore_eos;
     options.stop.strings.reserve(request.stop_strings.size() *
                                  (request.stop_strings_apply_to_reasoning ? 2U : 1U));

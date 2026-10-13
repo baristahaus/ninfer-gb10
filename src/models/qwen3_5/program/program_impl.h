@@ -343,6 +343,25 @@ struct DecodeGraphTopology {
 struct DecodeGraphFamily {
     std::vector<DecodeGraphProfile> profiles;
     std::vector<DecodeGraphTopology> topologies;
+
+    [[nodiscard]] DecodeGraphProfile& select(std::uint32_t batch_size, std::uint32_t frontier,
+                                             const char* label);
+    // Updates the profile's topology executable in place when another profile is installed.
+    [[nodiscard]] DecodeGraphExecutable& install(DecodeGraphProfile& profile, const char* label);
+};
+
+// A DFlash Forward stage publishes these ids before target execution finishes. Program owns the
+// pinned storage and the external event together; both outlive the graphs that reference them.
+struct DFlashDraftHandoff {
+    PinnedHostBuffer ids;
+    CudaCompletionEvent ready;
+
+    DFlashDraftHandoff(const DeviceContext& device, std::size_t count)
+        : ids(count * sizeof(TokenId)), ready(device) {}
+
+    [[nodiscard]] std::span<TokenId> tokens() const noexcept {
+        return {static_cast<TokenId*>(ids.data()), ids.size() / sizeof(TokenId)};
+    }
 };
 
 // Target model continuation for one logical sequence. This state remains meaningful after the
@@ -509,7 +528,8 @@ public:
     [[nodiscard]] bool has_unsettled_state_fork() const noexcept;
     [[nodiscard]] bool quiescent_after_fail_all_cleanup() const noexcept;
     [[nodiscard]] PrefillProgress advance_prefill(SequenceHandle sequence,
-                                                  runtime::ExecutionTiming* failed_timing);
+                                                  runtime::ExecutionTiming* failed_timing,
+                                                  runtime::TokenMaskProvider* masks);
     [[nodiscard]] CaptureAssessment
     inspect_capture(const CaptureOffer& offer, const SharedPrefixHandle* exact_shared,
                     const SharedPrefixHandle* replacement,
@@ -537,7 +557,8 @@ public:
         CapturePressureCandidate&& pressure, runtime::CancellationFlagView cancellation);
     [[nodiscard]] PendingBatch decode(std::span<const SequenceHandle> sequences,
                                       std::span<const runtime::RoundBudget> budgets,
-                                      runtime::ExecutionTiming* failed_timing);
+                                      runtime::ExecutionTiming* failed_timing,
+                                      runtime::TokenMaskProvider* masks);
     [[nodiscard]] runtime::ExecutionTiming
     append_forced_tokens(std::span<const SequenceHandle> sequences,
                          std::span<const TokenId> row_major_tokens, std::uint32_t row_stride,
@@ -611,6 +632,20 @@ public:
     std::optional<Tensor> score_hidden;
     Tensor sampling_config;
     Tensor token_counts;
+    // Grammar masks: Host fills one row's positions, then uploads them on the compute stream.
+    Tensor grammar_masks_device;
+    std::optional<PinnedHostBuffer> grammar_masks_host;
+    std::array<std::uint32_t, kMaximumConcurrency> grammar_dead_positions{};
+    std::optional<DFlashDraftHandoff> dflash_draft_handoff;
+    // Binds row's mask positions for a later fill; returns a disabled mask for unconstrained rows.
+    [[nodiscard]] ops::SamplingMask bind_grammar_mask(runtime::TokenMaskProvider* provider,
+                                                      std::size_t row);
+    // Fills and uploads masks for position 0 and each draft prefix of a constrained row. Decode
+    // rows stage in their own region; prefill stages in the dedicated last region.
+    [[nodiscard]] ops::SamplingMask fill_grammar_mask(runtime::TokenMaskProvider* provider,
+                                                      std::size_t row,
+                                                      std::span<const TokenId> drafts,
+                                                      bool prefill = false);
 
     std::vector<SequenceState> continuation_states;
     std::vector<ContinuationSlot> continuation_slots;
@@ -619,10 +654,6 @@ public:
     std::array<std::uint32_t, kMaximumConcurrency> active_continuations{};
     std::array<RequestControl, kMaximumConcurrency> requests;
     std::array<std::uint64_t, kMaximumConcurrency> lane_epochs{};
-
-    DecodeGraphFamily ordinary_graphs;
-    DecodeGraphFamily mtp_graphs;
-    DecodeGraphFamily dflash_graphs;
 
     std::optional<PinnedHostBuffer> round_host;
     std::optional<PinnedHostBuffer> score_logprobs_host;
@@ -636,6 +667,13 @@ public:
     std::optional<PinnedHostBuffer> dflash_host;
     qwen3_5::DFlashDecodeIngress* dflash_host_ingress = nullptr;
     qwen3_5::DFlashDecodeEgress* dflash_host_egress   = nullptr;
+
+    // Captured transfers and external events reference the buffers and events declared above, so
+    // the graph families are declared after them and destroyed first, including when startup
+    // throws. Speculative backends run every unit as a Forward graph followed by a Finish graph.
+    DecodeGraphFamily ordinary_graphs;
+    DecodeGraphFamily speculative_forward_graphs;
+    DecodeGraphFamily speculative_finish_graphs;
 
     std::size_t workspace_logical_peak_bytes = 0;
     std::size_t vision_handoff_peak_bytes    = 0;
@@ -945,12 +983,12 @@ private:
     advance_prefill_raw(std::uint32_t lane, runtime::ExecutionTiming* failed_timing);
     [[nodiscard]] runtime::BatchedGeneratedRound
     decode_raw(std::span<const std::uint32_t> lanes, std::span<const runtime::RoundBudget> budgets,
-               runtime::ExecutionTiming* failed_timing);
+               runtime::ExecutionTiming* failed_timing, runtime::TokenMaskProvider* masks);
     [[nodiscard]] runtime::ExecutionTiming
     resolve_prefill_raw(std::uint32_t lane, bool terminal, runtime::ExecutionTiming* failed_timing);
     [[nodiscard]] runtime::ExecutionTiming resolve_pending_raw(
         std::span<const std::uint32_t> lanes, std::span<const std::uint32_t> accepted_tokens,
-        std::span<const std::uint8_t> terminal, std::span<const std::uint8_t> cancelled,
+        std::span<const std::uint8_t> terminal, std::span<const std::uint8_t> discarded,
         std::span<const std::optional<std::uint32_t>> prefix_execution_splits,
         runtime::ExecutionTiming* failed_timing);
     [[nodiscard]] bool valid_sequence(SequenceHandle handle) const noexcept;
@@ -1162,18 +1200,17 @@ private:
                                        std::span<const std::uint32_t> counts);
     void validate_licensed_tokens(std::span<const TokenId> tokens) const;
     void mark_workspace_usage(std::size_t phase_bytes) noexcept;
-    [[nodiscard]] runtime::BatchedGeneratedRound
-    decode_ordinary_batch(std::span<const std::uint32_t> lanes,
-                          std::span<const runtime::RoundBudget> budgets,
-                          runtime::ExecutionTiming* failed_timing);
+    [[nodiscard]] runtime::BatchedGeneratedRound decode_ordinary_batch(
+        std::span<const std::uint32_t> lanes, std::span<const runtime::RoundBudget> budgets,
+        runtime::ExecutionTiming* failed_timing, runtime::TokenMaskProvider* masks);
     [[nodiscard]] runtime::BatchedGeneratedRound
     decode_mtp_batch(std::span<const std::uint32_t> lanes,
                      std::span<const runtime::RoundBudget> budgets,
-                     runtime::ExecutionTiming* failed_timing);
+                     runtime::ExecutionTiming* failed_timing, runtime::TokenMaskProvider* masks);
     [[nodiscard]] runtime::BatchedGeneratedRound
     decode_dflash_batch(std::span<const std::uint32_t> lanes,
                         std::span<const runtime::RoundBudget> budgets,
-                        runtime::ExecutionTiming* failed_timing);
+                        runtime::ExecutionTiming* failed_timing, runtime::TokenMaskProvider* masks);
     void resize_sequence_kv_entitlement(SequenceState& sequence, std::uint32_t text_pages,
                                         std::uint32_t backend_pages);
     void bind_sequence_kv(SequenceState& sequence);

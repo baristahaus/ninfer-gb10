@@ -868,7 +868,8 @@ ProgramImpl::shared_prefix_summary(const SharedPrefixState& shared) const {
 }
 
 PrefillProgress ProgramImpl::advance_prefill(SequenceHandle sequence,
-                                             runtime::ExecutionTiming* failed_timing) {
+                                             runtime::ExecutionTiming* failed_timing,
+                                             runtime::TokenMaskProvider* masks) {
     if (pending_transaction_ || !valid_sequence(sequence)) {
         throw std::logic_error("prefill sequence capability is invalid");
     }
@@ -877,6 +878,22 @@ PrefillProgress ProgramImpl::advance_prefill(SequenceHandle sequence,
         throw std::logic_error("prefill advance requires a prefilling sequence");
     }
     try {
+        // A chunk that can reach the prompt frontier samples the first output token, so a
+        // constrained lane installs a masked config for it. Earlier chunks may still be running
+        // without a synchronization point; wait for them before rewriting the pinned sources.
+        const RequestControl& request = requests[lane];
+        grammar_dead_positions[0]     = 0;
+        if (masks != nullptr && masks->constrained(0) && request.prefill &&
+            static_cast<std::uint64_t>(request.prefill->cursor) + prefill_chunk >=
+                request.prefill->prompt_tokens) {
+            device.synchronize();
+            auto& host         = *static_cast<qwen3_5::PrefillRoundHost*>(round_host->data());
+            host.sampling      = request.sampling_host;
+            host.sampling.mask = fill_grammar_mask(masks, 0, {}, true);
+            Tensor config_lane = sampling_config.slice(1, static_cast<std::int32_t>(lane), 1);
+            CUDA_CHECK(cudaMemcpyAsync(config_lane.data, &host.sampling, sizeof(host.sampling),
+                                       cudaMemcpyHostToDevice, device.stream));
+        }
         runtime::PrefillStepResult step = advance_prefill_raw(lane, failed_timing);
         if (failed_timing != nullptr) { *failed_timing += step.timing; }
         return wrap_prefill(lane, std::move(step));

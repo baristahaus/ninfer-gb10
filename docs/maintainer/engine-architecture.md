@@ -152,16 +152,25 @@ Gateway 不选择请求顺序、缓存来源、active lane 或 KV page。
 
 ### 2.2 Frontend
 
-Frontend 拥有模型家族的输入与输出语义：
+Frontend owns the model family's input and output semantics:
 
-- tokenizer、chat template、Vision preprocessing 和 MRoPE prompt construction；
-- owning `PreparedPrompt` 及其内容 identity；
-- stop、thinking/content channel、detokenization、最终文本和模型私有结构化输出；
-- model output 中可由历史 renderer 精确重建的 prefix-execution boundary；
-- 每个请求独占的 `OutputSession`。
+- tokenizer, chat template, Vision preprocessing and MRoPE prompt construction;
+- the owning `PreparedPrompt` and its content identity;
+- stop, thinking/content channel, detokenization, final text and model-private structured output;
+- prefix-execution boundaries in model output that the history renderer can reconstruct exactly;
+- the `OutputSession` owned exclusively by each request.
 
-Frontend 可以预览一次模型输出将产生的语义效果，但只有 Engine 完成提交后才能发布该效果。
-Frontend 不拥有等待队列、cache catalog 或物理模型状态。
+Frontend may preview the semantic effect that one model output will produce, but only the Engine
+may publish that effect after it commits. Frontend does not own the wait queue, the cache catalog,
+or physical model state.
+
+In the Qwen3.5 family, compiled grammars for GBNF, JSON, JSON Schema, choice, regex and tool
+constraints are shared per vocabulary inside the Frontend, and each request's `OutputSession` owns
+its matcher. The Engine compiles on the submitting thread before enqueueing; the Program borrows the
+round's mask provider and feeds the masks to GPU sampling and speculative acceptance. The matcher is
+previewed and committed together with the output and keeps its committed state for the request's
+whole life. The Flash-Next family has no token-mask execution and refuses explicit constraints.
+Execution timing and semantics are defined in [Constrained decoding](constrained-decoding.md).
 
 ### 2.3 Engine
 
@@ -614,28 +623,44 @@ Worker-layer failure taxonomy:
 
 ---
 
-## 8. 物理执行的顶层约束
+## 8. Top-level constraints on physical execution
 
-以下约束属于 Engine 架构，但具体实现由 Program 和下层文档定义：
+The following constraints belong to the Engine architecture; the Program and lower-level documents
+define their concrete implementation:
 
-- Program 在启动时建立固定数量的 control/state/table resources；
-- growing KV 由共享 paged pools 支持，active request 持有完整增长 reservation；
-- 一个 GPU execution unit 内 State/KV mapping 保持稳定；
-- CUDA Graph 按合法 exact-`B` topology 建立，request identity 和 page IDs 是稳定输入数据，不是 graph key；
-- ordinary decode 不运行 catalog scan、pressure search 或后台 replica scan；
-- workspace 是 Program 启动时统一规划的 backing，Vision、Text 和 speculative schedule 按互斥 lifetime
-  使用其内部区域。
+- the Program establishes a fixed number of control/state/table resources at startup;
+- growing KV is backed by shared paged pools, and an active request holds its complete growth
+  reservation;
+- the State/KV mapping stays stable within one GPU execution unit;
+- CUDA Graphs are built per legal exact-`B` topology; request identity and page IDs are stable input
+  data, not graph keys;
+- ordinary decode runs no catalog scan, pressure search, or background replica scan;
+- the workspace is one backing planned at Program startup; Vision, Text and speculative schedules
+  use its internal regions with mutually exclusive lifetimes.
 
-容量查询消费与执行同源的逐层参数和 Use。Allocation scope 同时用于布局计算与实际执行；
-顺序互斥的 scratch 取峰值，跨阶段仍活跃的数据计入完整存活期。Vision handoff 保留至 Text
-及所选 MTP 的最后消费者，speculative pending features 和 verify records 保留至对应提交边界。
+Capacity queries consume the same per-layer parameters and Uses as execution. An allocation scope
+serves both layout computation and actual execution; sequentially exclusive scratch counts at its
+peak, and data that stays live across phases counts over its complete lifetime. The Vision handoff
+is retained until the last consumer among Text and the selected MTP; speculative pending features
+and verify records are retained until the corresponding commit boundary.
 
-Prefill 成本按硬件类别与实际 Text/Vision 配置、绑定、Use 派生的 `prefill_signature` 选择测量值，
-没有匹配值时使用通用成本。成本用于规划选择，物理可行性仍由 Program 的实际布局与占用决定。
+Prefill cost selects measured values by hardware class and by the `prefill_signature` derived from
+the actual Text/Vision configuration, bindings and Uses; without a matching value it uses the
+generic cost. Cost guides plan selection; physical feasibility is still decided by the Program's
+actual layout and occupancy.
 
-Serve warmup 使用同一个公共 Engine 执行路径，但其 request-level context cache 固定关闭。Warmup 可以建立
-CUDA Graph、library 和 allocator 的运行时状态，结束后不得留下可供外部请求命中的 continuation 或占用
-checkpoint catalog。
+Serve warmup uses the same public Engine execution route, but its request-level context cache is
+always disabled. Warmup may establish runtime state for CUDA Graphs, libraries and the allocator;
+afterwards it must leave no continuation that external requests could hit and occupy no checkpoint
+catalog entry.
+
+MTP, DFlash and DFlash2 units execute as two CUDA Graph stages, Forward and Finish. Between them the
+CPU prepares constrained token masks, overlapping the target forward; both stages share one
+resource reservation and one commit boundary, and an unconstrained batch launches them back to
+back. Token masks live in fixed-address pinned Host and Device buffers planned at startup, so a
+captured graph reads whatever the latest fill uploaded. A row whose constraint reaches a position
+with no legal token fails alone (`CommitDisposition::FailedReleased`) while the other rows of the
+batch commit normally.
 
 ---
 

@@ -42,6 +42,10 @@ struct PersistentLayout {
     std::optional<TensorLayout> score_hidden;
     std::optional<TensorLayout> token_counts;
     std::optional<TensorLayout> sampling_config;
+    // Packed legal-token masks [words, draft_window + 1, max_concurrency + 1]; address-stable so
+    // captured decode graphs bind them through the round sampling configs. The last region is the
+    // prefill lane's.
+    std::optional<TensorLayout> grammar_masks;
     std::size_t bytes            = 0;
     std::size_t kv_payload_bytes = 0;
 };

@@ -31,13 +31,15 @@ plus selected fixes cherry-picked from giveen/ninfer-ext (see below).
    the reference part, not yet measured on GB10. `tools/convert` also reads safetensors
    tensors in chunks: Linux caps a single `read`/`pread` just under 2 GiB, so an
    unbounded `pread` short-reads.
-2. **JSON and tool calls.** Serve accepts `response_format: text | json_object |
-   json_schema` and `tool_choice: auto | none | required | allowed_tools`. Output is
-   prompt-guided (no constrained decoding — schema conformance is not guaranteed); a
-   leading system block carries the JSON/tool instructions and `json_output::extract`
-   returns the first well-formed JSON object or array after dropping whitespace, closed
-   think blocks, fences and prose. Streamed JSON arrives as one cleaned content chunk.
-   See `docs/serving.md`.
+2. **Constrained decoding (ported from upstream `81c8ce09`).** The vendored XGrammar CPU
+   core compiles GBNF, JSON object, JSON Schema (including tuple schemas and bounded
+   numbers), choice, regex and the Qwen tool-call contract into per-request token masks
+   that ordinary, MTP, DFlash and DFlash2 sampling consume on the GPU. Serve enforces
+   `response_format`/`text.format`/`output_config.format`, the `structured_outputs`
+   extension, strict tools and every `tool_choice`; the CLI and `ninfer_bench` take the
+   same constraints. The Qwen3.8 Flash-Next family has no token-mask execution and refuses
+   explicit constraints. See `docs/serving.md` and
+   `docs/maintainer/constrained-decoding.md`.
 3. **Lowered CUDA requirements.** The whole stack — clean build, op conformance
    (ctest), serve, probes — is validated on the GB10 stock **CUDA 13.0.88** toolkit;
    upstream's validated toolkit is CUDA 13.1. CMake imposes no CUDA version floor.

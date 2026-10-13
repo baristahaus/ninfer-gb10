@@ -102,8 +102,9 @@ python3 -m tools.smoke.serve_contract \
   --model qwen3.6-27b
 ```
 
-The client exercises OpenAI, Anthropic, streaming, usage, multimodal, and tool-call response
-surfaces against the resident process.
+The client exercises OpenAI, Anthropic, streaming, usage, multimodal, tool-call, and
+constrained-decoding response surfaces against the resident process. Pass `--constraints refused`
+for a Qwen3.8 Flash-Next server, whose family refuses enforceable output and tool constraints.
 
 For typed rewrite-checkpoint and thinking-history behavior, the managed smoke script launches a
 real server and consumes the repository fixture:

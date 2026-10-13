@@ -322,6 +322,7 @@ int exercise_stream_observations(ninfer::Engine& engine) {
     request.execution.sampling.temperature    = 0.0F;
     request.execution.allow_prefix_reuse      = false;
     request.stop.include_model_defaults       = false;
+    request.tool_choice.constraints       = ninfer::ToolConstraintMode::Automatic;
     const ninfer::GenerationObservationOptions observation{
         .phase_timings = true, .live_timings = true, .prompt_progress = true};
 
@@ -346,6 +347,7 @@ int exercise_full_prefill_chunk(ninfer::Engine& engine) {
     options.execution.sampling.temperature    = 0.0F;
     options.execution.allow_prefix_reuse      = false;
     options.stop.include_model_defaults       = false;
+    options.tool_choice.constraints       = ninfer::ToolConstraintMode::Automatic;
 
     const ninfer::GenerationResult result =
         engine.generate(engine.prepare_tokens(std::move(prompt)), options);
@@ -364,6 +366,7 @@ int exercise_abandoned_handle_capacity(ninfer::Engine& engine) {
     request.execution.sampling.temperature    = 0.0F;
     request.execution.allow_prefix_reuse      = false;
     request.stop.include_model_defaults       = false;
+    request.tool_choice.constraints       = ninfer::ToolConstraintMode::Automatic;
 
     {
         auto abandoned = engine.submit(engine.prepare_tokens(prompt), request);
@@ -405,6 +408,7 @@ int exercise_zero_suffix_reuse(ninfer::Engine& engine, const std::vector<ninfer:
     baseline_options.execution.sampling.temperature    = 0.0F;
     baseline_options.execution.allow_prefix_reuse      = true;
     baseline_options.stop.include_model_defaults       = false;
+    baseline_options.tool_choice.constraints       = ninfer::ToolConstraintMode::Automatic;
     const ninfer::GenerationResult baseline =
         engine.generate(engine.prepare_tokens(prompt), baseline_options);
     if (baseline.generated_token_ids.size() != 8) {
@@ -421,6 +425,7 @@ int exercise_zero_suffix_reuse(ninfer::Engine& engine, const std::vector<ninfer:
     reuse_options.execution.sampling.temperature    = 0.0F;
     reuse_options.execution.allow_prefix_reuse      = true;
     reuse_options.stop.include_model_defaults       = false;
+    reuse_options.tool_choice.constraints       = ninfer::ToolConstraintMode::Automatic;
     const ninfer::GenerationResult reused =
         engine.generate(engine.prepare_tokens(exact_frontier), reuse_options);
     if (reused.reused_prompt_tokens != exact_frontier.size()) {
@@ -441,6 +446,7 @@ int exercise_prefix(ninfer::Engine& engine) {
     first_options.execution.requested_output_tokens = 5;
     first_options.execution.sampling.temperature    = 0.0F;
     first_options.stop.include_model_defaults       = false;
+    first_options.tool_choice.constraints       = ninfer::ToolConstraintMode::Automatic;
 
     const std::vector<ninfer::TokenId> prompt{248045, 846, 198, 5834, 248046, 198};
     const ninfer::GenerationResult first =
@@ -460,6 +466,7 @@ int exercise_prefix(ninfer::Engine& engine) {
     reuse_options.execution.sampling.temperature    = 0.0F;
     reuse_options.execution.allow_prefix_reuse      = true;
     reuse_options.stop.include_model_defaults       = false;
+    reuse_options.tool_choice.constraints       = ninfer::ToolConstraintMode::Automatic;
     const ninfer::GenerationResult reused =
         engine.generate(engine.prepare_tokens(continuation), reuse_options);
 
@@ -486,6 +493,7 @@ int exercise_host_restore(const char* artifact) {
         request.execution.sampling.temperature    = 0.0F;
         request.execution.allow_prefix_reuse      = reuse;
         request.stop.include_model_defaults       = false;
+        request.tool_choice.constraints       = ninfer::ToolConstraintMode::Automatic;
         return request;
     };
 
@@ -628,6 +636,7 @@ int exercise_shared_replacement_and_full_capacity_reuse(const char* artifact) {
     capture_request.execution.sampling.temperature    = 0.0F;
     capture_request.execution.allow_prefix_reuse      = true;
     capture_request.stop.include_model_defaults       = false;
+    capture_request.tool_choice.constraints       = ninfer::ToolConstraintMode::Automatic;
 
     const auto plain_prompt = [](std::string text) {
         ninfer::PromptInput input;
@@ -819,6 +828,7 @@ int exercise_anthropic_prefix_regression(const char* artifact) {
         options.execution.sampling.temperature    = 0.0F;
         options.execution.allow_prefix_reuse      = true;
         options.stop.include_model_defaults       = model_stops;
+        options.tool_choice.constraints           = ninfer::ToolConstraintMode::Automatic;
         return options;
     };
 
@@ -1012,6 +1022,7 @@ int exercise_shared_rewrite_materialization(const char* artifact) {
     };
     const auto request_options = [] {
         ninfer::RequestOptions request;
+        request.tool_choice.constraints          = ninfer::ToolConstraintMode::Automatic;
         request.execution.requested_output_tokens = 16384;
         request.execution.sampling.temperature    = 0.0F;
         request.execution.thinking.budget         = 1024;
@@ -1110,6 +1121,7 @@ int exercise_private_long_anchor_capture_and_replacement(const char* artifact) {
     request.execution.sampling.temperature    = 0.0F;
     request.execution.allow_prefix_reuse      = true;
     request.stop.include_model_defaults       = false;
+    request.tool_choice.constraints       = ninfer::ToolConstraintMode::Automatic;
 
     constexpr std::string_view stable =
         "This is the stable conversation prefix retained for a later branch.";
@@ -1194,6 +1206,7 @@ int exercise_last_private_alias_eviction(const char* artifact) {
     one_token.execution.sampling.temperature    = 0.0F;
     one_token.execution.allow_prefix_reuse      = true;
     one_token.stop.include_model_defaults       = false;
+    one_token.tool_choice.constraints       = ninfer::ToolConstraintMode::Automatic;
 
     const ninfer::GenerationResult source = engine.generate(
         engine.prepare(input("last-alias-source", ninfer::CacheRetentionHint::LiveSession)),
@@ -1292,6 +1305,7 @@ int exercise_rewrite_checkpoints(ninfer::Engine& engine, RewriteCheckpointCacheT
         result.execution.sampling.temperature    = 0.0F;
         result.execution.allow_prefix_reuse      = reuse;
         result.stop.include_model_defaults       = false;
+        result.tool_choice.constraints       = ninfer::ToolConstraintMode::Automatic;
         return result;
     };
 
@@ -1442,6 +1456,7 @@ int exercise_rewrite_branch(const char* artifact) {
         value.execution.sampling.temperature    = 0.0F;
         value.execution.allow_prefix_reuse      = reuse;
         value.stop.include_model_defaults       = false;
+        value.tool_choice.constraints       = ninfer::ToolConstraintMode::Automatic;
         return value;
     };
 
@@ -1544,6 +1559,7 @@ int exercise_vision(ninfer::Engine& engine) {
         result.execution.sampling.temperature    = 0.0F;
         result.execution.allow_prefix_reuse      = reuse;
         result.stop.include_model_defaults       = false;
+        result.tool_choice.constraints       = ninfer::ToolConstraintMode::Automatic;
         return result;
     };
 
@@ -1761,6 +1777,7 @@ ninfer::RequestOptions fixed_output(std::uint32_t tokens, bool reuse = true) {
     options.execution.sampling.temperature    = 0.0F;
     options.execution.allow_prefix_reuse      = reuse;
     options.stop.include_model_defaults       = false;
+    options.tool_choice.constraints       = ninfer::ToolConstraintMode::Automatic;
     return options;
 }
 

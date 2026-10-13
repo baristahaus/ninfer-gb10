@@ -17,6 +17,14 @@ struct SparseMoeWeights {
     Weight routed_down;
     Weight shared_gate_up;
     Weight shared_down;
+    // Expert tiering (strategy SP-4 phase 2a). Routed experts below `tiered_hot_experts` read
+    // their rows from the device banks above; experts at or above the boundary read from the
+    // pinned-host warm twins, packed in expert order starting at the first non-hot expert.
+    // `tiered_hot_experts == 0` marks an untiered bank: every expert reads the device bank and
+    // the warm twins stay null, preserving the single-bank path bit-for-bit.
+    Weight warm_routed_gate_up;
+    Weight warm_routed_down;
+    std::uint32_t tiered_hot_experts = 0;
 };
 
 enum class SparseMoeEpilogue : std::uint8_t {

@@ -57,6 +57,7 @@ selected for this process.
 | Method and path | Behavior |
 |---|---|
 | `GET /health` | Engine readiness |
+| `GET /metrics` | Prometheus-format serving and Engine telemetry |
 | `GET /v1/models` | configured OpenAI model alias and effective `max_model_len` |
 | `GET /v1/models/{id}` | lookup of the configured alias and effective `max_model_len` |
 | `POST /v1/chat/completions` | OpenAI-style chat generation |
@@ -72,6 +73,18 @@ selected for this process.
 Engine-wide failure it returns HTTP 503 with `{"status":"unavailable"}`, and during a shutdown
 drain HTTP 503 with `{"status":"draining"}`. Temporary queue saturation does not make the Engine
 unavailable. The endpoint remains unauthenticated.
+
+`GET /metrics` renders Prometheus text (`text/plain; version=0.0.4`) with `ninfer:`-prefixed
+metrics: monotonic counters for completed, rejected, and failed requests; prompt, computed
+prefill, completion, reasoning, and cached tokens; speculative drafted/accepted tokens and
+rounds; and sum/count pairs for request latency, time to first token, prefill, and decode. The
+same document carries Engine gauges: running/prefilling/waiting requests, Main KV pool
+occupancy, catalogued prompts (`kept_prompts`), context length, Device and Host State slot
+occupancy, and Host KV spill occupancy. Consumers delta-sample the counters between polls
+(EngineMetrics does this for its live throughput panel); a request counter only moves when the
+corresponding request reaches its terminal state, so a poll taken mid-request sees no partial
+values. The endpoint remains unauthenticated alongside `/health` so monitoring tools poll
+without credentials.
 
 Every OpenAI-compatible response carries a unique `x-request-id` header, including streaming and
 error responses. Anthropic endpoints use their separate `request-id` contract.

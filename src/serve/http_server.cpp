@@ -272,18 +272,21 @@ void HttpServer::record_request_start(const RequestLogContext& context) {
 void HttpServer::record_request_rejected(const RequestRejectionLogContext& context) {
     request_jsonl_.write_request_rejected(context);
     operational_log_.request_rejected(context);
+    metrics_.record_request_rejected();
 }
 
 void HttpServer::record_request_done(const RequestLogContext& context,
                                      const GenerationOutcome& outcome) {
     request_jsonl_.write_request_done(context, outcome);
     operational_log_.request_done(context, outcome);
+    metrics_.record_request_done(outcome);
 }
 
 void HttpServer::record_request_failure(const RequestLogContext& context,
                                         const RequestFailure& failure) {
     request_jsonl_.write_request_error(context, failure.machine_message);
     operational_log_.request_failure(context, failure);
+    metrics_.record_request_failure();
 }
 
 void HttpServer::record_response_failure(std::uint64_t request_id, const RequestFailure& failure) {
@@ -370,7 +373,8 @@ void HttpServer::register_routes() {
             }
             return httplib::Server::HandlerResponse::Handled;
         }
-        if (options_.api_key.empty() || req.path == "/health" || req.method == "OPTIONS") {
+        if (options_.api_key.empty() || req.path == "/health" || req.path == "/metrics" ||
+            req.method == "OPTIONS") {
             return httplib::Server::HandlerResponse::Unhandled;
         }
         // Accept both the OpenAI-style bearer token and the Anthropic-style
@@ -451,6 +455,17 @@ void HttpServer::register_routes() {
             nlohmann::json{{"status", available ? "ok" : (draining ? "draining" : "unavailable")}}
                 .dump(),
             "application/json");
+    });
+    server_.Get("/metrics", [this](const httplib::Request&, httplib::Response& res) {
+        if (service_ == nullptr) {
+            res.status = 503;
+            res.set_content("# engine not attached\n", "text/plain; version=0.0.4; charset=utf-8");
+            return;
+        }
+        res.set_content(
+            metrics_.render_prometheus(service_->runtime_stats(), service_->memory_summary(),
+                                       public_model_id_),
+            "text/plain; version=0.0.4; charset=utf-8");
     });
     server_.Get("/v1/models", [this](const httplib::Request& req, httplib::Response& res) {
         handle_models(req, res);

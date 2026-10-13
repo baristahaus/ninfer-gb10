@@ -86,6 +86,82 @@ def wait_for_health(base_url: str, timeout: float) -> None:
     )
 
 
+def fetch_metrics(base_url: str) -> dict[str, float]:
+    request = urllib.request.Request(f"{base_url}/metrics")
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            body = response.read().decode("utf-8")
+    except urllib.error.URLError as error:
+        raise ContractError(f"GET /metrics failed: {error}") from error
+    metrics: dict[str, float] = {}
+    for line in body.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        name, _, value = line.rpartition(" ")
+        try:
+            metrics[name] = float(value)
+        except ValueError as error:
+            raise ContractError(f"GET /metrics has a malformed line: {line!r}") from error
+    if not metrics:
+        raise ContractError("GET /metrics rendered no metric lines")
+    return metrics
+
+
+def check_metrics(base_url: str, model: str) -> dict[str, Any]:
+    metrics = fetch_metrics(base_url)
+
+    def require(name: str) -> float:
+        if name not in metrics:
+            raise ContractError(f"GET /metrics is missing {name}")
+        return metrics[name]
+
+    requests_total = require("ninfer:requests_total")
+    if requests_total < 1:
+        raise ContractError("ninfer:requests_total did not count the smoke's requests")
+    for name in (
+        "ninfer:prompt_tokens_total",
+        "ninfer:generation_tokens_total",
+        "ninfer:cached_tokens_total",
+        "ninfer:computed_prefill_tokens_total",
+        "ninfer:mtp_drafted_total",
+        "ninfer:mtp_accepted_total",
+        "ninfer:request_latency_seconds_count",
+        "ninfer:request_latency_seconds_sum",
+        "ninfer:time_to_first_token_seconds_sum",
+        "ninfer:prefill_seconds_sum",
+        "ninfer:decode_seconds_sum",
+    ):
+        require(name)
+    if metrics["ninfer:request_latency_seconds_count"] != requests_total:
+        raise ContractError(
+            "ninfer:request_latency_seconds_count does not match requests_total"
+        )
+    if metrics["ninfer:prompt_tokens_total"] < 1 or metrics["ninfer:generation_tokens_total"] < 1:
+        raise ContractError("token counters did not accumulate over the smoke's requests")
+    for gauge in (
+        "ninfer:pool_tokens",
+        "ninfer:pool_free_tokens",
+        "ninfer:kept_prompts",
+        "ninfer:context_length",
+    ):
+        require(gauge)
+    if metrics["ninfer:pool_tokens"] < 1 or metrics["ninfer:context_length"] < 1:
+        raise ContractError("pool or context gauges are unset")
+    model_info = f'ninfer:model_info{{model_name="{model}"}}'
+    if model_info not in metrics:
+        raise ContractError(f"GET /metrics does not declare the model identity {model_info!r}")
+    return {
+        "requests_total": int(requests_total),
+        "prompt_tokens_total": int(metrics["ninfer:prompt_tokens_total"]),
+        "generation_tokens_total": int(metrics["ninfer:generation_tokens_total"]),
+        "cached_tokens_total": int(metrics["ninfer:cached_tokens_total"]),
+        "mtp_accepted_total": int(metrics["ninfer:mtp_accepted_total"]),
+        "pool_tokens": int(metrics["ninfer:pool_tokens"]),
+        "kept_prompts": int(metrics["ninfer:kept_prompts"]),
+    }
+
+
 def require_usage(usage: Any, prompt_key: str, completion_key: str) -> tuple[int, int]:
     if not isinstance(usage, dict):
         raise ContractError("response usage is not an object")
@@ -556,6 +632,7 @@ def exercise(base_url: str, model: str) -> dict[str, Any]:
         "responses_output_tokens": response_output_tokens,
         "image_prompt_tokens": image_prompt_tokens,
         "anthropic_stop_reason": anthropic["stop_reason"],
+        "metrics": check_metrics(base_url, model),
     }
 
 

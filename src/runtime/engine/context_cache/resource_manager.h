@@ -1137,6 +1137,14 @@ public:
         out.shared_active_references = shared_references > std::numeric_limits<std::uint32_t>::max()
                                            ? std::numeric_limits<std::uint32_t>::max()
                                            : static_cast<std::uint32_t>(shared_references);
+        std::uint32_t kept_prompts = 0;
+        for (std::uint32_t slot = 0; slot < catalog_count_; ++slot) {
+            if (catalog_[slot].state == CatalogState::Catalogued) { ++kept_prompts; }
+        }
+        for (std::uint32_t slot = 0; slot < shared_catalog_count_; ++slot) {
+            if (shared_catalog_[slot].state == SharedCatalogState::Catalogued) { ++kept_prompts; }
+        }
+        out.kept_prompts = kept_prompts;
     }
 
     [[nodiscard]] CatalogState catalog_state(std::uint32_t slot) const noexcept {

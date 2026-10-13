@@ -1029,6 +1029,9 @@ struct RuntimeStats {
     std::uint64_t pressure_search_budget_exhaustions   = 0;
     std::uint64_t pressure_maximal_fallback_selections = 0;
     std::uint32_t shared_active_references             = 0;
+    // Catalogued private continuations plus catalogued shared-prefix owners: the live
+    // context-cache set.
+    std::uint32_t kept_prompts                         = 0;
     std::uint64_t historical_fork_hits                 = 0;
     double actual_context_transfer_seconds             = 0.0;
 };

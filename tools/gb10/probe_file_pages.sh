@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # File-backed page GPU-read probe (plan step 6.3 gate): builds tools/gb10/file_page_probe.cu
-# for sm_121a and runs the phases in order, each as its own invocation so a hung cold-fault
+# for the local device's arch and runs the phases in order, each as its own invocation so a hung cold-fault
 # phase times out without taking the rest. Writes
 # profiles/bench/gb10/file_page_probe/summary.md. Needs no model.
 #
@@ -30,7 +30,8 @@ fi
 scratch=$dir/scratch.bin
 
 echo "[gb10] building file-page probe" >&2
-"$NVCC" -O3 -std=c++17 -arch=sm_121a tools/gb10/file_page_probe.cu -o "$dir/file_page_probe"
+ARCH=${NINFER_CUDA_ARCH:-$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader,nounits | head -1 | tr -d .)a}
+"$NVCC" -O3 -std=c++17 -arch="$ARCH" tools/gb10/file_page_probe.cu -o "$dir/file_page_probe"
 echo "[gb10] evictor: $evictor" >&2
 
 {

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Round-boundary probe (plan step 6): builds tools/gb10/sync_probe.cu for sm_121a and runs it
+# Round-boundary probe (plan step 6): builds tools/gb10/sync_probe.cu for the local device's arch and runs it
 # once per CUDA device schedule: how late a synchronize returns after the GPU finishes, and what
 # a graph launch costs per node. Writes profiles/bench/gb10/sync_probe/summary.md. Needs no model.
 # PIN_CPUS="0 10" additionally runs the blocking schedule pinned to each listed CPU, to compare
@@ -13,7 +13,8 @@ rm -rf "$dir"
 mkdir -p "$dir"
 
 echo "[gb10] building sync probe" >&2
-"$NVCC" -O3 -std=c++17 -arch=sm_121a tools/gb10/sync_probe.cu -o "$dir/sync_probe"
+ARCH=${NINFER_CUDA_ARCH:-$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader,nounits | head -1 | tr -d .)a}
+"$NVCC" -O3 -std=c++17 -arch="$ARCH" tools/gb10/sync_probe.cu -o "$dir/sync_probe"
 
 {
     echo "## Round-boundary probe — $(date -u +%FT%TZ)"

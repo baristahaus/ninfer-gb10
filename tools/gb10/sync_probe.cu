@@ -14,7 +14,8 @@
 // The schedule is fixed per process (cudaSetDeviceFlags before the context exists), so
 // probe_sync.sh runs one process per schedule. Prints Markdown.
 //
-// Build: nvcc -O3 -std=c++17 -arch=sm_121a tools/gb10/sync_probe.cu -o sync_probe
+// Build: nvcc -O3 -std=c++17 -arch=sm_120a tools/gb10/sync_probe.cu -o sync_probe
+// (RTX 5090 box; use sm_121a on GB10)
 
 #include <cuda_runtime.h>
 

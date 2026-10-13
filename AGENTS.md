@@ -131,9 +131,11 @@ family additionally supports DFlash/DFlash2 with the corresponding companion com
 
 ### Fork identity and upstream relationship
 
-This fork is independent. It does not track, rebase against, or sync with the Neroued/ninfer
-repository: upstream accepts only RTX 5090 implementation patches, and this fork's direction —
-GB10-first hardware, the context-cache/pressure/host-restore machinery, and the serving stack —
+This fork is independent. It is the fork of the fork-of-the-Origin — the design went
+strictly RTX 5090, then PRO 6000, then GB10 as this fork's platform — and it does not track,
+rebase against, or sync with the Neroued/ninfer repository: upstream accepts only RTX 5090
+implementation patches, and this fork's direction — the GB10 platform with the 5090-side
+multi-strata tiering, the context-cache/pressure/host-restore machinery, and the serving stack —
 does not land there. The relationship with upstream is bounded and explicit: a specific upstream
 feature may be ported into the fork when it is coherent, self-contained, and better than building
 fresh (constrained decoding and tuple schemas are the sanctioned ports), and RTX
@@ -142,12 +144,15 @@ upstream, and no fork work waits on upstream.
 
 ### Hardware lanes and model classes
 
-The fork serves two hardware lanes with one engine. **GB10** (`sm_121a`, the default build
-target) is the native lane: models serve mostly in memory from the 121 GiB unified pool, with
-the 125B Flash-Next's file-mapped PLE table as the existing disk tier. **RTX 5090-class**
-(`sm_120a`) is the tiered lane: the 27B-class serves fully hot today, and the MoE class is the
-tiering target (GPU + RAM + disk) per the ratified strategy. GB10 native 125B bring-up
-validation is the strategy's SP-6.
+The fork serves two hardware lanes with one engine. **RTX 5090-class** (`sm_120a`, the
+default build target and this repository's development and validation hardware) is the tiered
+lane and the active engineering lane: it carries the hard problem — running models larger than
+the card's 32 GB — through the multi-strata (GPU + RAM + disk) per the ratified strategy. The
+27B-class serves fully hot today; the MoE class is the tiering target. **GB10** (`sm_121a`) is
+the native unified-memory lane, where tiering needs far less work: models serve mostly in memory
+from the 121 GiB unified pool, with the 125B Flash-Next's file-mapped PLE table as the existing
+disk tier. GB10 native 125B bring-up validation is the strategy's SP-6; its test setup comes
+later.
 
 The **27B class** (Qwen 3.5/3.6/3.8 27B only) is the fully-hot baseline: its in-memory
 capability on RTX 5090-class hardware — weights, KV, state slots, concurrency, CUDA Graph
@@ -409,15 +414,16 @@ These are conventional project resources, not a checklist of resources every tas
 | conversion report | `out/qwen3_6_27b.ninfer.conversion.json` |
 | normal build | `build/` |
 | profiler output | `profiles/ncu/`, `profiles/nsys/`, `profiles/bench/` |
-| hardware/toolchain | GB10 (Grace Blackwell), `sm_121a` (default); RTX 5090, `sm_120a` (tiered lane); CUDA 13.0.88 |
+| hardware/toolchain | RTX 5090 (32 GiB VRAM + 123 GiB host RAM — the local box, tiered lane), `sm_120a` (default); GB10 (Grace Blackwell), `sm_121a` (native lane); CUDA 13.4.92 |
 
 Use the selected Python 3.11 interpreter explicitly. Do not install or upgrade dependencies unless
 the task requires it. Never select an artifact by glob, modification time, or an unqualified
 “latest” name. Large artifacts, source checkpoints, and profiler outputs are local prerequisites;
 do not download or regenerate them unless that work is in scope.
 - GPU work is single-instance. Never launch a second device-allocating run (real-artifact
-  tests, serve batteries, sweeps) while one is in flight: the 121 GiB unified pool fits one
-  73.7 GiB model load at a time. Wait for the running job to complete before starting the next.
+  tests, serve batteries, sweeps) while one is in flight: the resident server fills the 32 GiB
+  VRAM, and the box's full pool (VRAM + 123 GiB host RAM) fits one 73.7 GiB tiered 125B-class
+  load at a time. Wait for the running job to complete before starting the next.
 
 ```bash
 PYTHON=python3

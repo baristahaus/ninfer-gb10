@@ -12,7 +12,8 @@
 // everything. Run it after warming the page cache (read the artifact volumes) and with no other
 // GPU job.
 //
-// Build: nvcc -O2 -std=c++17 -arch=sm_121a tools/gb10/alloc_probe.cu -o alloc_probe
+// Build: nvcc -O2 -std=c++17 -arch=sm_120a tools/gb10/alloc_probe.cu -o alloc_probe
+// (RTX 5090 box; use sm_121a on GB10)
 // Usage: alloc_probe [--chunk-gib N (default 4)] [--reserve-gib N (default 8)]
 
 #include <cuda_runtime.h>

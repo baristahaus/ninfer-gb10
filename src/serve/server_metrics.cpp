@@ -31,6 +31,43 @@ void append_metric(std::string& out, std::string_view type, std::string_view nam
     out += '\n';
 }
 
+void append_labeled_counter(std::string& out, std::string_view name, std::string_view help,
+                            std::string_view label, const std::array<std::string_view, 3>& values,
+                            const std::array<std::atomic<std::uint64_t>, 3>& counters) {
+    out += "# HELP ";
+    out.append(name);
+    out += ' ';
+    out.append(help);
+    out += "\n# TYPE ";
+    out.append(name);
+    out += " counter\n";
+    for (std::size_t index = 0; index < values.size(); ++index) {
+        out.append(name);
+        out += '{';
+        out.append(label);
+        out += "=\"";
+        out.append(values[index]);
+        out += "\"} ";
+        out += std::to_string(counters[index].load(std::memory_order_relaxed));
+        out += '\n';
+    }
+}
+
+void append_seconds_sum(std::string& out, std::string_view name, std::string_view help,
+                        std::uint64_t millis) {
+    char value[64];
+    std::snprintf(value, sizeof(value), " %.3f\n", static_cast<double>(millis) / 1000.0);
+    out += "# HELP ";
+    out.append(name);
+    out += ' ';
+    out.append(help);
+    out += "\n# TYPE ";
+    out.append(name);
+    out += " counter\n";
+    out.append(name);
+    out += value;
+}
+
 } // namespace
 
 void ServerMetrics::record_request_done(const GenerationOutcome& outcome) {
@@ -57,6 +94,26 @@ void ServerMetrics::record_request_done(const GenerationOutcome& outcome) {
                                       std::memory_order_relaxed);
     decode_seconds_millis_.fetch_add(seconds_to_millis(outcome.metrics.decode_seconds),
                                      std::memory_order_relaxed);
+    if (outcome.constraint) {
+        const ninfer::ConstraintObservation& constraint = *outcome.constraint;
+        constraint_outcomes_[constraint.terminated ? 0
+                             : constraint.complete ? 1
+                                                   : 2]
+            .fetch_add(1, std::memory_order_relaxed);
+        constraint_branches_[static_cast<std::size_t>(constraint.branch)].fetch_add(
+            1, std::memory_order_relaxed);
+        constraint_cache_[static_cast<std::size_t>(constraint.cache)].fetch_add(
+            1, std::memory_order_relaxed);
+        constraint_mask_positions_.fetch_add(constraint.mask_positions, std::memory_order_relaxed);
+        constraint_mask_upload_bytes_.fetch_add(constraint.mask_upload_bytes,
+                                                std::memory_order_relaxed);
+        constraint_prepare_seconds_millis_.fetch_add(seconds_to_millis(constraint.prepare_seconds),
+                                                     std::memory_order_relaxed);
+        constraint_mask_seconds_millis_.fetch_add(seconds_to_millis(constraint.mask_seconds),
+                                                  std::memory_order_relaxed);
+        constraint_matcher_seconds_millis_.fetch_add(seconds_to_millis(constraint.matcher_seconds),
+                                                     std::memory_order_relaxed);
+    }
 }
 
 void ServerMetrics::record_request_rejected() {
@@ -86,7 +143,7 @@ std::string ServerMetrics::render_prometheus(const ninfer::RuntimeStats& stats,
                                                : 0;
 
     std::string out;
-    out.reserve(3072);
+    out.reserve(6144);
 
     // The model identity is a labeled gauge so metric scrapers can attribute samples without a
     // side-channel; EngineMetrics reads the model_name label from it.
@@ -153,6 +210,40 @@ std::string ServerMetrics::render_prometheus(const ninfer::RuntimeStats& stats,
         out += "# TYPE ninfer:decode_seconds_sum counter\n";
         out += line;
     }
+
+    // Output and tool constraints. A request is counted once, when it settles; mask work includes
+    // speculative lookahead that was rolled back. Phase seconds are nonzero only for requests that
+    // collected phase timings.
+    append_labeled_counter(out, "ninfer:constraint_requests_total",
+                           "Settled requests that ran an output or tool constraint, by whether "
+                           "the constrained language terminated or was interrupted.",
+                           "outcome",
+                           {"terminated", "complete_interrupted", "incomplete_interrupted"},
+                           constraint_outcomes_);
+    append_labeled_counter(out, "ninfer:constraint_branch_total",
+                           "Settled constrained requests by committed output branch.", "branch",
+                           {"undecided", "content", "tools"}, constraint_branches_);
+    append_labeled_counter(out, "ninfer:constraint_cache_total",
+                           "Grammar compilation cache access of settled constrained requests.",
+                           "result", {"hit", "built", "waited"}, constraint_cache_);
+    append_metric(out, "counter", "ninfer:constraint_mask_positions_total",
+                  "Evaluated constrained prediction positions.",
+                  constraint_mask_positions_.load(std::memory_order_relaxed));
+    append_metric(out, "counter", "ninfer:constraint_mask_upload_bytes_total",
+                  "Submitted token-mask payload bytes.",
+                  constraint_mask_upload_bytes_.load(std::memory_order_relaxed));
+    append_seconds_sum(out, "ninfer:constraint_prepare_seconds_sum",
+                       "Observed constraint preparation, including grammar compilation.",
+                       constraint_prepare_seconds_millis_.load(std::memory_order_relaxed));
+    append_seconds_sum(out, "ninfer:constraint_mask_seconds_sum",
+                       "Observed CPU mask work, including rolled-back lookahead.",
+                       constraint_mask_seconds_millis_.load(std::memory_order_relaxed));
+    append_seconds_sum(out, "ninfer:constraint_matcher_seconds_sum",
+                       "Observed matcher acceptance and discard work.",
+                       constraint_matcher_seconds_millis_.load(std::memory_order_relaxed));
+    append_seconds_sum(out, "ninfer:constraint_draft_wait_seconds_sum",
+                       "Constrained DFlash wait for Host-visible drafts, once per batch.",
+                       stats.host_work.constraint_draft_wait_ns / 1'000'000U);
 
     append_metric(out, "gauge", "ninfer:running_requests", "Requests currently decoding.",
                  stats.running_requests);

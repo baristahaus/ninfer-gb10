@@ -83,6 +83,9 @@ struct DFlashBatchContext {
     const qwen3_5::DFlashDecodeIngress& host_ingress;
     qwen3_5::DFlashDecodeEgress& host_egress;
     Tensor& continuation_hidden_store;
+    // Forward publishes this round's drafts here and records drafts_ready before target execution.
+    std::span<TokenId> host_drafts;
+    CudaCompletionEvent& drafts_ready;
 };
 
 struct DFlashAppendContext {
@@ -131,9 +134,12 @@ struct TargetVerifyFrameView {
 void configure_text_card(TextContext& card, const ExecutionCore& execution,
                          const ops::SamplingConfig* sampling, std::int32_t state_source_slot,
                          std::int32_t state_destination_slot, std::uint32_t mtp_proposal_extent);
-void target_verify_accept(ExecutionCore& execution, Tensor& continuation_hidden_store,
-                          TextContext& card, TargetVerifyFrameView frame,
-                          ops::CausalAttentionExecutionEnvelope envelope);
+// Speculative verification is split so Host grammar masks can be built while the target forward
+// runs: Forward evaluates the target over the proposal, accept consumes its persistent outputs.
+void target_verify_forward(ExecutionCore& execution, TextContext& card, TargetVerifyFrameView frame,
+                           ops::CausalAttentionExecutionEnvelope envelope);
+void target_accept(ExecutionCore& execution, Tensor& continuation_hidden_store,
+                   TargetVerifyFrameView frame);
 
 [[nodiscard]] PrefillChunkResult prefill_text_chunk(PrefillContext& state,
                                                     std::span<const TokenId> ids,
@@ -171,13 +177,20 @@ void ordinary_decode_batch(OrdinaryBatchContext& state, std::int32_t batch_size,
                            ops::CausalAttentionExecutionEnvelope envelope,
                            DecodeGraphExecutable* executable);
 
+// Every speculative decode unit runs as Forward then Finish on one stream. Forward uploads the
+// round ingress and runs the target over the proposal (DFlash also drafts and hands the draft ids
+// to the Host). Finish accepts, aligns the next proposal and publishes egress. Grammar mask
+// uploads, when any row is constrained, are ordered between the two.
+enum class SpeculativePhase : std::uint8_t { Forward, Finish };
+
 // Executes one exact-B MTP verification/alignment/proposal transaction. Each row may carry a
 // different current and next proposal extent while the model traversal remains batched.
 void capture_mtp_decode_batch(MtpBatchContext& state, std::int32_t batch_size, std::uint32_t k,
                               MtpCausalAttentionEnvelopes envelopes,
-                              DecodeGraphDefinition& definition);
+                              DecodeGraphDefinition& definition, SpeculativePhase phase);
 void mtp_decode_batch(MtpBatchContext& state, std::int32_t batch_size, std::uint32_t k,
-                      MtpCausalAttentionEnvelopes envelopes, DecodeGraphExecutable* executable);
+                      MtpCausalAttentionEnvelopes envelopes, DecodeGraphExecutable* executable,
+                      SpeculativePhase phase);
 
 [[nodiscard]] DFlashFeatureSink
 dflash_feature_sink(PrefillContext& state, DFlashFeatureSink::PrefillConsumer consume_prefill = {});
@@ -192,10 +205,10 @@ void dflash_append_context(PrefillContext& state, const Tensor& features, const 
 void capture_dflash_decode_batch(DFlashBatchContext& state, std::int32_t batch_size,
                                  std::uint32_t k, DFlashEnvelopes envelopes,
                                  ops::CausalAttentionExecutionEnvelope target_envelope,
-                                 DecodeGraphDefinition& definition);
+                                 DecodeGraphDefinition& definition, SpeculativePhase phase);
 void dflash_decode_batch(DFlashBatchContext& state, std::int32_t batch_size, std::uint32_t k,
                          DFlashEnvelopes envelopes,
                          ops::CausalAttentionExecutionEnvelope target_envelope,
-                         DecodeGraphExecutable* executable);
+                         DecodeGraphExecutable* executable, SpeculativePhase phase);
 
 } // namespace ninfer::models::qwen3_5::execution

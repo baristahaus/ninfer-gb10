@@ -10,8 +10,9 @@
 namespace ninfer::ops {
 
 struct SpeculativeAcceptExecutionEnvelope {
-    // Execution promise: every row has temperature<=0 and both penalties disabled. When false,
-    // the general route remains valid for any supported mixture of greedy and stochastic rows.
+    // Execution promise: every row has temperature<=0, both penalties disabled and no token mask.
+    // When false, the general route remains valid for any supported mixture of greedy and
+    // stochastic rows.
     bool all_rows_greedy_without_penalties = false;
 };
 
@@ -79,6 +80,10 @@ void speculative_prepare_verify_ids(const Tensor& anchors, const Tensor& drafts,
  *
  * Numeric:
  *   Sampling filtering, penalties, normalization, and RNG semantics are those of sampling.h.
+ *   A non-null configs[b].mask applies its position i to verification column i: illegal tokens
+ *   leave the support before argmax and normalization, so an illegal draft has p=0 and is
+ *   rejected through the ordinary residual. A masked greedy row recomputes the legal argmax
+ *   instead of reading target_tokens.
  *
  * Effects:
  *   For each row, let A be the accepted draft count and L=A+1. licensed_tokens[0:A,b] receives
@@ -134,7 +139,9 @@ void speculative_accept_greedy_drafts(const Tensor& target_tokens, const Tensor&
  *   a dense vocabulary distribution. Target logits are interpreted through sampling.h. Column i's
  *   penalty overlay is drafts[0..i-1], because the column is consumed only after that prefix was
  *   accepted. RNG purposes are the existing speculative accept/correction/bonus domains and use
- *   logical positions derived from the old round length.
+ *   logical positions derived from the old round length. A non-null configs[b].mask applies
+ *   position i to column i before p is built; the proposal q is not masked, so an illegal draft
+ *   has p=0, is rejected, and its correction is drawn from max(p-q,0).
  *
  * Effects:
  *   Let A be the accepted draft count and L=A+1. licensed_tokens[0:A,b] receives accepted drafts,
@@ -146,8 +153,9 @@ void speculative_accept_greedy_drafts(const Tensor& target_tokens, const Tensor&
  *   inputs remain unchanged.
  *
  * Execution:
- *   all_rows_greedy_without_penalties=true promises the matching device configs and enables the
- *   raw target_tokens route. A false flag selects the general route and supports mixed rows.
+ *   all_rows_greedy_without_penalties=true promises the matching device configs, including null
+ *   masks, and enables the raw target_tokens route. A false flag selects the general route and
+ * supports mixed rows.
  *
  * Workspace:
  *   Caller-owned transient storage reported by

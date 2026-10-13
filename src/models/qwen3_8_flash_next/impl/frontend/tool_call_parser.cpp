@@ -87,8 +87,8 @@ bool starts_with_at(std::string_view text, std::size_t pos, std::string_view pre
     return pos <= text.size() && text.substr(pos, prefix.size()) == prefix;
 }
 
-bool valid_function_name(std::string_view name, std::size_t max_name_length) {
-    if (name.empty() || name.size() > max_name_length) { return false; }
+bool valid_function_name(std::string_view name) {
+    if (name.empty()) { return false; }
     return std::all_of(name.begin(), name.end(), [](char byte) {
         return is_ascii_alphanumeric(byte) || byte == '_' || byte == '-';
     });
@@ -409,9 +409,8 @@ NormalizedParameter normalize_parameter(std::string_view encoded_value,
 
 class QwenToolRegionParser {
 public:
-    QwenToolRegionParser(std::string_view text, std::size_t max_name_length,
-                         const Contract& contract)
-        : text_(text), max_name_length_(max_name_length), contract_(contract) {}
+    QwenToolRegionParser(std::string_view text, const Contract& contract)
+        : text_(text), contract_(contract) {}
 
     [[nodiscard]] std::uint32_t duplicate_parameters_repaired() const noexcept {
         return duplicate_parameters_repaired_;
@@ -460,9 +459,7 @@ private:
             return FallbackReason::InvalidToolName;
         }
         call.name = text_.substr(name_begin, name_end - name_begin);
-        if (!valid_function_name(call.name, max_name_length_)) {
-            return FallbackReason::InvalidToolName;
-        }
+        if (!valid_function_name(call.name)) { return FallbackReason::InvalidToolName; }
         if (contract_.enforce_declared_names &&
             find_tool_contract(contract_, call.name) == nullptr) {
             return FallbackReason::UndeclaredTool;
@@ -554,7 +551,6 @@ private:
     }
 
     std::string_view text_;
-    std::size_t max_name_length_;
     const Contract& contract_;
     std::uint32_t duplicate_parameters_repaired_ = 0;
 };
@@ -609,13 +605,19 @@ build_tool_call_output_contract(std::span<const std::string> tool_jsons, bool en
     contract->tools.reserve(tool_jsons.size());
     for (const std::string& tool_json : tool_jsons) {
         const Json definition = Json::parse(tool_json, nullptr, false);
-        if (!definition.is_discarded()) { append_tool_contract(*contract, definition); }
+        if (definition.is_discarded()) { continue; }
+        append_tool_contract(*contract, definition);
+        const auto function = definition.find("function");
+        if (function != definition.end() && function->is_object()) {
+            const auto strict = function->find("strict");
+            contract->strict_declared |=
+                strict != function->end() && strict->is_boolean() && strict->get<bool>();
+        }
     }
     return contract;
 }
 
 ParsedToolCallOutput parse_qwen_tool_call_output(const std::string& text,
-                                                 std::size_t max_tool_name_length,
                                                  const ToolCallOutputContract& contract) {
     std::size_t candidate = text.find(kToolOpen);
     if (candidate == std::string::npos) { return fallback(text); }
@@ -634,7 +636,7 @@ ParsedToolCallOutput parse_qwen_tool_call_output(const std::string& text,
     bool first_failure_recorded  = false;
     while (candidate != std::string::npos) {
         std::vector<RawToolCall> calls;
-        QwenToolRegionParser parser(source.substr(candidate), max_tool_name_length, contract);
+        QwenToolRegionParser parser(source.substr(candidate), contract);
         const FallbackReason failure = parser.parse(calls);
         if (failure == FallbackReason::None) {
             accepted  = candidate;
@@ -665,9 +667,8 @@ ParsedToolCallOutput parse_qwen_tool_call_output(const std::string& text,
     return out;
 }
 
-ToolCallOutputDecoder::ToolCallOutputDecoder(std::shared_ptr<const ToolCallOutputContract> contract,
-                                             std::size_t max_tool_name_length)
-    : contract_(std::move(contract)), max_tool_name_length_(max_tool_name_length) {}
+ToolCallOutputDecoder::ToolCallOutputDecoder(std::shared_ptr<const ToolCallOutputContract> contract)
+    : contract_(std::move(contract)) {}
 
 std::string ToolCallOutputDecoder::feed(std::string_view text) {
     if (finished_) { throw std::logic_error("tool-call output decoder is already finished"); }
@@ -723,8 +724,7 @@ ToolCallOutputDecoder::Terminal ToolCallOutputDecoder::finish() {
     finished_ = true;
     if (!contract_) { return {}; }
 
-    ParsedToolCallOutput parsed =
-        parse_qwen_tool_call_output(tool_region_, max_tool_name_length_, *contract_);
+    ParsedToolCallOutput parsed = parse_qwen_tool_call_output(tool_region_, *contract_);
     if (saw_tool_marker_ && parsed.is_tool_call_response) {
         // The parser reports the held bytes before the accepted structured region, which are the
         // bytes after an earlier quoted marker that this decoder has not published yet.

@@ -41,7 +41,7 @@ int main() {
     const std::string quoted_close = "echo '</parameter>'";
     const std::string prose_close  = "End each value with </parameter> on its own line.";
     const auto parsed =
-        fi::parse_qwen_tool_call_output(bash_call(quoted_close, prose_close), 64, *contract);
+        fi::parse_qwen_tool_call_output(bash_call(quoted_close, prose_close), *contract);
     failures += check(parsed.is_tool_call_response && parsed.tool_calls.size() == 1,
                       "standalone parameter close inside a value rejected the call");
     if (parsed.tool_calls.size() == 1) {
@@ -52,13 +52,13 @@ int main() {
 
     // Balanced nested markup is value text as before; an unmatched nested open stays content.
     const std::string nested = "<parameter=inner>value</parameter>";
-    const auto balanced = fi::parse_qwen_tool_call_output(bash_call(nested, "x"), 64, *contract);
+    const auto balanced      = fi::parse_qwen_tool_call_output(bash_call(nested, "x"), *contract);
     failures +=
         check(balanced.tool_calls.size() == 1 &&
                   Json::parse(balanced.tool_calls.front().arguments_json).at("command") == nested,
               "balanced nested parameter markup was not preserved");
     const std::string unmatched = bash_call("echo '<parameter=open>'", "x");
-    const auto rejected         = fi::parse_qwen_tool_call_output(unmatched, 64, *contract);
+    const auto rejected         = fi::parse_qwen_tool_call_output(unmatched, *contract);
     failures += check(!rejected.is_tool_call_response && rejected.content == unmatched,
                       "unbalanced nested parameter open was silently repaired");
 

@@ -151,6 +151,30 @@ tests serially. `NINFER_PREFIX_REAL_SCENARIO` selects a focused prefix scenario 
 `pressure-resume` or `concurrent`; the default is `all`. These integration checks
 use behavior and state accounting rather than another numerical path's generated tokens as a golden.
 
+`ninfer_qwen3_5_tools_real_test [none|mtp|dflash|dflash2] [graph|eager|basic] [concurrency]`
+uses `NINFER_TEST_ARTIFACT` for strict tools, thinking, raw continuation, mixed batches, and
+call/result prefix reuse, and required-tool → JSON continuation with committed constraint observations.
+`basic` checks default constraints with open/complex schemas, continuation,
+streaming and mixed strict/basic/free rows. `NINFER_TEST_TOOL_REPORT` appends schema/output/timing
+JSONL. `ninfer_qwen3_5_tool_constraints_test` checks the tool grammar and decoder on the host, and
+`ninfer_qwen3_5_tool_schema_oracle_test` (`tests/models/qwen3_5/test_tool_schema.py`) compares the
+native Qwen grammar and decoder with `jsonschema`, including string pattern/Unicode-length
+intersections. The JSON Schema oracle also covers finite-value filtering, reference/union siblings,
+closed-object and positional-array intersections, draft-07 tuples, recursive conjunctions,
+numeric endpoints and JSON publication rounding. HTTP parsing tests check schema-number precision
+before protocol adapters serialize the schema.
+
+`ninfer_qwen3_5_grammar_real_test [none|mtp|dflash|dflash2] [graph|eager] [concurrency] [vision]` uses
+`NINFER_TEST_DRAFT_TOKENS` to override the default draft count of three and
+`NINFER_TEST_ARTIFACT` to check GBNF/JSON/schema/choice/regex content, sampling, thinking,
+continuation, prefix reuse and mixed batches. `ninfer_regex_choice_test` checks literal-set prefix
+masks and regex edge cases; `ninfer_regex_choice_oracle_test` (`tests/text/test_regex_choice.py`)
+compares regex membership with independent fullmatch semantics. `ninfer_grammar_test` and
+`ninfer_json_schema_test` cover CPU language semantics. `ninfer_json_schema_oracle_test` compares
+supported schemas with the independent Python `jsonschema` validator; install its dependency with
+`python3 -m pip install -r tests/text/requirements.txt` in the selected test environment.
+The sampling and speculative Op tests qualify masks against independent mathematical oracles.
+
 The capability-evaluation coordinator has its own environment and unittest entry point:
 
 ```bash
@@ -169,6 +193,11 @@ Run the serving contract manually after starting a resident server in another te
 python3 -m tools.smoke.serve_contract \
   --base-url http://127.0.0.1:18080 --model qwen3.6-27b
 ```
+
+The client checks constrained decoding as well: `--constraints enforced` (the default) expects the
+Qwen3.5 family to enforce JSON Schema, choice, regex and strict/required tool calls and to move the
+`ninfer:constraint_*` counters; pass `--constraints refused` for a Qwen3.8 Flash-Next server, which
+must reject enforceable requests with HTTP 400.
 
 This smoke check is intentionally not a CTest: it needs the real artifact, a supported GPU, and a
 server process that remains alive while the client exercises OpenAI Responses/Chat, Anthropic,

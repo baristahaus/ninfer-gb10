@@ -1,0 +1,11 @@
+{
+  "name": "NVIDIA GeForce RTX 5090",
+  "reference": "Memory measured by tools/gb10/memory_probe.cu on this RTX 5090 box (CUDA 13.0.88, driver 13040, 2026-10-12, 0.20 GiB buffers, production server resident): 1683 GB/s cudaMalloc streaming read (GDDR7 spec 1792 GB/s); the host tier sits behind PCIe Gen5 x16 — 45 GB/s pinned-host read in place and 47 GB/s pinned H2D payload, the wall for any staged or demand-read host-tier traffic on this lane (GB10 reads the same pool at fabric bandwidth; see gb10.json). Compute is derived, not a datasheet dense figure: FP32 is the 104.8 TFLOPS datasheet rate (21,760 cores at 2.407 GHz); BF16 dense is 2x FP32 and NVFP4 dense is 8x FP32, the consumer-Blackwell tensor ratios. Replace with NVIDIA dense rates when a 5090 appendix is published.",
+  "kind": "sustained",
+  "dram_gbps": 1683.0,
+  "pinned_host_read_gbps": 45.0,
+  "pinned_h2d_gbps": 46.8,
+  "bf16_tflops": 209.7,
+  "nvfp4_tflops": 838.6,
+  "fp32_tflops": 104.8
+}

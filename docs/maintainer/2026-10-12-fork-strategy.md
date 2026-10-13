@@ -220,7 +220,7 @@ criteria — which is also what makes each one delegable (section 12). Dependenc
 |---|---|---|---|
 | SP-1 | EngineMetrics exposure: `/metrics` + the EngineMetrics `ninfer` backend | — | **EXECUTED 2026-10-12**: the EngineMetrics dashboard renders a live fork server (MTP acceptance, cache hit, pool occupancy, kept prompts all reconciling with the serve-contract smoke) |
 | SP-2 | Upstream ports: constrained decoding (choice/regex) + tuple schemas/bounded numbers into serving | — | Tool-calling schema tests pass; the ported features engage on the tool-calling workload (measurable on the SP-1 counters) |
-| SP-3 | KV tail streaming (host-KV-spill extension from batch-restore to demand reads) | SP-1 (tunability) | Long-context serving on the 27B with KV beyond device capacity; the 27B baseline battery unchanged |
+| SP-3 | KV tail streaming (host-KV-spill extension from batch-restore to demand reads; per-lane shape measured 2026-10-12: GB10 reads host-tier pages in place at fabric bandwidth — no staging — while the 5090 sits behind PCIe at 45 GB/s pinned read / 47 GB/s H2D against 1683 GB/s VRAM, so its tail is staged and hidden behind the batch's compute) | SP-1 (tunability) | Long-context serving on the 27B with KV beyond device capacity; the 27B baseline battery unchanged |
 | SP-4 | Expert-tiering spine: container placement metadata, ranked profiles, the adaptive hot-set cache, tier transactions on the pressure/materialization spine | SP-1 | A tiered MoE serves with a hot/warm/cold split and a measured hot-set hit rate; the 27B serves with the machinery dormant and unchanged |
 | SP-5 | 5090 PCIe expert streaming with layer-ahead prefetch (GPU-only execution) | SP-4 | The 125B (or a stand-in MoE) serves on a 32 GB card; throughput and hit rate measured on SP-1 counters |
 | SP-6 | GB10 native 125B bring-up (validation lane; demand paging, no streaming code) | SP-4 (profiles only) | The 125B serves on GB10 natively; the resident-set and PLE demand-paging behavior measured |
@@ -298,6 +298,9 @@ what "correct" means.
   `5090-test@638b27cf`; full logs and JSONs in `~/runs/tool-eval-ab/`.
 - 125B artifact: `docs/maintainer/qwen3.8-flash-next-125b-a6b-artifact.md` (125.5 GiB, five
   files, 51.2 GB file-mapped PLE table, 512/10 experts, NVFP4 routed banks).
+- RTX 5090 memory tier: `tools/bench/hardware/rtx_5090.json` — 1683 GB/s VRAM streaming read, 45 GB/s
+  pinned-host read in place, 47 GB/s pinned H2D payload; measured 2026-10-12 by
+  `tools/gb10/memory_probe.cu` (0.20 GiB buffers, CUDA 13.0.88, driver 13040, production server resident).
 - Strata: `../Strata` `docs/HOW_IT_WORKS.md` (expert cache ~700 experts/GB, CPU-parallel cold
   experts, layer-ahead prefetch, KV tail streaming, disjoint secondary-GPU caches).
 - TensorFold: `../TensorFold` `docs/recipes/cuda.md` (shared EXL3 trellis module, any codebook,

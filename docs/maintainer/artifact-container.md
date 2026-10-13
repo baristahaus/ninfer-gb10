@@ -27,7 +27,7 @@ Top-level sections:
 7. Logical parameter binding (逻辑参数绑定): the two binding kinds.
 8. Uses and auxiliary inputs (使用许可与辅助输入): the `uses` array. Each Use names one read of a parameter.
 9. Resources and optional output representations (资源与可选输出表示): frontend resource references.
-10. Instance data and provenance (实例资料与 provenance): the `metadata` and `provenance` objects.
+10. Instance data and provenance: the `metadata` and `provenance` objects, including the expert tier-plan convention (SP-4).
 11. Reading, writing, and error boundaries (读取、写入与错误边界): the generic reader and its failure rules.
 12. Concrete examples (具体例子): a complete Text-only catalog.
 
@@ -522,20 +522,60 @@ V3 可以在相应资源对象中承载自定义 chat template。资源保存原
 Full 的行数从 Text vocab_size 取得；indexed 需要显式 token ID 映射。主输出 head 始终由
 Text 自己的绑定提供。省略 proposal 时，现有后端按其代码使用 target 的完整输出表示。
 
-## 10. 实例资料与 provenance
+## 10. Instance data and provenance
 
-`metadata` 是开放 JSON 对象，可选 `name` 为非空公开名称字符串，其余成员供展示和工具记录。
-`provenance` 是开放 JSON 对象，可保存源 checkpoint/revision、组件训练配对、encoder/recipe
-说明和转换信息。两者省略时按空对象处理。
+`metadata` is an open JSON object. The optional `name` member is a nonempty public name string;
+the remaining members are for display and tool records. `provenance` is an open JSON object that
+may record the source checkpoint/revision, component training pairs, encoder/recipe notes, and
+conversion information. Both are treated as empty objects when omitted.
 
-执行所需的数值、许可和资源分别进入 config、对象、bindings、uses 和 resources。
-Frontend 从 generation_config 读取 EOS；模式采样预置由架构实现提供，应用及请求可以覆盖。
-资源中的采样数值原样保存，当前 Frontend 不用它们替换模式预置，见[CLI 采样说明](../cli.md)。
-Provenance 说明训练配对的来源，binder 检查组件的实际 target、维度和输入关系；质量与接受率
-由产物评估建立。
+Numbers required for execution, licenses, and resources go into config, objects, bindings, uses,
+and resources respectively. The frontend reads EOS from generation_config; mode sampling presets
+come from the architecture implementation, and applications and requests can override them.
+Sampling numbers in resources are stored verbatim; the current frontend does not use them to
+replace mode presets — see the [CLI sampling notes](../cli.md). Provenance records the source of
+training pairs; the binder checks each component's actual target, dimensions, and input
+relations; quality and acceptance rates are established by artifact evaluation.
 
-Artifact_id 用于核对分片集合，公开名称用于产品语义，架构/config 用于取得固定模型实现，
-对象绑定用于提供实际表示。各消费者按这些用途读取数据。
+Artifact_id verifies the shard set, the public name carries product semantics, architecture and
+config select the fixed model implementation, and object bindings provide the actual
+representations. Each consumer reads data for these uses.
+
+### Expert tier plans (strategy SP-4)
+
+The `metadata` object may carry an optional `tier_plan` member declaring the expert-tiering
+placement plan for routed expert banks. A version-1 plan is an object:
+
+```json
+{
+  "version": 1,
+  "banks": [
+    {
+      "object": "text/layers/0/moe/routed_gate_up",
+      "experts": 256,
+      "rows_per_expert": 1024,
+      "tiers": { "hot": [], "warm": [], "cold": [] },
+      "activation_profile": [0]
+    }
+  ]
+}
+```
+
+Each bank names one tensor object by id and declares its expert geometry (`experts` by
+`rows_per_expert`), the hot/warm/cold expert assignment, and an optional per-expert activation
+profile (conversion-time calibration, for hot-set seeding). The three tier arrays must
+disjointly and completely cover `[0, experts)`; an activation profile, when present, carries one
+nonnegative count per expert. The loader (`src/artifact/tier_plan.{h,cpp}`) parses the block,
+rejects malformed plans at load, and checks that every named bank resolves to a tensor whose row
+count is exactly `experts * rows_per_expert`. The load summary reports the plan
+(`tier_plan_banks`, `tier_plan_warm_experts`).
+
+Version 1 is declarative: the plan describes placement and is validated and reported, but the
+materialization honors it only when the tiered execution path consumes it; an absent or partial
+plan changes no serving behavior. `tools/annotate_tier_plan.py` annotates an existing v3
+artifact without re-conversion: it rewrites the directory JSON with the plan, shifts file zero's
+payload region (logical payload offsets and continuation shards are untouched), and preserves
+every payload byte.
 
 ## 11. 读取、写入与错误边界
 

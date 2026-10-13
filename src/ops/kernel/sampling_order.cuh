@@ -7,6 +7,8 @@
 
 #include "ninfer/ops/sampling.h"
 
+#include <math_constants.h>
+
 #include <cstdint>
 
 namespace ninfer::ops {
@@ -46,13 +48,19 @@ __device__ __forceinline__ float sampling_penalized(float raw, int count,
 
 // Applies the sampler's penalties to a raw logit. `overlay`/`overlay_len` carry a round-local count
 // overlay: tokens committed earlier in the current speculative round but not yet flushed to the
-// global `token_counts`. For speculative verify column `col` the overlay is exactly drafts[0..col-1]
-// (statically known, since column `col` is only consumed when every earlier draft was accepted), so
-// the penalty at each column sees the same prefix a per-token sampler would. Non-speculative callers
-// pass no overlay. The scan is bounded by k and only runs when penalties are active.
+// global `token_counts`. For speculative verify column `col` the overlay is exactly
+// drafts[0..col-1] (statically known, since column `col` is only consumed when every earlier draft
+// was accepted), so the penalty at each column sees the same prefix a per-token sampler would.
+// Non-speculative callers pass no overlay. The scan is bounded by k and only runs when penalties
+// are active. A token mask selects its position by the same overlay length: sample() reads position
+// zero and speculative verify column `col` reads position `col`. Illegal tokens become -inf.
 __device__ __forceinline__ float sampling_adjusted_logit(float raw, int v, const SamplingConfig& c,
                                                          const std::int32_t* overlay = nullptr,
                                                          int overlay_len             = 0) {
+    if (c.mask.words != nullptr &&
+        !(c.mask.words[overlay_len * c.mask.stride + v / 32] & (1u << (v % 32)))) {
+        return -CUDART_INF_F;
+    }
     if (c.presence_penalty == 0.0f && c.frequency_penalty == 0.0f) { return raw; }
     int cnt = c.token_counts != nullptr ? c.token_counts[v] : 0;
     for (int j = 0; j < overlay_len; ++j) {

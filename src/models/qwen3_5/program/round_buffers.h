@@ -26,6 +26,13 @@ struct RoundStateSpec {
     bool causal_scoring          = false;
 };
 
+// Pinned prefill round exchange: the sampled first token and, for a constrained final chunk, the
+// lane sampling config whose mask the prefill sample consumes.
+struct PrefillRoundHost {
+    TokenId sampled_token = 0;
+    ops::SamplingConfig sampling;
+};
+
 // Stable pinned/device transfer format for ordinary decode. The full fixed-size object is copied
 // once per round; only its exact-B prefixes are consumed by the model schedule.
 struct OrdinaryDecodeIngress {

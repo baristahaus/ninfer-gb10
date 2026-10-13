@@ -260,6 +260,14 @@ PersistentLayout persistent_layout(const SequencePlanImpl& plan) {
         out.sampling_config = add_tensor(
             builder, DType::I32, {config_words, static_cast<std::int32_t>(plan.max_concurrency)},
             "sampling config");
+        // One region per decode row plus one owned by the prefill lane, so an unsynchronized
+        // prefill chunk never shares Host staging with a decode round.
+        out.grammar_masks =
+            add_tensor(builder, DType::I32,
+                       {dimension((parameters.model.resources().public_token_count + 31) / 32),
+                        static_cast<std::int32_t>(plan.draft_window + 1),
+                        static_cast<std::int32_t>(plan.max_concurrency + 1)},
+                       "grammar token masks");
     }
     out.bytes = builder.finish(kArenaAlign, "persistent layout");
     out.kv_payload_bytes =
@@ -869,14 +877,18 @@ std::unique_ptr<SequencePlanImpl> build_sequence_candidate(const SequencePlannin
                         const std::uint64_t final_visible = std::min<std::uint64_t>(
                             impl->capacity,
                             static_cast<std::uint64_t>(profile.max) + impl->draft_window + 1ULL);
-                        return (final_visible <= 4096 ? 64ULL : 96ULL) * kMiB;
+                        // Long profiles also materialize driver execution storage; that shared
+                        // cost does not shrink with the number of graph executables.
+                        return (final_visible <= 4096 ? 64ULL : 192ULL) * kMiB;
                     },
                     "DFlash graph allowance");
             };
+            // Forward keeps the draft's topology classes; Finish has one small executable per
+            // exact B, independently of context length.
             for (std::uint32_t batch_size = 1; batch_size <= impl->max_concurrency; ++batch_size) {
-                impl->graph_allowance_bytes =
-                    checked_add(impl->graph_allowance_bytes, class_allowance(batch_size),
-                                "DFlash exact-b graph allowance");
+                impl->graph_allowance_bytes = checked_add(impl->graph_allowance_bytes,
+                                                          class_allowance(batch_size) + 8ULL * kMiB,
+                                                          "DFlash exact-b graph allowance");
             }
         }
     }

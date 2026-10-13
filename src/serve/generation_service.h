@@ -15,6 +15,8 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
+#include <span>
 #include <unordered_map>
 #include <vector>
 
@@ -22,6 +24,7 @@ namespace ninfer::serve {
 
 struct RequestLifetime;
 struct RequestCapacity;
+struct ResolvedPromptSemantics;
 
 struct GenerationMetrics {
     double prepare_seconds         = 0.0;
@@ -62,6 +65,7 @@ struct GenerationOutcome {
     int completion_tokens = 0;
     int reasoning_tokens  = 0;
     ninfer::ThinkingBudgetStats thinking;
+    std::optional<ninfer::ConstraintObservation> constraint;
     ninfer::FinishReason finish_reason = ninfer::FinishReason::OutputLimit;
     std::optional<std::string> matched_stop_string;
     GenerationMetrics metrics;
@@ -83,12 +87,17 @@ enum class GenerationConsumerMode : std::uint8_t {
 };
 
 // Translate Engine request failures into the shared protocol-neutral HTTP error contract.
-ApiError request_error_to_api_error(const ninfer::RequestError& exception);
+ApiError
+request_error_to_api_error(const ninfer::RequestError& exception,
+                           std::string_view constraint_param = "structured_outputs.grammar",
+                           std::span<const std::string> tool_schema_params = {});
 
 // Preparation ends by synchronously submitting the owning prompt to the Engine FIFO. The returned
 // request keeps its ingress/response lifetime reservation until the HTTP response is released and
 // is consumed exactly once by run().
 struct PreparedRequest {
+    std::string constraint_param;
+    std::vector<std::string> tool_schema_params;
     ninfer::GenerationHandle generation;
     ninfer::ResolvedSamplingParameters sampling;
     double prepare_seconds     = 0.0;
@@ -99,7 +108,6 @@ struct PreparedRequest {
     std::optional<std::uint32_t> thinking_budget;
     std::optional<ninfer::ReasoningEffort> reasoning_effort;
     std::optional<bool> preserve_thinking;
-    ResponseFormatKind response_format = ResponseFormatKind::Text;
     std::shared_ptr<RequestLifetime> lifetime;
 };
 
@@ -169,8 +177,11 @@ private:
     [[nodiscard]] std::shared_ptr<RequestLifetime>
     acquire_request_lifetime(DeadlinePolicy deadline_policy) const;
 
+    [[nodiscard]] ResolvedPromptSemantics prompt_semantics(const GenerationRequest& request) const;
+
     ServeOptions options_;
     std::unique_ptr<ninfer::Engine> engine_;
+    bool output_constraints_ = false;
     std::shared_ptr<RequestCapacity> request_capacity_;
     std::atomic<bool> draining_{false};
     std::atomic<bool> cancelling_{false};

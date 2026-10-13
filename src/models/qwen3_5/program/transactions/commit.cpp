@@ -38,9 +38,16 @@ PendingBatch ProgramImpl::wrap_pending(std::span<const std::uint32_t> lanes,
             ContractAccess::make_sequence(this, runtime::LaneId{lane}, lane_epochs[lane]);
     }
     pending_transaction_ = transaction;
-    return ContractAccess::make_pending(
+    auto pending         = ContractAccess::make_pending(
         this, transaction.id, std::span<const SequenceHandle>(handles.data(), lanes.size()),
         round.tokens, round.row_counts, round.row_stride, round.timing);
+    // A dead-end grammar position fails its row only when the licensed extent reaches it.
+    for (std::size_t row = 0; row < lanes.size(); ++row) {
+        const auto count = round.row_counts.empty() ? 1 : round.row_counts[row];
+        const auto reach = count >= 32 ? ~0U : (1U << count) - 1U;
+        ContractAccess::constraint_failed(pending, row, (grammar_dead_positions[row] & reach) != 0);
+    }
+    return pending;
 }
 
 PrefillProgress ProgramImpl::wrap_prefill(std::uint32_t lane, runtime::PrefillStepResult step) {
@@ -155,7 +162,8 @@ StartResult ProgramImpl::start_request(MaterializationTransaction& transaction) 
 
 PendingBatch ProgramImpl::decode(std::span<const SequenceHandle> members,
                                  std::span<const runtime::RoundBudget> budgets,
-                                 runtime::ExecutionTiming* failed_timing) {
+                                 runtime::ExecutionTiming* failed_timing,
+                                 runtime::TokenMaskProvider* masks) {
     if (pending_transaction_ || members.empty() || members.size() > max_concurrency ||
         budgets.size() != members.size()) {
         throw std::invalid_argument("decode membership is invalid");
@@ -175,7 +183,7 @@ PendingBatch ProgramImpl::decode(std::span<const SequenceHandle> members,
     }
     const auto lane_span = std::span<const std::uint32_t>(lanes.data(), members.size());
     try {
-        runtime::BatchedGeneratedRound round = decode_raw(lane_span, budgets, failed_timing);
+        runtime::BatchedGeneratedRound round = decode_raw(lane_span, budgets, failed_timing, masks);
         if (failed_timing != nullptr) { *failed_timing += round.timing; }
         return wrap_pending(lane_span, std::move(round));
     } catch (...) {
@@ -435,6 +443,10 @@ CommitResult ProgramImpl::commit(PendingBatch&& pending,
     const auto input_rows       = ContractAccess::rows(pending);
     const std::size_t row_count = input_rows.size();
     for (std::size_t row = 0; row < row_count; ++row) { members[row] = input_rows[row]; }
+    std::array<bool, kMaximumConcurrency> constraint_failed{};
+    for (std::size_t row = 0; row < row_count; ++row) {
+        constraint_failed[row] = pending.constraint_failed(row);
+    }
     const bool valid = valid_pending(pending);
     ContractAccess::consume(pending);
 
@@ -463,7 +475,8 @@ CommitResult ProgramImpl::commit(PendingBatch&& pending,
         }
         std::array<std::uint32_t, kMaximumConcurrency> accepted{};
         std::array<std::uint8_t, kMaximumConcurrency> terminal{};
-        std::array<std::uint8_t, kMaximumConcurrency> cancelled{};
+        // Cancelled and constraint-failed rows are both discarded: they commit nothing.
+        std::array<std::uint8_t, kMaximumConcurrency> discarded{};
         std::array<std::optional<std::uint32_t>, kMaximumConcurrency> prefix_execution_splits{};
         for (std::size_t row = 0; row < row_count; ++row) {
             const std::uint32_t lane                = ContractAccess::lane(members[row]).value;
@@ -471,24 +484,27 @@ CommitResult ProgramImpl::commit(PendingBatch&& pending,
             const PendingCandidate& candidate       = requests[lane].pending;
             pending_kinds[row]                      = candidate.kind;
             const runtime::CommitDecision& decision = decisions[row];
-            if (decision.cancelled && has_context_transaction()) {
+            const bool discard                      = decision.cancelled || decision.failed;
+            if (discard && has_context_transaction()) {
                 throw std::logic_error(
                     "active cancellation overlaps the global context transaction");
             }
-            if ((decision.cancelled && (decision.accepted_tokens != 0 || !decision.terminal)) ||
-                (!decision.cancelled &&
+            if ((decision.cancelled && decision.failed) ||
+                (!decision.cancelled && decision.failed != constraint_failed[row]) ||
+                (discard && (decision.accepted_tokens != 0 || !decision.terminal)) ||
+                (!discard &&
                  (decision.accepted_tokens == 0 || decision.accepted_tokens > candidate.produced ||
                   (!decision.terminal && decision.accepted_tokens != candidate.produced))) ||
                 (decision.prefix_execution_split_after &&
-                 (decision.cancelled || *decision.prefix_execution_split_after == 0 ||
+                 (discard || *decision.prefix_execution_split_after == 0 ||
                   *decision.prefix_execution_split_after > decision.accepted_tokens))) {
                 throw std::logic_error("pending transaction decision is invalid");
             }
             accepted[row]                = decision.accepted_tokens;
             terminal[row]                = decision.terminal ? 1U : 0U;
-            cancelled[row]               = decision.cancelled ? 1U : 0U;
+            discarded[row]               = discard ? 1U : 0U;
             prefix_execution_splits[row] = decision.prefix_execution_split_after;
-            if (decision.cancelled) {
+            if (discard) {
                 timings[row]     = requests[lane].timings;
                 speculative[row] = std::move(requests[lane].speculative_stats);
             }
@@ -499,7 +515,7 @@ CommitResult ProgramImpl::commit(PendingBatch&& pending,
             resolve_pending_raw(std::span<const std::uint32_t>(lanes.data(), row_count),
                                 std::span<const std::uint32_t>(accepted.data(), row_count),
                                 std::span<const std::uint8_t>(terminal.data(), row_count),
-                                std::span<const std::uint8_t>(cancelled.data(), row_count),
+                                std::span<const std::uint8_t>(discarded.data(), row_count),
                                 std::span<const std::optional<std::uint32_t>>(
                                     prefix_execution_splits.data(), row_count),
                                 failed_timing));
@@ -510,11 +526,13 @@ CommitResult ProgramImpl::commit(PendingBatch&& pending,
         out.row_count          = row_count;
         bool released_resource = false;
         for (std::size_t row = 0; row < row_count; ++row) {
-            if (decisions[row].cancelled) {
+            if (discarded[row]) {
                 invalidate_lane(lanes[row]);
                 released_resource = true;
                 out.rows[row]     = CommitRowResult{
-                        .disposition = runtime::CommitDisposition::CancelledReleased,
+                        .disposition = decisions[row].failed
+                                           ? runtime::CommitDisposition::FailedReleased
+                                           : runtime::CommitDisposition::CancelledReleased,
                         .timings     = timings[row],
                         .speculative = std::move(speculative[row]),
                 };
@@ -532,7 +550,7 @@ CommitResult ProgramImpl::commit(PendingBatch&& pending,
                 }
             }
 
-            if (pending_kinds[row] != PendingKind::Begin || decisions[row].cancelled) { continue; }
+            if (pending_kinds[row] != PendingKind::Begin || discarded[row]) { continue; }
             RequestControl& request = requests[lanes[row]];
             if (decisions[row].terminal) {
                 request.prefill.reset();

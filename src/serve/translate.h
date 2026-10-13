@@ -20,6 +20,8 @@ struct ResolvedPromptSemantics {
     std::optional<ninfer::ReasoningEffort> reasoning_effort;
     std::optional<bool> preserve_thinking;
     std::string chat_template_kwargs_json;
+    // The loaded family enforces output and tool constraints (LoadSummary::output_constraints).
+    bool output_constraints = true;
 };
 
 ResolvedPromptSemantics resolve_prompt_semantics(const GenerationRequest& req,

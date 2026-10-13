@@ -1,10 +1,10 @@
 #include "serve/generation_service.h"
 
 #include "product/media_acquire/acquire.h"
-#include "serve/json_output.h"
 #include "serve/translate.h"
 
 #include <algorithm>
+#include <charconv>
 #include <chrono>
 #include <cstddef>
 #include <iterator>
@@ -39,11 +39,59 @@ struct RequestLifetime {
     std::chrono::steady_clock::time_point deadline;
 };
 
-ApiError request_error_to_api_error(const ninfer::RequestError& exception) {
+ApiError request_error_to_api_error(const ninfer::RequestError& exception,
+                                    std::string_view constraint_param,
+                                    std::span<const std::string> tool_schema_params) {
     ApiError error;
     error.param   = "messages";
     error.message = exception.what();
+    const auto tool_param = [&] {
+        const std::string_view pointer = exception.pointer();
+        const auto split               = pointer.find('/', 1);
+        std::size_t index              = 0;
+        if (pointer.starts_with('/') && split != std::string_view::npos) {
+            const auto number = pointer.substr(1, split - 1);
+            const auto parsed =
+                std::from_chars(number.data(), number.data() + number.size(), index);
+            if (parsed.ec == std::errc{} && parsed.ptr == number.data() + number.size() &&
+                index < tool_schema_params.size() && !tool_schema_params[index].empty() &&
+                (pointer.substr(split) == "/parameters" ||
+                 pointer.substr(split).starts_with("/parameters/")))
+                return tool_schema_params[index] + std::string(pointer.substr(split + 11));
+        }
+        return "tools" + exception.pointer();
+    };
     switch (exception.kind()) {
+    case ninfer::RequestErrorKind::InvalidToolConstraint:
+        error.status = 400;
+        error.code   = "invalid_tool_constraint";
+        error.param  = tool_param();
+        break;
+    case ninfer::RequestErrorKind::InvalidGrammar:
+    case ninfer::RequestErrorKind::InvalidChoice:
+    case ninfer::RequestErrorKind::InvalidRegex:
+    case ninfer::RequestErrorKind::ConstraintDeadEnd:
+        error.status = 400;
+        error.param  = constraint_param;
+        error.code =
+            exception.kind() == ninfer::RequestErrorKind::InvalidGrammar  ? "invalid_grammar"
+            : exception.kind() == ninfer::RequestErrorKind::InvalidChoice ? "invalid_choice"
+            : exception.kind() == ninfer::RequestErrorKind::InvalidRegex  ? "invalid_regex"
+                                                                          : "constraint_dead_end";
+        break;
+    case ninfer::RequestErrorKind::InvalidJsonSchema:
+    case ninfer::RequestErrorKind::UnsupportedJsonSchema:
+    case ninfer::RequestErrorKind::UnsatisfiableJsonSchema:
+        error.status = 400;
+        error.param  = exception.source() == RequestErrorSource::Tools
+                           ? tool_param()
+                           : std::string(constraint_param) + exception.pointer();
+        error.code   = exception.kind() == ninfer::RequestErrorKind::InvalidJsonSchema
+                           ? "invalid_json_schema"
+                       : exception.kind() == ninfer::RequestErrorKind::UnsupportedJsonSchema
+                           ? "unsupported_json_schema"
+                           : "unsatisfiable_json_schema";
+        break;
     case ninfer::RequestErrorKind::ContextLengthExceeded:
         error.status = 400;
         error.code   = "context_length_exceeded";
@@ -187,8 +235,11 @@ ninfer::OwnedMedia acquire_media(const ContentPart& part, Clock::time_point dead
     return media;
 }
 
-[[noreturn]] void throw_request_error(const ninfer::RequestError& exception) {
-    throw ApiException(request_error_to_api_error(exception));
+[[noreturn]] void
+throw_request_error(const ninfer::RequestError& exception,
+                    std::string_view constraint_param               = "structured_outputs.grammar",
+                    std::span<const std::string> tool_schema_params = {}) {
+    throw ApiException(request_error_to_api_error(exception, constraint_param, tool_schema_params));
 }
 
 void check_preparation_control(Clock::time_point deadline,
@@ -202,12 +253,7 @@ void check_preparation_control(Clock::time_point deadline,
 
 class ServiceOutputSink final : public ninfer::OutputSink {
 public:
-    // withhold_content suppresses incremental answer text. JSON response_format output is
-    // cleaned only once generation ends, so the stream encoder's terminal suffix delivers the
-    // cleaned text as one chunk instead of streaming raw text that the cleaned result would
-    // no longer extend.
-    ServiceOutputSink(const StreamSink& sink, bool withhold_content)
-        : sink_(&sink), withhold_content_(withhold_content) {}
+    explicit ServiceOutputSink(const StreamSink& sink) : sink_(&sink) {}
 
     void start(ninfer::GenerationStart start) override {
         if (sink_->on_start) { sink_->on_start(start); }
@@ -228,14 +274,13 @@ public:
         if (delta.text.empty()) { return; }
         if (delta.channel == ninfer::OutputChannel::Reasoning) {
             if (sink_->on_reasoning) { sink_->on_reasoning(delta.text); }
-        } else if (!withhold_content_) {
+        } else {
             if (sink_->on_content) { sink_->on_content(delta.text); }
         }
     }
 
 private:
     const StreamSink* sink_ = nullptr;
-    bool withhold_content_  = false;
 };
 
 } // namespace
@@ -265,7 +310,8 @@ GenerationService::GenerationService(ServeOptions options, StartupObserver start
     engine_options.media_live_bytes         = options_.media_live_bytes;
     engine_options.media_preprocess_threads = options_.media_preprocess_threads;
     engine_options.startup_observer         = std::move(startup_observer);
-    engine_           = std::make_unique<ninfer::Engine>(std::move(engine_options));
+    engine_             = std::make_unique<ninfer::Engine>(std::move(engine_options));
+    output_constraints_ = engine_->load_summary().output_constraints;
     request_capacity_ = std::make_shared<RequestCapacity>(
         static_cast<std::size_t>(options_.max_concurrency) + options_.max_pending_requests);
 }
@@ -319,6 +365,13 @@ PreparedRequest GenerationService::prepare(const GenerationRequest& request,
         DeadlinePolicy::ClientPendingTimeout);
 }
 
+ResolvedPromptSemantics
+GenerationService::prompt_semantics(const GenerationRequest& request) const {
+    ResolvedPromptSemantics semantics = resolve_prompt_semantics(request, options_);
+    semantics.output_constraints      = output_constraints_;
+    return semantics;
+}
+
 PreparedRequest GenerationService::prepare_impl(const GenerationRequest& request,
                                                 GenerationConsumerMode consumer_mode,
                                                 ninfer::GenerationObservationOptions observation,
@@ -327,13 +380,14 @@ PreparedRequest GenerationService::prepare_impl(const GenerationRequest& request
                                                 CacheParticipation cache_participation,
                                                 DeadlinePolicy deadline_policy) const {
     PreparedRequest prepared;
-    const ResolvedPromptSemantics semantics = resolve_prompt_semantics(request, options_);
+    prepared.constraint_param = request.constraint_param;
+    for (const auto& tool : request.tools) prepared.tool_schema_params.push_back(tool.schema_param);
+    const ResolvedPromptSemantics semantics = prompt_semantics(request);
     ninfer::RequestOptions request_options  = to_request_options(
         request, options_, semantics, cache_participation == CacheParticipation::ReadWrite);
     prepared.thinking_budget     = request_options.execution.thinking.budget;
     prepared.reasoning_effort    = semantics.reasoning_effort;
     prepared.preserve_thinking   = semantics.preserve_thinking;
-    prepared.response_format      = request.response_format.kind;
     const bool request_has_media = request.media_item_count() != 0;
     if (request_has_media && !options_.enable_vision) {
         const std::invalid_argument error("Vision is disabled for this server");
@@ -385,7 +439,7 @@ PreparedRequest GenerationService::prepare_impl(const GenerationRequest& request
                                               observation, prepared.lifetime->deadline);
         prepared.sampling   = prepared.generation.resolved_sampling();
     } catch (const ApiException&) { throw; } catch (const ninfer::RequestError& exception) {
-        throw_request_error(exception);
+        throw_request_error(exception, request.constraint_param, prepared.tool_schema_params);
     } catch (const std::invalid_argument& exception) {
         throw_invalid_input(exception, "invalid_prompt");
     }
@@ -401,7 +455,7 @@ int GenerationService::count_prompt_tokens(const GenerationRequest& request,
     }
     const Clock::time_point deadline =
         Clock::now() + std::chrono::milliseconds(options_.pending_timeout_ms);
-    const ResolvedPromptSemantics semantics = resolve_prompt_semantics(request, options_);
+    const ResolvedPromptSemantics semantics = prompt_semantics(request);
     try {
         std::size_t remaining_media_bytes =
             std::min(options_.max_request_bytes, ninfer::kMaximumPromptMediaBytes);
@@ -428,11 +482,7 @@ int GenerationService::count_prompt_tokens(const GenerationRequest& request,
 GenerationOutcome GenerationService::run(PreparedRequest& prepared, const StreamSink* sink,
                                          std::function<bool()> is_cancelled) {
     std::unique_ptr<ServiceOutputSink> output_sink;
-    if (sink != nullptr) {
-        const bool json_format = prepared.response_format == ResponseFormatKind::JsonObject ||
-                                 prepared.response_format == ResponseFormatKind::JsonSchema;
-        output_sink = std::make_unique<ServiceOutputSink>(*sink, json_format);
-    }
+    if (sink != nullptr) { output_sink = std::make_unique<ServiceOutputSink>(*sink); }
     ninfer::OutputSink* public_sink = output_sink.get();
     // Every running request also observes the shutdown cancellation.
     const ninfer::CancellationView cancellation([this, external = std::move(is_cancelled), sink]() {
@@ -448,7 +498,7 @@ GenerationOutcome GenerationService::run(PreparedRequest& prepared, const Stream
             cancelling_.load(std::memory_order_acquire)) {
             throw_shutting_down();
         }
-        throw_request_error(exception);
+        throw_request_error(exception, prepared.constraint_param, prepared.tool_schema_params);
     }
     // A shutdown cancellation can also end the generation normally with a Cancelled finish; it
     // must still reach the client as the shutdown error, not as an ordinary stop.
@@ -480,20 +530,17 @@ GenerationOutcome GenerationService::run(PreparedRequest& prepared, const Stream
     }
     outcome.reasoning_tokens    = static_cast<int>(result.reasoning_tokens);
     outcome.thinking            = result.thinking;
+    outcome.constraint          = result.constraint;
     outcome.finish_reason       = result.finish_reason;
     outcome.matched_stop_string = std::move(result.matched_stop_string);
-    // JSON response_format output is tolerant-cleaned to its JSON value. Tool-call responses
-    // carry their own structure and keep their text unchanged. Streams received no content
-    // deltas, so their terminal suffix is exactly this text.
-    if (result.tool_calls.empty() &&
-        (prepared.response_format == ResponseFormatKind::JsonObject ||
-         prepared.response_format == ResponseFormatKind::JsonSchema)) {
-        outcome.text = json_output::extract(outcome.text);
-    }
 
-    outcome.metrics.prepare_seconds = prepared.prepare_seconds;
-    outcome.metrics.ttft_seconds =
+    // The service measured Frontend input preparation; the Engine also counts Submit-time output
+    // preparation (grammar compilation), which belongs to prepare exactly once.
+    outcome.metrics.prepare_seconds =
         prepared.prepare_seconds +
+        std::max(0.0, result.timings.prepare_seconds - prepared.preparation.seconds);
+    outcome.metrics.ttft_seconds =
+        outcome.metrics.prepare_seconds +
         std::max(0.0, result.timings.first_token_seconds - result.timings.prepare_seconds);
     outcome.metrics.vision_seconds          = result.timings.vision_seconds;
     outcome.metrics.prefill_seconds         = result.timings.prefill_seconds;
@@ -501,7 +548,7 @@ GenerationOutcome GenerationService::run(PreparedRequest& prepared, const Stream
     outcome.metrics.prompt_wall_seconds     = result.timings.prompt_wall_seconds;
     outcome.metrics.generation_wall_seconds = result.timings.generation_wall_seconds;
     outcome.metrics.total_seconds =
-        prepared.prepare_seconds +
+        outcome.metrics.prepare_seconds +
         std::max(0.0, result.timings.total_seconds - result.timings.prepare_seconds);
     outcome.metrics.engine_timing               = result.engine_timing;
     outcome.metrics.prefix_cache_hit_tokens     = result.reused_prompt_tokens;

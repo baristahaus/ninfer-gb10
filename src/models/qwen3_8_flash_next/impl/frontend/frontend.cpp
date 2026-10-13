@@ -1001,8 +1001,7 @@ public:
           thinking_control_tokens(std::move(thinking_control_tokens_)),
           preserve_special(output.raw || output.preserve_special_tokens),
           split_reasoning(starts_in_reasoning && !output.raw),
-          tool_call_output(output.raw ? nullptr : std::move(tool_call_output_),
-                           output.tool_name_max_length) {
+          tool_call_output(output.raw ? nullptr : std::move(tool_call_output_)) {
         if (thinking.budget && *thinking.budget == 0) {
             throw std::invalid_argument("thinking budget must be positive");
         }
@@ -1635,8 +1634,32 @@ std::vector<std::string> Frontend::token_pieces(std::span<const TokenId> tokens)
 OutputSession Frontend::make_output_session(const PreparedPrompt& prompt,
                                             const StopPolicy& caller_stop,
                                             const OutputOptions& output,
-                                            const ThinkingControlOptions& thinking) const {
+                                            const ThinkingControlOptions& thinking,
+                                            const std::optional<OutputConstraint>& constraint,
+                                            const ToolChoice& tool_choice) const {
     if (prompt.data_ == nullptr) { throw std::invalid_argument("prepared prompt is empty"); }
+    // This family samples without token masks. The default Basic tool mode therefore leaves calls
+    // to free generation, and every request that names an enforceable output contract is refused
+    // rather than answered unconstrained.
+    if (constraint) {
+        throw RequestError(
+            constraint->kind == OutputConstraintKind::JsonSchema ||
+                    constraint->kind == OutputConstraintKind::JsonObject
+                ? RequestErrorKind::UnsupportedJsonSchema
+            : constraint->kind == OutputConstraintKind::Choice ? RequestErrorKind::InvalidChoice
+            : constraint->kind == OutputConstraintKind::Regex  ? RequestErrorKind::InvalidRegex
+                                                               : RequestErrorKind::InvalidGrammar,
+            "Qwen3.8 Flash-Next does not support constrained decoding");
+    }
+    const auto& declared = prompt.data_->tool_call_output;
+    if (declared && !declared->tools.empty() &&
+        (declared->strict_declared || tool_choice.mode != ToolChoiceMode::Auto ||
+         tool_choice.allowed_names || !tool_choice.parallel)) {
+        throw RequestError(RequestErrorKind::InvalidToolConstraint,
+                           "Qwen3.8 Flash-Next does not enforce strict tools or a tool choice "
+                           "other than auto",
+                           {}, RequestErrorSource::Tools);
+    }
     StopPolicy policy = merge_stop_policy(*impl_->tokenizer, caller_stop);
     if (output.raw) { policy.publish_stop_token = true; }
     return OutputSession(std::make_unique<OutputSession::Impl>(

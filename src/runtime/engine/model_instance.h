@@ -21,6 +21,8 @@ inline constexpr std::uint32_t kIntegratedPrefillChunk = 4096;
 
 struct ModelInstance {
     using ModelContract = models::qwen3_5::RuntimeTypes;
+    // The family masks sampling with request-owned grammar matchers.
+    static constexpr bool kOutputConstraints = true;
 
     std::unique_ptr<models::qwen3_5::Model> model;
     const models::qwen3_5::execution::Parameters parameters;
@@ -37,6 +39,8 @@ struct ModelInstance {
 
 struct FlashNextInstance {
     using ModelContract = models::qwen3_8_flash_next_125b_a6b::Package;
+    // The family samples without token masks; its Frontend refuses enforceable constraints.
+    static constexpr bool kOutputConstraints = false;
     std::unique_ptr<ModelContract::LoadedModel> model;
     ModelContract::Frontend frontend;
     KvCapacityResolution kv_capacity_resolution;

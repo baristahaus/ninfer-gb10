@@ -1053,6 +1053,7 @@ public:
                 lanes_[lane.value] = LogicalLaneState::TerminalPending;
                 break;
             case CommitDisposition::CancelledReleased:
+            case CommitDisposition::FailedReleased:
                 release_cancelled_lane(lane);
                 break;
             }

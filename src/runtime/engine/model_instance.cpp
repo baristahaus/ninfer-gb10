@@ -219,6 +219,7 @@ ModelInstance::ModelInstance(std::unique_ptr<models::qwen3_5::Model> source,
     : model(std::move(source)), parameters(*model),
       frontend(models::qwen3_5::make_frontend(
           model->resources(), {.chat_template_path       = options.chat_template_path,
+                               .grammar_cache_bytes      = options.grammar_cache_bytes,
                                .architecture             = model->config().text.architecture,
                                .vision_enabled           = options.enable_vision,
                                .max_context              = options.max_context,
@@ -281,6 +282,7 @@ ConstructedModel construct_flash_next(const EngineOptions& options, DeviceContex
         options.context_cost.preset_path);
     LoadSummary summary;
     summary.architecture = "Qwen3_8FlashNextForCausalLM";
+    summary.output_constraints = FlashNextInstance::kOutputConstraints;
     summary.model_name   = reader.directory().metadata.value("name", "qwen3.8-flash-next-125b-a6b");
     summary.prefill_signature = "qwen3_8_flash_next_125b_a6b-nvfp4-v3-1";
     summary.weight_formats.assign(formats.begin(), formats.end());
@@ -358,6 +360,7 @@ ConstructedModel construct_model(const EngineOptions& options, DeviceContext& de
     const auto& stats = instance->model->storage_stats();
     LoadSummary summary;
     summary.architecture = models::architecture_name(instance->model->config().text.architecture);
+    summary.output_constraints = ModelInstance::kOutputConstraints;
     summary.model_name   = instance->model->info().name;
     summary.prefill_signature = signature;
     std::set<std::string> formats;

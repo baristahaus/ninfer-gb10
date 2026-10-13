@@ -11,6 +11,7 @@
 // by Engine; media sources remain unresolved until the product service acquires
 // owning bytes.
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -80,6 +81,8 @@ struct ToolDefinition {
     std::string name;
     std::string description;
     std::string input_schema_json;
+    std::string schema_param; // Original protocol path; never included in the model prompt.
+    bool strict = false;
     std::optional<std::string> input_examples_json;
     std::optional<CacheBoundary> cache_boundary_after;
 };
@@ -90,31 +93,8 @@ struct ToolCall {
     std::string arguments_json;
 };
 
-enum class ToolChoiceMode {
-    Auto,
-    None,
-    // Prompt-level directive forcing at least one tool call; NInfer has no
-    // constrained decoding, so enforcement is a directive appended to the final turn.
-    Required,
-};
-
-struct ToolChoice {
-    ToolChoiceMode mode = ToolChoiceMode::Auto;
-};
-
-// Wire response_format steering. Non-text kinds are prompt-guided (a directive
-// appended to the final turn) plus tolerant output cleaning; NInfer performs no
-// constrained decoding.
-enum class ResponseFormatKind {
-    Text,
-    JsonObject,
-    JsonSchema,
-};
-
-struct ResponseFormat {
-    ResponseFormatKind kind = ResponseFormatKind::Text;
-    std::string schema_json; // populated for JsonSchema
-};
+using ToolChoiceMode = ninfer::ToolChoiceMode;
+using ToolChoice     = ninfer::ToolChoice;
 
 struct ChatTurn {
     ChatRole role = ChatRole::User;
@@ -188,11 +168,11 @@ requested_reasoning_effort_name(RequestedReasoningEffort effort) noexcept {
 }
 
 struct GenerationRequest {
+    std::optional<OutputConstraint> constraint;
+    std::string constraint_param;
     std::vector<ChatTurn> messages;
     std::vector<ToolDefinition> tools;
-    std::size_t tool_name_max_length = 64;
     ToolChoice tool_choice;
-    ResponseFormat response_format;
     std::vector<std::string> stop_strings;
     bool stop_strings_apply_to_reasoning = false;
     // Benchmark/serving extension shared with vLLM, SGLang and llama.cpp: suppress the
@@ -210,7 +190,18 @@ struct GenerationRequest {
     SamplingParams sampling;
 
     [[nodiscard]] bool uses_tools() const noexcept {
-        return !tools.empty() && tool_choice.mode != ToolChoiceMode::None;
+        return !tools.empty() && tool_choice.mode != ToolChoiceMode::None &&
+               (!tool_choice.allowed_names || !tool_choice.allowed_names->empty());
+    }
+
+    [[nodiscard]] bool constrains_tools() const noexcept {
+        if (tools.empty() || constraint) return false;
+        if (!uses_tools()) return true;
+        if (tool_choice.mode == ToolChoiceMode::Required || !tool_choice.parallel ||
+            tool_choice.allowed_names || tool_choice.constraints == ToolConstraintMode::Basic)
+            return true;
+        return std::any_of(tools.begin(), tools.end(),
+                           [](const auto& tool) { return tool.strict; });
     }
 
     [[nodiscard]] std::size_t media_item_count() const noexcept {

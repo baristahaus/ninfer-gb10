@@ -2,6 +2,7 @@
 
 #include "serve/generation_service.h"
 
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <string>
@@ -12,8 +13,9 @@ namespace ninfer::serve {
 // Serving-layer telemetry counters rendered as Prometheus text on GET /metrics. Monotonic
 // counters are delta-sampled by the consumer (EngineMetrics, scrape agents); gauges are read
 // from Engine snapshots at render time. The serving layer owns the request-observed counters
-// (tokens, latency, speculative acceptance, cache hits); the Engine owns execution gauges
-// (batch occupancy, pool occupancy, catalogued prompts, state-slot occupancy).
+// (tokens, latency, speculative acceptance, cache hits, output-constraint engagement); the Engine
+// owns execution gauges (batch occupancy, pool occupancy, catalogued prompts, state-slot
+// occupancy) and the cumulative constrained-draft wait.
 class ServerMetrics {
 public:
     // Completed generation request: the outcome carries prompt/completion/reasoning tokens,
@@ -46,6 +48,17 @@ private:
     std::atomic<std::uint64_t> ttft_seconds_millis_{0};
     std::atomic<std::uint64_t> prefill_seconds_millis_{0};
     std::atomic<std::uint64_t> decode_seconds_millis_{0};
+    // Settled requests that ran a constraint matcher, by language completion (terminated,
+    // complete but interrupted, incomplete), committed output branch (undecided, content, tools)
+    // and compilation-cache access (hit, built, waited).
+    std::array<std::atomic<std::uint64_t>, 3> constraint_outcomes_{};
+    std::array<std::atomic<std::uint64_t>, 3> constraint_branches_{};
+    std::array<std::atomic<std::uint64_t>, 3> constraint_cache_{};
+    std::atomic<std::uint64_t> constraint_mask_positions_{0};
+    std::atomic<std::uint64_t> constraint_mask_upload_bytes_{0};
+    std::atomic<std::uint64_t> constraint_prepare_seconds_millis_{0};
+    std::atomic<std::uint64_t> constraint_mask_seconds_millis_{0};
+    std::atomic<std::uint64_t> constraint_matcher_seconds_millis_{0};
 };
 
 } // namespace ninfer::serve

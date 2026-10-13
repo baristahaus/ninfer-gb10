@@ -3,6 +3,7 @@
 #include "models/qwen3_5/frontend/tokenizer.h"
 #include "models/qwen3_5/frontend/tool_call_parser.h"
 #include "text/unicode.h"
+#include "text/grammar.h"
 #include <algorithm>
 #include <array>
 #include <limits>
@@ -132,6 +133,20 @@ ReasoningCloseScan scan_reasoning_close(std::string_view text, bool implicit_end
     return ReasoningCloseScan{.hold = longest_suffix_prefix(text, kThinkClose, true)};
 }
 
+// A constrained route shares the canonical close serialization with its grammar, so the decoder
+// and the matcher change phase at the same byte. Free routes use the marker scan above.
+ReasoningCloseScan find_reasoning_close(std::string_view text, bool exact, bool implicit_end) {
+    if (!exact) { return scan_reasoning_close(text, implicit_end); }
+    const std::size_t marker = text.find(fi::kCanonicalReasoningCloseSerialization);
+    if (marker != std::string_view::npos) { return ReasoningCloseScan{.close = marker}; }
+    return ReasoningCloseScan{
+        .hold = longest_suffix_prefix(text, fi::kCanonicalReasoningCloseSerialization, true)};
+}
+
+constexpr std::size_t reasoning_close_size(bool exact) noexcept {
+    return exact ? fi::kCanonicalReasoningCloseSerialization.size() : kThinkClose.size();
+}
+
 template <std::size_t Size>
 consteval std::array<std::size_t, Size> make_prefix_failure_table(std::string_view pattern) {
     std::array<std::size_t, Size> failure{};
@@ -175,6 +190,7 @@ struct DecoderState {
     std::array<std::string, 2> stop_pending;
     bool in_reasoning              = false;
     bool strip_content_leading     = false;
+    bool exact_reasoning_framing   = false;
     bool terminal                  = false;
     std::uint64_t decoded_bytes    = 0;
     std::uint32_t reasoning_tokens = 0;
@@ -189,12 +205,14 @@ struct SemanticThinkingState {
     bool in_reasoning                   = false;
     bool control_pending                = false;
     bool applied                        = false;
+    bool exact_reasoning_framing        = false;
 };
 
 void feed_semantic_thinking(SemanticThinkingState& state, std::string_view bytes) {
     if (!state.in_reasoning || bytes.empty()) { return; }
     state.close_pending.append(bytes);
-    const ReasoningCloseScan scan = scan_reasoning_close(state.close_pending, false);
+    const ReasoningCloseScan scan =
+        find_reasoning_close(state.close_pending, state.exact_reasoning_framing, false);
     if (scan.close != std::string::npos) {
         state.close_pending.clear();
         state.in_reasoning    = false;
@@ -296,16 +314,18 @@ void feed_decoded_text(DecoderState& state, std::string_view text, const StopPol
     }
 
     state.think_marker_pending.append(text);
-    const ReasoningCloseScan scan = scan_reasoning_close(state.think_marker_pending, false);
+    const ReasoningCloseScan scan =
+        find_reasoning_close(state.think_marker_pending, state.exact_reasoning_framing, false);
     if (scan.close != std::string::npos) {
         feed_channel(state, OutputChannel::Reasoning,
                      std::string_view(state.think_marker_pending).substr(0, scan.close), policy,
                      emitted, committed_tokens, best_match);
         close_channel(state, OutputChannel::Reasoning, emitted);
-        std::string content = state.think_marker_pending.substr(scan.close + kThinkClose.size());
+        std::string content = state.think_marker_pending.substr(
+            scan.close + reasoning_close_size(state.exact_reasoning_framing));
         state.think_marker_pending.clear();
         state.in_reasoning          = false;
-        state.strip_content_leading = true;
+        state.strip_content_leading = !state.exact_reasoning_framing;
         feed_content(state, std::move(content), policy, emitted, committed_tokens, best_match);
         return;
     }
@@ -336,7 +356,8 @@ void terminalize(DecoderState& state, const StopPolicy& policy, PublishedOutput&
     }
     if (state.in_reasoning) {
         // A close marker still pending at the end of the turn is the model's implicit close.
-        const ReasoningCloseScan scan = scan_reasoning_close(state.think_marker_pending, true);
+        const ReasoningCloseScan scan =
+            find_reasoning_close(state.think_marker_pending, state.exact_reasoning_framing, true);
         const std::size_t split =
             scan.close != std::string::npos ? scan.close : state.think_marker_pending.size();
         feed_channel(state, OutputChannel::Reasoning,
@@ -344,11 +365,11 @@ void terminalize(DecoderState& state, const StopPolicy& policy, PublishedOutput&
                      committed_tokens, nullptr);
         close_channel(state, OutputChannel::Reasoning, emitted);
         if (scan.close != std::string::npos) {
-            std::string content =
-                state.think_marker_pending.substr(scan.close + kThinkClose.size());
+            std::string content = state.think_marker_pending.substr(
+                scan.close + reasoning_close_size(state.exact_reasoning_framing));
             state.think_marker_pending.clear();
             state.in_reasoning          = false;
-            state.strip_content_leading = true;
+            state.strip_content_leading = !state.exact_reasoning_framing;
             feed_content(state, std::move(content), policy, emitted, committed_tokens, nullptr);
         } else {
             state.think_marker_pending.clear();
@@ -374,23 +395,35 @@ public:
     Impl(std::shared_ptr<const fi::Tokenizer> tokenizer_, StopPolicy policy_, OutputOptions output,
          bool starts_in_reasoning, ThinkingControlOptions thinking,
          std::shared_ptr<const std::vector<TokenId>> thinking_control_tokens_,
-         std::shared_ptr<const fi::ToolCallOutputContract> tool_call_output_)
+         std::shared_ptr<const fi::ToolCallOutputContract> tool_call_output_,
+         std::unique_ptr<text::GrammarSession> grammar_, std::string_view continuation,
+         bool combined_)
         : tokenizer(std::move(tokenizer_)), policy(std::move(policy_)),
           thinking_control_tokens(std::move(thinking_control_tokens_)),
           preserve_special(output.raw || output.preserve_special_tokens),
           split_reasoning(starts_in_reasoning && !output.raw),
-          tool_call_output(output.raw ? nullptr : std::move(tool_call_output_),
-                           output.tool_name_max_length) {
+          tool_call_output(output.raw ? nullptr : std::move(tool_call_output_)),
+          grammar(std::move(grammar_)), combined(combined_) {
         if (thinking.budget && *thinking.budget == 0) {
             throw std::invalid_argument("thinking budget must be positive");
         }
-        state.in_reasoning        = split_reasoning;
-        prefix_execution.tracking = starts_in_reasoning;
-        semantic.budget           = thinking.budget;
+        state.in_reasoning               = split_reasoning;
+        state.exact_reasoning_framing    = grammar != nullptr;
+        prefix_execution.tracking        = starts_in_reasoning;
+        semantic.budget                  = thinking.budget;
+        semantic.exact_reasoning_framing = grammar != nullptr;
         // The presentation decoder already tracks normal reasoning output. Keep the independent
         // semantic tracker dormant unless a cap needs it, so the default unlimited path does not
         // decode every model token twice.
         semantic.in_reasoning = starts_in_reasoning && thinking.budget.has_value();
+        if (!continuation.empty()) {
+            saw_content = true;
+            if (combined)
+                branch = continuation.front() == '<' ? ConstraintOutputBranch::Tools
+                                                     : ConstraintOutputBranch::Content;
+            if (!combined || branch == ConstraintOutputBranch::Tools)
+                tool_call_output.initialize_continuation(continuation);
+        }
     }
 
     std::shared_ptr<const fi::Tokenizer> tokenizer;
@@ -409,7 +442,22 @@ public:
     fi::ToolCallOutputDecoder tool_call_output;
     std::vector<GeneratedToolCall> tool_calls;
     ToolCallParseDiagnostics tool_call_parse;
-    bool preview_ready = false;
+    bool preview_ready                 = false;
+    FinishReason preview_finish_reason = FinishReason::None;
+    std::unique_ptr<text::GrammarSession> grammar;
+    bool combined                 = false;
+    bool saw_content              = false;
+    ConstraintOutputBranch branch = ConstraintOutputBranch::Undecided;
+
+    void accept_grammar(std::span<const TokenId> tokens) {
+        if (!grammar) { return; }
+        try {
+            grammar->accept(tokens);
+        } catch (...) {
+            grammar->discard();
+            throw;
+        }
+    }
 };
 
 PublishedOutput::PublishedOutput(PublishedOutput&& other) noexcept
@@ -444,10 +492,46 @@ OutputSession::OutputSession(
     std::shared_ptr<const frontend::Tokenizer> tokenizer, StopPolicy policy, OutputOptions output,
     bool starts_in_reasoning, ThinkingControlOptions thinking,
     std::shared_ptr<const std::vector<TokenId>> thinking_control_tokens,
-    std::shared_ptr<const frontend::ToolCallOutputContract> tool_call_output)
-    : impl_(std::make_unique<Impl>(
-          std::move(tokenizer), std::move(policy), output, starts_in_reasoning, thinking,
-          std::move(thinking_control_tokens), std::move(tool_call_output))) {}
+    std::shared_ptr<const frontend::ToolCallOutputContract> tool_call_output,
+    std::unique_ptr<text::GrammarSession> grammar, std::string_view continuation, bool combined)
+    : impl_(std::make_unique<Impl>(std::move(tokenizer), std::move(policy), output,
+                                   starts_in_reasoning, thinking,
+                                   std::move(thinking_control_tokens), std::move(tool_call_output),
+                                   std::move(grammar), continuation, combined)) {}
+
+bool OutputSession::constrained() const noexcept { return impl_ && impl_->grammar != nullptr; }
+
+void OutputSession::observe_constraint(bool timings, double prepare_seconds) noexcept {
+    if (constrained()) impl_->grammar->observe(timings, prepare_seconds);
+}
+
+void OutputSession::constraint_uploaded(std::size_t bytes) noexcept {
+    if (constrained()) impl_->grammar->uploaded(bytes);
+}
+
+std::optional<ConstraintObservation> OutputSession::constraint_observation() const {
+    if (!constrained()) return {};
+    auto result = impl_->grammar->observation();
+    if (impl_->combined)
+        result.branch = impl_->branch;
+    else if (impl_->tool_call_output.in_tool_region() || !impl_->tool_calls.empty())
+        result.branch = ConstraintOutputBranch::Tools;
+    else if (impl_->saw_content || (!impl_->state.in_reasoning && result.complete))
+        result.branch = ConstraintOutputBranch::Content;
+    return result;
+}
+
+std::uint32_t OutputSession::grammar_masks(std::span<const TokenId> drafts,
+                                           std::span<std::uint32_t> words) {
+    if (!constrained()) { throw std::logic_error("mask requested for unconstrained output"); }
+    return impl_->grammar->masks(drafts, words);
+}
+
+void OutputSession::discard_preview() {
+    if (impl_->grammar) { impl_->grammar->discard(); }
+    impl_->preview_ready = false;
+    impl_->preview_output.clear();
+}
 
 runtime::OutputDecision OutputSession::preview_model(std::span<const TokenId> tokens,
                                                      std::uint32_t total_budget_remaining,
@@ -482,7 +566,9 @@ runtime::OutputDecision OutputSession::preview_model(std::span<const TokenId> to
         if (impl_->preview_execution_split_after && *impl_->preview_execution_split_after > count) {
             throw std::logic_error("prefix execution split exceeds the accepted token prefix");
         }
-        impl_->preview_ready = true;
+        impl_->accept_grammar(tokens.first(count));
+        impl_->preview_finish_reason = reason;
+        impl_->preview_ready         = true;
         return runtime::OutputDecision{
             .accepted_tokens              = count,
             .finish_reason                = reason,
@@ -620,7 +706,9 @@ runtime::OutputDecision OutputSession::preview_control(std::span<const TokenId> 
     impl_->preview_semantic.control_pending = false;
     impl_->preview_semantic.applied         = true;
     impl_->preview_semantic.injected_tokens = static_cast<std::uint32_t>(tokens.size());
-    impl_->preview_ready                    = true;
+    impl_->accept_grammar(tokens);
+    impl_->preview_finish_reason = FinishReason::None;
+    impl_->preview_ready         = true;
     return runtime::OutputDecision{
         .accepted_tokens              = static_cast<std::uint32_t>(tokens.size()),
         .prefix_execution_split_after = impl_->preview_execution_split_after,
@@ -659,7 +747,8 @@ runtime::OutputDecision OutputSession::preview_terminal(FinishReason reason) {
     impl_->preview_semantic.control_pending = false;
     impl_->preview_output.clear();
     terminalize(impl_->preview_state, impl_->policy, impl_->preview_output, 0);
-    impl_->preview_ready = true;
+    impl_->preview_finish_reason = reason;
+    impl_->preview_ready         = true;
     return runtime::OutputDecision{.accepted_tokens = 0, .finish_reason = reason};
 }
 
@@ -673,16 +762,27 @@ PublishedOutput OutputSession::commit_preview() {
     impl_->preview_output.clear();
     impl_->preview_ready = false;
 
+    if (impl_->grammar) impl_->grammar->confirm();
+
     for (OutputDelta& delta : output) {
         if (delta.channel == OutputChannel::Content) {
-            delta.text = impl_->tool_call_output.feed(delta.text);
-            delta.tool_call_progress_bytes = impl_->tool_call_output.tool_call_progress_bytes();
+            impl_->saw_content |= !delta.text.empty();
+            if (impl_->combined && impl_->branch == ConstraintOutputBranch::Undecided &&
+                !delta.text.empty())
+                impl_->branch = delta.text.front() == '<' ? ConstraintOutputBranch::Tools
+                                                          : ConstraintOutputBranch::Content;
+            if (!impl_->combined || impl_->branch == ConstraintOutputBranch::Tools) {
+                delta.text                     = impl_->tool_call_output.feed(delta.text);
+                delta.tool_call_progress_bytes = impl_->tool_call_output.tool_call_progress_bytes();
+            }
         }
     }
-    if (impl_->state.terminal) {
-        fi::ToolCallOutputDecoder::Terminal terminal = impl_->tool_call_output.finish();
-        impl_->tool_calls                            = std::move(terminal.tool_calls);
-        impl_->tool_call_parse                       = terminal.diagnostics;
+    if (impl_->state.terminal &&
+        (!impl_->combined || impl_->branch == ConstraintOutputBranch::Tools)) {
+        fi::ToolCallOutputDecoder::Terminal terminal =
+            impl_->tool_call_output.finish(impl_->preview_finish_reason);
+        impl_->tool_calls      = std::move(terminal.tool_calls);
+        impl_->tool_call_parse = terminal.diagnostics;
         if (!terminal.content.empty()) {
             OutputDelta* content = nullptr;
             for (OutputDelta& delta : output) {

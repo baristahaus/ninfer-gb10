@@ -125,12 +125,43 @@ intermediate artifacts are excluded unless requested or themselves the deliverab
 NInfer is a from-scratch C++/CUDA inference engine for maximum single-GPU performance on
 Qwen3.5 Dense/MoE and the fixed Qwen3.8 Flash-Next 125B-A6B architecture. V3 artifacts supply
 model configuration, encoded objects, logical bindings, Uses and selected component resources.
-Official 27B/35B recipes target RTX 5090; Flash-Next NVFP4 targets RTX PRO 6000 Blackwell.
-This is the GB10 fork. The default build target is `sm_121a` (GB10 Grace Blackwell);
-`sm_120a` (RTX 5090 / RTX PRO 6000) is the upstream reference target and remains supported.
 Text, image/video Vision, MTP, prefix reuse, CLI,
 OpenAI/Anthropic serving and measurement share the public `.ninfer` Engine route. The Qwen3.5
 family additionally supports DFlash/DFlash2 with the corresponding companion components.
+
+### Fork identity and upstream relationship
+
+This fork is independent. It does not track, rebase against, or sync with the Neroued/ninfer
+repository: upstream accepts only RTX 5090 implementation patches, and this fork's direction —
+GB10-first hardware, the context-cache/pressure/host-restore machinery, and the serving stack —
+does not land there. The relationship with upstream is bounded and explicit: a specific upstream
+feature may be ported into the fork when it is coherent, self-contained, and better than building
+fresh (constrained decoding and tuple schemas are the sanctioned ports), and RTX
+5090-relevant correctness fixes may be offered upstream as goodwill. Nothing else flows from
+upstream, and no fork work waits on upstream.
+
+### Hardware lanes and model classes
+
+The fork serves two hardware lanes with one engine. **GB10** (`sm_121a`, the default build
+target) is the native lane: models serve mostly in memory from the 121 GiB unified pool, with
+the 125B Flash-Next's file-mapped PLE table as the existing disk tier. **RTX 5090-class**
+(`sm_120a`) is the tiered lane: the 27B-class serves fully hot today, and the MoE class is the
+tiering target (GPU + RAM + disk) per the ratified strategy. GB10 native 125B bring-up
+validation is the strategy's SP-6.
+
+The **27B class** (Qwen 3.5/3.6/3.8 27B only) is the fully-hot baseline: its in-memory
+capability on RTX 5090-class hardware — weights, KV, state slots, concurrency, CUDA Graph
+decode, prefix reuse — must not regress, and it is the validation baseline for all strategy
+work. The **MoE class** (Qwen 3.6 35B-A3B fully hot today, Qwen 3.8 Flash-Next 125B-A6B, and
+future MoEs) is the tiering-aligned class. **Qwen 4.0/4.x** is the anticipated family:
+readiness is architectural (one shared core with family math modules, per the strategy's
+reframing); no speculative Qwen 4 code exists before the family is specified.
+
+The ratified strategy is `docs/maintainer/2026-10-12-fork-strategy.md`. Its packages (tiering,
+the family convergence, EXL3/Trellis, telemetry, multi-GPU phase gates) execute with task-level
+authorization, and each revises the affected contract lines in this file at execution time, not
+before. EngineMetrics-compatible Prometheus `/metrics` serving telemetry is part of the serving layer
+(SP-1, executed); `/health` remains the liveness probe.
 
 The current workload is one GPU and one resident model instance with a startup-fixed one to eight
 active requests. The Engine forms one compact decode batch at every round boundary and uses bounded
@@ -176,6 +207,9 @@ explicitly changed product contract requires them.
 Read only current authorities relevant to a live decision in the task. The following list is a
 routing map, not a mandatory reading list:
 
+- `docs/maintainer/2026-10-12-fork-strategy.md`: ratified fork strategy (tiering lanes, model
+  classes, the sovereign work packages, and the delegation split); its packages execute with
+  task-level authorization;
 - `README.md` and executable `--help`: delivered capabilities and exact commands;
 - `docs/README.md`: public documentation map;
 - `docs/cli.md`: CLI input, output, sampling, MTP, and runtime options;
@@ -375,7 +409,7 @@ These are conventional project resources, not a checklist of resources every tas
 | conversion report | `out/qwen3_6_27b.ninfer.conversion.json` |
 | normal build | `build/` |
 | profiler output | `profiles/ncu/`, `profiles/nsys/`, `profiles/bench/` |
-| hardware/toolchain | GB10 (Grace Blackwell), `sm_121a` (default); `sm_120a` upstream reference, CUDA 13.0.88 |
+| hardware/toolchain | GB10 (Grace Blackwell), `sm_121a` (default); RTX 5090, `sm_120a` (tiered lane); CUDA 13.0.88 |
 
 Use the selected Python 3.11 interpreter explicitly. Do not install or upgrade dependencies unless
 the task requires it. Never select an artifact by glob, modification time, or an unqualified

@@ -1,6 +1,7 @@
 #include "models/qwen3_5/load.h"
 
 #include "artifact/reader.h"
+#include "artifact/tier_plan.h"
 #include "models/qwen3_5/load/bindings.h"
 
 #include <utility>
@@ -15,6 +16,7 @@ struct LoadPlan::Impl {
     artifact::MaterializationPlan materialization;
     FrontendResources resources;
     InstanceInfo info;
+    std::optional<artifact::TierPlan> tier_plan;
 };
 
 LoadPlan::LoadPlan(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
@@ -33,6 +35,8 @@ const artifact::MaterializationPlan& LoadPlan::materialization() const {
     return impl_->materialization;
 }
 
+const std::optional<artifact::TierPlan>& LoadPlan::tier_plan() const { return impl_->tier_plan; }
+
 const artifact::ParameterReference& LoadPlan::parameter(WeightId id) const {
     return impl_->pending.at(id.index).reference;
 }
@@ -42,9 +46,28 @@ std::span<const WeightUse> LoadPlan::uses(WeightId id) const {
 }
 
 LoadPlan plan_load(const artifact::Reader& reader, LoadOptions options) {
-    auto out     = std::make_unique<LoadPlan::Impl>();
-    out->options = options;
-    out->config  = parse_config(reader.directory(), options);
+    auto out       = std::make_unique<LoadPlan::Impl>();
+    out->options   = options;
+    out->config    = parse_config(reader.directory(), options);
+    out->tier_plan = artifact::parse_tier_plan(reader.directory().metadata);
+    if (out->tier_plan) {
+        // A tier plan is declarative until the tiered materialization consumes it, but it must
+        // describe real banks: every named object resolves to a tensor whose row count is
+        // exactly experts * rows_per_expert.
+        for (const auto& bank : out->tier_plan->banks) {
+            const auto handle = reader.directory().object_index.find(bank.object);
+            if (handle == reader.directory().object_index.end()) {
+                throw artifact::ArtifactError("tier_plan bank object is absent: " + bank.object);
+            }
+            const auto& shape   = reader.directory().tensor(handle->second).shape;
+            const auto expected = static_cast<std::uint64_t>(bank.experts) *
+                                  static_cast<std::uint64_t>(bank.rows_per_expert);
+            if (shape.empty() || shape.front() != expected) {
+                throw artifact::ArtifactError("tier_plan bank " + bank.object +
+                                              " shape does not match experts * rows_per_expert");
+            }
+        }
+    }
     artifact::Binder binder(reader);
     out->resources = loading::bind_resources(binder, out->config);
     loading::Bindings bindings(binder);

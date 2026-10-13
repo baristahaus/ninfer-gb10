@@ -4,11 +4,13 @@
 
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <span>
 
 namespace ninfer::artifact {
 class Reader;
 struct ParameterReference;
+struct TierPlan;
 } // namespace ninfer::artifact
 
 namespace ninfer::models::qwen3_5 {
@@ -27,6 +29,9 @@ public:
     [[nodiscard]] const ModelWeights& weights() const;
     [[nodiscard]] const FrontendResources& resources() const;
     [[nodiscard]] const artifact::MaterializationPlan& materialization() const;
+    // The artifact's expert-tiering plan when the directory metadata carries one (strategy
+    // SP-4); validated against the bank objects at plan time.
+    [[nodiscard]] const std::optional<artifact::TierPlan>& tier_plan() const;
     [[nodiscard]] const artifact::ParameterReference& parameter(WeightId id) const;
     [[nodiscard]] std::span<const WeightUse> uses(WeightId id) const;
 

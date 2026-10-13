@@ -6,6 +6,7 @@ add_library(ninfer_artifact STATIC
   reader.cpp
   binder.cpp
   materializer.cpp
+  tier_plan.cpp
   views.cpp
 )
 ninfer_internal_includes(ninfer_artifact)

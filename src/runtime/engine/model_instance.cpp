@@ -1,5 +1,6 @@
 #include "runtime/engine/model_instance.h"
 #include "artifact/reader.h"
+#include "artifact/tier_plan.h"
 #include "artifact/binder.h"
 #include "artifact/formats.h"
 #include "core/startup.h"
@@ -313,6 +314,16 @@ ConstructedModel construct_model(const EngineOptions& options, DeviceContext& de
     }
     StartupPhaseScope binding(options.startup_observer, StartupPhase::TargetPlan);
     auto plan = models::qwen3_5::plan_load(reader, models::load_options(options));
+    // The LoadPlan is moved into materialization below; capture the reported tier-plan scalars
+    // while the plan is still alive.
+    std::uint32_t tier_plan_banks        = 0;
+    std::uint64_t tier_plan_warm_experts = 0;
+    if (const auto& tier_plan = plan.tier_plan()) {
+        tier_plan_banks = static_cast<std::uint32_t>(tier_plan->banks.size());
+        for (const auto& bank : tier_plan->banks) {
+            tier_plan_warm_experts += bank.warm.size() + bank.cold.size();
+        }
+    }
     binding.complete();
     auto model =
         models::qwen3_5::materialize_model(std::move(plan), device, &options.startup_observer);
@@ -356,14 +367,16 @@ ConstructedModel construct_model(const EngineOptions& options, DeviceContext& de
         }
     }
     summary.weight_formats.assign(formats.begin(), formats.end());
-    summary.load_seconds         = std::chrono::duration<double>(Clock::now() - start).count();
-    summary.upload_seconds       = stats.upload_seconds;
-    summary.artifact_bytes_read  = stats.read_bytes;
-    summary.host_to_device_bytes = stats.h2d_bytes;
-    summary.peak_staging_bytes   = stats.peak_staging_bytes;
-    summary.device_object_count  = stats.device_object_count;
-    summary.host_object_count    = stats.host_object_count;
-    summary.context_cost         = std::move(context_cost.summary);
+    summary.load_seconds           = std::chrono::duration<double>(Clock::now() - start).count();
+    summary.upload_seconds         = stats.upload_seconds;
+    summary.artifact_bytes_read    = stats.read_bytes;
+    summary.host_to_device_bytes   = stats.h2d_bytes;
+    summary.peak_staging_bytes     = stats.peak_staging_bytes;
+    summary.device_object_count    = stats.device_object_count;
+    summary.host_object_count      = stats.host_object_count;
+    summary.context_cost           = std::move(context_cost.summary);
+    summary.tier_plan_banks        = tier_plan_banks;
+    summary.tier_plan_warm_experts = tier_plan_warm_experts;
     return {std::move(instance), std::move(summary), std::move(context_cost.model)};
 }
 

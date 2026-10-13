@@ -1079,6 +1079,10 @@ struct LoadSummary {
     std::size_t device_object_count    = 0;
     std::size_t host_object_count      = 0;
     ContextCostSummary context_cost;
+    // The artifact's expert-tiering plan (strategy SP-4), when the directory metadata carries
+    // one: the planned banks and the experts planned outside the Device tier across them.
+    std::uint32_t tier_plan_banks      = 0;
+    std::uint64_t tier_plan_warm_experts = 0;
 };
 
 } // namespace ninfer

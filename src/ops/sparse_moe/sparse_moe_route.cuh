@@ -59,7 +59,8 @@ sparse_moe_merge_ranked_runs(SparseMoeRankedValue (&run)[kSparseMoeTopK]) {
 
 __device__ __forceinline__ void sparse_moe_select_top8_warp(const float* scores, int* ids,
                                                             float* alpha, float* shared_scale,
-                                                            float* selected_logits) {
+                                                            float* selected_logits,
+                                                            std::uint32_t* expert_activations) {
     const int lane = static_cast<int>(threadIdx.x) & 31;
     SparseMoeRankedValue local[kSparseMoeTopK];
 #pragma unroll
@@ -87,6 +88,11 @@ __device__ __forceinline__ void sparse_moe_select_top8_warp(const float* scores,
         }
     }
     __syncwarp();
+
+    // SP-4 phase 2b: accumulate one count per selected expert when profiling is armed.
+    if (expert_activations != nullptr && lane < kSparseMoeTopK) {
+        atomicAdd(expert_activations + ids[lane], 1u);
+    }
 
     float exponential = 0.0f;
     if (lane < kSparseMoeTopK) { exponential = expf(selected_logits[lane] - selected_logits[0]); }

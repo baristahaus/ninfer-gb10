@@ -278,6 +278,12 @@ public:
         return Submission(*this, std::move(request));
     }
 
+    [[nodiscard]] ninfer::MoeActivationProfile moe_activation_profile() const {
+        std::scoped_lock lock(execution_mutex_);
+        device_.synchronize();
+        return instance_.moe_activation_profile();
+    }
+
     [[nodiscard]] MemorySummary memory_summary() const {
         std::scoped_lock lock(execution_mutex_);
         MemorySummary out                      = instance_.program->memory_summary();

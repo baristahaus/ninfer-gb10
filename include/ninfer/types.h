@@ -1181,4 +1181,19 @@ struct LoadSummary {
     std::uint64_t tier_pinned_warm_bytes = 0;
 };
 
+// SP-4 phase 2b: per-expert activation counts accumulated by the MoE routing stages since
+// Engine construction. One entry per routed-expert MoE layer, in execution order.
+struct MoeActivationProfileLayer {
+    // The layer's component path, matching the routed bank object names: "text/layers/7" for
+    // the banks "text/layers/7/moe/routed_gate_up" and "text/layers/7/moe/routed_down", or
+    // "mtp/layer" for the MTP banks.
+    std::string component;
+    // One count per routed expert, in expert id order.
+    std::vector<std::uint32_t> counts;
+};
+
+struct MoeActivationProfile {
+    std::vector<MoeActivationProfileLayer> layers;
+};
+
 } // namespace ninfer

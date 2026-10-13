@@ -98,10 +98,12 @@ __global__ void sparse_moe_d1_kernel(const __nv_bfloat16* __restrict__ x,
 
 __global__ void sparse_moe_d2_warp_kernel(const float* __restrict__ scores, int* __restrict__ ids,
                                           float* __restrict__ alpha,
-                                          float* __restrict__ shared_scale) {
+                                          float* __restrict__ shared_scale,
+                                          std::uint32_t* __restrict__ expert_activations) {
     __shared__ float selected_logits[kTopK];
     if (threadIdx.x == 0) { pdl::trigger_dependents(); }
-    sparse_moe_select_top8_warp(scores, ids, alpha, shared_scale, selected_logits);
+    sparse_moe_select_top8_warp(scores, ids, alpha, shared_scale, selected_logits,
+                                expert_activations);
 }
 
 struct Q4Codec {
@@ -563,7 +565,8 @@ void launch_d2_d3(const Tensor& x, const SparseMoeWeights& weights,
     auto* ids          = static_cast<int*>(workspace.ids.data);
     auto* alpha        = static_cast<float*>(workspace.alpha.data);
     auto* shared_scale = static_cast<float*>(workspace.shared_scale.data);
-    sparse_moe_d2_warp_kernel<<<1, 32, 0, stream>>>(scores, ids, alpha, shared_scale);
+    sparse_moe_d2_warp_kernel<<<1, 32, 0, stream>>>(
+        scores, ids, alpha, shared_scale, weights.expert_activations);
     CUDA_CHECK(cudaGetLastError());
 
     switch (weights.routed_gate_up.qtype) {

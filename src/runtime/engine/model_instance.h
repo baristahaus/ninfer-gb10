@@ -35,6 +35,12 @@ struct ModelInstance {
     ~ModelInstance();
     ModelInstance(const ModelInstance&)            = delete;
     ModelInstance& operator=(const ModelInstance&) = delete;
+
+    // SP-4 phase 2b: the per-expert activation counts accumulated by this family's MoE
+    // routing stages. The caller synchronizes the device before querying.
+    [[nodiscard]] ninfer::MoeActivationProfile moe_activation_profile() const {
+        return parameters.moe_activation_profile();
+    }
 };
 
 struct FlashNextInstance {
@@ -45,6 +51,10 @@ struct FlashNextInstance {
     ModelContract::Frontend frontend;
     KvCapacityResolution kv_capacity_resolution;
     const std::uint32_t capacity;
+
+    // The Flash-Next family owns its own MoE machinery; this Engine carries no SP-4
+    // activation counters for it, so the profile reports no layers.
+    [[nodiscard]] ninfer::MoeActivationProfile moe_activation_profile() const { return {}; }
     std::unique_ptr<ModelContract::Program> program;
 
     FlashNextInstance(std::unique_ptr<ModelContract::LoadedModel> source,

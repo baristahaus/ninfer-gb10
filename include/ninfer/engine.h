@@ -110,6 +110,10 @@ public:
     [[nodiscard]] const EngineOptions& options() const;
     [[nodiscard]] LoadSummary load_summary() const;
     [[nodiscard]] MemorySummary memory_summary() const;
+    // SP-4: per-expert activation counts accumulated by the MoE routing stages since
+    // construction, one entry per routed-expert MoE layer in execution order. The query
+    // synchronizes the device and returns one consistent snapshot.
+    [[nodiscard]] MoeActivationProfile moe_activation_profile() const;
     [[nodiscard]] RuntimeStats runtime_stats() const;
     [[nodiscard]] MediaCacheSummary media_cache_summary() const;
     [[nodiscard]] bool is_available() const;

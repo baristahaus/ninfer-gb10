@@ -133,6 +133,7 @@ struct ProposalParameters {
 class Parameters {
 public:
     explicit Parameters(const Model& source);
+    ~Parameters();
     Parameters(const Parameters&)            = delete;
     Parameters& operator=(const Parameters&) = delete;
     Parameters(Parameters&&)                 = delete;
@@ -144,6 +145,17 @@ public:
     std::optional<VisionParameters> vision;
     std::optional<DraftParameters> draft;
     std::optional<ProposalParameters> proposal;
+
+    // SP-4 phase 2b: the per-expert activation counts accumulated by the MoE routing stages.
+    // The caller synchronizes the device before querying; dense models return no layers.
+    [[nodiscard]] ninfer::MoeActivationProfile moe_activation_profile() const;
+
+private:
+    // SP-4 phase 2b: device storage, one u32 counter per routed expert per MoE layer.
+    std::uint32_t* expert_counters_        = nullptr;
+    std::size_t expert_counters_bytes_     = 0;
+    std::uint32_t counter_experts_         = 0;
+    std::vector<std::string> counter_layers_;
 };
 
 } // namespace ninfer::models::qwen3_5::execution

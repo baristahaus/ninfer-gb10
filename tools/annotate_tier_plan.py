@@ -8,18 +8,33 @@ device (hot), pinned-host (warm), or file-backed (cold) tier:
 
     {
       "banks": [
-        {"object": "text/layers/0/mlp.experts.gate_up_proj.weight",
+        {"object": "text/layers/0/moe/routed_gate_up",
          "experts": 256, "rows_per_expert": 1024,
          "tiers": {"hot": [0, 1], "warm": [], "cold": [2, 3]}}
       ],
       "activation_profiles": {"<object id>": [count, ...]}   # optional, one count per expert
     }
 
+Ranked mode (strategy SP-4 phase 2b): when the plan carries "residency" (a hot-expert
+budget) and per-bank activation profiles, the tool ranks each layer's experts by measured
+activation count, keeps the top budget hot, and PERMUTES the artifact so the hot tier is
+the positional expert prefix [0, budget): every layer's routed_gate_up and routed_down banks
+have their per-expert row blocks reordered identically per plane (codes, high, scales), and
+the layer's router_shared_gate rows [0, experts) are permuted to match. The model is
+permutation-symmetric, so generation is bit-identical; the emitted tier plan, activation
+profiles, and the <output>.permutation.json sidecar all use the new expert numbering:
+
+    {
+      "version": 1,
+      "activation_profiles": {"<gate_up id>": [count, ...], ...},
+      "residency": {"hot_experts": 204}
+    }
+
 Version 1 plans are declarative: the loader validates them and reports them in the load
-summary; the materialization honors them only when the tiered execution path consumes them.
-The container's payload bytes are preserved exactly; only file zero is rewritten (its payload
-region shifts when the directory JSON changes length) and continuation shards are copied
-byte-for-byte.
+summary; the tiered materialization consumes them positionally. The container's payload
+bytes are preserved exactly except for the tiered permutation; only file zero is rewritten
+(its payload region shifts when the directory JSON changes length) and continuation shards
+are copied byte-for-byte.
 """
 
 from __future__ import annotations
@@ -129,15 +144,164 @@ def build_tier_plan(plan: dict) -> dict:
     return {"version": 1, "banks": out_banks}
 
 
+def plane_row_bytes(fmt: str, cols: int) -> tuple[int, int, int]:
+    """Per-row (codes, high, scales) byte widths for the row-split quantized layouts."""
+    if fmt == "q4_g64_fp16":
+        return cols // 2, 0, cols // 64 * 2
+    if fmt == "q5_g64_fp16":
+        return cols // 2, cols // 64 * 8, cols // 64 * 2
+    if fmt == "q6_g64_fp16":
+        return cols // 2, cols // 64 * 16, cols // 64 * 2
+    if fmt == "q8_g32_fp16":
+        return cols, 0, cols // 32 * 2
+    raise SystemExit(f"unsupported tiered bank format: {fmt}")
+
+
+def rank_residency(counts: list, hot_experts: int) -> tuple[list, list]:
+    """The hot tier is the top `hot_experts` experts by activation count; ties break by
+    expert id so the ranking is deterministic. Both tiers keep expert id order."""
+    if not 0 < hot_experts < len(counts):
+        raise SystemExit(f"hot budget {hot_experts} must be a strict expert prefix of {len(counts)}")
+    order = sorted(range(len(counts)), key=lambda e: (-counts[e], e))
+    return sorted(order[:hot_experts]), sorted(order[hot_experts:])
+
+
+def permute_row_split(payload: bytes, fmt: str, shape: list, rows_per_expert: int,
+                      new_order: list) -> bytes:
+    """Reorder one row-split bank payload by whole-expert blocks, per plane. The layout is
+    [codes | high | scales] with each plane row-major over all rows, so every expert owns one
+    contiguous block per plane."""
+    rows, cols = shape
+    code_rb, high_rb, scale_rb = plane_row_bytes(fmt, cols)
+    code_plane, high_plane = rows * code_rb, rows * high_rb
+    if code_plane + high_plane + rows * scale_rb != len(payload):
+        raise SystemExit(f"plane layout does not cover the bank payload ({len(payload)} bytes)")
+    out = bytearray(len(payload))
+    for new_e, old_e in enumerate(new_order):
+        old_base, new_base = old_e * rows_per_expert, new_e * rows_per_expert
+        size = rows_per_expert * code_rb
+        out[new_base * code_rb:new_base * code_rb + size] = payload[old_base * code_rb:old_base * code_rb + size]
+        if high_rb:
+            size = rows_per_expert * high_rb
+            src = code_plane + old_base * high_rb
+            dst = code_plane + new_base * high_rb
+            out[dst:dst + size] = payload[src:src + size]
+        size = rows_per_expert * scale_rb
+        src = code_plane + high_plane + old_base * scale_rb
+        dst = code_plane + high_plane + new_base * scale_rb
+        out[dst:dst + size] = payload[src:src + size]
+    return bytes(out)
+
+
+def permute_router(payload: bytes, row_bytes: int, experts: int, new_order: list) -> bytes:
+    """Reorder a bf16 router bank's expert rows [0, experts); trailing rows stay in place."""
+    if len(payload) % row_bytes:
+        raise SystemExit("router payload is not a whole number of rows")
+    if len(payload) < (experts + 1) * row_bytes:
+        raise SystemExit("router payload is shorter than its expert rows")
+    out = bytearray(len(payload))
+    for new_e, old_e in enumerate(new_order):
+        out[new_e * row_bytes:(new_e + 1) * row_bytes] = payload[old_e * row_bytes:(old_e + 1) * row_bytes]
+    tail = experts * row_bytes
+    out[tail:] = payload[tail:]
+    return bytes(out)
+
+
+def derive_ranked_plan(plan_raw: dict, by_id: dict) -> tuple[dict, dict, list]:
+    """Build the positional tier plan for a profile-ranked residency, and return the payload
+    permutation specs: {relative payload offset: (object id, kind, format, shape,
+    rows_per_expert, new_order)} plus the sidecar mapping {layer: old_to_new}."""
+    profiles = plan_raw.get("activation_profiles")
+    residency = plan_raw.get("residency")
+    if not isinstance(residency, dict) or "hot_experts" not in residency:
+        raise SystemExit("residency must name hot_experts")
+    hot_experts = residency["hot_experts"]
+    if not isinstance(hot_experts, int) or hot_experts <= 0:
+        raise SystemExit("residency.hot_experts must be a positive integer")
+    if not isinstance(profiles, dict) or not profiles:
+        raise SystemExit("ranked residency requires activation_profiles keyed by object id")
+    gate_up_ids = sorted(k for k in profiles if k.endswith("/moe/routed_gate_up"))
+    if not gate_up_ids:
+        raise SystemExit("activation_profiles name no routed_gate_up banks")
+
+    banks, specs, sidecar = [], {}, {}
+    hit_total, selection_total = 0, 0
+    for gate_up_id in gate_up_ids:
+        counts = profiles[gate_up_id]
+        layer = gate_up_id[: -len("/moe/routed_gate_up")]
+        down_id, router_id = layer + "/moe/routed_down", layer + "/moe/router_shared_gate"
+        gate_up, down, router = by_id.get(gate_up_id), by_id.get(down_id), by_id.get(router_id)
+        if gate_up is None or down is None or router is None:
+            raise SystemExit(f"{gate_up_id}: layer is missing its bank or router object")
+        if down_id in profiles and profiles[down_id] != counts:
+            raise SystemExit(f"{gate_up_id}: gate_up and down activation profiles differ")
+        experts = router["shape"][0] - 1
+        if len(counts) != experts:
+            raise SystemExit(
+                f"{gate_up_id}: profile has {len(counts)} counts, router names {experts} experts")
+        rows_per_expert, rem = divmod(gate_up["shape"][0], experts)
+        down_rows_per_expert, down_rem = divmod(down["shape"][0], experts)
+        if rem or down_rem:
+            raise SystemExit(f"{gate_up_id}: bank rows do not divide into experts")
+        hot, warm = rank_residency(counts, hot_experts)
+        new_order = hot + warm  # hot prefix, then warm suffix, expert order in each
+        old_to_new = [0] * experts
+        for new_e, old_e in enumerate(new_order):
+            old_to_new[old_e] = new_e
+
+        for obj in (gate_up, down):
+            code_rb, high_rb, scale_rb = plane_row_bytes(obj["format"], obj["shape"][1])
+            if obj["shape"][0] * (code_rb + high_rb + scale_rb) != obj["bytes"]:
+                raise SystemExit(f"{obj['id']}: plane layout does not cover the object bytes")
+            specs[obj["offset"]] = (obj["id"], "bank", obj["format"], obj["shape"],
+                                   obj["shape"][0] // experts, new_order)
+        if router["format"] != "bf16" or router["shape"][0] != experts + 1:
+            raise SystemExit(f"{router_id}: router is not a bf16 [experts+1, hidden] bank")
+        if router["bytes"] != router["shape"][0] * router["shape"][1] * 2:
+            raise SystemExit(f"{router_id}: router bytes do not match its shape")
+        specs[router["offset"]] = (router_id, "router", router["format"], router["shape"], 1,
+                                   new_order)
+
+        permuted_counts = [counts[old] for old in new_order]
+        hot_ids = list(range(hot_experts))
+        warm_ids = list(range(hot_experts, experts))
+        banks.append({"object": gate_up_id, "experts": experts, "rows_per_expert": rows_per_expert,
+                      "hot": hot_ids, "warm": warm_ids, "cold": [],
+                      "activation_profile": permuted_counts})
+        banks.append({"object": down_id, "experts": experts,
+                      "rows_per_expert": down_rows_per_expert,
+                      "hot": hot_ids, "warm": warm_ids, "cold": [],
+                      "activation_profile": list(permuted_counts)})
+        hit_total += sum(counts[e] for e in hot)
+        selection_total += sum(counts)
+        sidecar[layer] = old_to_new
+
+    hit_rate = hit_total / selection_total if selection_total else 0.0
+    print(f"ranked residency: {hot_experts}/{experts} experts per layer, "
+          f"measured hot-set hit rate {hit_rate * 100:.2f}% "
+          f"({hit_total}/{selection_total} selections)", flush=True)
+    return {"version": 1, "banks": banks}, specs, {"hot_experts": hot_experts,
+                                                    "hit_rate": hit_rate, "layers": sidecar}
+
+
 def annotate(input_path: Path, output_path: Path, plan_path: Path) -> None:
     if output_path.exists():
         raise SystemExit(f"output already exists: {output_path}")
-    plan = build_tier_plan(json.loads(plan_path.read_text()))
+    plan_raw = json.loads(plan_path.read_text())
 
     magic, _, artifact_id, json_text, old_payload_start = read_entry_header(input_path)
     directory = json.loads(json_text)
     objects = directory.get("objects") or []
     by_id = {obj.get("id"): obj for obj in objects if isinstance(obj, dict)}
+
+    # Ranked mode (SP-4 phase 2b): the tiers come from the measured profiles and the payload
+    # is permuted so the hot tier is the positional prefix. Explicit mode keeps the input's
+    # declared tiers and byte-identical payloads.
+    specs, sidecar = {}, {}
+    if plan_raw.get("residency") is not None:
+        plan, specs, sidecar = derive_ranked_plan(plan_raw, by_id)
+    else:
+        plan = build_tier_plan(plan_raw)
 
     # The plan's banks must name real tensor objects, and each bank's row count must be exactly
     # experts * rows_per_expert so the runtime's semantic check passes.
@@ -180,14 +344,33 @@ def annotate(input_path: Path, output_path: Path, plan_path: Path) -> None:
         pad = new_payload_start - HEADER.size - len(encoded)
         out.write(b"\x00" * pad)
         copied = 0
+        pending = sorted(specs)
+        pending_index = 0
         with input_path.open("rb") as source:
             source.seek(old_payload_start)
             while copied < first_payload_bytes:
-                chunk = source.read(min(IO_CHUNK, first_payload_bytes - copied))
-                if not chunk:
-                    raise SystemExit("entry payload ended early")
-                out.write(chunk)
-                copied += len(chunk)
+                next_stop = first_payload_bytes
+                if pending_index < len(pending):
+                    next_stop = min(next_stop, pending[pending_index])
+                if next_stop > copied:
+                    chunk = source.read(min(IO_CHUNK, next_stop - copied))
+                    if not chunk:
+                        raise SystemExit("entry payload ended early")
+                    out.write(chunk)
+                    copied += len(chunk)
+                if pending_index < len(pending) and copied == pending[pending_index]:
+                    obj_id, kind, fmt, shape, unit_rows, new_order = specs[copied]
+                    length = by_id[obj_id]["bytes"]
+                    payload = source.read(length)
+                    if len(payload) != length:
+                        raise SystemExit(f"{obj_id}: entry payload ended early")
+                    if kind == "bank":
+                        permuted = permute_row_split(payload, fmt, shape, unit_rows, new_order)
+                    else:
+                        permuted = permute_router(payload, shape[1] * 2, shape[0] - 1, new_order)
+                    out.write(permuted)
+                    copied += length
+                    pending_index += 1
 
     for shard in continuation_files(input_path):
         target = output_path.parent / shard.name
@@ -195,10 +378,16 @@ def annotate(input_path: Path, output_path: Path, plan_path: Path) -> None:
             while chunk := source.read(IO_CHUNK):
                 sink.write(chunk)
 
+    if sidecar.get("layers"):
+        sidecar_path = output_path.with_suffix(".permutation.json")
+        sidecar_path.write_text(json.dumps(sidecar, indent=1))
+        print(f"permutation sidecar: {sidecar_path}", flush=True)
+
     print(
         f"annotated {input_path} -> {output_path}: "
         f"{len(plan['banks'])} banks planned, "
-        f"payload shifted {new_payload_start - old_payload_start:+d} bytes",
+        f"payload shifted {new_payload_start - old_payload_start:+d} bytes"
+        + (", payload permuted to the ranked expert order" if sidecar else ""),
         flush=True,
     )
 

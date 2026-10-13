@@ -1,5 +1,6 @@
 #include "models/qwen3_5/execution/parameters.h"
 
+#include "core/device.h"
 #include "core/weight_view.h"
 
 #include <limits>
@@ -283,6 +284,52 @@ Parameters::Parameters(const Model& source) : model(source) {
             ProposalParameters{prepare.linear(w.proposal->head), std::nullopt, w.proposal->rows};
         if (w.proposal->token_ids) { proposal->token_ids = prepare.tensor(*w.proposal->token_ids); }
     }
+    // SP-4 phase 2b: allocate per-expert activation counters for the routed MoE layers and
+    // wire them into the assembled weights; the routing stage accumulates one count per
+    // selected expert per token.
+    std::vector<std::pair<std::string, ops::SparseMoeWeights*>> routed;
+    for (std::size_t i = 0; i < text.layers.size(); ++i) {
+        if (auto* moe = std::get_if<ops::SparseMoeWeights>(&text.layers[i].ffn)) {
+            routed.emplace_back("text/layers/" + std::to_string(i), moe);
+        }
+    }
+    if (mtp) {
+        if (auto* moe = std::get_if<ops::SparseMoeWeights>(&mtp->ffn)) {
+            routed.emplace_back("mtp/layer", moe);
+        }
+    }
+    if (!routed.empty()) {
+        counter_experts_ = std::get<MoeConfig>(model.config().text.ffn).num_experts;
+        expert_counters_bytes_ =
+            routed.size() * static_cast<std::size_t>(counter_experts_) * sizeof(std::uint32_t);
+        CUDA_CHECK(cudaMalloc(&expert_counters_, expert_counters_bytes_));
+        CUDA_CHECK(cudaMemset(expert_counters_, 0, expert_counters_bytes_));
+        for (std::size_t i = 0; i < routed.size(); ++i) {
+            routed[i].second->expert_activations =
+                expert_counters_ + i * static_cast<std::size_t>(counter_experts_);
+            counter_layers_.push_back(routed[i].first);
+        }
+    }
+}
+
+Parameters::~Parameters() {
+    if (expert_counters_ != nullptr) { CUDA_CHECK(cudaFree(expert_counters_)); }
+}
+
+MoeActivationProfile Parameters::moe_activation_profile() const {
+    MoeActivationProfile out;
+    if (expert_counters_ == nullptr) { return out; }
+    std::vector<std::uint32_t> host(expert_counters_bytes_ / sizeof(std::uint32_t));
+    CUDA_CHECK(cudaMemcpy(host.data(), expert_counters_, expert_counters_bytes_,
+                          cudaMemcpyDeviceToHost));
+    for (std::size_t i = 0; i < counter_layers_.size(); ++i) {
+        MoeActivationProfileLayer layer;
+        layer.component = counter_layers_[i];
+        layer.counts.assign(host.begin() + static_cast<std::ptrdiff_t>(i) * counter_experts_,
+                            host.begin() + static_cast<std::ptrdiff_t>(i + 1) * counter_experts_);
+        out.layers.push_back(std::move(layer));
+    }
+    return out;
 }
 
 } // namespace ninfer::models::qwen3_5::execution

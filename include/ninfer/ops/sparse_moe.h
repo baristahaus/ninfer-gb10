@@ -25,6 +25,10 @@ struct SparseMoeWeights {
     Weight warm_routed_gate_up;
     Weight warm_routed_down;
     std::uint32_t tiered_hot_experts = 0;
+    // SP-4 phase 2b: when non-null, the routing stage accumulates one count per selected
+    // expert per token into this device buffer (256 counters per MoE layer); null preserves
+    // the exact existing behavior.
+    std::uint32_t* expert_activations = nullptr;
 };
 
 enum class SparseMoeEpilogue : std::uint8_t {

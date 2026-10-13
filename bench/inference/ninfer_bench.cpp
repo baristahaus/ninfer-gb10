@@ -286,6 +286,36 @@ int main(int argc, char** argv) {
             results.push_back(std::move(result));
         }
 
+        if (!options.moe_profile_path.empty()) {
+            const ninfer::MoeActivationProfile profile = engine.moe_activation_profile();
+            std::ostringstream out;
+            out << "{\n";
+            bool first_layer = true;
+            for (const auto& layer : profile.layers) {
+                for (const std::string_view bank : {"moe/routed_gate_up", "moe/routed_down"}) {
+                    if (!first_layer) { out << ",\n"; }
+                    first_layer = false;
+                    out << "  \"" << ninfer::bench::json_escape(layer.component) << '/'
+                        << ninfer::bench::json_escape(bank) << "\": [";
+                    for (std::size_t i = 0; i < layer.counts.size(); ++i) {
+                        out << (i == 0 ? "" : ", ") << layer.counts[i];
+                    }
+                    out << ']';
+                }
+            }
+            out << "\n}\n";
+            std::ofstream profile_out(options.moe_profile_path);
+            if (!profile_out) {
+                throw std::runtime_error("cannot write MoE profile: " + options.moe_profile_path);
+            }
+            profile_out << out.str();
+            if (profile_out.bad()) {
+                throw std::runtime_error("failed to write MoE profile: " + options.moe_profile_path);
+            }
+            std::cerr << "[ninfer_bench] MoE activation profile: " << profile.layers.size()
+                      << " layers -> " << options.moe_profile_path << '\n';
+        }
+
         std::string report;
         switch (options.output) {
         case ninfer::bench::OutputFormat::Table:

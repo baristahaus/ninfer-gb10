@@ -222,7 +222,7 @@ criteria — which is also what makes each one delegable (section 12). Dependenc
 | SP-2 | Upstream ports: constrained decoding (choice/regex) + tuple schemas/bounded numbers into serving | — | Tool-calling schema tests pass; the ported features engage on the tool-calling workload (measurable on the SP-1 counters) |
 | SP-3 | KV tail streaming (host-KV-spill extension from batch-restore to demand reads; per-lane shape measured 2026-10-12: GB10 reads host-tier pages in place at fabric bandwidth — no staging — while the 5090 sits behind PCIe at 45 GB/s pinned read / 47 GB/s H2D against 1683 GB/s VRAM, so its tail is staged and hidden behind the batch's compute) | SP-1 (tunability) | Long-context serving on the 27B with KV beyond device capacity; the 27B baseline battery unchanged |
 | SP-4 | Expert-tiering spine: container placement metadata, ranked profiles, the adaptive hot-set cache, tier transactions on the pressure/materialization spine | SP-1 | A tiered MoE serves with a hot/warm/cold split and a measured hot-set hit rate; the 27B serves with the machinery dormant and unchanged |
-| SP-5 | 5090 PCIe expert streaming with layer-ahead prefetch (GPU-only execution) | SP-4 | The 125B (or a stand-in MoE) serves on a 32 GB card; throughput and hit rate measured on SP-1 counters |
+| SP-5 | 5090 PCIe expert streaming with layer-ahead prefetch (GPU-only execution; prefetch depth n+2 — two layers ahead, community-validated at +8% chat / +4.2% code on Flash-Next SSD streaming and suggested by upstream's author — and the cache must pin in-flight prefetches or eviction discards them before their layer consumes them) | SP-4 | The 125B (or a stand-in MoE) serves on a 32 GB card; throughput and hit rate measured on SP-1 counters |
 | SP-6 | GB10 native 125B bring-up (validation lane; demand paging, no streaming code) | SP-4 (profiles only) | The 125B serves on GB10 natively; the resident-set and PLE demand-paging behavior measured |
 | SP-7 | EXL3: container format + trellis kernels + converter recipe, MoE banks first | SP-4 (sequencing) | An EXL3-quantized MoE artifact converts, loads, and matches its oracle within tolerance; quality-per-GB measured against NVFP4 |
 | SP-8 | Family convergence: one shared core; families shrink to math + recipes + policies | SP-1 (observability of no-regression) | The 27B baseline battery + smokes green at each step; net lines deleted reported per step; Qwen-4-readiness review (adding a family touches no core code) |
@@ -298,6 +298,13 @@ what "correct" means.
   `5090-test@638b27cf`; full logs and JSONs in `~/runs/tool-eval-ab/`.
 - 125B artifact: `docs/maintainer/qwen3.8-flash-next-125b-a6b-artifact.md` (125.5 GiB, five
   files, 51.2 GB file-mapped PLE table, 512/10 experts, NVFP4 routed banks).
+- SP-5 prefetch depth: r/LocalLLaMA 2026-10-13, "../Based on advice from LocalLLama
+  implemented a n+2 lookahead prediction for ssd streaming Qwen Flash Next - and it worked!
+  _ r_LocalLLaMA.pdf" (github.com/skeggsguy/Flash-next-ssd) — an n+2 expert lookahead on
+  Flash-Next SSD streaming measured +8% chat / +4.2% code on a Mac Mini M5 64 GB; the
+  eviction-pinning interaction (a correctly prefetched expert can be evicted before its layer
+  consumes it) is the thread's second finding and constrains SP-4 phase 2b's cache and SP-5's
+  staging.
 - RTX 5090 memory tier: `tools/bench/hardware/rtx_5090.json` — 1683 GB/s VRAM streaming read, 45 GB/s
   pinned-host read in place, 47 GB/s pinned H2D payload; measured 2026-10-12 by
   `tools/gb10/memory_probe.cu` (0.20 GiB buffers, CUDA 13.0.88, driver 13040, production server resident).

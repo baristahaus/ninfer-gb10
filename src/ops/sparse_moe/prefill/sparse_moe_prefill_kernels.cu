@@ -136,12 +136,11 @@ __global__ __launch_bounds__(kRouterThreads, 2) void sparse_moe_prefill_router_m
     }
 }
 
-__global__ void sparse_moe_prefill_select_count_kernel(const float* __restrict__ scores,
-                                                       int* __restrict__ ids,
-                                                       float* __restrict__ alpha,
-                                                       float* __restrict__ shared_scale,
-                                                       int* __restrict__ local_rank,
-                                                       int* __restrict__ tile_counts, int tokens) {
+__global__ void sparse_moe_prefill_select_count_kernel(
+    const float* __restrict__ scores, int* __restrict__ ids, float* __restrict__ alpha,
+    float* __restrict__ shared_scale, int* __restrict__ local_rank,
+    int* __restrict__ tile_counts, int tokens,
+    std::uint32_t* __restrict__ expert_activations) {
     __shared__ int counts[kExperts];
     __shared__ float selected_logits[kSparseMoeRouteTileTokens][kTopK];
     const int tid  = static_cast<int>(threadIdx.x);
@@ -155,7 +154,8 @@ __global__ void sparse_moe_prefill_select_count_kernel(const float* __restrict__
         sparse_moe_select_top8_warp(scores + static_cast<std::int64_t>(token) *
                                                  kSparseMoeRouterScoreRows,
                                     ids + token * kTopK, alpha + token * kTopK,
-                                    shared_scale + token, selected_logits[warp]);
+                                    shared_scale + token, selected_logits[warp],
+                                    expert_activations);
         __syncwarp();
         if (lane == 0) {
 #pragma unroll
@@ -1267,7 +1267,8 @@ void sparse_moe_prefill_launch(const Tensor& x, const SparseMoeWeights& weights,
         CUDA_CHECK(cudaGetLastError());
 
         sparse_moe_prefill_select_count_kernel<<<route_tiles, kRouterThreads, 0, stream>>>(
-            scores, ids, alpha, shared_scale, local_rank, tile_counts, tokens);
+            scores, ids, alpha, shared_scale, local_rank, tile_counts, tokens,
+            weights.expert_activations);
         CUDA_CHECK(cudaGetLastError());
 
         const bool wide_plan   = tokens >= kSparseMoePrefillWideMin;

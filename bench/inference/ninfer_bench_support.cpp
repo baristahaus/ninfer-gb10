@@ -351,6 +351,7 @@ std::string usage_text(std::string_view program) {
         << "  --profile-measured          bracket one measured repetition with CUDA profiler API\n"
         << "  -o, --output <table|json|csv>  output format (default: table)\n"
         << "  --output-file <path>        write report to a file\n"
+        << "  --moe-profile <path>         write per-expert MoE activation counts after the runs\n"
         << "  -h, --help                  show this help\n\n"
         << "With no -p/-n/-pg, the matrix is pp" << kDefaultNPrompt << " and tg" << kDefaultNGen
         << ".\n";
@@ -470,6 +471,8 @@ BenchOptions parse_args(int argc, char** argv) {
             }
         } else if (arg == "--output-file") {
             options.output_file = value("--output-file");
+        } else if (arg == "--moe-profile") {
+            options.moe_profile_path = value("--moe-profile");
         } else {
             throw std::invalid_argument("unknown argument: " + std::string(arg));
         }

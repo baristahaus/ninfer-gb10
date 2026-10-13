@@ -75,6 +75,9 @@ struct BenchOptions {
     bool profile_measured = false;
     OutputFormat output   = OutputFormat::Table;
     std::string output_file;
+    // SP-4 phase 2b: write per-expert MoE activation counts (the annotate tool's
+    // activation_profiles key format) after the measured runs.
+    std::string moe_profile_path;
     bool help_requested = false;
 };
 

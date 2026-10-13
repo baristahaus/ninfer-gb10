@@ -448,6 +448,20 @@ MemorySummary Engine::memory_summary() const {
         impl_->core);
 }
 
+MoeActivationProfile Engine::moe_activation_profile() const {
+    if (impl_ == nullptr) { throw std::logic_error("Engine is moved from"); }
+    return std::visit(
+        [](const auto& core) -> MoeActivationProfile {
+            using CoreState = std::remove_cvref_t<decltype(core)>;
+            if constexpr (std::is_same_v<CoreState, std::monostate>) {
+                throw std::logic_error("Engine core is unavailable");
+            } else {
+                return core->moe_activation_profile();
+            }
+        },
+        impl_->core);
+}
+
 MediaCacheSummary Engine::media_cache_summary() const {
     if (impl_ == nullptr) { throw std::logic_error("Engine is moved from"); }
     return std::visit(

@@ -7,7 +7,7 @@ import json
 from math import prod
 from typing import ClassVar, Mapping, Sequence, TypeAlias
 
-from .layouts import align_up, encoded_size, get_layout
+from .layouts import EXL3_EXPERT_BANK_V1, align_up, encoded_size, get_layout
 
 U64_MAX = (1 << 64) - 1
 RAW_BYTES_V1 = "raw_bytes_v1"
@@ -66,6 +66,9 @@ class TensorSpec:
     shape: tuple[int, ...]
     format: str
     layout: str
+    # EXL3 expert banks carry data-dependent payload bytes (mixed per-expert
+    # bitrates); every other layout derives its size from the shape alone.
+    bytes: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,8 +149,17 @@ def validate_encoding(obj: ArtifactObject) -> None:
             )
         return
     try:
-        size = encoded_size(obj.layout, obj.format, obj.shape)
         alignment = get_layout(obj.layout).alignment
+        if get_layout(obj.layout) is not EXL3_EXPERT_BANK_V1:
+            size = encoded_size(obj.layout, obj.format, obj.shape)
+        else:
+            # Mixed per-expert bitrates: the exact bytes are the experts' own
+            # trellis extents, validated directory-aware at load (contract 4).
+            if obj.bytes < 256 + 4 or obj.bytes % 4:
+                raise ArtifactError(
+                    f"{obj.id}: EXL3 bank needs at least a directory and codebook scalar"
+                )
+            size = obj.bytes
     except (TypeError, ValueError) as error:
         raise ArtifactError(f"{obj.id}: {error}") from error
     integer(size, f"{obj.id} encoded size", positive=True)
@@ -169,9 +181,14 @@ def plan_objects(specs: Sequence[ObjectSpec]) -> tuple[ArtifactObject, ...]:
         seen.add(name)
         if isinstance(spec, TensorSpec):
             dims = shape(spec.shape, name)
+            declared = spec.bytes
             try:
                 start = align_up(offset, get_layout(spec.layout).alignment)
-                size = encoded_size(spec.layout, spec.format, dims)
+                size = (
+                    encoded_size(spec.layout, spec.format, dims)
+                    if declared is None
+                    else encoded_size(spec.layout, spec.format, dims, payload_bytes=declared)
+                )
             except (TypeError, ValueError) as error:
                 raise ArtifactError(f"{name}: {error}") from error
             obj = TensorObject(name, dims, spec.format, spec.layout, start, size)

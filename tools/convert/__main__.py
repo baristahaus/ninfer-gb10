@@ -43,9 +43,14 @@ class SourceInputs(Mapping):
         return len(set(self._sources) | set(self._paths))
 
     def provenance(self):
-        return {
-            name: {"path": str(source.path)} for name, source in self._sources.items()
-        }
+        result = {}
+        for name, source in self._sources.items():
+            entry = {"path": str(source.path)}
+            if name == "exl3":
+                quantization = source.config.get("quantization_config", {})
+                entry["exl3_version"] = quantization.get("version")
+            result[name] = entry
+        return result
 
 
 def _pairs(values, label):

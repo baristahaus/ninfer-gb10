@@ -55,12 +55,33 @@ The built-in recipes are ordinary Python functions in
 | `qwen3_6_27b` | Q4/Q5 projections, Q6 vocabulary weights | None |
 | `qwen3_8_27b` | Q4/Q5 projections, Q8 vocabulary weights | None |
 | `qwen3_6_35b_a3b` | Q4 experts, Q5/Q6 expert down, Q8 shared/projection weights | None |
+| `qwen3_6_35b_a3b_exl3` | Imported EXL3 routed banks, Q8 shared/projection weights, Q8/Q6 vocabulary | `exl3` |
 | `qwen3_6_27b_nvfp4` | Imported NVFP4, selected BF16 projections, Q8 vocabulary weights | `quantized` |
 | `qwen3_8_27b_nvfp4` | Imported NVFP4/FP8, FP8 embedding generated from BF16 | `quantized` |
 
 These names select conversion choices. Runtime execution is selected from the architecture,
 configuration and actual bindings stored in the artifact. `--name` sets the public model name;
 it does not select kernels.
+
+For a Qwen3.6-35B-A3B artifact with EXL3 routed banks imported from an exllamav3 checkpoint
+(see [the EXL3 contract](maintainer/exl3-trellis-contract.md) for the pinned version and the
+validation the import performs):
+
+```bash
+python3 -m tools.convert \
+  --model /path/to/Qwen3.6-35B-A3B \
+  --recipe qwen3_6_35b_a3b_exl3 \
+  --source exl3=/path/to/Qwen3.6-35B-A3B-EXL3 \
+  --components text,mtp \
+  --proposal \
+  --name qwen3_6_35b_a3b_exl3 \
+  --out out/qwen3_6_35b_a3b_exl3.ninfer
+```
+
+The EXL3 source must carry `quantization_config.quant_method = "exl3"` at the contract's pinned
+version, and its architecture configuration must match the `--model` source. Every non-routed
+tensor keeps the groupwise recipe's formats from the BF16 source, so the artifact differs from
+`qwen3_6_35b_a3b` only in the routed banks.
 
 For a Qwen3.8-27B NVFP4/FP8 artifact with DFlash2:
 

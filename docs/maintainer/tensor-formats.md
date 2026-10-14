@@ -8,7 +8,7 @@ separately.
 
 ## 1. Registered formats
 
-NInfer has exactly ten persistent numeric tensor formats in four categories.
+NInfer has exactly eleven persistent numeric tensor formats in five categories.
 
 Direct scalar formats preserve one logical scalar word per tensor element:
 
@@ -39,6 +39,18 @@ The row-scaled floating-point weight format is:
 | Canonical name | Code | Scale granularity | Scale |
 |---|---|---|---|
 | `fp8_e4m3fn_row_bf16` | E4M3FN, 8 bits/weight | one multiplier per logical row | BF16 |
+
+The trellis-coded weight format is:
+
+| Canonical name | Code | Codebook | Object scalar |
+|---|---|---|---|
+| `exl3` | one 16-bit state per weight | `3inst`, `mcg` or `mul1`, uniform within a bank | the codebook id |
+
+The `exl3` numeric decode (tiles, ring, codebooks) is fixed by the SP-7 contract,
+[`exl3-trellis-contract.md`](exl3-trellis-contract.md) sections 2.3–2.5, and is implemented
+for verification by the exact codec oracles (`tools/convert/quantization/exl3.py`,
+`exl3_reference.py`, `tests/ops/exl3_ref.h`). It exists only as the `exl3_expert_bank` layout
+and only for routed MoE banks.
 
 Each name fixes a code and scale contract. The format registry is implemented in
 [`tools/artifact/formats.py`](../../tools/artifact/formats.py) and
@@ -301,6 +313,27 @@ The format does not define how a floating-point source is assigned a scale or ro
 A recipe either preserves already selected code and scale words exactly or names its
 conversion method. Activation quantization and activation scales are separate compute or runtime-state
 concerns and are not persistent fields of this format.
+
+### 3.5 `exl3`
+
+`exl3` is a trellis-coded weight representation defined by the SP-7 contract,
+[`exl3-trellis-contract.md`](exl3-trellis-contract.md), and exists only inside the
+`exl3_expert_bank` layout. One 16-bit codebook state is stored per logical weight element of a
+routed expert bank `[E*N, K]`: each 16×16 tile of the expert's `[N,K]` weight packs one tail-biting
+ring of `16·K` int16 words (bitrate `K` in 1…8, or 1.5, 2.5, 3.5 with the `mul1` codebook), and
+the ring's 16-bit windows select the codebook entries. Three codebooks are admitted (`3inst`,
+`mcg`, `mul1`); the bank's object scalar records which one, and a bank's codebook is uniform.
+
+The numeric decode, the ring storage rule, the codebook formulas and the exact bitrates are fixed
+by contract sections 2.3–2.5 and are not restated here. The format carries no scales: the expert's
+`suh` and `svh` FP16 vectors and the block Hadamard transforms of contract section 2.1 are stored
+in the bank layout, not in the numeric format. Verification oracles exist in Python
+(`tools/convert/quantization/exl3.py`, `exl3_reference.py`) and C++ (`tests/ops/exl3_ref.h`),
+qualified bit-exactly against exllamav3 v1.6.1.
+
+The format does not define how a floating-point source is quantized to a ring. The import recipe
+preserves an existing EXL3 checkpoint's rings verbatim; the quantize route names its own method
+(contract section 6.2).
 
 ## 4. Grouped signed-integer tensor model
 

@@ -13,6 +13,7 @@ from math import prod
 import struct
 from typing import Callable, Mapping
 
+import numpy as np
 import torch
 
 from tools.artifact.formats import (
@@ -26,7 +27,17 @@ from tools.artifact.tensor_output import TensorOutput
 
 from .quantization.fp8_row import quantize_bf16_rows
 from .quantization.groupwise import quantize_matrix
+from .sources.exllamav3 import Exl3ExpertSource
 from .sources.logical import EncodedRows, LogicalSource
+
+from tools.artifact.layouts import (
+    EXL3_CODEBOOK_IDS,
+    exl3_bank_geometry,
+    validate_exl3_rate,
+)
+from tools.convert.quantization.exl3 import decode_tiles
+
+EXL3_TILE = 16
 
 UseKey = tuple[str, str]
 AuxiliaryKey = tuple[str, str, str]
@@ -293,9 +304,128 @@ def import_encoded(request: PrepareRequest) -> PreparedMethod:
     return request.job(produce=produce, auxiliaries=auxiliaries)
 
 
+def import_exl3_bank(request: PrepareRequest) -> PreparedMethod:
+    """Repack one (layer, projection) EXL3 expert bank verbatim (contract 6.1 step 3).
+
+    Every input is one expert's EXL3 linear (an `Exl3ExpertSource`); the parent is
+    the bank `[E*n, k]`. Trellis bytes and suh/svh are copied unchanged, packed
+    experts are expanded, and the emitted planes are verified against the source
+    tensors with the exact codec oracle before the produced bytes are written.
+    """
+
+    if request.target.format != "exl3" or request.target.layout != "exl3_expert_bank":
+        raise ValueError("import_exl3_bank requires the EXL3 expert bank target")
+    if request.parameters:
+        raise ValueError("import_exl3_bank accepts no method parameters")
+    sources = []
+    for item in request.inputs:
+        if not isinstance(item.source, Exl3ExpertSource):
+            raise ValueError(
+                f"{item.parameter}: import_exl3_bank requires EXL3 expert sources"
+            )
+        sources.append(item.source)
+    if not sources:
+        raise ValueError("an EXL3 bank requires at least one expert")
+    codebooks = {source.linear.codebook for source in sources}
+    if len(codebooks) != 1:
+        raise ValueError(
+            f"a bank's codebook must be uniform; got {sorted(codebooks)}"
+        )
+    codebook = sources[0].linear.codebook
+    n, k = sources[0].shape
+    if any(source.shape != (n, k) for source in sources):
+        raise ValueError("a bank's experts must share one [n, k] shape")
+    if prod(request.target.shape) != len(sources) * n * k:
+        raise ValueError("bank parent and logical expert shapes disagree")
+    rates = tuple(source.linear.k2 for source in sources)
+    for rate in rates:
+        validate_exl3_rate(rate, codebook)
+    geometry = exl3_bank_geometry(n, k, rates, codebook)
+    if (geometry.experts * n, k) != tuple(request.target.shape):
+        raise ValueError("bank parent shape is not the stacked expert rows [E*n, k]")
+
+    # Directory-aware load validation (contract 4) checked at emission: offsets
+    # increase in expert order, are 256-byte aligned, and match the extents.
+    offsets = [entry[0] for entry in geometry.directory_entries()]
+    if offsets != sorted(offsets) or any(
+        offset % 256 or extent % 256
+        for offset, extent in zip(offsets, geometry.trellis_extents)
+    ):
+        raise ValueError("trellis extents violate the load validation")
+
+    def verify_expert(expert: int, extent: memoryview) -> None:
+        """Contract 6.1 step 4: sampled tiles decode bit-identically from the emitted
+        extent and the source trellis; every emitted suh/svh row equals its source."""
+
+        source = sources[expert]
+        tiles_n, tiles_k = k // EXL3_TILE, n // EXL3_TILE
+        positions = [(0, 0), (tiles_n - 1, tiles_k - 1)]
+        generator = torch.Generator().manual_seed(
+            20261014 + 7919 * expert + 104729 * tiles_n * tiles_k
+        )
+        picks = torch.randint(0, tiles_n * tiles_k, (14,), generator=generator)
+        positions += [(
+            int(pick) // tiles_k, int(pick) % tiles_k
+        ) for pick in picks.tolist()]
+        words = rates[expert] * 8
+        emitted = torch.frombuffer(
+            bytearray(extent[: tiles_n * tiles_k * words * 2]), dtype=torch.int16
+        ).reshape(tiles_n, tiles_k, words)
+        emitted_tiles = decode_tiles(emitted, rates[expert], codebook)
+        source_tiles = decode_tiles(source.linear.trellis, rates[expert], codebook)
+        for tile_n, tile_k in positions:
+            if not np.array_equal(
+                emitted_tiles[tile_n, tile_k], source_tiles[tile_n, tile_k]
+            ):
+                raise ValueError(
+                    f"expert {expert} tile ({tile_n},{tile_k}) differs from its source"
+                )
+
+    def produce(output):
+        directory = bytearray(geometry.directory_bytes)
+        for expert, (offset, extent, rate) in enumerate(geometry.directory_entries()):
+            struct.pack_into("<QIBBBB", directory, expert * 16, offset, extent, rate, 0, 0, 0)
+        output.write_bytes(geometry.directory_offset, bytes(directory))
+        if geometry.trellis_offset > geometry.directory_bytes:
+            output.write_bytes(
+                geometry.directory_bytes,
+                bytes(geometry.trellis_offset - geometry.directory_bytes),
+            )
+        suh = torch.empty((geometry.experts, k), dtype=torch.float16)
+        svh = torch.empty((geometry.experts, n), dtype=torch.float16)
+        for expert, source in enumerate(sources):
+            offset, extent, _ = geometry.directory_entries()[expert]
+            data = source.linear.trellis.numpy().tobytes()
+            if len(data) != n * k * rates[expert] // 16:
+                raise ValueError(f"expert {expert}: trellis bytes disagree with its rate")
+            packed = data + bytes(extent - len(data))
+            verify_expert(expert, memoryview(packed))
+            output.write_bytes(offset, packed)
+            suh[expert] = source.linear.suh
+            svh[expert] = source.linear.svh
+        if not torch.equal(
+            suh, torch.stack([source.linear.suh for source in sources])
+        ) or not torch.equal(
+            svh, torch.stack([source.linear.svh for source in sources])
+        ):
+            raise ValueError("emitted suh/svh rows differ from their sources")
+        output.write_bytes(geometry.suh_offset, suh.numpy().tobytes())
+        suh_end = geometry.suh_offset + geometry.suh_bytes
+        if geometry.svh_offset > suh_end:
+            output.write_bytes(suh_end, bytes(geometry.svh_offset - suh_end))
+        output.write_bytes(geometry.svh_offset, svh.numpy().tobytes())
+        output.write_bytes(
+            geometry.codebook_offset,
+            EXL3_CODEBOOK_IDS[codebook].to_bytes(4, "little"),
+        )
+
+    return request.job(produce=produce)
+
+
 METHODS: dict[str, Method] = {
     "cast_direct": cast_direct,
     "grouped_absmax": grouped_absmax,
     "fp8_row_maxabs": fp8_row_maxabs,
     "import_encoded": import_encoded,
+    "import_exl3_bank": import_exl3_bank,
 }

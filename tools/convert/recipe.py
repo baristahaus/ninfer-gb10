@@ -8,7 +8,10 @@ from fnmatch import fnmatchcase
 from math import prod
 from typing import Sequence
 
-from tools.artifact.layouts import encoded_size
+from tools.artifact.layouts import (
+    encoded_size,
+    exl3_bank_geometry,
+)
 from tools.artifact.formats import DirectFormat, Fp8RowFormat, Nvfp4Format, get_format
 from tools.artifact.schema import ACTIVATION_POLICIES, TensorSpec
 from .methods import (
@@ -23,6 +26,7 @@ from .methods import (
     import_encoded,
 )
 from .model import Model
+from .sources.exllamav3 import Exl3ExpertSource
 from .sources.logical import LogicalSource, select_rows
 
 
@@ -63,6 +67,8 @@ def default_layout(format: str) -> str:
         return "row_scale_v1"
     if isinstance(kind, Nvfp4Format):
         return "block_scale_k16_m128x4_v1"
+    if kind.name == "exl3":
+        return "exl3_expert_bank"
     return "row_split_k128_v1"
 
 
@@ -315,9 +321,44 @@ class Recipe:
             dims, sources = parent_shape(items, chosen)
             selection = items[0][1]
             layout = selection.layout or default_layout(selection.format)
-            encoded_size(layout, selection.format, dims)
+            declared_bytes = None
+            if selection.format == "exl3" or layout == "exl3_expert_bank":
+                if layout != "exl3_expert_bank" or selection.format != "exl3":
+                    raise ValueError("the EXL3 format exists only as the expert bank")
+                experts = []
+                for _, value in items:
+                    source = value.source
+                    if not isinstance(source, Exl3ExpertSource):
+                        raise ValueError(
+                            "EXL3 banks pack whole experts from EXL3 expert sources"
+                        )
+                    if value.begin != 0 or value.end != prod(source.shape):
+                        raise ValueError(
+                            "EXL3 banks pack whole experts; partial selections are invalid"
+                        )
+                    experts.append(source)
+                codebooks = {source.linear.codebook for source in experts}
+                if len(codebooks) != 1:
+                    raise ValueError(
+                        f"a bank's codebook must be uniform; got {sorted(codebooks)}"
+                    )
+                n, k = experts[0].shape
+                if any(source.shape != (n, k) for source in experts):
+                    raise ValueError("a bank's experts must share one [n, k] shape")
+                geometry = exl3_bank_geometry(
+                    n, k, [source.linear.k2 for source in experts], next(iter(codebooks))
+                )
+                if tuple(dims) != (geometry.experts * n, k):
+                    raise ValueError("bank parent shape is not the stacked expert rows")
+                declared_bytes = geometry.payload_bytes
+                encoded_size(
+                    layout, selection.format, dims, payload_bytes=declared_bytes
+                )
+            else:
+                encoded_size(layout, selection.format, dims)
             spec = TensorSpec(
-                f"weight/{len(weights):06d}", dims, selection.format, layout
+                f"weight/{len(weights):06d}", dims, selection.format, layout,
+                bytes=declared_bytes,
             )
             inputs = tuple(
                 MethodInput(

@@ -43,7 +43,20 @@ class Fp8RowFormat:
     name: str
 
 
-NumericFormat: TypeAlias = DirectFormat | QuantFormat | Nvfp4Format | Fp8RowFormat
+@dataclass(frozen=True, slots=True)
+class Exl3Format:
+    """EXL3 trellis codes; numeric decode per the SP-7 contract (exl3-trellis-contract.md).
+
+    One 16-bit codebook state per weight element, decoded from a tail-biting ring
+    per 16x16 tile. The codebook (3inst, mcg, mul1) is a per-object scalar carried
+    in the exl3_expert_bank payload, uniform within a bank.
+    """
+
+    name: str
+    codebooks: tuple[str, ...] = ("3inst", "mcg", "mul1")
+
+
+NumericFormat: TypeAlias = DirectFormat | QuantFormat | Nvfp4Format | Fp8RowFormat | Exl3Format
 
 
 FP8_E4M3FN = DirectFormat("fp8_e4m3fn", 1)
@@ -57,6 +70,7 @@ Q6_G64_FP16 = QuantFormat("q6_g64_fp16", 6, 64, -32, 31)
 Q8_G32_FP16 = QuantFormat("q8_g32_fp16", 8, 32, -127, 127)
 NVFP4 = Nvfp4Format("nvfp4", 16)
 FP8_E4M3FN_ROW_BF16 = Fp8RowFormat("fp8_e4m3fn_row_bf16")
+EXL3 = Exl3Format("exl3")
 
 
 DIRECT_FORMATS = MappingProxyType({item.name: item for item in (BF16, FP32, INT32, FP8_E4M3FN)})
@@ -65,8 +79,9 @@ QUANT_FORMATS = MappingProxyType(
 )
 NVFP4_FORMATS = MappingProxyType({NVFP4.name: NVFP4})
 FP8_ROW_FORMATS = MappingProxyType({FP8_E4M3FN_ROW_BF16.name: FP8_E4M3FN_ROW_BF16})
+EXL3_FORMATS = MappingProxyType({EXL3.name: EXL3})
 NUMERIC_FORMATS = MappingProxyType(
-    {**DIRECT_FORMATS, **QUANT_FORMATS, **NVFP4_FORMATS, **FP8_ROW_FORMATS}
+    {**DIRECT_FORMATS, **QUANT_FORMATS, **NVFP4_FORMATS, **FP8_ROW_FORMATS, **EXL3_FORMATS}
 )
 
 
@@ -148,15 +163,18 @@ __all__ = [
     "Q8_G32_FP16",
     "NVFP4",
     "FP8_E4M3FN_ROW_BF16",
+    "EXL3",
     "DIRECT_FORMATS",
     "QUANT_FORMATS",
     "NVFP4_FORMATS",
     "FP8_ROW_FORMATS",
+    "EXL3_FORMATS",
     "NUMERIC_FORMATS",
     "DirectFormat",
     "QuantFormat",
     "Nvfp4Format",
     "Fp8RowFormat",
+    "Exl3Format",
     "NumericFormat",
     "get_format",
     "decode_e2m1_word",

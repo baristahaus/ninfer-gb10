@@ -16,6 +16,7 @@ from typing import Sequence
 
 from .formats import (
     DirectFormat,
+    Exl3Format,
     Fp8RowFormat,
     Nvfp4Format,
     NumericFormat,
@@ -77,6 +78,43 @@ class RowScaleGeometry:
     payload_bytes: int
 
 
+@dataclass(frozen=True, slots=True)
+class Exl3BankGeometry:
+    """Plane geometry of one exl3_expert_bank (SP-7 contract section 4).
+
+    The trellis plane packs each expert's extent at its own 256-byte-aligned size,
+    so mixed bitrates give unequal extents; the experts plane is the per-expert
+    directory that resolves them. The codebook is the bank's object scalar.
+    """
+
+    experts: int
+    n: int
+    k: int
+    k2: tuple[int, ...]
+    codebook: str
+    directory_offset: int
+    directory_bytes: int
+    trellis_offset: int
+    trellis_extents: tuple[int, ...]
+    trellis_bytes: int
+    suh_offset: int
+    suh_bytes: int
+    svh_offset: int
+    svh_bytes: int
+    codebook_offset: int
+    payload_bytes: int
+
+    def directory_entries(self) -> tuple[tuple[int, int, int], ...]:
+        """Per expert: (trellis byte offset, extent bytes, 2K), in expert id order."""
+
+        entries = []
+        offset = self.trellis_offset
+        for expert, extent in enumerate(self.trellis_extents):
+            entries.append((offset, extent, self.k2[expert]))
+            offset += extent
+        return tuple(entries)
+
+
 CONTIGUOUS_LE_V1 = Layout("contiguous_le_v1", 256, frozenset(("bf16", "fp32", "int32", "fp8_e4m3fn")))
 ROW_SPLIT_K128_V1 = Layout(
     "row_split_k128_v1",
@@ -97,6 +135,8 @@ ROW_SCALE_V1 = Layout(
 EXPERT_BLOCK_SCALE_K16_M128X4_V1 = Layout(
     "expert_block_scale_k16_m128x4_v1", 256, frozenset(("nvfp4",)))
 
+EXL3_EXPERT_BANK_V1 = Layout("exl3_expert_bank", 256, frozenset(("exl3",)))
+
 LAYOUTS = MappingProxyType(
     {
         layout.name: layout
@@ -106,6 +146,7 @@ LAYOUTS = MappingProxyType(
             BLOCK_SCALE_K16_M128X4_V1,
             ROW_SCALE_V1,
             EXPERT_BLOCK_SCALE_K16_M128X4_V1,
+            EXL3_EXPERT_BANK_V1,
         )
     }
 )
@@ -250,10 +291,84 @@ def row_scale_geometry(
     )
 
 
+EXL3_CODEBOOK_IDS = MappingProxyType({"3inst": 0, "mcg": 1, "mul1": 2})
+EXL3_MIN_K2 = 2
+EXL3_MAX_K2 = 16
+EXL3_HALF_INTEGER_K2 = frozenset((3, 5, 7))
+
+
+def validate_exl3_rate(k2: int, codebook: str) -> None:
+    """Section 2.4/2.5 bitrate admission: 2K in 2..16, half-integer rates MUL1 only."""
+
+    if type(k2) is not int:
+        raise ValueError("EXL3 bitrate 2K must be an integer")
+    if codebook not in EXL3_CODEBOOK_IDS:
+        raise ValueError(f"unknown EXL3 codebook {codebook!r}")
+    if k2 % 2 == 0:
+        if not EXL3_MIN_K2 <= k2 <= EXL3_MAX_K2:
+            raise ValueError(f"EXL3 integer bitrate 2K must be 2..16, got {k2}")
+        return
+    if k2 not in EXL3_HALF_INTEGER_K2:
+        raise ValueError(f"EXL3 half-integer bitrate 2K must be 3, 5 or 7, got {k2}")
+    if codebook != "mul1":
+        raise ValueError(f"half-integer EXL3 bitrates require the mul1 codebook, got {k2}")
+
+
+def exl3_bank_geometry(
+    n: int, k: int, k2: Sequence[int], codebook: str
+) -> Exl3BankGeometry:
+    """Plane geometry of one EXL3 expert bank from its per-expert bitrates.
+
+    Expert e's trellis extent is k*n*K_e/8 bytes, zero-padded to a multiple of 256;
+    extents pack in expert id order (contract section 4). k and n are multiples of
+    128; the suh/svh planes are fixed-stride FP16 [E, k] / [E, n].
+    """
+
+    if type(n) is not int or type(k) is not int:
+        raise ValueError("EXL3 bank dimensions must be integers")
+    if n <= 0 or k <= 0 or n % 128 or k % 128:
+        raise ValueError("EXL3 bank requires N and K divisible by 128")
+    rates = tuple(k2)
+    if not rates:
+        raise ValueError("EXL3 bank requires at least one expert")
+    for rate in rates:
+        validate_exl3_rate(rate, codebook)
+    experts = len(rates)
+    directory_bytes = experts * 16
+    trellis_offset = align_up(directory_bytes, PLANE_ALIGNMENT)
+    extents = tuple(align_up(n * k * rate // 16, PLANE_ALIGNMENT) for rate in rates)
+    trellis_bytes = sum(extents)
+    suh_offset = trellis_offset + trellis_bytes
+    suh_bytes = experts * k * 2
+    svh_offset = align_up(suh_offset + suh_bytes, PLANE_ALIGNMENT)
+    svh_bytes = experts * n * 2
+    codebook_offset = svh_offset + svh_bytes
+    return Exl3BankGeometry(
+        experts=experts,
+        n=n,
+        k=k,
+        k2=rates,
+        codebook=codebook,
+        directory_offset=0,
+        directory_bytes=directory_bytes,
+        trellis_offset=trellis_offset,
+        trellis_extents=extents,
+        trellis_bytes=trellis_bytes,
+        suh_offset=suh_offset,
+        suh_bytes=suh_bytes,
+        svh_offset=svh_offset,
+        svh_bytes=svh_bytes,
+        codebook_offset=codebook_offset,
+        payload_bytes=codebook_offset + 4,
+    )
+
+
 def encoded_size(
     layout: str | Layout,
     format: str | NumericFormat,
     shape: Sequence[int],
+    *,
+    payload_bytes: int | None = None,
 ) -> int:
     layout_spec = _layout(layout)
     numeric_spec = _format(format)
@@ -261,6 +376,19 @@ def encoded_size(
         raise ValueError(
             f"layout {layout_spec.name!r} does not accept format {numeric_spec.name!r}"
         )
+    if layout_spec is EXL3_EXPERT_BANK_V1:
+        if not isinstance(numeric_spec, Exl3Format):
+            raise ValueError("exl3_expert_bank requires the EXL3 format")
+        # Mixed per-expert bitrates make the payload size data-dependent: it is the
+        # sum of the experts' own trellis extents, resolved from the checkpoint by
+        # the converter and validated directory-aware at load (contract section 4).
+        if type(payload_bytes) is not int or payload_bytes < 256 + 4:
+            raise ValueError(
+                "exl3_expert_bank size is data-dependent; supply the bank's exact "
+                "payload bytes"
+            )
+        _shape(shape, rank=2)
+        return payload_bytes
     if layout_spec is EXPERT_BLOCK_SCALE_K16_M128X4_V1:
         e, n, k = _shape(shape, rank=3)
         if n % 128 or k % 64:

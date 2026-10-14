@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from .methods import cast_direct, fp8_row_maxabs, grouped_absmax, import_encoded
+from .methods import cast_direct, fp8_row_maxabs, grouped_absmax, import_encoded, import_exl3_bank
+from .sources.exllamav3 import (
+    _check_architecture,
+    check_quantization_config,
+    exl3_expert_source,
+)
 
 Q4 = "q4_g64_fp16"
 Q5 = "q5_g64_fp16"
@@ -118,6 +123,62 @@ def qwen3_6_35b_a3b(model, recipe, sources):
         _assign(recipe, name, format)
 
 
+def qwen3_6_35b_a3b_exl3(model, recipe, sources):
+    """Import the routed experts as EXL3 banks; everything else per the groupwise recipe.
+
+    The EXL3 checkpoint supplies only the routed banks' tensors (SP-7 contract
+    6.1); every non-routed tensor keeps the existing recipe's format from the BF16
+    source, so artifacts differ from `qwen3_6_35b_a3b` only in the routed banks.
+    """
+
+    if "num_experts" not in model.config:
+        raise ValueError("this official recipe requires Qwen3.5 MoE mathematics")
+    exl3 = sources["exl3"]
+    check_quantization_config(exl3.config)
+    _check_architecture(exl3.config, model.config)
+    experts = model.config["num_experts"]
+    hidden = model.config["hidden_size"]
+    intermediate = model.config["moe_intermediate_size"]
+    layers = model.config["num_hidden_layers"]
+    _optional(model, recipe)
+    _assign(recipe, "text/token_embedding", Q8)
+    _assign(recipe, "text/output_head", Q6)
+    for name, parameter in model.parameters.items():
+        if not name.startswith("text/layers/") or not parameter.projection:
+            continue
+        if name.endswith(
+            (
+                "/gdn/a_projection",
+                "/gdn/b_projection",
+                "/moe/router",
+                "/moe/shared_score",
+            )
+        ):
+            continue
+        if "/moe/experts/" in name:
+            continue
+        _assign(recipe, name, Q8)
+    for layer in range(layers):
+        for role, k, n in (
+            ("gate", hidden, intermediate),
+            ("up", hidden, intermediate),
+            ("down", intermediate, hidden),
+        ):
+            names = []
+            for expert in range(experts):
+                name = f"text/layers/{layer}/moe/experts/{expert}/{role}"
+                tensor = f"model.layers.{layer}.mlp.experts.{expert}.{role}_proj"
+                recipe.assign(
+                    name,
+                    format="exl3",
+                    layout="exl3_expert_bank",
+                    method="import_exl3_bank",
+                    source=exl3_expert_source(exl3, tensor, expected=(k, n)),
+                )
+                names.append(name)
+            recipe.group(names)
+
+
 def qwen3_6_27b_nvfp4(model, recipe, sources):
     if "num_experts" in model.config:
         raise ValueError("this official recipe requires Qwen3.5 Dense mathematics")
@@ -180,4 +241,5 @@ RECIPES = {
     "qwen3_8_27b": qwen3_8_27b,
     "qwen3_8_27b_nvfp4": qwen3_8_27b_nvfp4,
     "qwen3_6_35b_a3b": qwen3_6_35b_a3b,
+    "qwen3_6_35b_a3b_exl3": qwen3_6_35b_a3b_exl3,
 }

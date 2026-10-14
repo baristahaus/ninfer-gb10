@@ -16,10 +16,11 @@ The storage registry contains exactly these identities:
 | `block_scale_k16_m128x4_v1` | tensor layout | `nvfp4` | rank 2 `[N,K]`, `N % 128 == 0`, `K % 64 == 0` | 256 bytes |
 | `row_scale_v1` | tensor layout | `fp8_e4m3fn_row_bf16` | rank 2 `[N,K]` | 256 bytes |
 | `expert_block_scale_k16_m128x4_v1` | tensor layout | `nvfp4` | rank 3 `[E,N,K]`, `N % 128 == 0`, `K % 64 == 0` | 256 bytes |
+| `exl3_expert_bank` | tensor layout | `exl3` | rank 2 `[E*N,K]`, `K % 128 == 0`, `N % 128 == 0`, byte size data-dependent | 256 bytes |
 | `raw_bytes_v1` | resource encoding | not applicable | nonempty byte string | 1 byte |
 
 These format/layout pairs define the current codec support. Native consumer requirements are
-covered separately in Section 8.
+covered separately in Section 9.
 
 Object alignment applies to the object's payload-relative `offset` in the `.ninfer` JSON. Internal
 plane offsets and padding belong to the selected layout. Inter-object padding belongs to the
@@ -296,7 +297,46 @@ The scale word's byte offset within the scale plane is:
 Layout decoding must recover the original packed E2M1 words, natural `[N,K/16]` E4M3FN scale-word
 matrix, and exact divisor word. It never decodes and re-encodes either floating-point format.
 
-## 5. `row_scale_v1`
+## 5. `exl3_expert_bank`
+
+`exl3_expert_bank` stores one routed MoE bank per (layer, projection): all `E` experts of one
+projection in one object with logical shape `[E*N, K]`, so the binding's row convention and the
+tier plan's `experts × rows_per_expert` check hold with `rows_per_expert = N`. `K` and `N` are
+multiples of 128. Expert `e` owns rows `[e*N, (e+1)*N)`.
+
+The payload carries four planes plus the bank's object scalar, per the SP-7 contract
+([`exl3-trellis-contract.md`](exl3-trellis-contract.md) section 4). With per-expert bitrate
+`K_e` (stored as `2K_e`):
+
+```text
+directory_offset = 0
+directory_bytes  = E * 16
+trellis_offset   = align_up(directory_bytes, 256)
+extent_e         = align_up(K * N * K_e / 8, 256)
+trellis_bytes    = sum(extent_e)
+suh_offset       = trellis_offset + trellis_bytes
+suh_bytes        = E * K * 2
+svh_offset       = align_up(suh_offset + suh_bytes, 256)
+svh_bytes        = E * N * 2
+codebook_offset  = svh_offset + svh_bytes
+payload_bytes    = codebook_offset + 4
+```
+
+The `experts` plane is the directory: per expert, one 16-byte little-endian entry `{u64 byte offset
+of the expert's trellis extent, u32 extent bytes, u8 2K_e (2…16; 3, 5 or 7 for the half-integer
+rates), three zero bytes}`, in expert id order. The `trellis` plane packs each expert's exllamav3
+`trellis` bytes verbatim at its own 256-byte-aligned extent; mixed per-expert bitrates give
+unequal extents, and the object's byte size is therefore data-dependent: it is resolved from the
+checkpoint by the converter and validated directory-aware at load. The `suh` plane is FP16
+`[E, K]` (row `e` = expert `e`'s input-side vector); the `svh` plane is FP16 `[E, N]`. The final
+four bytes are the little-endian codebook id (`0` = `3inst`, `1` = `mcg`, `2` = `mul1`).
+
+Load validation: directory offsets increase in expert id order, are 256-byte aligned, and match
+the extents implied by `2K_e`; an odd `2K_e` requires the `mul1` codebook; `K` and `N` are
+multiples of 128; the bank's codebook is uniform; and the directory-implied planes end exactly at
+the object's byte size.
+
+## 6. `row_scale_v1`
 
 `row_scale_v1` stores only rank-two `fp8_e4m3fn_row_bf16` matrices `[N,K]` with positive
 dimensions. It adds no logical or physical matrix padding. Let:
@@ -323,7 +363,7 @@ encoded by concatenating the selected code rows, recomputing the scale-plane ali
 row count, and appending the selected scale words in the same row order. It does not decode or
 requantize either plane.
 
-## 6. `raw_bytes_v1`
+## 7. `raw_bytes_v1`
 
 `raw_bytes_v1` is a resource encoding, not a tensor layout. Its enclosing object payload is
 the resource byte string itself:
@@ -338,7 +378,7 @@ trailing padding. The resource object's JSON `bytes` is its exact nonzero length
 returns the complete span unchanged. A model contract assigns a resource name and interprets those
 bytes; the common encoding does not infer that meaning from the name.
 
-## 7. Decode boundary
+## 8. Decode boundary
 
 Layout decoding yields only persistent logical words:
 
@@ -355,7 +395,7 @@ Dequantized values follow the reconstruction rule in `tensor-formats.md`. This d
 not select a quantization encoder, output dtype, accumulation dtype, kernel, runtime device layout,
 or model consumer.
 
-## 8. Logical views and native operands
+## 9. Logical views and native operands
 
 Bindings address C-order logical element ranges of a parent object. The parent retains its full
 geometry and backing allocation, so a view can locate code and scale planes using the original

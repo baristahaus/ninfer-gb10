@@ -215,7 +215,8 @@ MaterializedArtifact materialize(const Reader& reader, MaterializationPlan&& pla
         if (geometry.shape.size() != 2 || rows == 0 || geometry.shape[1] == 0 ||
             experts == 0 || rows % experts != 0 || tier.hot_experts == 0 ||
             tier.hot_experts >= experts || geometry.bytes % rows != 0 ||
-            tier.bytes != geometry.bytes / experts * tier.hot_experts) {
+            tier.bytes != geometry.bytes / experts *
+                              (tier.hot_experts + tier.cache_slots)) {
             throw ArtifactError(reader.directory().tensor(tier.object).id +
                                 ": tiered placement does not divide into per-expert mini-banks");
         }
@@ -277,14 +278,17 @@ MaterializedArtifact materialize(const Reader& reader, MaterializationPlan&& pla
                     hot_written = checked_add(hot_written, block, "tiered hot bytes");
                 }
             }
-            hot_plane  = checked_add(hot_plane,
-                                     checked_mul(block, tier.hot_experts, "tiered hot plane"),
-                                     "tiered hot plane base");
+            hot_plane  = checked_add(
+                hot_plane,
+                checked_mul(block, tier.hot_experts + tier.cache_slots, "tiered hot plane"),
+                "tiered hot plane base");
             warm_plane = checked_add(warm_plane,
                                      checked_mul(block, warm_experts, "tiered warm plane"),
                                      "tiered warm plane base");
         }
-        if (hot_written != tier.bytes || warm_written != storage.pinned->size()) {
+        const auto hot_slice_bytes =
+            checked_mul(tier.hot_experts, geometry.bytes / experts, "tiered hot slice");
+        if (hot_written != hot_slice_bytes || warm_written != storage.pinned->size()) {
             throw ArtifactError("tiered expert packing does not cover the mini-banks");
         }
         // The scaled mini-bank geometries: the same plane structure at the split row counts.
@@ -302,7 +306,7 @@ MaterializedArtifact materialize(const Reader& reader, MaterializationPlan&& pla
             return mini;
         };
         storage.device =
-            WeightParent{mini_geometry(tier.hot_experts * rows_per_expert),
+            WeightParent{mini_geometry((tier.hot_experts + tier.cache_slots) * rows_per_expert),
                          static_cast<const std::byte*>(hot_storage.data), divisor};
         storage.host = WeightParent{mini_geometry(warm_experts * rows_per_expert),
                                     static_cast<const std::byte*>(storage.pinned->data()),

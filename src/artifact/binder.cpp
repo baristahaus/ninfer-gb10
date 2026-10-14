@@ -84,6 +84,8 @@ std::uint32_t Binder::tier_hot_experts(ObjectHandle object) const {
     return demands_.at(object.index).tier_hot_experts;
 }
 
+void Binder::set_device_budget(std::uint64_t bytes) { device_budget_ = bytes; }
+
 ParameterReference Binder::binding(std::string name, const Binding& binding, Shape shape,
                                    Residency residency, std::optional<QType> exact_format) {
     if (weight_element_count(shape) != binding.elements ||
@@ -275,20 +277,59 @@ MaterializationPlan Binder::finish() && {
     // SP-4 tiered banks follow the plain device objects so the arena's sequential allocation
     // order matches the plan offsets: the device carries only each compact hot mini-bank; the
     // pinned-host warm mini-bank is allocated and filled by the materializer.
-    for (std::size_t i = 0; i < demands_.size(); ++i) {
+        struct TieredBank {
+        ObjectHandle handle;
+        std::size_t demand;
+    };
+    std::vector<TieredBank> tiered;
+for (std::size_t i = 0; i < demands_.size(); ++i) {
         auto& demand = demands_[i];
         // A tier mark without any bound part is inert: the component owning the bank was not
         // selected, so the bank materializes nowhere (matching its plain unbound peers).
         if (demand.tier_new_order.empty() || (!demand.device && !demand.host)) { continue; }
-        const ObjectHandle handle{i};
-        const auto& geometry = reader_.geometry(handle);
+        tiered.push_back({ObjectHandle{i}, i});
+    }
+    // SP-4 adaptive cache: one uniform slot count across every tiered bank — a promoted
+    // expert's paired banks (routed gate/up and down) must carry matching slots, and one slot
+    // costs its per-expert bytes in every bank. The device budget covers the whole plan: the
+    // plain device objects and the tiered hot mini-banks consume first, and the remaining
+    // bytes buy as many whole expert slices as fit, never exceeding the smallest bank's warm
+    // count.
+    std::uint32_t cache_slots = 0;
+    if (!tiered.empty() && device_budget_ != 0) {
+        std::uint64_t slice_cost = 0;
+        std::uint64_t min_warm   = std::numeric_limits<std::uint64_t>::max();
+        std::uint64_t hot_bytes  = 0;
+        for (const auto& bank : tiered) {
+            const auto& demand   = demands_[bank.demand];
+            const auto& geometry = reader_.geometry(bank.handle);
+            const auto experts   = demand.tier_new_order.size();
+            slice_cost           = checked_add(slice_cost, geometry.bytes / experts,
+                                               "expert cache slice cost");
+            min_warm = std::min(min_warm, experts - demand.tier_hot_experts);
+            hot_bytes = checked_add(
+                hot_bytes,
+                checked_mul(demand.tier_hot_experts, geometry.bytes / experts, "tiered hot bytes"),
+                "tiered hot total");
+        }
+        const auto weights_bytes = checked_add(plan.device_capacity_bytes, hot_bytes,
+                                               "tiered weights bytes");
+        const auto tail_budget   = device_budget_ > weights_bytes ? device_budget_ - weights_bytes
+                                                                : 0;
+        cache_slots = static_cast<std::uint32_t>(
+            std::min<std::uint64_t>(min_warm, tail_budget / slice_cost));
+    }
+    for (const auto& bank : tiered) {
+        const auto& demand   = demands_[bank.demand];
+        const auto& geometry = reader_.geometry(bank.handle);
         const auto experts   = demand.tier_new_order.size();
-        const auto hot_bytes = checked_mul(
-            demand.tier_hot_experts, geometry.bytes / experts, "tiered hot bytes");
+        const auto bank_bytes =
+            checked_mul(demand.tier_hot_experts + cache_slots, geometry.bytes / experts,
+                        "tiered device bytes");
         const auto offset = align_up(plan.device_capacity_bytes, demand.alignment, "device offset");
-        plan.tier_objects.push_back({handle, offset, hot_bytes, demand.alignment,
-                                     demand.tier_hot_experts, demand.tier_new_order});
-        plan.device_capacity_bytes = checked_add(offset, hot_bytes, "device capacity");
+        plan.tier_objects.push_back({bank.handle, offset, bank_bytes, demand.alignment,
+                                     demand.tier_hot_experts, cache_slots, demand.tier_new_order});
+        plan.device_capacity_bytes = checked_add(offset, bank_bytes, "device capacity");
     }
     return plan;
 }

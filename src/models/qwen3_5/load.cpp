@@ -46,12 +46,24 @@ std::span<const WeightUse> LoadPlan::uses(WeightId id) const {
     return impl_->pending.at(id.index).uses;
 }
 
-LoadPlan plan_load(const artifact::Reader& reader, LoadOptions options) {
+LoadPlan plan_load(const artifact::Reader& reader, LoadOptions options,
+                   std::uint64_t device_free_bytes) {
     auto out       = std::make_unique<LoadPlan::Impl>();
     out->options   = options;
     out->config    = parse_config(reader.directory(), options);
     out->tier_plan = artifact::parse_tier_plan(reader.directory().metadata);
     artifact::Binder binder(reader);
+    if (device_free_bytes != 0) {
+        // SP-4 adaptive cache: the device budget = free bytes at plan time less the startup
+        // reserve (context-cache state slots, workspaces, CUDA Graph pools, and headroom for
+        // the resolved KV pool; an explicit KV capacity that no longer fits fails loudly at
+        // resolution). The plan's device objects and hot mini-banks consume first; the
+        // remainder becomes the expert cache tail.
+        constexpr std::uint64_t kStartupReserveBytes = 6ULL << 30;
+        binder.set_device_budget(device_free_bytes > kStartupReserveBytes
+                                     ? device_free_bytes - kStartupReserveBytes
+                                     : 0);
+    }
     if (out->tier_plan) {
         // Strategy SP-4 consumes the plan's tier lists directly: every named object resolves
         // to a tensor whose row count is exactly experts * rows_per_expert, the hot experts

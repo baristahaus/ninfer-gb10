@@ -243,8 +243,10 @@ per expert), not an EXL3 branch, and the existing codecs are its constant-extent
 The fork's converter emits the same format by EXL3's method. The steps:
 
 1. **Hessians**: per expert, from the calibration tokens routed to it, using the frequency-corpus
-   discipline. An expert with fewer routed calibration tokens than a stated threshold uses the
-   layer's pooled routed-token Hessian. Damping is applied before LDL as in EXL3.
+   discipline. An expert with fewer than 512 routed calibration tokens uses the layer's pooled
+   routed-token Hessian (the threshold, set 2026-10-14; the quantize route's bring-up may move it
+   once with measured perplexity evidence, never to fit a result). Damping is applied before LDL
+   as in EXL3.
 2. **Incoherence**: EXL3's derivation. Random signs, output-channel scales into `svh` when the
    out-scales mode applies them, the output-side Hadamard, block-RMS input-channel scales folded
    with `−1/codebook_scale` into `suh`, the input-side Hadamard, and the global-scale search folded
@@ -292,8 +294,10 @@ The fork's converter emits the same format by EXL3's method. The steps:
    against routed-bank bytes, with the calibration provenance of each EXL3 bank.
 5. **Performance**: `ninfer_bench` decode at concurrency 1, 4 and 8 on the tiered 35B path under the
    same device budget, EXL3 against NVFP4 routed banks, plus prefill at 2048 tokens. Report
-   throughput and the resident expert count. A slowdown is a reported finding. The pass threshold is
-   set by the owner before the measurement.
+   throughput and the resident expert count. A slowdown is a reported finding. The pass threshold,
+   set by the fork on 2026-10-14 before any measurement: EXL3 tiered decode and prefill throughput
+   must each remain at or above 80% of NVFP4's at the matched routed-bank byte budget. The
+   threshold may tighten after a measurement; it never loosens.
 
 ## 9. Delegation boundary
 

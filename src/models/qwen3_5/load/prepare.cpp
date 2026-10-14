@@ -63,10 +63,10 @@ WeightId Bindings::parameter(std::string name, artifact::Shape shape,
     return id;
 }
 
-// SP-4 phase 2a: a parameter's residency follows its parts' tier state. A part inside a
-// tiered bank's hot prefix stays Device-resident; a part at or past the boundary becomes
-// Host-resident and addresses the pinned-host warm mini-bank. A parameter mixing hot and
-// warm parts falls through as Host and the binder rejects its hot part at the prefix check.
+// SP-4: a parameter's residency follows its parts' tier state. A part inside a tiered
+// bank's hot experts stays Device-resident; a part on a warm expert becomes Host-resident
+// and addresses the pinned-host warm mini-bank. A parameter mixing hot and warm parts falls
+// through as Host and the binder rejects its hot part at the residency check.
 artifact::ParameterReference
 Bindings::bind_parameter(const std::string& name, const artifact::Shape& shape,
                          const std::optional<QType>& exact_format) {
@@ -77,12 +77,18 @@ Bindings::bind_parameter(const std::string& name, const artifact::Shape& shape,
     }
     auto residency = artifact::Residency::Device;
     for (const auto& part : found->second.parts) {
-        const auto hot_rows = binder.tier_hot_rows(part.object);
-        if (hot_rows == 0) { continue; }
+        const auto& tier_order = binder.tier_new_order(part.object);
+        if (tier_order.empty()) { continue; }
         const auto& geometry = binder.reader().geometry(part.object);
-        const auto hot_elements =
-            artifact::checked_mul(hot_rows, geometry.shape[1], "tiered hot rows");
-        if (part.begin >= hot_elements) { residency = artifact::Residency::Host; }
+        const auto experts   = static_cast<std::uint64_t>(tier_order.size());
+        const auto row       = part.begin / geometry.shape[1];
+        const auto expert    = row / (geometry.shape[0] / experts);
+        const auto position  = static_cast<std::uint64_t>(
+            std::find(tier_order.begin(), tier_order.end(),
+                      static_cast<std::uint32_t>(expert)) - tier_order.begin());
+        if (position >= experts || position >= binder.tier_hot_experts(part.object)) {
+            residency = artifact::Residency::Host;
+        }
     }
     return binder.binding(name, found->second, shape, residency, exact_format);
 }

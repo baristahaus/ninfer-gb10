@@ -31,10 +31,12 @@ profiles, and the <output>.permutation.json sidecar all use the new expert numbe
     }
 
 Version 1 plans are declarative: the loader validates them and reports them in the load
-summary; the tiered materialization consumes them positionally. The container's payload
-bytes are preserved exactly except for the tiered permutation; only file zero is rewritten
-(its payload region shifts when the directory JSON changes length) and continuation shards
-are copied byte-for-byte.
+summary. Since SP-4 phase 2b the tiered materialization consumes the hot/warm lists directly
+and per expert (arbitrary scattered hot sets, no permutation required), so the ranked-mode
+permutation is an optional artifact-level optimization, not a correctness requirement. The
+container's payload bytes are preserved exactly except for the tiered permutation; only file
+zero is rewritten (its payload region shifts when the directory JSON changes length) and
+continuation shards are copied byte-for-byte.
 """
 
 from __future__ import annotations

@@ -156,6 +156,9 @@ private:
     std::size_t expert_counters_bytes_     = 0;
     std::uint32_t counter_experts_         = 0;
     std::vector<std::string> counter_layers_;
+    // SP-4 phase 2b: device storage, one u32 residency entry per routed expert per MoE
+    // layer; null when no layer is tiered.
+    std::uint32_t* expert_residency_       = nullptr;
 };
 
 } // namespace ninfer::models::qwen3_5::execution

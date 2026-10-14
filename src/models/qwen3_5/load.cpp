@@ -4,6 +4,7 @@
 #include "artifact/tier_plan.h"
 #include "models/qwen3_5/load/bindings.h"
 
+#include <algorithm>
 #include <utility>
 
 namespace ninfer::models::qwen3_5 {
@@ -52,10 +53,11 @@ LoadPlan plan_load(const artifact::Reader& reader, LoadOptions options) {
     out->tier_plan = artifact::parse_tier_plan(reader.directory().metadata);
     artifact::Binder binder(reader);
     if (out->tier_plan) {
-        // Strategy SP-4 phase 2a consumes the plan positionally: every named object resolves
-        // to a tensor whose row count is exactly experts * rows_per_expert, the hot tier is
-        // the expert prefix [0, hot), and the warm and cold tiers share the pinned-host warm
-        // mini-bank that the tiered materialization fills from the same suffix.
+        // Strategy SP-4 consumes the plan's tier lists directly: every named object resolves
+        // to a tensor whose row count is exactly experts * rows_per_expert, the hot experts
+        // form the device hot mini-bank, and every remaining expert (warm and cold — the
+        // pinned-host warm mini-bank is the only host tier) shares that warm mini-bank in
+        // expert id order.
         for (const auto& bank : out->tier_plan->banks) {
             const auto handle = reader.directory().object_index.find(bank.object);
             if (handle == reader.directory().object_index.end()) {
@@ -68,16 +70,11 @@ LoadPlan plan_load(const artifact::Reader& reader, LoadOptions options) {
                 throw artifact::ArtifactError("tier_plan bank " + bank.object +
                                               " shape does not match experts * rows_per_expert");
             }
-            for (std::size_t i = 0; i < bank.hot.size(); ++i) {
-                if (bank.hot[i] != i) {
-                    throw artifact::ArtifactError(
-                        "tier_plan bank " + bank.object +
-                        ": tiered materialization requires the positional hot prefix");
-                }
-            }
+            auto warm = bank.warm;
+            warm.insert(warm.end(), bank.cold.begin(), bank.cold.end());
+            std::sort(warm.begin(), warm.end());
             if (bank.hot.size() == bank.experts) { continue; }
-            binder.set_tier(handle->second,
-                            static_cast<std::uint64_t>(bank.hot.size()) * bank.rows_per_expert);
+            binder.set_tier(handle->second, bank.hot, warm);
         }
     }
     out->resources = loading::bind_resources(binder, out->config);

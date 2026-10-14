@@ -286,16 +286,28 @@ Parameters::Parameters(const Model& source) : model(source) {
     }
     // SP-4 phase 2b: allocate per-expert activation counters for the routed MoE layers and
     // wire them into the assembled weights; the routing stage accumulates one count per
-    // selected expert per token.
-    std::vector<std::pair<std::string, ops::SparseMoeWeights*>> routed;
+    // selected expert per token. Tiered layers additionally receive a per-expert residency
+    // table derived from the assembled views: an expert's gate part begins at its compacted
+    // rank in the gate_up bank, and the part's parent marks the tier. Null tables keep the
+    // untiered direct path where every expert reads the device bank at its own rank.
+    struct RoutedLayer {
+        std::string label;
+        ops::SparseMoeWeights* parameters;
+        const MoeWeights* weights;
+    };
+    std::vector<RoutedLayer> routed;
     for (std::size_t i = 0; i < text.layers.size(); ++i) {
-        if (auto* moe = std::get_if<ops::SparseMoeWeights>(&text.layers[i].ffn)) {
-            routed.emplace_back("text/layers/" + std::to_string(i), moe);
+        auto* moe = std::get_if<ops::SparseMoeWeights>(&text.layers[i].ffn);
+        const auto* src = std::get_if<MoeWeights>(&w.text.layers[i].ffn);
+        if (moe != nullptr && src != nullptr) {
+            routed.push_back({"text/layers/" + std::to_string(i), moe, src});
         }
     }
-    if (mtp) {
-        if (auto* moe = std::get_if<ops::SparseMoeWeights>(&mtp->ffn)) {
-            routed.emplace_back("mtp/layer", moe);
+    if (w.mtp && mtp) {
+        auto* moe = std::get_if<ops::SparseMoeWeights>(&mtp->ffn);
+        const auto* src = std::get_if<MoeWeights>(&w.mtp->layer.ffn);
+        if (moe != nullptr && src != nullptr) {
+            routed.push_back({"mtp/layer", moe, src});
         }
     }
     if (!routed.empty()) {
@@ -305,15 +317,57 @@ Parameters::Parameters(const Model& source) : model(source) {
         CUDA_CHECK(cudaMalloc(&expert_counters_, expert_counters_bytes_));
         CUDA_CHECK(cudaMemset(expert_counters_, 0, expert_counters_bytes_));
         for (std::size_t i = 0; i < routed.size(); ++i) {
-            routed[i].second->expert_activations =
+            routed[i].parameters->expert_activations =
                 expert_counters_ + i * static_cast<std::size_t>(counter_experts_);
-            counter_layers_.push_back(routed[i].first);
+            counter_layers_.push_back(routed[i].label);
+        }
+        std::vector<std::uint32_t> tables(
+            routed.size() * static_cast<std::size_t>(counter_experts_), 0u);
+        std::vector<std::size_t> tiered_layers;
+        for (std::size_t i = 0; i < routed.size(); ++i) {
+            bool tiered = false;
+            for (std::size_t e = 0; e < routed[i].weights->experts.size(); ++e) {
+                const auto& gate = model.input(routed[i].weights->experts[e].gate).weight;
+                const auto& part = gate.parts.front();
+                const std::uint64_t gate_rows = 2 * gate.shape[0];
+                const auto rank = static_cast<std::uint32_t>(
+                    part.begin / (gate_rows * gate.shape[1]));
+                const bool warm = part.parent->host;
+                const auto& down = model.input(routed[i].weights->experts[e].down).weight;
+                const auto& down_part = down.parts.front();
+                const auto down_rank = static_cast<std::uint32_t>(
+                    down_part.begin / (down.shape[0] * down.shape[1]));
+                if (down_part.parent->host != warm || down_rank != rank) {
+                    throw std::invalid_argument(
+                        routed[i].label + ": tiered routed banks disagree on expert " +
+                        std::to_string(e) + " residency");
+                }
+                if (warm) {
+                    tables[i * counter_experts_ + e] = 0x80000000u | rank;
+                    tiered = true;
+                } else {
+                    tables[i * counter_experts_ + e] = rank;
+                    if (rank != e) { tiered = true; }
+                }
+            }
+            if (tiered) { tiered_layers.push_back(i); }
+        }
+        if (!tiered_layers.empty()) {
+            CUDA_CHECK(cudaMalloc(&expert_residency_, tables.size() * sizeof(std::uint32_t)));
+            CUDA_CHECK(cudaMemcpy(expert_residency_, tables.data(),
+                                  tables.size() * sizeof(std::uint32_t),
+                                  cudaMemcpyHostToDevice));
+            for (const auto i : tiered_layers) {
+                routed[i].parameters->expert_residency =
+                    expert_residency_ + i * static_cast<std::size_t>(counter_experts_);
+            }
         }
     }
 }
 
 Parameters::~Parameters() {
     if (expert_counters_ != nullptr) { CUDA_CHECK(cudaFree(expert_counters_)); }
+    if (expert_residency_ != nullptr) { CUDA_CHECK(cudaFree(expert_residency_)); }
 }
 
 MoeActivationProfile Parameters::moe_activation_profile() const {

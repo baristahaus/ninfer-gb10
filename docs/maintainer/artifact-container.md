@@ -572,7 +572,12 @@ count is exactly `experts * rows_per_expert`. The load summary reports the plan
 
 Version 1 is declarative: the plan describes placement and is validated and reported, but the
 materialization honors it only when the tiered execution path consumes it; an absent or partial
-plan changes no serving behavior. `tools/annotate_tier_plan.py` annotates an existing v3
+plan changes no serving behavior. The tiered path (SP-4 phase 2b) consumes the hot/warm lists
+directly and per expert: the hot experts form a compact device mini-bank in expert id order,
+the warm and cold experts share the pinned-host warm mini-bank in expert id order (the pinned
+host tier is the only host tier), and per-expert residency tables map every expert to its
+compacted rank and tier at execution time — so arbitrary scattered hot sets work without any
+artifact permutation. `tools/annotate_tier_plan.py` annotates an existing v3
 artifact without re-conversion: it rewrites the directory JSON with the plan, shifts file zero's
 payload region (logical payload offsets and continuation shards are untouched), and preserves
 every payload byte.

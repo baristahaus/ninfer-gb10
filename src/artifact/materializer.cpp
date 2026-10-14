@@ -202,24 +202,29 @@ MaterializedArtifact materialize(const Reader& reader, MaterializationPlan&& pla
                               static_cast<std::byte*>(storage.data) + segment.destination_offset});
         }
     }
-    // SP-4 tiered banks (phase 2a): compact hot mini-banks on the device, pinned-host warm
-    // mini-banks. Allocated after the plain device objects so the arena's sequential offsets
-    // match the plan; each bank reads once and splits per plane. The upload window starts
-    // here so the tiered synchronous uploads count toward upload_seconds.
+    // SP-4 tiered banks: compact hot mini-banks on the device, pinned-host warm mini-banks.
+    // Allocated after the plain device objects so the arena's sequential offsets match the
+    // plan; each bank reads once and packs per expert per plane, in the tier permutation's
+    // order. The upload window starts here so the tiered synchronous uploads count toward
+    // upload_seconds.
     const auto upload_start = std::chrono::steady_clock::now();
     for (const auto& tier : plan.tier_objects) {
         const auto& geometry = reader.geometry(tier.object);
         const auto rows      = geometry.shape[0];
+        const auto experts   = tier.new_order.size();
         if (geometry.shape.size() != 2 || rows == 0 || geometry.shape[1] == 0 ||
-            tier.hot_rows == 0 || tier.hot_rows >= rows || geometry.bytes % rows != 0 ||
-            tier.bytes != geometry.bytes / rows * tier.hot_rows) {
-            throw ArtifactError("tiered placement does not divide into per-row mini-banks");
+            experts == 0 || rows % experts != 0 || tier.hot_experts == 0 ||
+            tier.hot_experts >= experts || geometry.bytes % rows != 0 ||
+            tier.bytes != geometry.bytes / experts * tier.hot_experts) {
+            throw ArtifactError(reader.directory().tensor(tier.object).id +
+                                ": tiered placement does not divide into per-expert mini-banks");
         }
-        if (geometry.layout == QuantLayout::BlockScaleK16M128x4 && tier.hot_rows % 128 != 0) {
+        if (geometry.layout == QuantLayout::BlockScaleK16M128x4 && rows / experts % 128 != 0) {
             throw ArtifactError("tiered swizzled-scale split requires 128-row tile alignment");
         }
-        const auto warm_rows = rows - tier.hot_rows;
-        auto& storage        = out.objects_.at(tier.object.index);
+        const auto rows_per_expert = rows / experts;
+        const auto warm_experts    = experts - tier.hot_experts;
+        auto& storage              = out.objects_.at(tier.object.index);
         if (storage.device || storage.host || storage.pinned.has_value()) {
             throw ArtifactError("duplicate tiered placement");
         }
@@ -234,7 +239,8 @@ MaterializedArtifact materialize(const Reader& reader, MaterializationPlan&& pla
         out.stats_.read_bytes =
             checked_add(out.stats_.read_bytes, staging.size(), "tiered read bytes");
         const auto divisor = read_divisor(reader, tier.object, geometry, staging, out.stats_);
-        // The packed mini-banks: each plane's hot prefix and warm suffix, in plane order.
+        // The packed mini-banks: each expert's per-plane block at its compacted slot in the
+        // hot (device) or warm (pinned-host) mini-bank.
         const std::array<std::pair<std::uint64_t, std::uint64_t>, 3> planes{{
             {0, geometry.code_bytes_per_row},
             {geometry.high_offset, geometry.high_bytes_per_row},
@@ -242,23 +248,44 @@ MaterializedArtifact materialize(const Reader& reader, MaterializationPlan&& pla
         }};
         std::vector<std::byte> hot_packed(static_cast<std::size_t>(tier.bytes));
         storage.pinned.emplace(
-            static_cast<std::size_t>(geometry.bytes / rows * warm_rows));
-        std::uint64_t hot_plane = 0;
-        std::uint64_t warm_plane = 0;
+            static_cast<std::size_t>(geometry.bytes / experts * warm_experts));
+        std::uint64_t hot_written  = 0;
+        std::uint64_t warm_written = 0;
+        std::uint64_t hot_plane    = 0;
+        std::uint64_t warm_plane   = 0;
         for (const auto& [object_offset, per_row] : planes) {
             if (per_row == 0) { continue; }
-            const auto hot_len  = checked_mul(per_row, tier.hot_rows, "tiered hot plane");
-            const auto warm_len = checked_mul(per_row, warm_rows, "tiered warm plane");
-            std::memcpy(hot_packed.data() + hot_plane, staging.data() + object_offset,
-                        static_cast<std::size_t>(hot_len));
-            std::memcpy(static_cast<std::byte*>(storage.pinned->data()) + warm_plane,
-                        staging.data() + object_offset + hot_len,
-                        static_cast<std::size_t>(warm_len));
-            hot_plane  = checked_add(hot_plane, hot_len, "tiered hot plane offset");
-            warm_plane = checked_add(warm_plane, warm_len, "tiered warm plane offset");
+            const auto block = checked_mul(per_row, rows_per_expert, "tiered expert block");
+            for (std::size_t slot = 0; slot < experts; ++slot) {
+                const auto expert   = tier.new_order[slot];
+                const bool warm     = slot >= tier.hot_experts;
+                const auto dst_slot = warm ? slot - tier.hot_experts : slot;
+                const auto source = checked_add(
+                    object_offset, checked_mul(expert, block, "tiered source block"),
+                    "tiered source offset");
+                const auto destination =
+                    checked_add(warm ? warm_plane : hot_plane,
+                                checked_mul(dst_slot, block, "tiered slot block"),
+                                "tiered destination offset");
+                if (warm) {
+                    std::memcpy(static_cast<std::byte*>(storage.pinned->data()) + destination,
+                                staging.data() + source, static_cast<std::size_t>(block));
+                    warm_written = checked_add(warm_written, block, "tiered warm bytes");
+                } else {
+                    std::memcpy(hot_packed.data() + destination, staging.data() + source,
+                                static_cast<std::size_t>(block));
+                    hot_written = checked_add(hot_written, block, "tiered hot bytes");
+                }
+            }
+            hot_plane  = checked_add(hot_plane,
+                                     checked_mul(block, tier.hot_experts, "tiered hot plane"),
+                                     "tiered hot plane base");
+            warm_plane = checked_add(warm_plane,
+                                     checked_mul(block, warm_experts, "tiered warm plane"),
+                                     "tiered warm plane base");
         }
-        if (hot_plane != tier.bytes || warm_plane != storage.pinned->size()) {
-            throw ArtifactError("tiered plane split does not cover the mini-banks");
+        if (hot_written != tier.bytes || warm_written != storage.pinned->size()) {
+            throw ArtifactError("tiered expert packing does not cover the mini-banks");
         }
         // The scaled mini-bank geometries: the same plane structure at the split row counts.
         const auto mini_geometry = [&](std::uint64_t mini_rows) {
@@ -274,11 +301,12 @@ MaterializedArtifact materialize(const Reader& reader, MaterializationPlan&& pla
             mini.divisor_offset = 0;
             return mini;
         };
-        storage.device = WeightParent{mini_geometry(tier.hot_rows),
-                                      static_cast<const std::byte*>(hot_storage.data), divisor};
-        storage.host   = WeightParent{mini_geometry(warm_rows),
-                                      static_cast<const std::byte*>(storage.pinned->data()),
-                                      divisor, true};
+        storage.device =
+            WeightParent{mini_geometry(tier.hot_experts * rows_per_expert),
+                         static_cast<const std::byte*>(hot_storage.data), divisor};
+        storage.host = WeightParent{mini_geometry(warm_experts * rows_per_expert),
+                                    static_cast<const std::byte*>(storage.pinned->data()),
+                                    divisor, true};
         // One-shot synchronous upload: the staging and packed buffers are per-bank locals.
         check_cuda(cudaMemcpy(hot_storage.data, hot_packed.data(), hot_packed.size(),
                               cudaMemcpyHostToDevice),

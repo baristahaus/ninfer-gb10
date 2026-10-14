@@ -264,15 +264,16 @@ int main(int argc, char** argv) {
                         {offset, false, reader.read_range(object.offset + offset, count)});
                 }
             }
-            // SP-4 tiered banks: verify the split per plane. Each plane's hot-row bytes land
-            // packed in the device hot mini-bank; the warm-row suffix lands packed in the
-            // pinned-host warm mini-bank, both in expert order.
+            // SP-4 tiered banks: verify the per-expert packing per plane. Each expert's
+            // per-plane block lands at its compacted slot in the hot (device) or warm
+            // (pinned-host) mini-bank, ordered by the tier permutation.
             for (const auto& item : plan.materialization().tier_objects) {
                 const auto& object   = reader.directory().tensor(item.object);
                 const auto& geometry = reader.geometry(item.object);
                 const auto rows      = geometry.shape[0];
-                const auto hot_rows  = item.hot_rows;
-                const auto warm_rows = rows - hot_rows;
+                const auto experts   = item.new_order.size();
+                const auto rows_per_expert = rows / experts;
+                const auto warm_experts    = experts - item.hot_experts;
                 expected_h2d += item.bytes;
                 expected_parents += 2;
                 const std::uint64_t plane_per[3] = {geometry.code_bytes_per_row,
@@ -290,20 +291,23 @@ int main(int argc, char** argv) {
                 std::uint64_t hot_packed  = 0;
                 std::uint64_t warm_packed = 0;
                 for (std::size_t plane = 0; plane < 3; ++plane) {
-                    const auto hot_len  = plane_per[plane] * hot_rows;
-                    const auto warm_len = plane_per[plane] * warm_rows;
-                    if (hot_len != 0) {
-                        sample_at(hot_packed, plane_base[plane], false);
-                        sample_at(hot_packed + hot_len - 64, plane_base[plane] + hot_len - 64,
-                                  false);
+                    const auto block = plane_per[plane] * rows_per_expert;
+                    const auto sample_slot = [&](std::uint64_t base, std::size_t slot,
+                                                 bool host) {
+                        if (block == 0) { return; }
+                        const auto expert = item.new_order[host ? item.hot_experts + slot : slot];
+                        const auto file   = plane_base[plane] + expert * block;
+                        sample_at(base + slot * block, file, host);
+                        sample_at(base + slot * block + block - 64, file + block - 64, host);
+                    };
+                    for (std::size_t slot = 0; slot < item.hot_experts; ++slot) {
+                        sample_slot(hot_packed, slot, false);
                     }
-                    if (warm_len != 0) {
-                        sample_at(warm_packed, plane_base[plane] + hot_len, true);
-                        sample_at(warm_packed + warm_len - 64,
-                                  plane_base[plane] + hot_len + warm_len - 64, true);
+                    for (std::size_t slot = 0; slot < warm_experts; ++slot) {
+                        sample_slot(warm_packed, slot, true);
                     }
-                    hot_packed += hot_len;
-                    warm_packed += warm_len;
+                    hot_packed += block * item.hot_experts;
+                    warm_packed += block * warm_experts;
                 }
             }
             device = std::make_unique<DeviceContext>();

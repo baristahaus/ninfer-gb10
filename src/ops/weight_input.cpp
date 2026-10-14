@@ -87,22 +87,31 @@ const WeightParent* view_parent(const WeightInput& input) {
     return parent;
 }
 
-// SP-4 phase 2a: returns the first suffix view index — where the pinned-host warm parent
-// begins — or the span size when the bank is untiered (every view shares one parent).
-// Exactly one parent change is representable.
-std::size_t tiered_boundary(std::span<const WeightInput> inputs) {
+// SP-4: partitions expert views by residency parent — device parents form the hot tier,
+// pinned-host parents the warm tier — with arbitrary expert ids on either side. Each
+// partition keeps expert id order (the input order is expert id order, so filtering
+// preserves it). An empty warm partition means the bank is untiered.
+std::pair<std::vector<std::size_t>, std::vector<std::size_t>>
+tier_partition(std::span<const WeightInput> inputs) {
     require(!inputs.empty(), "expert bank is empty");
-    const auto* hot = view_parent(inputs.front());
-    for (std::size_t i = 1; i < inputs.size(); ++i) {
+    const auto* hot  = static_cast<const WeightParent*>(nullptr);
+    const auto* warm = static_cast<const WeightParent*>(nullptr);
+    std::pair<std::vector<std::size_t>, std::vector<std::size_t>> out;
+    for (std::size_t i = 0; i < inputs.size(); ++i) {
         const auto* parent = view_parent(inputs[i]);
-        if (parent == hot) { continue; }
-        for (std::size_t j = i + 1; j < inputs.size(); ++j) {
-            require(view_parent(inputs[j]) == parent,
-                    "tiered routed bank requires one hot/warm parent split");
+        if (!parent->host) {
+            require(hot == nullptr || parent == hot,
+                    "tiered routed bank requires one device hot parent");
+            hot = parent;
+            out.first.push_back(i);
+        } else {
+            require(warm == nullptr || parent == warm,
+                    "tiered routed bank requires one host warm parent");
+            warm = parent;
+            out.second.push_back(i);
         }
-        return i;
     }
-    return inputs.size();
+    return out;
 }
 
 SingleProjectionWeight single(std::span<const WeightInput> inputs) {
@@ -274,30 +283,36 @@ prepare_sparse_moe_weights(const WeightInput& router, const WeightInput& shared_
                   (down_format == QType::Q5_G64_FP16 || down_format == QType::Q6_G64_FP16)) ||
                  (gate_format == QType::Q8_G32_FP16 && down_format == QType::Q8_G32_FP16)),
             "SparseMoe native bank formats are unsupported");
-    // SP-4 phase 2a: a tiered layer splits its routed expert views at one positional parent
-    // boundary — the device hot mini-bank's parent for the prefix, the pinned-host warm
-    // mini-bank's parent for the suffix. Gate and up views pair per expert; down views are
-    // one per expert, so both banks must split at the same expert boundary.
-    const auto gate_up_split = tiered_boundary(expert_gate_up);
-    const auto down_split    = tiered_boundary(expert_down);
-    if (gate_up_split == expert_gate_up.size() && down_split == expert_down.size()) {
+    // SP-4: a tiered layer partitions its routed expert views by residency parent — the
+    // device hot mini-bank's parent versus the pinned-host warm mini-bank's parent — with
+    // arbitrary expert ids on either side. Gate and up views pair per expert, so the gate/up
+    // partitions must select matching expert pairs; down views are one per expert and both
+    // banks must partition identically.
+    const auto [gate_up_hot, gate_up_warm] = tier_partition(expert_gate_up);
+    const auto [down_hot, down_warm]       = tier_partition(expert_down);
+    if (gate_up_warm.empty() && down_warm.empty()) {
         const auto gate_up_bank = single(expert_gate_up);
         const auto down_bank    = single(expert_down);
         return {router_bank.weight, gate_up_bank.weight, down_bank.weight, shared.weight,
                 down.weight};
     }
-    require(gate_up_split != expert_gate_up.size() && down_split != expert_down.size(),
+    require(!gate_up_warm.empty() && !down_warm.empty(),
             "tiered routed banks must split together");
-    require(gate_up_split > 0 && gate_up_split % 2 == 0 && down_split > 0 &&
-                down_split < expert_down.size(),
-            "tiered routed views must split inside the expert range");
-    const auto hot_experts = gate_up_split / 2;
-    require(down_split == hot_experts,
-             "tiered gate/up and down banks must split at the same expert boundary");
-    const auto hot_gate_up = single(expert_gate_up.first(gate_up_split));
-    const auto warm_gate_up = single(expert_gate_up.last(expert_gate_up.size() - gate_up_split));
-    const auto hot_down     = single(expert_down.first(down_split));
-    const auto warm_down    = single(expert_down.last(expert_down.size() - down_split));
+    const auto hot_experts = down_hot.size();
+    require(gate_up_hot.size() == 2 * hot_experts && gate_up_warm.size() % 2 == 0 &&
+                gate_up_warm.size() / 2 == down_warm.size(),
+            "tiered gate/up and down banks must partition the same experts");
+    auto gather = [](std::span<const WeightInput> inputs,
+                     const std::vector<std::size_t>& indices) {
+        std::vector<WeightInput> picked;
+        picked.reserve(indices.size());
+        for (const auto i : indices) { picked.push_back(inputs[i]); }
+        return picked;
+    };
+    const auto hot_gate_up  = single(gather(expert_gate_up, gate_up_hot));
+    const auto warm_gate_up = single(gather(expert_gate_up, gate_up_warm));
+    const auto hot_down     = single(gather(expert_down, down_hot));
+    const auto warm_down    = single(gather(expert_down, down_warm));
     return {router_bank.weight,
             hot_gate_up.weight,
             hot_down.weight,

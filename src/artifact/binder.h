@@ -46,13 +46,18 @@ public:
     [[nodiscard]] const Reader& reader() const noexcept { return reader_; }
 
     void require_device(ObjectHandle object, std::uint64_t alignment = 256);
-    // Declares a routed expert bank as tier-split (strategy SP-4 phase 2a): the first
-    // `hot_rows` rows of the object materialize on the device as a compact hot mini-bank,
-    // the remaining rows live in a pinned-host warm mini-bank, and Host-residency parts on
-    // this object address the warm mini-bank at suffix-relative element ranges.
-    void set_tier(ObjectHandle object, std::uint64_t hot_rows);
-    // SP-4 tiered bank state: the registered hot-row prefix, or zero for an untiered object.
-    [[nodiscard]] std::uint64_t tier_hot_rows(ObjectHandle object) const;
+    // Declares a routed expert bank as tier-split (strategy SP-4): `hot` and `warm` are
+    // disjoint expert id lists covering the bank's experts. The hot experts materialize on
+    // the device as a compact hot mini-bank in expert id order; the warm experts live in a
+    // pinned-host warm mini-bank in expert id order; parts remap to their expert's
+    // compacted position in the matching mini-bank.
+    void set_tier(ObjectHandle object, const std::vector<std::uint32_t>& hot,
+                  const std::vector<std::uint32_t>& warm);
+    // SP-4 tiered bank state: the registered expert permutation (the hot experts in expert
+    // id order, then the warm experts), empty for an untiered object.
+    [[nodiscard]] std::span<const std::uint32_t> tier_new_order(ObjectHandle object) const;
+    // SP-4 tiered bank state: the hot expert count — the permutation prefix on the device.
+    [[nodiscard]] std::uint32_t tier_hot_experts(ObjectHandle object) const;
     [[nodiscard]] std::span<const std::byte> host_object(ObjectHandle object);
     [[nodiscard]] ObjectHandle resource(std::string_view component, std::string_view role);
     [[nodiscard]] HostValues values(const Binding& binding, std::optional<QType> format = {});
@@ -64,9 +69,12 @@ private:
         bool host               = false;
         std::uint64_t alignment = 256;
         std::vector<std::byte> host_data;
-        // SP-4 tiered bank: nonzero marks the split; device/host demands then describe the
-        // hot and warm mini-banks instead of the whole object.
-        std::uint64_t tier_hot_rows = 0;
+        // SP-4 tiered bank: nonempty marks the split; device/host demands then describe the
+        // hot and warm mini-banks instead of the whole object. The permutation lists the hot
+        // experts (expert id order) followed by the warm experts; `tier_hot_experts` is the
+        // boundary between the two tiers.
+        std::vector<std::uint32_t> tier_new_order;
+        std::uint32_t tier_hot_experts = 0;
     };
 
     const Reader& reader_;

@@ -57,6 +57,21 @@ sparse_moe_merge_ranked_runs(SparseMoeRankedValue (&run)[kSparseMoeTopK]) {
     }
 }
 
+// SP-4 phase 2b: the per-expert residency entry. Bit 31 marks the warm tier; the low 31
+// bits are the expert's compacted rank in its bank. A null table selects the untiered
+// direct path: the expert reads the device bank at its own rank.
+__device__ __forceinline__ void sparse_moe_residency(const unsigned* __restrict__ table,
+                                                     int expert, bool& warm, int& rank) {
+    if (table == nullptr) {
+        warm = false;
+        rank = expert;
+        return;
+    }
+    const unsigned entry = table[expert];
+    warm = (entry & 0x80000000u) != 0u;
+    rank = static_cast<int>(entry & 0x7fffffffu);
+}
+
 __device__ __forceinline__ void sparse_moe_select_top8_warp(const float* scores, int* ids,
                                                             float* alpha, float* shared_scale,
                                                             float* selected_logits,

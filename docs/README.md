@@ -50,7 +50,7 @@ other references own narrower contracts:
 | [Engine architecture](maintainer/engine-architecture.md) | model/config/weight ownership, loading-to-execution flow, requests, scheduling, transactions and graphs |
 | [Build system](maintainer/build-system.md) | CMake targets, explicit source ownership, CUDA compilation boundaries, presets and developer configuration |
 | [Artifact container](maintainer/artifact-container.md) | v3 directory, objects, logical bindings, Uses, resources and file framing/sharding |
-- `maintainer/exl3-trellis-contract.md`: the EXL3 trellis codec contract (SP-7) — decode mathematics, oracle, container extension, converter recipe, kernel contracts, and the delegation boundary.
+- `maintainer/exl3-trellis-contract.md`: the EXL3 trellis codec contract (SP-7) — the exllamav3-compatible format, the codec and SparseMoe oracles, the container extension, variable-extent expert tiering, the converter routes, kernel contracts, acceptance, and the delegation boundary.
 | [Numeric formats](maintainer/tensor-formats.md) | represented values, codes/scales, conversion arithmetic and numerical interpretation |
 | [Storage layouts](maintainer/storage-layouts.md) | packing, plane offsets, padding, encoded sizes and view addressing |
 | [Qwen3.5 model](maintainer/qwen3_5-model.md) | Dense/MoE mathematics, instance config, logical parameters, MTP, Vision and state semantics |

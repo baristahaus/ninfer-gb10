@@ -35,9 +35,13 @@ struct HostPlacement {
 struct TierPlacement {
     ObjectHandle object;
     std::uint64_t offset      = 0;
-    std::uint64_t bytes       = 0;  // hot mini-bank bytes on the device.
+    std::uint64_t bytes       = 0;  // device mini-bank bytes: hot experts plus the cache tail.
     std::uint64_t alignment   = 256;
     std::uint32_t hot_experts = 0;
+    // SP-4 adaptive cache: tail slots appended after the hot experts. A promoted warm expert
+    // occupies one tail slot per bank at compacted rank `hot_experts + slot`; the residency
+    // table's warm flag flips off while it stays promoted.
+    std::uint32_t cache_slots = 0;
     std::vector<std::uint32_t> new_order;  // hot experts then warm experts, expert id order.
 };
 

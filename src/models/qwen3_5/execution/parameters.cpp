@@ -3,6 +3,7 @@
 #include "core/device.h"
 #include "core/weight_view.h"
 
+#include <algorithm>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -351,6 +352,97 @@ Parameters::Parameters(const Model& source) : model(source) {
                 }
             }
             if (tiered) { tiered_layers.push_back(i); }
+        }
+        // SP-4 adaptive cache: promote warm experts into the cache tail. A tiered layer's
+        // device mini-bank carries the hot experts plus tail slots; every warm expert with a
+        // tail slot copies its per-plane blocks from the pinned-host warm mini-bank into the
+        // device tail and flips its residency entry to the device rank, so the tiered model
+        // serves device-resident experts wherever the tail covers its warm tier. Warm slots
+        // and tail slots are both rank ordered, so each plane copies as one contiguous block,
+        // and the flipped entries ride the same upload below. Layers without a tail, and
+        // banks that are already fully hot, keep their entries unchanged.
+        for (std::size_t i = 0; i < routed.size(); ++i) {
+            const auto& experts = routed[i].weights->experts;
+            const WeightParent* gate_dev  = nullptr;
+            const WeightParent* gate_host = nullptr;
+            const WeightParent* down_dev  = nullptr;
+            const WeightParent* down_host = nullptr;
+            std::uint32_t hot  = 0;
+            std::uint32_t warm = 0;
+            std::uint64_t gate_rows_per_expert = 0;
+            std::uint64_t down_rows_per_expert = 0;
+            for (std::size_t e = 0; e < experts.size(); ++e) {
+                const auto& gate = model.input(experts[e].gate).weight;
+                const auto& part = gate.parts.front();
+                gate_rows_per_expert = 2 * gate.shape[0];
+                if (part.parent->host) {
+                    gate_host = part.parent;
+                    ++warm;
+                } else {
+                    gate_dev = part.parent;
+                    ++hot;
+                }
+                const auto& down = model.input(experts[e].down).weight;
+                const auto& down_part = down.parts.front();
+                down_rows_per_expert = down.shape[0];
+                if (down_part.parent->host) {
+                    down_host = down_part.parent;
+                } else {
+                    down_dev = down_part.parent;
+                }
+            }
+            if (gate_dev == nullptr || gate_host == nullptr || down_dev == nullptr ||
+                down_host == nullptr) {
+                continue;
+            }
+            // One plane-aligned copy per bank; the tail is mutable by design (the promotion
+            // and eviction transactions own it), while the hot rows stay untouched.
+            const auto promote = [&](const WeightParent* device, const WeightParent* host_bank,
+                                     std::uint64_t rows_per_expert, std::uint32_t hot_count,
+                                     std::uint32_t warm_count) {
+                const auto tail_rows =
+                    device->geometry.shape[0] -
+                    static_cast<std::uint64_t>(hot_count) * rows_per_expert;
+                if (tail_rows == 0) { return static_cast<std::uint32_t>(0); }
+                const auto slots = static_cast<std::uint32_t>(tail_rows / rows_per_expert);
+                const auto count = std::min(slots, warm_count);
+                const struct Plane {
+                    std::uint64_t device_offset;
+                    std::uint64_t host_offset;
+                    std::uint64_t per_row;
+                } planes[] = {
+                    {0, 0, device->geometry.code_bytes_per_row},
+                    {device->geometry.high_offset, host_bank->geometry.high_offset,
+                     device->geometry.high_bytes_per_row},
+                    {device->geometry.scale_offset, host_bank->geometry.scale_offset,
+                     device->geometry.scale_bytes_per_row},
+                };
+                for (const auto& plane : planes) {
+                    if (plane.per_row == 0) { continue; }
+                    const auto block =
+                        static_cast<std::uint64_t>(count) * rows_per_expert * plane.per_row;
+                    const auto hot_prefix =
+                        static_cast<std::uint64_t>(hot_count) * rows_per_expert * plane.per_row;
+                    CUDA_CHECK(cudaMemcpy(
+                        const_cast<std::byte*>(device->data) + plane.device_offset + hot_prefix,
+                        host_bank->data + plane.host_offset, block, cudaMemcpyHostToDevice));
+                }
+                return count;
+            };
+            const auto gate_count =
+                promote(gate_dev, gate_host, gate_rows_per_expert, hot, warm);
+            const auto down_count =
+                promote(down_dev, down_host, down_rows_per_expert, hot, warm);
+            if (gate_count != down_count) {
+                throw std::invalid_argument(routed[i].label +
+                                            ": tiered cache tails disagree between banks");
+            }
+            for (std::size_t e = 0; e < experts.size(); ++e) {
+                auto& entry = tables[i * counter_experts_ + e];
+                if ((entry & 0x80000000u) != 0u && (entry & 0x7fffffffu) < gate_count) {
+                    entry = (entry & 0x7fffffffu) + hot;
+                }
+            }
         }
         if (!tiered_layers.empty()) {
             CUDA_CHECK(cudaMalloc(&expert_residency_, tables.size() * sizeof(std::uint32_t)));

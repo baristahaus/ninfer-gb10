@@ -315,7 +315,8 @@ ConstructedModel construct_model(const EngineOptions& options, DeviceContext& de
         return construct_flash_next(options, device, reader, start);
     }
     StartupPhaseScope binding(options.startup_observer, StartupPhase::TargetPlan);
-    auto plan = models::qwen3_5::plan_load(reader, models::load_options(options));
+    auto plan = models::qwen3_5::plan_load(reader, models::load_options(options),
+                                          obtainable_device_bytes(device, options, true));
     // The LoadPlan is moved into materialization below; capture the reported tier-plan scalars
     // while the plan is still alive.
     std::uint32_t tier_plan_banks        = 0;

@@ -58,6 +58,13 @@ public:
     [[nodiscard]] std::span<const std::uint32_t> tier_new_order(ObjectHandle object) const;
     // SP-4 tiered bank state: the hot expert count — the permutation prefix on the device.
     [[nodiscard]] std::uint32_t tier_hot_experts(ObjectHandle object) const;
+    // SP-4 adaptive cache: the total device-bytes budget for the materialization plan. The
+    // plain device objects and the tiered hot mini-banks consume first; every tiered bank then
+    // gains a cache tail of equal slot count (a promoted expert needs its paired banks to
+    // match), sized so one slot costs its per-expert bytes in every bank. Zero (or a budget
+    // the weights already exceed) keeps the tiered placement at its planned hot set with no
+    // tail.
+    void set_device_budget(std::uint64_t bytes);
     [[nodiscard]] std::span<const std::byte> host_object(ObjectHandle object);
     [[nodiscard]] ObjectHandle resource(std::string_view component, std::string_view role);
     [[nodiscard]] HostValues values(const Binding& binding, std::optional<QType> format = {});
@@ -79,6 +86,7 @@ private:
 
     const Reader& reader_;
     std::vector<Demand> demands_;
+    std::uint64_t device_budget_ = 0;
     std::uint64_t read_bytes_        = 0;
     std::uint64_t owned_value_bytes_ = 0;
 };

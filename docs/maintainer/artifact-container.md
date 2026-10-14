@@ -577,7 +577,12 @@ directly and per expert: the hot experts form a compact device mini-bank in expe
 the warm and cold experts share the pinned-host warm mini-bank in expert id order (the pinned
 host tier is the only host tier), and per-expert residency tables map every expert to its
 compacted rank and tier at execution time — so arbitrary scattered hot sets work without any
-artifact permutation. `tools/annotate_tier_plan.py` annotates an existing v3
+artifact permutation. The device mini-bank additionally carries a cache tail of equal slot
+count across each layer's paired banks (SP-4's adaptive cache): sized by the engine's
+device budget after the hot mini-banks, and populated at startup by promoting warm experts
+into tail slots — each promotion is one plane-aligned copy per bank plus a residency-table
+flip, and a promoted expert reads exactly like a hot expert at rank `hot_experts + slot`.
+`tools/annotate_tier_plan.py` annotates an existing v3
 artifact without re-conversion: it rewrites the directory JSON with the plan, shifts file zero's
 payload region (logical payload offsets and continuation shards are untouched), and preserves
 every payload byte.

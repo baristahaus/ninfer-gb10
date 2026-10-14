@@ -5,6 +5,7 @@
 #include "models/qwen3_5/load/bindings.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <utility>
 
 namespace ninfer::models::qwen3_5 {
@@ -63,6 +64,12 @@ LoadPlan plan_load(const artifact::Reader& reader, LoadOptions options,
         binder.set_device_budget(device_free_bytes > kStartupReserveBytes
                                      ? device_free_bytes - kStartupReserveBytes
                                      : 0);
+        if (const char* cap = std::getenv("NINFER_EXPERT_TAIL_SLOTS")) {
+            // Validation knob: force the tail-limited case on models whose free VRAM would
+            // otherwise cover the whole warm tier, so the runtime adaptation has a
+            // measurable stand-in for the 125B scenario.
+            binder.set_cache_slot_cap(static_cast<std::uint32_t>(std::stoul(cap)));
+        }
     }
     if (out->tier_plan) {
         // Strategy SP-4 consumes the plan's tier lists directly: every named object resolves

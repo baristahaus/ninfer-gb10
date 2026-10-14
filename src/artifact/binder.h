@@ -65,6 +65,10 @@ public:
     // the weights already exceed) keeps the tiered placement at its planned hot set with no
     // tail.
     void set_device_budget(std::uint64_t bytes);
+    // SP-4 adaptive cache: hard cap on tail slots per bank, overriding the budget-derived
+    // count. Used to force the tail-limited case (where the tail cannot cover the warm tier)
+    // on models whose free VRAM would otherwise cover it.
+    void set_cache_slot_cap(std::uint32_t slots);
     [[nodiscard]] std::span<const std::byte> host_object(ObjectHandle object);
     [[nodiscard]] ObjectHandle resource(std::string_view component, std::string_view role);
     [[nodiscard]] HostValues values(const Binding& binding, std::optional<QType> format = {});
@@ -87,6 +91,7 @@ private:
     const Reader& reader_;
     std::vector<Demand> demands_;
     std::uint64_t device_budget_ = 0;
+    std::uint32_t cache_slot_cap_ = 0;
     std::uint64_t read_bytes_        = 0;
     std::uint64_t owned_value_bytes_ = 0;
 };

@@ -483,7 +483,7 @@ public:
         qwen3_5::ContinuationSummary continuation_summary;
     };
 
-    ProgramImpl(const execution::Parameters& parameters, const SequencePlanImpl& plan,
+    ProgramImpl(execution::Parameters& parameters, const SequencePlanImpl& plan,
                 DeviceContext& device, const StartupObserver& startup_observer);
     ~ProgramImpl() noexcept;
 
@@ -589,7 +589,7 @@ public:
 
     friend struct qwen3_5::detail::PressurePlanningSessionImpl;
 
-    const execution::Parameters& parameters;
+    execution::Parameters& parameters;
     DeviceContext& device;
     const std::uint32_t capacity;
     const std::uint32_t kv_capacity;

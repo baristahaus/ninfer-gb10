@@ -970,7 +970,7 @@ private:
     explicit Program(std::unique_ptr<detail::ProgramImpl> impl) noexcept;
     std::unique_ptr<detail::ProgramImpl> impl_;
 
-    friend std::unique_ptr<Program> create_program(const execution::Parameters&, SequencePlan&&,
+    friend std::unique_ptr<Program> create_program(execution::Parameters&, SequencePlan&&,
                                                    DeviceContext&, const StartupObserver&);
 };
 
@@ -1130,7 +1130,7 @@ struct RuntimeContractAccess {
                                                     DeviceContext& device,
                                                     const EngineOptions& options);
 
-[[nodiscard]] std::unique_ptr<Program> create_program(const execution::Parameters& parameters,
+[[nodiscard]] std::unique_ptr<Program> create_program(execution::Parameters& parameters,
                                                       SequencePlan&& plan, DeviceContext& device,
                                                       const StartupObserver& startup_observer);
 

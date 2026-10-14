@@ -30,7 +30,7 @@ using qwen3_5::PromptModality;
 
 struct ExecutionCore {
     DeviceContext& device;
-    const execution::Parameters& parameters;
+    execution::Parameters& parameters;
     WorkspaceArena& work;
     LinearAttentionStatePool& linear_attention;
     const GdnReplayRecords* replay_records;

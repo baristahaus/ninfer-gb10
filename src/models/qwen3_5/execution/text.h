@@ -67,7 +67,7 @@ class VisionPrefillSession;
 
 class TextContext {
 public:
-    TextContext(DeviceContext& ctx, const execution::Parameters& weights, WorkspaceArena& work,
+    TextContext(DeviceContext& ctx, execution::Parameters& weights, WorkspaceArena& work,
                 qwen3_5::PagedKVCacheView kv, LinearAttentionStatePool& state,
                 qwen3_5::RoundState& io, Tensor& prefill_hidden, std::uint32_t prefill_chunk,
                 std::uint32_t text_kv_base,
@@ -209,7 +209,7 @@ private:
     prefill_impl(std::span<const int> ids, const TextPrefill* text_prefill,
                  const MultimodalPrefill* multimodal, Tap& tap, bool finalize_at_end);
     DeviceContext& ctx_;
-    const Parameters& parameters_;
+    Parameters& parameters_;
     const TextConfig& config_;
     WorkspaceArena& work_;
     qwen3_5::PagedKVCacheView kv_;

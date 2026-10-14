@@ -3,6 +3,8 @@
 #include "models/qwen3_5/model.h"
 #include "ninfer/ops/weight_input.h"
 
+#include <cuda_runtime.h>
+
 #include <array>
 #include <memory>
 #include <limits>
@@ -12,6 +14,9 @@
 #include <vector>
 
 namespace ninfer::models::qwen3_5::execution {
+
+// SP-4 adaptive cache: runtime adaptation state (defined in parameters.cpp).
+struct ExpertCacheState;
 
 using LinearParameters = ops::SingleProjectionWeight;
 
@@ -149,6 +154,11 @@ public:
     // SP-4 phase 2b: the per-expert activation counts accumulated by the MoE routing stages.
     // The caller synchronizes the device before querying; dense models return no layers.
     [[nodiscard]] ninfer::MoeActivationProfile moe_activation_profile() const;
+    // SP-4 adaptive cache: runtime promotion/eviction for tail-limited tiers, driven by the
+    // always-armed per-expert activation counters. Prefill boundaries always adapt; decode
+    // boundaries adapt every eighth round. Tiers the tail fully covers — and untiered models —
+    // only accumulate the warm-tier hit-rate statistics.
+    void adapt_expert_cache(cudaStream_t stream, bool prefill_boundary);
 
 private:
     // SP-4 phase 2b: device storage, one u32 counter per routed expert per MoE layer.
@@ -159,6 +169,9 @@ private:
     // SP-4 phase 2b: device storage, one u32 residency entry per routed expert per MoE
     // layer; null when no layer is tiered.
     std::uint32_t* expert_residency_       = nullptr;
+    // SP-4 adaptive cache: per-layer tier metadata, the residency shadow, and the counter
+    // mirrors; null when no layer is routed.
+    std::unique_ptr<ExpertCacheState> expert_cache_;
 };
 
 } // namespace ninfer::models::qwen3_5::execution

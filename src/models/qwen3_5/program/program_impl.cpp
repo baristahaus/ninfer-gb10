@@ -35,7 +35,7 @@ std::uint32_t normalized_private_capacity(const ContextCacheOptions& options) {
 
 } // namespace
 
-ProgramImpl::ProgramImpl(const execution::Parameters& parameters_in, const SequencePlanImpl& plan,
+ProgramImpl::ProgramImpl(execution::Parameters& parameters_in, const SequencePlanImpl& plan,
                          DeviceContext& device_in, const StartupObserver& startup_observer)
     : parameters(parameters_in), device(device_in), capacity(plan.capacity),
       kv_capacity(plan.kv_capacity), max_concurrency(plan.max_concurrency),

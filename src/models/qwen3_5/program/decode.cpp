@@ -773,13 +773,19 @@ runtime::BatchedGeneratedRound ProgramImpl::decode_dflash_batch(
 runtime::BatchedGeneratedRound ProgramImpl::decode_raw(
     std::span<const std::uint32_t> lanes, std::span<const runtime::RoundBudget> budgets,
     runtime::ExecutionTiming* failed_timing, runtime::TokenMaskProvider* masks) {
+    runtime::BatchedGeneratedRound round;
     if (speculative_backend == SpeculativeBackend::None) {
-        return decode_ordinary_batch(lanes, budgets, failed_timing, masks);
+        round = decode_ordinary_batch(lanes, budgets, failed_timing, masks);
+    } else if (speculative_backend == SpeculativeBackend::Mtp) {
+        round = decode_mtp_batch(lanes, budgets, failed_timing, masks);
+    } else {
+        round = decode_dflash_batch(lanes, budgets, failed_timing, masks);
     }
-    if (speculative_backend == SpeculativeBackend::Mtp) {
-        return decode_mtp_batch(lanes, budgets, failed_timing, masks);
-    }
-    return decode_dflash_batch(lanes, budgets, failed_timing, masks);
+    // SP-4 adaptive cache: the round boundary adapts the tail-limited tiers (every eighth
+    // round) from the activation counters; the stream orders the copies before the commit's
+    // kernels read the flipped entries.
+    parameters.adapt_expert_cache(device.stream, false);
+    return round;
 }
 
 runtime::ExecutionTiming ProgramImpl::resolve_non_speculative_pending(

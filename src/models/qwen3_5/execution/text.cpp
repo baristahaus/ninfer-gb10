@@ -230,7 +230,7 @@ void DFlashFeatureSink::consume_prefill_chunk(std::int32_t tokens, bool rewrite_
     consume_prefill(feature_window, position_window, rewrite_checkpoint);
 }
 
-TextContext::TextContext(DeviceContext& ctx, const execution::Parameters& weights,
+TextContext::TextContext(DeviceContext& ctx, execution::Parameters& weights,
                          WorkspaceArena& work, qwen3_5::PagedKVCacheView kv,
                          LinearAttentionStatePool& state, qwen3_5::RoundState& io,
                          Tensor& prefill_hidden, std::uint32_t prefill_chunk,
@@ -1394,6 +1394,9 @@ TextContext::prefill_impl(std::span<const int> ids, const TextPrefill* text_pref
     return PrefillChunkResult{.processed_tokens = static_cast<std::uint32_t>(t0),
                               .finalized        = finalize_at_end && t0 == T,
                               .timing           = timing.finish()};
+    // SP-4 adaptive cache: the chunk boundary adapts the tail-limited tiers before the next
+    // chunk enqueues, so this chunk's warm reads become the next chunk's tail hits.
+    parameters_.adapt_expert_cache(ctx_.stream, true);
 }
 
 PrefillChunkResult TextContext::prefill_chunk(std::span<const int> full_ids, std::uint32_t begin,

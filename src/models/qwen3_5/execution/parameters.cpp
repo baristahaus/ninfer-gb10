@@ -4,12 +4,44 @@
 #include "core/weight_view.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <limits>
 #include <stdexcept>
 #include <string>
 #include <utility>
 
 namespace ninfer::models::qwen3_5::execution {
+
+// SP-4 adaptive cache: runtime adaptation state. One Layer per routed MoE layer records the
+// tier geometry and the per-expert warm ranks; the shadow mirrors the residency table, and
+// the counter mirrors carry the current pass and the previous snapshot for recency deltas.
+struct ExpertCacheState {
+    struct Layer {
+        const WeightParent* gate_device   = nullptr;
+        const WeightParent* gate_warm     = nullptr;
+        const WeightParent* down_device   = nullptr;
+        const WeightParent* down_warm     = nullptr;
+        std::uint64_t gate_rows_per_expert = 0;
+        std::uint64_t down_rows_per_expert = 0;
+        std::uint32_t hot                 = 0;
+        std::uint32_t warm_count          = 0;
+        std::uint32_t slots               = 0;
+        // Warm-tier experts carry their compacted rank in the warm mini-bank; hot-tier
+        // experts carry kNoWarmRank.
+        std::vector<std::uint32_t> warm_rank;
+    };
+    static constexpr std::uint32_t kNoWarmRank = 0xffffffffu;
+    std::vector<Layer> layers;
+    std::vector<std::uint32_t> shadow;
+    std::vector<std::uint32_t> counters;
+    std::vector<std::uint32_t> snapshot;
+    std::uint32_t decode_gate = 0;
+    std::uint64_t warm_hits   = 0;
+    std::uint64_t warm_total  = 0;
+    std::uint64_t promotions  = 0;
+    std::uint64_t evictions   = 0;
+};
+
 namespace {
 
 template <class Function>
@@ -325,6 +357,13 @@ Parameters::Parameters(const Model& source) : model(source) {
         std::vector<std::uint32_t> tables(
             routed.size() * static_cast<std::size_t>(counter_experts_), 0u);
         std::vector<std::size_t> tiered_layers;
+        expert_cache_                     = std::make_unique<ExpertCacheState>();
+        expert_cache_->layers.resize(routed.size());
+        expert_cache_->counters.assign(routed.size() * counter_experts_, 0u);
+        expert_cache_->snapshot.assign(routed.size() * counter_experts_, 0u);
+        for (auto& layer : expert_cache_->layers) {
+            layer.warm_rank.assign(counter_experts_, ExpertCacheState::kNoWarmRank);
+        }
         for (std::size_t i = 0; i < routed.size(); ++i) {
             bool tiered = false;
             for (std::size_t e = 0; e < routed[i].weights->experts.size(); ++e) {
@@ -345,6 +384,7 @@ Parameters::Parameters(const Model& source) : model(source) {
                 }
                 if (warm) {
                     tables[i * counter_experts_ + e] = 0x80000000u | rank;
+                    expert_cache_->layers[i].warm_rank[e] = rank;
                     tiered = true;
                 } else {
                     tables[i * counter_experts_ + e] = rank;
@@ -395,6 +435,15 @@ Parameters::Parameters(const Model& source) : model(source) {
                 down_host == nullptr) {
                 continue;
             }
+            auto& cache_layer      = expert_cache_->layers[i];
+            cache_layer.gate_device = gate_dev;
+            cache_layer.gate_warm  = gate_host;
+            cache_layer.down_device = down_dev;
+            cache_layer.down_warm  = down_host;
+            cache_layer.gate_rows_per_expert = gate_rows_per_expert;
+            cache_layer.down_rows_per_expert = down_rows_per_expert;
+            cache_layer.hot        = hot;
+            cache_layer.warm_count = warm;
             // One plane-aligned copy per bank; the tail is mutable by design (the promotion
             // and eviction transactions own it), while the hot rows stay untouched.
             const auto promote = [&](const WeightParent* device, const WeightParent* host_bank,
@@ -437,6 +486,7 @@ Parameters::Parameters(const Model& source) : model(source) {
                 throw std::invalid_argument(routed[i].label +
                                             ": tiered cache tails disagree between banks");
             }
+            cache_layer.slots = gate_count;
             for (std::size_t e = 0; e < experts.size(); ++e) {
                 auto& entry = tables[i * counter_experts_ + e];
                 if ((entry & 0x80000000u) != 0u && (entry & 0x7fffffffu) < gate_count) {
@@ -444,6 +494,7 @@ Parameters::Parameters(const Model& source) : model(source) {
                 }
             }
         }
+        expert_cache_->shadow = tables;
         if (!tiered_layers.empty()) {
             CUDA_CHECK(cudaMalloc(&expert_residency_, tables.size() * sizeof(std::uint32_t)));
             CUDA_CHECK(cudaMemcpy(expert_residency_, tables.data(),
@@ -457,8 +508,121 @@ Parameters::Parameters(const Model& source) : model(source) {
     }
 }
 
+// SP-4 adaptive cache: one promotion/eviction pass. The counters ride the stream (ordered
+// after the boundary's kernels), the host then swaps the weakest promoted warm experts for the
+// hottest uncovered ones with hysteresis — a newcomer must clear a minimum recent count and
+// double the incumbent it evicts, at most two swaps per layer per pass — and the flipped
+// entries follow on the stream. Tiers the tail fully covers only accumulate the warm-tier
+// hit rate.
+void Parameters::adapt_expert_cache(cudaStream_t stream, bool prefill_boundary) {
+    if (expert_cache_ == nullptr || expert_cache_->layers.empty()) { return; }
+    auto& state = *expert_cache_;
+    if (!prefill_boundary && ++state.decode_gate % 8 != 1) { return; }
+    CUDA_CHECK(cudaMemcpyAsync(state.counters.data(), expert_counters_, expert_counters_bytes_,
+                               cudaMemcpyDeviceToHost, stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+    for (std::size_t i = 0; i < state.layers.size(); ++i) {
+        auto& layer = state.layers[i];
+        if (layer.gate_warm == nullptr || layer.gate_device == nullptr ||
+            layer.down_warm == nullptr || layer.down_device == nullptr) {
+            continue;
+        }
+        const std::uint32_t base = static_cast<std::uint32_t>(i) * counter_experts_;
+        for (std::uint32_t e = 0; e < counter_experts_; ++e) {
+            if (layer.warm_rank[e] == ExpertCacheState::kNoWarmRank) { continue; }
+            const std::uint32_t delta = state.counters[base + e] - state.snapshot[base + e];
+            state.warm_total += delta;
+            if ((state.shadow[base + e] & 0x80000000u) == 0u) { state.warm_hits += delta; }
+        }
+        if (layer.slots >= layer.warm_count) { continue; }
+        std::vector<std::pair<std::uint32_t, std::uint32_t>> promoted;
+        std::vector<std::pair<std::uint32_t, std::uint32_t>> candidates;
+        promoted.reserve(layer.slots);
+        candidates.reserve(layer.warm_count - layer.slots);
+        for (std::uint32_t e = 0; e < counter_experts_; ++e) {
+            if (layer.warm_rank[e] == ExpertCacheState::kNoWarmRank) { continue; }
+            const std::uint32_t delta = state.counters[base + e] - state.snapshot[base + e];
+            if ((state.shadow[base + e] & 0x80000000u) == 0u) {
+                promoted.emplace_back(e, delta);
+            } else {
+                candidates.emplace_back(e, delta);
+            }
+        }
+        std::sort(promoted.begin(), promoted.end(),
+                  [](const auto& a, const auto& b) { return a.second < b.second; });
+        std::sort(candidates.begin(), candidates.end(),
+                  [](const auto& a, const auto& b) { return a.second > b.second; });
+        constexpr std::uint32_t kMinimumRecentCount = 4;
+        constexpr double kEvictionMargin           = 2.0;
+        constexpr std::size_t kMaximumSwaps        = 2;
+        std::size_t swaps = 0;
+        for (std::size_t k = 0;
+             k < promoted.size() && k < candidates.size() && swaps < kMaximumSwaps; ++k) {
+            const auto [newcomer, newcomer_count]   = candidates[k];
+            const auto [incumbent, incumbent_count] = promoted[k];
+            if (newcomer_count < kMinimumRecentCount) { break; }
+            if (static_cast<double>(newcomer_count) <=
+                static_cast<double>(incumbent_count) * kEvictionMargin) {
+                break;
+            }
+            const std::uint32_t slot =
+                (state.shadow[base + incumbent] & 0x7fffffffu) - layer.hot;
+            const std::uint32_t warm_rank = layer.warm_rank[newcomer];
+            const auto copy_expert         = [&](const WeightParent* device,
+                                                 const WeightParent* warm_bank,
+                                                 std::uint64_t rows_per_expert) {
+                const struct Plane {
+                    std::uint64_t device_offset;
+                    std::uint64_t warm_offset;
+                    std::uint64_t per_row;
+                } planes[] = {
+                    {0, 0, device->geometry.code_bytes_per_row},
+                    {device->geometry.high_offset, warm_bank->geometry.high_offset,
+                     device->geometry.high_bytes_per_row},
+                    {device->geometry.scale_offset, warm_bank->geometry.scale_offset,
+                     device->geometry.scale_bytes_per_row},
+                };
+                for (const auto& plane : planes) {
+                    if (plane.per_row == 0) { continue; }
+                    const auto block = rows_per_expert * plane.per_row;
+                    CUDA_CHECK(cudaMemcpyAsync(
+                        const_cast<std::byte*>(device->data) + plane.device_offset +
+                            static_cast<std::uint64_t>(layer.hot + slot) * block,
+                        warm_bank->data + plane.warm_offset +
+                            static_cast<std::uint64_t>(warm_rank) * block,
+                        block, cudaMemcpyHostToDevice, stream));
+                }
+            };
+            copy_expert(layer.gate_device, layer.gate_warm, layer.gate_rows_per_expert);
+            copy_expert(layer.down_device, layer.down_warm, layer.down_rows_per_expert);
+            state.shadow[base + incumbent] = 0x80000000u | layer.warm_rank[incumbent];
+            state.shadow[base + newcomer]  = layer.hot + slot;
+            ++state.promotions;
+            ++state.evictions;
+            ++swaps;
+        }
+        if (swaps != 0) {
+            CUDA_CHECK(cudaMemcpyAsync(expert_residency_ + base, state.shadow.data() + base,
+                                       counter_experts_ * sizeof(std::uint32_t),
+                                       cudaMemcpyHostToDevice, stream));
+        }
+    }
+    state.snapshot = state.counters;
+}
+
 Parameters::~Parameters() {
     if (expert_counters_ != nullptr) { CUDA_CHECK(cudaFree(expert_counters_)); }
+    if (expert_cache_ != nullptr && expert_cache_->warm_total != 0) {
+        std::fprintf(stderr,
+                     "ninfer: expert cache warm-tier hit rate %.2f%% (%llu/%llu selections, "
+                     "%llu promotions, %llu evictions)\n",
+                     100.0 * static_cast<double>(expert_cache_->warm_hits) /
+                         static_cast<double>(expert_cache_->warm_total),
+                     static_cast<unsigned long long>(expert_cache_->warm_hits),
+                     static_cast<unsigned long long>(expert_cache_->warm_total),
+                     static_cast<unsigned long long>(expert_cache_->promotions),
+                     static_cast<unsigned long long>(expert_cache_->evictions));
+    }
     if (expert_residency_ != nullptr) { CUDA_CHECK(cudaFree(expert_residency_)); }
 }
 

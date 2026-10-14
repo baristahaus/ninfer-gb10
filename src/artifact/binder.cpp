@@ -86,6 +86,8 @@ std::uint32_t Binder::tier_hot_experts(ObjectHandle object) const {
 
 void Binder::set_device_budget(std::uint64_t bytes) { device_budget_ = bytes; }
 
+void Binder::set_cache_slot_cap(std::uint32_t slots) { cache_slot_cap_ = slots; }
+
 ParameterReference Binder::binding(std::string name, const Binding& binding, Shape shape,
                                    Residency residency, std::optional<QType> exact_format) {
     if (weight_element_count(shape) != binding.elements ||
@@ -318,6 +320,9 @@ for (std::size_t i = 0; i < demands_.size(); ++i) {
                                                                 : 0;
         cache_slots = static_cast<std::uint32_t>(
             std::min<std::uint64_t>(min_warm, tail_budget / slice_cost));
+        if (cache_slot_cap_ != 0) {
+            cache_slots = std::min(cache_slots, cache_slot_cap_);
+        }
     }
     for (const auto& bank : tiered) {
         const auto& demand   = demands_[bank.demand];

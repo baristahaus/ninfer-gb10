@@ -487,7 +487,7 @@ SequencePlanner make_sequence_planner(const execution::Parameters& parameters,
     return SequencePlanner(detail::make_sequence_planner_impl(parameters, device, options));
 }
 
-std::unique_ptr<Program> create_program(const execution::Parameters& parameters,
+std::unique_ptr<Program> create_program(execution::Parameters& parameters,
                                         SequencePlan&& plan, DeviceContext& device,
                                         const StartupObserver& startup_observer) {
     if (plan.impl_ == nullptr) { throw std::invalid_argument("sequence plan is empty"); }

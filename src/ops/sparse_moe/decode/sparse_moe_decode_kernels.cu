@@ -246,7 +246,8 @@ __global__ void sparse_moe_d3_nine_warp_kernel(
     const std::uint8_t* __restrict__ routed_scales, const std::uint8_t* __restrict__ shared_codes,
     const std::uint8_t* __restrict__ shared_scales, float* __restrict__ act,
     const std::uint8_t* __restrict__ warm_codes, const std::uint8_t* __restrict__ warm_high,
-    const std::uint8_t* __restrict__ warm_scales, int hot_experts) {
+    const std::uint8_t* __restrict__ warm_scales,
+    const unsigned* __restrict__ expert_residency) {
     __shared__ __align__(16) __nv_bfloat16 x_shared[kHidden];
     const int tid  = static_cast<int>(threadIdx.x);
     const int warp = tid >> 5;
@@ -261,8 +262,10 @@ __global__ void sparse_moe_d3_nine_warp_kernel(
     if (warp < kTopK) {
         pdl::wait_for_dependencies();
         const int expert   = ids[warp];
-        const bool warm    = hot_experts != 0 && expert >= hot_experts;
-        const int row_base = (warm ? expert - hot_experts : expert) * 1024;
+        bool warm = false;
+        int tier_row = expert;
+        sparse_moe_residency(expert_residency, expert, warm, tier_row);
+        const int row_base = tier_row * 1024;
         dot_two_rows<RoutedCodec, kHidden>(warm ? warm_codes : routed_codes,
                                            warm ? warm_high : routed_high,
                                            warm ? warm_scales : routed_scales, row_base + j,
@@ -283,7 +286,8 @@ __global__ void sparse_moe_d3_path_tiled_kernel(
     const std::uint8_t* __restrict__ shared_scales, float* __restrict__ token_activations,
     int tokens, const int* __restrict__ adaptive_route_jobs,
     const std::uint8_t* __restrict__ warm_codes, const std::uint8_t* __restrict__ warm_high,
-    const std::uint8_t* __restrict__ warm_scales, int hot_experts) {
+    const std::uint8_t* __restrict__ warm_scales,
+    const unsigned* __restrict__ expert_residency) {
     // Three path CTAs per token/output row expose enough blocks for the 170-SM target and keep the
     // heavier shared Q8 path from holding eight completed routed warps resident.
     static_assert(PathsPerBlock > 0 && (kTopK + 1) % PathsPerBlock == 0);
@@ -325,8 +329,10 @@ __global__ void sparse_moe_d3_path_tiled_kernel(
         float up   = 0.0f;
         if (path < kTopK) {
             const int expert   = token_ids[token * kTopK + path];
-            const bool warm    = hot_experts != 0 && expert >= hot_experts;
-            const int row_base = (warm ? expert - hot_experts : expert) * (2 * kIntermediate);
+            bool warm = false;
+            int tier_row = expert;
+            sparse_moe_residency(expert_residency, expert, warm, tier_row);
+            const int row_base = tier_row * (2 * kIntermediate);
             dot_two_rows<RoutedCodec, kHidden>(warm ? warm_codes : routed_codes,
                                                warm ? warm_high : routed_high,
                                                warm ? warm_scales : routed_scales,
@@ -405,7 +411,8 @@ __global__ void sparse_moe_d4_nine_warp_kernel(
     const std::uint8_t* __restrict__ shared_scales, __nv_bfloat16* __restrict__ destination,
     const char* __restrict__ prefetch_data, unsigned long long prefetch_bytes,
     const std::uint8_t* __restrict__ warm_codes, const std::uint8_t* __restrict__ warm_high,
-    const std::uint8_t* __restrict__ warm_scales, int hot_experts) {
+    const std::uint8_t* __restrict__ warm_scales,
+    const unsigned* __restrict__ expert_residency) {
     __shared__ float paths[kTopK + 1][Rows];
     pdl::wait_for_dependencies();
     const int warp     = static_cast<int>(threadIdx.x) >> 5;
@@ -413,8 +420,9 @@ __global__ void sparse_moe_d4_nine_warp_kernel(
     const int row_base = static_cast<int>(blockIdx.x) * Rows;
     if (warp < kTopK) {
         const int expert = ids[warp];
-        const bool warm  = hot_experts != 0 && expert >= hot_experts;
-        const int tier_row = warm ? expert - hot_experts : expert;
+        bool warm = false;
+        int tier_row = expert;
+        sparse_moe_residency(expert_residency, expert, warm, tier_row);
         float dot[Rows];
         dot_fp32_rows<RoutedCodec, Rows>(warm ? warm_codes : routed_codes,
                                          warm ? warm_high : routed_high,
@@ -464,7 +472,8 @@ __global__ void sparse_moe_d4_token_kernel(
     const std::uint8_t* __restrict__ shared_scales, __nv_bfloat16* __restrict__ destination,
     int tokens, const int* __restrict__ adaptive_route_jobs,
     const std::uint8_t* __restrict__ warm_codes, const std::uint8_t* __restrict__ warm_high,
-    const std::uint8_t* __restrict__ warm_scales, int hot_experts) {
+    const std::uint8_t* __restrict__ warm_scales,
+    const unsigned* __restrict__ expert_residency) {
     // Token is a grid dimension rather than an in-CTA serial loop. Rows lets one routed-weight
     // stream serve adjacent outputs while retaining the deterministic rank-order FP32 epilogue.
     __shared__ float paths[kTopK + 1][Rows];
@@ -487,8 +496,9 @@ __global__ void sparse_moe_d4_token_kernel(
             token_activations + static_cast<std::int64_t>(token) * (kTopK + 1) * kIntermediate;
         if (warp < kTopK) {
             const int expert = token_ids[token * kTopK + warp];
-            const bool warm  = hot_experts != 0 && expert >= hot_experts;
-            const int tier_row = warm ? expert - hot_experts : expert;
+            bool warm = false;
+            int tier_row = expert;
+            sparse_moe_residency(expert_residency, expert, warm, tier_row);
             float dot[Rows];
             dot_fp32_rows<RoutedCodec, Rows>(warm ? warm_codes : routed_codes,
                                              warm ? warm_high : routed_high,
@@ -550,13 +560,13 @@ void launch_d3_dependent_codec(const Tensor& x, const SparseMoeWeights& weights,
     const auto* warm_codes    = static_cast<const std::uint8_t*>(weights.warm_routed_gate_up.qdata);
     const auto* warm_high     = static_cast<const std::uint8_t*>(weights.warm_routed_gate_up.qhigh);
     const auto* warm_scales   = static_cast<const std::uint8_t*>(weights.warm_routed_gate_up.scales);
-    const int hot_experts     = static_cast<int>(weights.tiered_hot_experts);
+    const unsigned* expert_residency = weights.expert_residency;
     const auto* shared_codes  = static_cast<const std::uint8_t*>(weights.shared_gate_up.qdata);
     const auto* shared_scales = static_cast<const std::uint8_t*>(weights.shared_gate_up.scales);
     CUDA_CHECK(pdl::launch_dependent(
         {dim3(kIntermediate), dim3(9 * 32), 0, stream}, sparse_moe_d3_nine_warp_kernel<Codec>,
         input, ids, routed_codes, routed_high, routed_scales, shared_codes, shared_scales, act,
-        warm_codes, warm_high, warm_scales, hot_experts));
+        warm_codes, warm_high, warm_scales, expert_residency));
 }
 
 void launch_d2_d3(const Tensor& x, const SparseMoeWeights& weights,
@@ -595,7 +605,7 @@ void launch_d4_dependent_codec(const SparseMoeWeights& weights, Tensor& destinat
     const auto* warm_codes    = static_cast<const std::uint8_t*>(weights.warm_routed_down.qdata);
     const auto* warm_high     = static_cast<const std::uint8_t*>(weights.warm_routed_down.qhigh);
     const auto* warm_scales   = static_cast<const std::uint8_t*>(weights.warm_routed_down.scales);
-    const int hot_experts     = static_cast<int>(weights.tiered_hot_experts);
+    const unsigned* expert_residency = weights.expert_residency;
     const auto* shared_codes  = static_cast<const std::uint8_t*>(weights.shared_down.qdata);
     const auto* shared_scales = static_cast<const std::uint8_t*>(weights.shared_down.scales);
     auto* output              = static_cast<__nv_bfloat16*>(destination.data);
@@ -604,7 +614,7 @@ void launch_d4_dependent_codec(const SparseMoeWeights& weights, Tensor& destinat
         alpha, shared_scale, act, routed_codes, routed_high, routed_scales, shared_codes,
         shared_scales, output, static_cast<const char*>(prefetch_data),
         static_cast<unsigned long long>(prefetch_bytes), warm_codes, warm_high, warm_scales,
-        hot_experts));
+        expert_residency));
 }
 
 void launch_d4_dependent(const SparseMoeWeights& weights, Tensor& destination,
@@ -640,7 +650,7 @@ void launch_d3_small_t_paths(const Tensor& x, const SparseMoeWeights& weights, c
     const auto* warm_codes    = static_cast<const std::uint8_t*>(weights.warm_routed_gate_up.qdata);
     const auto* warm_high     = static_cast<const std::uint8_t*>(weights.warm_routed_gate_up.qhigh);
     const auto* warm_scales   = static_cast<const std::uint8_t*>(weights.warm_routed_gate_up.scales);
-    const int hot_experts     = static_cast<int>(weights.tiered_hot_experts);
+    const unsigned* expert_residency = weights.expert_residency;
     const auto* shared_codes  = static_cast<const std::uint8_t*>(weights.shared_gate_up.qdata);
     const auto* shared_scales = static_cast<const std::uint8_t*>(weights.shared_gate_up.scales);
     if constexpr (Adaptive) {
@@ -648,14 +658,15 @@ void launch_d3_small_t_paths(const Tensor& x, const SparseMoeWeights& weights, c
             <<<kAdaptiveD3Blocks, PathsPerBlock * 32, 0, stream>>>(
                 input, token_ids, routed_codes, routed_high, routed_scales, shared_codes,
                 shared_scales, token_activations, tokens, adaptive_route_jobs, warm_codes,
-                warm_high, warm_scales, hot_experts);
+                warm_high, warm_scales, expert_residency);
         CUDA_CHECK(cudaGetLastError());
     } else {
         CUDA_CHECK(pdl::launch_dependent(
             {dim3(kIntermediate, tokens * kPathBlocks), dim3(PathsPerBlock * 32), 0, stream},
             sparse_moe_d3_path_tiled_kernel<Codec, PathsPerBlock, false>, input, token_ids,
             routed_codes, routed_high, routed_scales, shared_codes, shared_scales,
-            token_activations, tokens, nullptr, warm_codes, warm_high, warm_scales, hot_experts));
+            token_activations, tokens, nullptr, warm_codes, warm_high, warm_scales,
+            expert_residency));
     }
 }
 
@@ -699,7 +710,7 @@ void launch_d4_small_t_rows(const SparseMoeWeights& weights, Tensor& destination
         static_cast<const std::uint8_t*>(weights.warm_routed_down.qdata),
         static_cast<const std::uint8_t*>(weights.warm_routed_down.qhigh),
         static_cast<const std::uint8_t*>(weights.warm_routed_down.scales),
-        static_cast<int>(weights.tiered_hot_experts));
+        weights.expert_residency);
     CUDA_CHECK(cudaGetLastError());
 }
 

@@ -41,19 +41,47 @@ ParameterReference Binder::parameter(std::string_view name, Shape shape, Residen
     return binding(std::string(name), found->second, std::move(shape), residency, exact_format);
 }
 
-void Binder::set_tier(ObjectHandle object, std::uint64_t hot_rows) {
+void Binder::set_tier(ObjectHandle object, const std::vector<std::uint32_t>& hot,
+                      const std::vector<std::uint32_t>& warm) {
     auto& demand      = demands_.at(object.index);
     const auto& shape = reader_.geometry(object).shape;
-    if (demand.device || demand.host || demand.tier_hot_rows != 0 || shape.size() != 2 ||
-        shape[0] == 0 || shape[1] == 0 || hot_rows == 0 || hot_rows >= shape[0]) {
-        throw ArtifactError("tiered bank requires an untouched two-dimensional object with a "
-                            "strict hot-row prefix");
+    if (demand.device || demand.host || !demand.tier_new_order.empty() || shape.size() != 2 ||
+        shape[0] == 0 || shape[1] == 0) {
+        throw ArtifactError("tiered bank requires an untouched two-dimensional object");
     }
-    demand.tier_hot_rows = hot_rows;
+    if (hot.empty() || warm.empty() || shape[0] % (hot.size() + warm.size()) != 0) {
+        throw ArtifactError("tiered bank requires a strict, nonempty hot/warm expert split "
+                            "whose experts divide the rows");
+    }
+    std::vector<std::uint32_t> cover;
+    cover.reserve(hot.size() + warm.size());
+    cover.insert(cover.end(), hot.begin(), hot.end());
+    cover.insert(cover.end(), warm.begin(), warm.end());
+    std::sort(cover.begin(), cover.end());
+    for (std::size_t i = 0; i < cover.size(); ++i) {
+        if (cover[i] != i) {
+            throw ArtifactError("tiered bank requires a disjoint hot/warm expert cover");
+        }
+    }
+    // Both tiers normalize to expert id order: the per-expert views concatenate in expert
+    // id order, so the compacted mini-bank slots must follow the same order.
+    demand.tier_new_order.reserve(cover.size());
+    demand.tier_new_order.insert(demand.tier_new_order.end(), hot.begin(), hot.end());
+    demand.tier_new_order.insert(demand.tier_new_order.end(), warm.begin(), warm.end());
+    std::sort(demand.tier_new_order.begin(),
+              demand.tier_new_order.begin() +
+                  static_cast<std::ptrdiff_t>(hot.size()));
+    std::sort(demand.tier_new_order.begin() + static_cast<std::ptrdiff_t>(hot.size()),
+              demand.tier_new_order.end());
+    demand.tier_hot_experts = static_cast<std::uint32_t>(hot.size());
 }
 
-std::uint64_t Binder::tier_hot_rows(ObjectHandle object) const {
-    return demands_.at(object.index).tier_hot_rows;
+std::span<const std::uint32_t> Binder::tier_new_order(ObjectHandle object) const {
+    return demands_.at(object.index).tier_new_order;
+}
+
+std::uint32_t Binder::tier_hot_experts(ObjectHandle object) const {
+    return demands_.at(object.index).tier_hot_experts;
 }
 
 ParameterReference Binder::binding(std::string name, const Binding& binding, Shape shape,
@@ -70,25 +98,54 @@ ParameterReference Binder::binding(std::string name, const Binding& binding, Sha
             throw ArtifactError(name +
                                 ": representation does not match its mathematical value type");
         }
-        const auto tier_hot_rows = demands_.at(part.object.index).tier_hot_rows;
-        if (tier_hot_rows != 0) {
-            // SP-4 tiered bank: both residencies address the mini-banks. Device parts keep
-            // their hot-prefix ranges unchanged; Host parts shift suffix-relative into the
-            // pinned-host warm mini-bank.
+        const auto& tier_order = demands_.at(part.object.index).tier_new_order;
+        if (!tier_order.empty()) {
+            // SP-4 tiered bank: both residencies address the mini-banks, and each part
+            // remaps to its expert's compacted position. The part must stay inside one
+            // expert's row block so a whole-bank or straddling binding cannot alias the
+            // compacted layout.
             auto& demand = demands_.at(part.object.index);
-            const auto hot_elements = checked_mul(tier_hot_rows, geometry.shape[1], "hot rows");
+            const auto experts         = static_cast<std::uint64_t>(tier_order.size());
+            const auto rows_per_expert = geometry.shape[0] / experts;
+            const auto begin_row       = part.begin / geometry.shape[1];
+            const auto end_row         = part.end / geometry.shape[1];
+            if (geometry.shape[0] % experts != 0 ||
+                begin_row / rows_per_expert != (end_row - 1) / rows_per_expert) {
+                throw ArtifactError(name + ": tiered part must stay inside one expert's rows");
+            }
+            const auto expert = begin_row / rows_per_expert;
+            const auto within = begin_row % rows_per_expert;
+            const auto position = static_cast<std::size_t>(
+                std::find(tier_order.begin(), tier_order.end(),
+                          static_cast<std::uint32_t>(expert)) - tier_order.begin());
+            if (position >= tier_order.size()) {
+                throw ArtifactError(name + ": tiered bank lost its expert permutation");
+            }
+            const auto hot_experts = static_cast<std::uint64_t>(demand.tier_hot_experts);
             if (residency == Residency::Device) {
-                if (part.end > hot_elements) {
-                    throw ArtifactError(name + ": device part exceeds the tiered hot prefix");
+                if (position >= hot_experts) {
+                    throw ArtifactError(name + ": warm-tier expert bound with device residency");
                 }
+                const auto rank = static_cast<std::uint64_t>(position);
+                part.begin      = checked_mul(rank * rows_per_expert + within, geometry.shape[1],
+                                              "tiered hot rows");
+                part.end        = checked_add(part.begin,
+                                              checked_mul(end_row - begin_row, geometry.shape[1],
+                                                          "tiered span"),
+                                              "tiered hot end");
                 demand.device = true;
             } else if (residency == Residency::Host) {
-                if (part.begin < hot_elements) {
-                    throw ArtifactError(name + ": tiered warm part starts inside the hot prefix");
+                if (position < hot_experts) {
+                    throw ArtifactError(name + ": hot-tier expert bound with host residency");
                 }
+                const auto rank = static_cast<std::uint64_t>(position) - hot_experts;
+                part.begin      = checked_mul(rank * rows_per_expert + within, geometry.shape[1],
+                                              "tiered warm rows");
+                part.end        = checked_add(part.begin,
+                                              checked_mul(end_row - begin_row, geometry.shape[1],
+                                                          "tiered span"),
+                                              "tiered warm end");
                 demand.host = true;
-                part.begin -= hot_elements;
-                part.end -= hot_elements;
             } else {
                 throw ArtifactError(name + ": tiered banks do not support value residency");
             }
@@ -203,7 +260,7 @@ MaterializationPlan Binder::finish() && {
     for (std::size_t i = 0; i < demands_.size(); ++i) {
         auto& demand = demands_[i];
         const ObjectHandle handle{i};
-        if (demand.tier_hot_rows != 0) { continue; }
+        if (!demand.tier_new_order.empty()) { continue; }
         if (demand.device) {
             const auto& geometry = reader_.geometry(handle);
             const auto offset =
@@ -222,14 +279,15 @@ MaterializationPlan Binder::finish() && {
         auto& demand = demands_[i];
         // A tier mark without any bound part is inert: the component owning the bank was not
         // selected, so the bank materializes nowhere (matching its plain unbound peers).
-        if (demand.tier_hot_rows == 0 || (!demand.device && !demand.host)) { continue; }
+        if (demand.tier_new_order.empty() || (!demand.device && !demand.host)) { continue; }
         const ObjectHandle handle{i};
         const auto& geometry = reader_.geometry(handle);
+        const auto experts   = demand.tier_new_order.size();
         const auto hot_bytes = checked_mul(
-            demand.tier_hot_rows, geometry.bytes / geometry.shape[0], "tiered hot bytes");
+            demand.tier_hot_experts, geometry.bytes / experts, "tiered hot bytes");
         const auto offset = align_up(plan.device_capacity_bytes, demand.alignment, "device offset");
-        plan.tier_objects.push_back(
-            {handle, offset, hot_bytes, demand.alignment, demand.tier_hot_rows});
+        plan.tier_objects.push_back({handle, offset, hot_bytes, demand.alignment,
+                                     demand.tier_hot_experts, demand.tier_new_order});
         plan.device_capacity_bytes = checked_add(offset, hot_bytes, "device capacity");
     }
     return plan;

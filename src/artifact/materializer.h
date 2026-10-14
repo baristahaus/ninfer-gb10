@@ -27,16 +27,18 @@ struct HostPlacement {
     std::vector<std::byte> data;
 };
 
-// SP-4 tiered routed bank (phase 2a): the first `hot_rows` rows of the object materialize as
-// a compact hot mini-bank on the device at `offset`; the remaining rows live in a pinned-host
-// warm mini-bank that the materializer allocates and fills. Device-residency parts address the
-// hot prefix unchanged; Host-residency parts address the warm mini-bank suffix-relative.
+// SP-4 tiered routed bank: the hot experts (the `new_order` prefix, expert id order)
+// materialize as a compact hot mini-bank on the device at `offset`; the warm experts (the
+// `new_order` suffix, expert id order) live in a pinned-host warm mini-bank that the
+// materializer allocates and fills. Parts address their expert's compacted position in the
+// matching mini-bank.
 struct TierPlacement {
     ObjectHandle object;
     std::uint64_t offset      = 0;
     std::uint64_t bytes       = 0;  // hot mini-bank bytes on the device.
     std::uint64_t alignment   = 256;
-    std::uint64_t hot_rows    = 0;
+    std::uint32_t hot_experts = 0;
+    std::vector<std::uint32_t> new_order;  // hot experts then warm experts, expert id order.
 };
 
 struct MaterializationPlan {

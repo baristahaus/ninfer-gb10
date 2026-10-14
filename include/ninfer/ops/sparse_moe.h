@@ -29,6 +29,10 @@ struct SparseMoeWeights {
     // expert per token into this device buffer (256 counters per MoE layer); null preserves
     // the exact existing behavior.
     std::uint32_t* expert_activations = nullptr;
+    // SP-4 phase 2b: per-expert residency (256 entries per MoE layer): bit 31 marks the warm
+    // tier, the low bits are the expert's compacted rank in its bank. Null selects the
+    // untiered direct path where every expert reads the device banks at its own rank.
+    const std::uint32_t* expert_residency = nullptr;
 };
 
 enum class SparseMoeEpilogue : std::uint8_t {

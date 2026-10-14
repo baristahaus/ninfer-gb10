@@ -137,6 +137,12 @@ ninfer_add_op_test(ninfer_gdn_replay_fold_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/test_gdn_replay_fold.cpp"
   LIBRARIES ninfer_ops)
 
+# Host-only: the EXL3 codec decoder against the exllamav3 fixture (skips until it is generated).
+ninfer_add_op_test(ninfer_exl3_codec_test
+  SOURCES "${CMAKE_CURRENT_LIST_DIR}/test_exl3_codec.cpp"
+  LIBRARIES ninfer::json
+  NEEDS_SOURCE_DIR)
+
 include("${CMAKE_CURRENT_LIST_DIR}/linear/tests.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/linear_add/tests.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/linear_pair/tests.cmake")

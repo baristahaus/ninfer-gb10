@@ -9,8 +9,12 @@ The fixture is generated once and committed here. Until it exists, the tests tha
 
 - An NVIDIA GPU with a driver that runs CUDA 13 builds. The commands below target the RTX 5090
   (`sm_120`).
-- A CUDA 13 toolkit with `nvcc` (the box's CUDA 13.4.92 at `/usr/local/cuda`), used to compile
-  exllamav3's extension against the CUDA 13.0 build of torch (same major version).
+- A CUDA 13 toolkit with `nvcc` (the box's CUDA 13.4.92, at `/opt/cuda` on this machine), used to
+  compile exllamav3's extension against the CUDA 13.0 build of torch (same major version).
+- On the box's GCC 15/16 toolchain, nvcc's host pass compiles cudafe's rewritten translation unit,
+  where GCC's `-Wtemplate-body` diagnostic (an error by default) fires on torch 2.11's
+  `List_inl.h`. The construct is valid at instantiation, so the diagnostic is suppressed for the
+  host pass through nvcc's append-flags variable; the compiled code is unchanged.
 - Python 3.11, `git`, network access to `github.com`, `download.pytorch.org` and PyPI.
 
 ## Install (once)
@@ -27,8 +31,9 @@ git clone https://github.com/turboderp-org/exllamav3 ~/src/exllamav3
 git -C ~/src/exllamav3 checkout 3a513ac9f91aae777f317ca2341b8e445b62c64e
 python -m pip install -r ~/src/exllamav3/requirements.txt
 
-export CUDA_HOME=/usr/local/cuda
+export CUDA_HOME=/opt/cuda
 export TORCH_CUDA_ARCH_LIST="12.0"
+export NVCC_APPEND_FLAGS="-Xcompiler -Wno-template-body"
 python -m pip install --no-build-isolation -e ~/src/exllamav3
 
 python -c "import torch, exllamav3.ext; print(torch.__version__, torch.cuda.get_device_name(0))"

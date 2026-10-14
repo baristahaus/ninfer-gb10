@@ -10,10 +10,10 @@ import uuid
 from pathlib import Path
 
 
-def request(url, messages, limit, started=None, wait_for=None, reuse=False, cache_salt=None):
+def request(url, messages, limit, model, started=None, wait_for=None, reuse=False, cache_salt=None):
     if wait_for is not None and not wait_for.wait(300):
         raise TimeoutError('first request did not begin streaming')
-    payload = {'model': 'Qwen/Qwen3.8-Flash-Next', 'messages': messages,
+    payload = {'model': model, 'messages': messages,
                'max_tokens': limit, 'temperature': 0, 'top_p': 1,
                'presence_penalty': 0, 'frequency_penalty': 0, 'stream': True,
                'stream_options': {'include_usage': True},
@@ -76,13 +76,20 @@ def main():
     p.add_argument('--tokens', type=int, default=512,
                    help='maximum output tokens per request; natural stops remain enabled')
     p.add_argument('--cases', nargs='+', choices=['single8k','pair8k','single64k','pair64k','mixed','turns'], default=['single8k','pair8k','single64k','pair64k','mixed'])
+    p.add_argument('--model', default=None,
+                   help='registered model id; default: the first id advertised by /v1/models')
     a = p.parse_args()
     contexts = json.loads(a.contexts.read_text())
+    if a.model:
+        model = a.model
+    else:
+        with urllib.request.urlopen(a.url + '/v1/models', timeout=30) as response:
+            model = json.load(response)['data'][0]['id']
     a.output.parent.mkdir(parents=True, exist_ok=True)
     def prompt(length, lane, iteration=None):
         prefix = f'Request {lane}. ' + (f'Conversation {iteration}. ' if iteration is not None else '')
         return [{'role':'user','content':prefix+'Read the following reference material.\n'+contexts[str(length)]+ '\nExplain its main themes in detail, with examples. Write at least 1000 words.'}]
-    request(a.url, [{'role':'user','content':'Explain why the sky is blue.'}],32)
+    request(a.url, [{'role':'user','content':'Explain why the sky is blue.'}],32, model)
     with a.output.open('w') as out:
         for case in a.cases:
             for repetition in range(-1, a.repetitions):
@@ -96,7 +103,7 @@ def main():
                         futures=[]
                         for lane in range(count):
                             messages = histories[lane] if case == 'turns' else prompt(65536 if case=='mixed' and lane else length,lane)
-                            futures.append(pool.submit(request,a.url,messages,a.tokens,
+                            futures.append(pool.submit(request,a.url,messages,a.tokens,model,
                                 ready if case=='mixed' and lane==0 else None,
                                 ready if case=='mixed' and lane==1 else None,case=='turns',
                                 salts[lane] if case=='turns' else None))

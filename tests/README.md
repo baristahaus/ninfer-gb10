@@ -110,6 +110,12 @@ The Python suites exercise conversion and encoded output, without running model 
 The maintained environment uses Python 3.11 with the dependencies for those suites. C++ binding and Engine tests
 cover consumption of their resulting representation.
 
+The EXL3 codec oracles (`tools/convert/quantization/exl3.py`, the literal reference
+`exl3_reference.py`, and the C++ test decoder `tests/ops/exl3_ref.h` behind
+`ninfer_exl3_codec_test`) are qualified against the exllamav3 fixture described in
+[`fixtures/exl3/README.md`](fixtures/exl3/README.md); their fixture checks skip until it is
+generated.
+
 The real loading test accepts an explicit artifact path and optional component selection:
 
 ```bash

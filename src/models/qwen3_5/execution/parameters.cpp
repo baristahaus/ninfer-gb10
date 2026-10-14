@@ -1,4 +1,5 @@
 #include "models/qwen3_5/execution/parameters.h"
+#include "ops/sparse_moe/expert_cache_adapt.h"
 
 #include "core/device.h"
 #include "core/weight_view.h"
@@ -12,9 +13,11 @@
 
 namespace ninfer::models::qwen3_5::execution {
 
-// SP-4 adaptive cache: runtime adaptation state. One Layer per routed MoE layer records the
-// tier geometry and the per-expert warm ranks; the shadow mirrors the residency table, and
-// the counter mirrors carry the current pass and the previous snapshot for recency deltas.
+// SP-4/SP-5 adaptive cache: host-side tier metadata plus the device-resident adaptation
+// state. One Layer per routed MoE layer records the tier geometry, the per-expert warm ranks,
+// and the mini-bank parents; the device buffers carry the uploaded layer parameters, the
+// warm-rank table, the recency snapshot, and the reporting accumulators that the
+// device-side adaptation pass (ops::launch_expert_cache_adapt) updates in place.
 struct ExpertCacheState {
     struct Layer {
         const WeightParent* gate_device   = nullptr;
@@ -27,19 +30,20 @@ struct ExpertCacheState {
         std::uint32_t warm_count          = 0;
         std::uint32_t slots               = 0;
         // Warm-tier experts carry their compacted rank in the warm mini-bank; hot-tier
-        // experts carry kNoWarmRank.
+        // experts carry ops::ExpertCacheAdaptState::kNoWarmRank.
         std::vector<std::uint32_t> warm_rank;
     };
-    static constexpr std::uint32_t kNoWarmRank = 0xffffffffu;
     std::vector<Layer> layers;
-    std::vector<std::uint32_t> shadow;
-    std::vector<std::uint32_t> counters;
-    std::vector<std::uint32_t> snapshot;
+    // Decode-round cadence gate: the recency delta spans eight rounds, matching the
+    // hysteresis thresholds.
     std::uint32_t decode_gate = 0;
-    std::uint64_t warm_hits   = 0;
-    std::uint64_t warm_total  = 0;
-    std::uint64_t promotions  = 0;
-    std::uint64_t evictions   = 0;
+    // Device storage owned here; the counters and the residency table are the Parameters'
+    // own buffers.
+    std::uint32_t* snapshot                    = nullptr;
+    std::uint32_t* warm_rank                   = nullptr;
+    ops::ExpertCacheLayerParams* layer_params  = nullptr;
+    unsigned long long* accumulators           = nullptr;  // hits, totals, promotions, evictions
+    ops::ExpertCacheAdaptState device{};
 };
 
 namespace {
@@ -359,10 +363,8 @@ Parameters::Parameters(const Model& source) : model(source) {
         std::vector<std::size_t> tiered_layers;
         expert_cache_                     = std::make_unique<ExpertCacheState>();
         expert_cache_->layers.resize(routed.size());
-        expert_cache_->counters.assign(routed.size() * counter_experts_, 0u);
-        expert_cache_->snapshot.assign(routed.size() * counter_experts_, 0u);
         for (auto& layer : expert_cache_->layers) {
-            layer.warm_rank.assign(counter_experts_, ExpertCacheState::kNoWarmRank);
+            layer.warm_rank.assign(counter_experts_, ops::ExpertCacheAdaptState::kNoWarmRank);
         }
         for (std::size_t i = 0; i < routed.size(); ++i) {
             bool tiered = false;
@@ -494,7 +496,6 @@ Parameters::Parameters(const Model& source) : model(source) {
                 }
             }
         }
-        expert_cache_->shadow = tables;
         if (!tiered_layers.empty()) {
             CUDA_CHECK(cudaMalloc(&expert_residency_, tables.size() * sizeof(std::uint32_t)));
             CUDA_CHECK(cudaMemcpy(expert_residency_, tables.data(),
@@ -504,124 +505,114 @@ Parameters::Parameters(const Model& source) : model(source) {
                 routed[i].parameters->expert_residency =
                     expert_residency_ + i * static_cast<std::size_t>(counter_experts_);
             }
+            // SP-4/SP-5 adaptive cache: upload the device-side adaptation state. The layer
+            // parameters carry each bank's mini-bank pointers and plane geometry; the
+            // warm-rank table and the zeroed snapshot and accumulators complete the state.
+            auto& cache = *expert_cache_;
+            const std::size_t layer_bytes =
+                routed.size() * sizeof(ops::ExpertCacheLayerParams);
+            const std::size_t rank_bytes =
+                routed.size() * counter_experts_ * sizeof(std::uint32_t);
+            const std::size_t snapshot_bytes =
+                routed.size() * counter_experts_ * sizeof(std::uint32_t);
+            std::vector<ops::ExpertCacheLayerParams> params(routed.size());
+            std::vector<std::uint32_t> warm_rank(rank_bytes / sizeof(std::uint32_t));
+            const auto fill_bank = [&](ops::ExpertCacheBankParams& bank,
+                                       const WeightParent* device, const WeightParent* warm,
+                                       std::uint64_t rows_per_expert) {
+                bank.device          = device->data;
+                bank.warm            = warm->data;
+                bank.device_code_offset  = device->geometry.code_bytes == 0 ? 0 : 0;
+                bank.device_high_offset  = device->geometry.high_offset;
+                bank.device_scale_offset = device->geometry.scale_offset;
+                bank.warm_code_offset    = warm->geometry.code_bytes == 0 ? 0 : 0;
+                bank.warm_high_offset    = warm->geometry.high_offset;
+                bank.warm_scale_offset   = warm->geometry.scale_offset;
+                bank.code_bytes_per_row  = device->geometry.code_bytes_per_row;
+                bank.high_bytes_per_row  = device->geometry.high_bytes_per_row;
+                bank.scale_bytes_per_row = device->geometry.scale_bytes_per_row;
+                bank.rows_per_expert     = rows_per_expert;
+            };
+            for (std::size_t i = 0; i < routed.size(); ++i) {
+                const auto& layer = cache.layers[i];
+                if (layer.gate_device == nullptr || layer.gate_warm == nullptr ||
+                    layer.down_device == nullptr || layer.down_warm == nullptr) {
+                    continue;
+                }
+                fill_bank(params[i].gate_up, layer.gate_device, layer.gate_warm,
+                          layer.gate_rows_per_expert);
+                fill_bank(params[i].down, layer.down_device, layer.down_warm,
+                          layer.down_rows_per_expert);
+                params[i].hot        = layer.hot;
+                params[i].warm_count = layer.warm_count;
+                params[i].slots      = layer.slots;
+                for (std::size_t e = 0; e < counter_experts_; ++e) {
+                    warm_rank[i * counter_experts_ + e] = layer.warm_rank[e];
+                }
+            }
+            CUDA_CHECK(cudaMalloc(&cache.layer_params, layer_bytes));
+            CUDA_CHECK(cudaMemcpy(cache.layer_params, params.data(), layer_bytes,
+                                  cudaMemcpyHostToDevice));
+            CUDA_CHECK(cudaMalloc(&cache.warm_rank, rank_bytes));
+            CUDA_CHECK(cudaMemcpy(cache.warm_rank, warm_rank.data(), rank_bytes,
+                                  cudaMemcpyHostToDevice));
+            CUDA_CHECK(cudaMalloc(&cache.snapshot, snapshot_bytes));
+            CUDA_CHECK(cudaMemset(cache.snapshot, 0, snapshot_bytes));
+            CUDA_CHECK(cudaMalloc(&cache.accumulators, 4 * sizeof(unsigned long long)));
+            CUDA_CHECK(cudaMemset(cache.accumulators, 0, 4 * sizeof(unsigned long long)));
+            cache.device.counters   = expert_counters_;
+            cache.device.snapshot    = cache.snapshot;
+            cache.device.residency   = expert_residency_;
+            cache.device.warm_rank   = cache.warm_rank;
+            cache.device.layers      = cache.layer_params;
+            cache.device.layer_count = static_cast<std::uint32_t>(routed.size());
+            cache.device.experts     = counter_experts_;
+            cache.device.hits        = cache.accumulators + 0;
+            cache.device.totals     = cache.accumulators + 1;
+            cache.device.promotions = cache.accumulators + 2;
+            cache.device.evictions  = cache.accumulators + 3;
         }
     }
 }
 
-// SP-4 adaptive cache: one promotion/eviction pass. The counters ride the stream (ordered
-// after the boundary's kernels), the host then swaps the weakest promoted warm experts for the
-// hottest uncovered ones with hysteresis — a newcomer must clear a minimum recent count and
-// double the incumbent it evicts, at most two swaps per layer per pass — and the flipped
-// entries follow on the stream. Tiers the tail fully covers only accumulate the warm-tier
-// hit rate.
+// SP-4/SP-5 adaptive cache: launch the device-side adaptation pass. The kernel reads the
+// activation counters and the residency table on device, swaps tail-limited tiers with
+// hysteresis, copies promoted blocks itself, and flips the residency entries in place —
+// stream-ordered at every prefill chunk and decode round boundary, with no host
+// synchronization and no readback until teardown.
 void Parameters::adapt_expert_cache(cudaStream_t stream, bool prefill_boundary) {
-    if (expert_cache_ == nullptr || expert_cache_->layers.empty()) { return; }
-    auto& state = *expert_cache_;
-    if (!prefill_boundary && ++state.decode_gate % 8 != 1) { return; }
-    CUDA_CHECK(cudaMemcpyAsync(state.counters.data(), expert_counters_, expert_counters_bytes_,
-                               cudaMemcpyDeviceToHost, stream));
-    CUDA_CHECK(cudaStreamSynchronize(stream));
-    for (std::size_t i = 0; i < state.layers.size(); ++i) {
-        auto& layer = state.layers[i];
-        if (layer.gate_warm == nullptr || layer.gate_device == nullptr ||
-            layer.down_warm == nullptr || layer.down_device == nullptr) {
-            continue;
-        }
-        const std::uint32_t base = static_cast<std::uint32_t>(i) * counter_experts_;
-        for (std::uint32_t e = 0; e < counter_experts_; ++e) {
-            if (layer.warm_rank[e] == ExpertCacheState::kNoWarmRank) { continue; }
-            const std::uint32_t delta = state.counters[base + e] - state.snapshot[base + e];
-            state.warm_total += delta;
-            if ((state.shadow[base + e] & 0x80000000u) == 0u) { state.warm_hits += delta; }
-        }
-        if (layer.slots >= layer.warm_count) { continue; }
-        std::vector<std::pair<std::uint32_t, std::uint32_t>> promoted;
-        std::vector<std::pair<std::uint32_t, std::uint32_t>> candidates;
-        promoted.reserve(layer.slots);
-        candidates.reserve(layer.warm_count - layer.slots);
-        for (std::uint32_t e = 0; e < counter_experts_; ++e) {
-            if (layer.warm_rank[e] == ExpertCacheState::kNoWarmRank) { continue; }
-            const std::uint32_t delta = state.counters[base + e] - state.snapshot[base + e];
-            if ((state.shadow[base + e] & 0x80000000u) == 0u) {
-                promoted.emplace_back(e, delta);
-            } else {
-                candidates.emplace_back(e, delta);
-            }
-        }
-        std::sort(promoted.begin(), promoted.end(),
-                  [](const auto& a, const auto& b) { return a.second < b.second; });
-        std::sort(candidates.begin(), candidates.end(),
-                  [](const auto& a, const auto& b) { return a.second > b.second; });
-        constexpr std::uint32_t kMinimumRecentCount = 4;
-        constexpr double kEvictionMargin           = 2.0;
-        constexpr std::size_t kMaximumSwaps        = 2;
-        std::size_t swaps = 0;
-        for (std::size_t k = 0;
-             k < promoted.size() && k < candidates.size() && swaps < kMaximumSwaps; ++k) {
-            const auto [newcomer, newcomer_count]   = candidates[k];
-            const auto [incumbent, incumbent_count] = promoted[k];
-            if (newcomer_count < kMinimumRecentCount) { break; }
-            if (static_cast<double>(newcomer_count) <=
-                static_cast<double>(incumbent_count) * kEvictionMargin) {
-                break;
-            }
-            const std::uint32_t slot =
-                (state.shadow[base + incumbent] & 0x7fffffffu) - layer.hot;
-            const std::uint32_t warm_rank = layer.warm_rank[newcomer];
-            const auto copy_expert         = [&](const WeightParent* device,
-                                                 const WeightParent* warm_bank,
-                                                 std::uint64_t rows_per_expert) {
-                const struct Plane {
-                    std::uint64_t device_offset;
-                    std::uint64_t warm_offset;
-                    std::uint64_t per_row;
-                } planes[] = {
-                    {0, 0, device->geometry.code_bytes_per_row},
-                    {device->geometry.high_offset, warm_bank->geometry.high_offset,
-                     device->geometry.high_bytes_per_row},
-                    {device->geometry.scale_offset, warm_bank->geometry.scale_offset,
-                     device->geometry.scale_bytes_per_row},
-                };
-                for (const auto& plane : planes) {
-                    if (plane.per_row == 0) { continue; }
-                    const auto block = rows_per_expert * plane.per_row;
-                    CUDA_CHECK(cudaMemcpyAsync(
-                        const_cast<std::byte*>(device->data) + plane.device_offset +
-                            static_cast<std::uint64_t>(layer.hot + slot) * block,
-                        warm_bank->data + plane.warm_offset +
-                            static_cast<std::uint64_t>(warm_rank) * block,
-                        block, cudaMemcpyHostToDevice, stream));
-                }
-            };
-            copy_expert(layer.gate_device, layer.gate_warm, layer.gate_rows_per_expert);
-            copy_expert(layer.down_device, layer.down_warm, layer.down_rows_per_expert);
-            state.shadow[base + incumbent] = 0x80000000u | layer.warm_rank[incumbent];
-            state.shadow[base + newcomer]  = layer.hot + slot;
-            ++state.promotions;
-            ++state.evictions;
-            ++swaps;
-        }
-        if (swaps != 0) {
-            CUDA_CHECK(cudaMemcpyAsync(expert_residency_ + base, state.shadow.data() + base,
-                                       counter_experts_ * sizeof(std::uint32_t),
-                                       cudaMemcpyHostToDevice, stream));
-        }
+    if (expert_cache_ == nullptr || expert_residency_ == nullptr) { return; }
+    if (prefill_boundary) {
+        ops::launch_expert_cache_adapt(expert_cache_->device, stream);
+        return;
     }
-    state.snapshot = state.counters;
+    // Decode rounds adapt every eighth pass: the recency delta then spans eight rounds —
+    // the scale the hysteresis thresholds expect — and the pass cost amortizes.
+    if (++expert_cache_->decode_gate % 8 == 1) {
+        ops::launch_expert_cache_adapt(expert_cache_->device, stream);
+    }
 }
+
 
 Parameters::~Parameters() {
     if (expert_counters_ != nullptr) { CUDA_CHECK(cudaFree(expert_counters_)); }
-    if (expert_cache_ != nullptr && expert_cache_->warm_total != 0) {
-        std::fprintf(stderr,
-                     "ninfer: expert cache warm-tier hit rate %.2f%% (%llu/%llu selections, "
-                     "%llu promotions, %llu evictions)\n",
-                     100.0 * static_cast<double>(expert_cache_->warm_hits) /
-                         static_cast<double>(expert_cache_->warm_total),
-                     static_cast<unsigned long long>(expert_cache_->warm_hits),
-                     static_cast<unsigned long long>(expert_cache_->warm_total),
-                     static_cast<unsigned long long>(expert_cache_->promotions),
-                     static_cast<unsigned long long>(expert_cache_->evictions));
+    if (expert_cache_ != nullptr && expert_cache_->accumulators != nullptr &&
+        expert_residency_ != nullptr) {
+        unsigned long long report[4] = {0, 0, 0, 0};
+        CUDA_CHECK(cudaMemcpy(report, expert_cache_->accumulators,
+                              4 * sizeof(unsigned long long), cudaMemcpyDeviceToHost));
+        if (report[1] != 0) {
+            std::fprintf(stderr,
+                         "ninfer: expert cache warm-tier hit rate %.2f%% (%llu/%llu "
+                         "selections, %llu promotions, %llu evictions)\n",
+                         100.0 * static_cast<double>(report[0]) /
+                             static_cast<double>(report[1]),
+                         report[0], report[1], report[2], report[3]);
+        }
+        CUDA_CHECK(cudaFree(expert_cache_->layer_params));
+        CUDA_CHECK(cudaFree(expert_cache_->warm_rank));
+        CUDA_CHECK(cudaFree(expert_cache_->snapshot));
+        CUDA_CHECK(cudaFree(expert_cache_->accumulators));
     }
     if (expert_residency_ != nullptr) { CUDA_CHECK(cudaFree(expert_residency_)); }
 }

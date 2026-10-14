@@ -781,9 +781,9 @@ runtime::BatchedGeneratedRound ProgramImpl::decode_raw(
     } else {
         round = decode_dflash_batch(lanes, budgets, failed_timing, masks);
     }
-    // SP-4 adaptive cache: the round boundary adapts the tail-limited tiers (every eighth
-    // round) from the activation counters; the stream orders the copies before the commit's
-    // kernels read the flipped entries.
+    // SP-4/SP-5 adaptive cache: the round boundary launches the device-side adaptation pass;
+    // the stream orders the promoted blocks and flipped entries before the commit's kernels
+    // read them.
     parameters.adapt_expert_cache(device.stream, false);
     return round;
 }

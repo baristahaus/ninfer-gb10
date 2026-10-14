@@ -154,10 +154,11 @@ public:
     // SP-4 phase 2b: the per-expert activation counts accumulated by the MoE routing stages.
     // The caller synchronizes the device before querying; dense models return no layers.
     [[nodiscard]] ninfer::MoeActivationProfile moe_activation_profile() const;
-    // SP-4 adaptive cache: runtime promotion/eviction for tail-limited tiers, driven by the
-    // always-armed per-expert activation counters. Prefill boundaries always adapt; decode
-    // boundaries adapt every eighth round. Tiers the tail fully covers — and untiered models —
-    // only accumulate the warm-tier hit-rate statistics.
+    // SP-4/SP-5 adaptive cache: launch the device-side promotion/eviction pass for
+    // tail-limited tiers, driven by the always-armed per-expert activation counters. The
+    // kernel runs stream-ordered at every prefill chunk boundary and every eighth decode
+    // round; tiers the tail fully covers — and untiered models — only accumulate the
+    // hit-rate statistics.
     void adapt_expert_cache(cudaStream_t stream, bool prefill_boundary);
 
 private:

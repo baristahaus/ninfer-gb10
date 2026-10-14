@@ -159,16 +159,24 @@ Op that consumes it.
 ### 3.3 Independence and ground truth
 
 - The exact codec oracle exists twice, both written from this contract alone. The Python
-  implementation under `tools/convert/<target>` serves converter verification. The C++ test-owned
-  decoder serves `tests/ops` kernel qualification. Neither calls production code.
-- **External fixture.** A small fixture generated once with the pinned exllamav3 commit: for every
-  `K` in 1…8 and {1.5, 2.5, 3.5} and each codebook (MUL1 only for half-integer `K`), a few random
-  tiles with their exllamav3-reconstructed FP16 `Ŵ` (`ext.reconstruct`), and one full 128×128 linear
-  with its `suh`/`svh` and exllamav3's `get_weight_tensor` result. Both oracle implementations must
+  implementation is `tools/convert/quantization/exl3.py` (the shared converter codec module, beside
+  `nvfp4.py`, because EXL3 is target-independent); the literal scalar reference is
+  `exl3_reference.py` beside it. The C++ test-owned decoder is `tests/ops/exl3_ref.h`, behind
+  `ninfer_exl3_codec_test`. Neither calls production code, and the three read the ring through
+  three phrasings of §2.4 (uint32 words, int16 elements, a word loop).
+- **External fixture.** `tests/fixtures/exl3/exllamav3-1.6.1.json`, generated once by
+  `tests/fixtures/exl3/generate_fixture.py` with the pinned exllamav3 commit (install and run
+  commands in `tests/fixtures/exl3/README.md`): for every `K` in 1…8 and {1.5, 2.5, 3.5} and each
+  codebook (MUL1 only for half-integer `K`), four random tiles with their exllamav3-reconstructed
+  FP16 `Ŵ`; per codebook, one `K = 8` coverage linear whose rings contain every one of the 65,536
+  states, pinning the complete codebook table including its subnormal and signed-zero results
+  (random tiles cannot reach every state); and one full 128×128 linear with its `suh`/`svh`, its
+  reconstructed `Ŵ`, and exllamav3's `get_weight_tensor` result. Both oracle implementations must
   reproduce the reconstructed tiles bit-exactly. The full-weight composition, which exllamav3
-  evaluates in FP16, is supplementary evidence for §2.1's transform order and is compared within
-  FP16 tolerance, not bit-exactly. The fixture, its generation command and the pinned commit are
-  committed with the oracle.
+  evaluates in FP16, is supplementary evidence for §2.1's transform order: relative L2 at most
+  2e-3 and max error at most 4e-3 of the largest reference value. If the fixture misses those
+  bounds, that is a finding against the oracle or this contract, not a license to loosen them. The
+  fixture, its generation command and the pinned commit are committed with the oracle.
 - **Shapes**: the 35B banks (gate/up `k=2048, n=512`; down `k=512, n=2048`; 256 experts) with
   uniform `K` ∈ {2, 3, 4, 5, 6} and a mixed bank whose experts span integer and half-integer `K`;
   plus the single 16×16 tile and the 128×128 linear for the codec oracle.

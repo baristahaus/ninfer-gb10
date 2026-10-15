@@ -310,12 +310,14 @@ void validate(const Tensor& hyper, const HyperConnectionWeights& weights, const 
         weights.up.n != kHyper || weights.up.k != kRank) {
         throw std::invalid_argument("hyperconnection_mix: invalid Flash-Next geometry");
     }
-    // The low-rank down and up projections are each BF16 or row-scaled FP8; the injection rows
-    // are read as BF16.
+    // The low-rank down and up projections are each BF16, row-scaled FP8, or dense
+    // block-scale MXFP8; the injection rows are read as BF16.
     const auto projection = [](const Weight& weight) {
         return (weight.qtype == QType::BF16 && weight.layout == QuantLayout::Contiguous) ||
                (weight.qtype == QType::FP8_E4M3FN_ROW_BF16 &&
-                weight.layout == QuantLayout::RowScale);
+                weight.layout == QuantLayout::RowScale) ||
+               (weight.qtype == QType::MXFP8 &&
+                weight.layout == QuantLayout::DenseBlockScaleK32Mxfp8);
     };
     if (!projection(weights.down) || !projection(weights.up)) {
         throw std::invalid_argument("hyperconnection_mix: unsupported weight representation");
@@ -351,11 +353,13 @@ void finish_mix(const Tensor& normalized, const Tensor* partials,
     const int tokens = normalized.ne[1];
     Tensor low_rank = workspace.alloc(DType::BF16, {kRank, tokens});
     // FP8 runs the fused down+SiLU at every width; BF16 fuses through its small-T family.
+    // MXFP8 uses the generic linear route at every width.
     const bool fp8_down        = weights.down.qtype == QType::FP8_E4M3FN_ROW_BF16;
-    const bool fused_down_silu = fp8_down || tokens <= 16;
+    const bool mxfp8_down      = weights.down.qtype == QType::MXFP8;
+    const bool fused_down_silu = fp8_down || (tokens <= 16 && !mxfp8_down);
     if (fp8_down) {
         detail::flash_next::launch_fp8_hc_down_silu(normalized, weights.down, low_rank, stream);
-    } else if (tokens == 1) {
+    } else if (tokens == 1 && !mxfp8_down) {
         detail::flash_next::launch_bf16_hc_down_silu_decode(normalized, weights.down, low_rank, stream);
     } else if (fused_down_silu) {
         detail::flash_next::launch_bf16_hc_down_silu_small_t(normalized, weights.down, low_rank, stream);

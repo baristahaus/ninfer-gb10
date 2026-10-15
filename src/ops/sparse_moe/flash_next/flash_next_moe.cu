@@ -909,13 +909,22 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
     const auto fp8 = [](const Weight& weight) {
         return weight.qtype == QType::FP8_E4M3FN_ROW_BF16 && weight.layout == QuantLayout::RowScale;
     };
+    const auto mxfp8 = [](const Weight& weight, int rows, int k) {
+        return weight.qtype == QType::MXFP8 &&
+               weight.layout == QuantLayout::DenseBlockScaleK32Mxfp8 && weight.n == rows &&
+               weight.k == k;
+    };
     if ((shared_pair != nullptr &&
-         (!bf16(shared_pair->gate, kIntermediate) || !bf16(shared_pair->up, kIntermediate))) ||
+         (!bf16(shared_pair->gate, kIntermediate) || !bf16(shared_pair->up, kIntermediate)) &&
+         (!mxfp8(shared_pair->gate, kIntermediate, kHidden) ||
+          !mxfp8(shared_pair->up, kIntermediate, kHidden))) ||
         (shared_packed != nullptr &&
          (!fp8(*shared_packed) || shared_packed->n != 2 * kIntermediate ||
           shared_packed->k != kHidden)) ||
-        (!fp8(weights.shared_down) && (weights.shared_down.qtype != QType::BF16 ||
-                                       weights.shared_down.layout != QuantLayout::Contiguous))) {
+        (!fp8(weights.shared_down) &&
+         (weights.shared_down.qtype != QType::BF16 ||
+          weights.shared_down.layout != QuantLayout::Contiguous) &&
+         !mxfp8(weights.shared_down, kHidden, kIntermediate))) {
         throw std::invalid_argument("flash_next_moe: unsupported shared-expert representation");
     }
     require_bank(weights.routed_gate_up, 2 * kIntermediate, kHidden,
@@ -965,7 +974,7 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
     Tensor shared_activation = workspace.alloc(DType::BF16, {kIntermediate, tokens});
     if (shared_packed != nullptr) {
         linear_swiglu(input, *shared_packed, shared_activation, workspace, stream);
-    } else if (tokens == 1) {
+    } else if (tokens == 1 && shared_pair->gate.qtype == QType::BF16) {
         detail::flash_next::launch_bf16_shared_swiglu_decode(
             input, shared_pair->gate, shared_pair->up, shared_activation, stream);
     } else {

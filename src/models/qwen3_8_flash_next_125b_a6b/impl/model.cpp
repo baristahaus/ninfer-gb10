@@ -37,15 +37,29 @@ Weight bf16(const artifact::MaterializedArtifact& artifact,
 }
 
 Weight row_view(const Weight& parent, int begin, int rows) {
-    if (parent.qtype != QType::BF16 || parent.layout != QuantLayout::Contiguous || begin < 0 ||
-        rows <= 0 || begin + rows > parent.n) {
-        throw std::logic_error("invalid Flash-Next BF16 row view");
+    if (rows <= 0 || begin < 0 || begin + rows > parent.n) {
+        throw std::logic_error("invalid Flash-Next row view");
     }
-    Weight out = parent;
-    out.qdata  = static_cast<const std::byte*>(parent.qdata) +
-                 static_cast<std::size_t>(begin) * parent.k * sizeof(std::uint16_t);
-    out.n = out.shape[0] = out.padded_shape[0] = rows;
-    return out;
+    if (parent.qtype == QType::BF16 && parent.layout == QuantLayout::Contiguous) {
+        Weight out = parent;
+        out.qdata  = static_cast<const std::byte*>(parent.qdata) +
+                    static_cast<std::size_t>(begin) * parent.k * sizeof(std::uint16_t);
+        out.n = out.shape[0] = out.padded_shape[0] = rows;
+        return out;
+    }
+    if (parent.qtype == QType::MXFP8 && parent.layout == QuantLayout::DenseBlockScaleK32Mxfp8) {
+        Weight out = parent;
+        out.qdata  = static_cast<const std::byte*>(parent.qdata) +
+                    static_cast<std::size_t>(begin) * parent.k;
+        out.scales = static_cast<const std::uint8_t*>(parent.scales) +
+                     static_cast<std::size_t>(begin) * (parent.k / 32);
+        out.scale_ne[1]     = rows;
+        out.scale_nb[2]     = out.scale_nb[1] * rows;
+        out.scale_nb[3]     = out.scale_nb[2];
+        out.n = out.shape[0] = out.padded_shape[0] = rows;
+        return out;
+    }
+    throw std::logic_error("invalid Flash-Next row view");
 }
 
 ops::HyperConnectionWeights hc(const HyperConnectionPlan& plan,

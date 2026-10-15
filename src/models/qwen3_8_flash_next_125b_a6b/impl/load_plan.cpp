@@ -43,9 +43,11 @@ Reference projection(artifact::Binder& binder, std::string_view name,
         throw artifact::ArtifactError("missing logical parameter " + std::string(name));
     }
     const QType format = binder.reader().geometry(found->second.parts.front().object).format;
-    if (format != QType::BF16 && format != QType::FP8_E4M3FN_ROW_BF16) {
-        throw artifact::ArtifactError(std::string(name) +
-                                      ": projection must be BF16 or row-scaled FP8");
+    if (format != QType::BF16 && format != QType::FP8_E4M3FN_ROW_BF16 &&
+        format != QType::MXFP8) {
+        throw artifact::ArtifactError(
+            std::string(name) +
+            ": projection must be BF16, row-scaled FP8, or dense block-scale MXFP8");
     }
     return device(binder, name, format, shape, placement);
 }
@@ -55,11 +57,17 @@ Reference expert_bank(artifact::Binder& binder, std::string_view name,
                       Placement placement = Placement::Device) {
     if (placement == Placement::Disabled) { return {}; }
     const auto& use = binder.use(name, std::string(name) + "/input");
-    if (use.activation_policy != artifact::ActivationPolicy::AllowA4 ||
-        use.auxiliaries.size() != 1 || !use.auxiliaries.contains("activation_divisor")) {
+    const bool w4a4  = use.activation_policy == artifact::ActivationPolicy::AllowA4 &&
+                      use.auxiliaries.size() == 1 &&
+                      use.auxiliaries.contains("activation_divisor");
+    const bool w4a16 = use.activation_policy == artifact::ActivationPolicy::AllowA16 &&
+                       use.auxiliaries.size() == 1 &&
+                       use.auxiliaries.contains("weight_divisor");
+    if (!w4a4 && !w4a16) {
         throw artifact::ArtifactError(
             std::string(name) +
-            ": NVFP4 experts require AllowA4 and per-expert activation divisors");
+            ": NVFP4 experts require AllowA4 with activation divisors or AllowA16 "
+            "with weight divisors");
     }
     auto reference = device(binder, name, QType::NVFP4, shape, placement);
     if (!reference.binding.whole_object || reference.binding.parts.size() != 1 ||
@@ -73,8 +81,9 @@ Reference expert_bank(artifact::Binder& binder, std::string_view name,
 
 Reference expert_input_divisors(artifact::Binder& binder, const std::string& parameter) {
     const auto& use = binder.use(parameter, parameter + "/input");
-    return binder.binding(parameter + "/activation_divisor",
-                          use.auxiliaries.at("activation_divisor"), {512},
+    const std::string auxiliary =
+        use.auxiliaries.contains("activation_divisor") ? "activation_divisor" : "weight_divisor";
+    return binder.binding(parameter + "/" + auxiliary, use.auxiliaries.at(auxiliary), {512},
                           artifact::Residency::Device, QType::FP32);
 }
 
@@ -158,13 +167,13 @@ FullAttentionPlan bind_attention(artifact::Binder& binder, const std::string& pr
                                  Placement placement = Placement::Device) {
     return {
         .query_gate = projection(binder, prefix + "q_proj.weight", {12288, 2560}, placement),
-        .key        = device(binder, prefix + "k_proj.weight", QType::BF16, {512, 2560}, placement),
-        .value      = device(binder, prefix + "v_proj.weight", QType::BF16, {512, 2560}, placement),
+        .key        = projection(binder, prefix + "k_proj.weight", {512, 2560}, placement),
+        .value      = projection(binder, prefix + "v_proj.weight", {512, 2560}, placement),
         .output     = projection(binder, prefix + "o_proj.weight", {2560, 6144}, placement),
         .query_norm = device(binder, prefix + "q_norm.weight", QType::BF16, {256}, placement),
         .key_norm   = device(binder, prefix + "k_norm.weight", QType::BF16, {256}, placement),
-        .index_query_key = device(binder, prefix + "indexer.index_qk_proj.weight", QType::BF16,
-                                  {640, 2560}, placement),
+        .index_query_key = projection(binder, prefix + "indexer.index_qk_proj.weight", {640, 2560},
+                                      placement),
         .index_query_norm =
             device(binder, prefix + "indexer.q_layernorm.weight", QType::BF16, {128}, placement),
         .index_key_norm =
@@ -177,8 +186,8 @@ GdnPlan bind_gdn(artifact::Binder& binder, const std::string& prefix) {
         .a_log           = device(binder, prefix + "A_log", QType::FP32, {48}),
         .dt_bias         = device(binder, prefix + "dt_bias", QType::FP32, {48}),
         .convolution     = device(binder, prefix + "conv1d.weight", QType::BF16, {4, 10240}),
-        .a_projection    = device(binder, prefix + "in_proj_a.weight", QType::BF16, {48, 2560}),
-        .b_projection    = device(binder, prefix + "in_proj_b.weight", QType::BF16, {48, 2560}),
+        .a_projection    = projection(binder, prefix + "in_proj_a.weight", {48, 2560}),
+        .b_projection    = projection(binder, prefix + "in_proj_b.weight", {48, 2560}),
         .query_key_value = projection(binder, prefix + "in_proj_qkv.weight", {10240, 2560}),
         .output_gate     = projection(binder, prefix + "in_proj_z.weight", {6144, 2560}),
         .norm            = device(binder, prefix + "norm.weight", QType::BF16, {128}),
@@ -190,28 +199,40 @@ Reference bind_ple_table(artifact::Binder& binder, const std::string& name) {
     const auto& binding = binder.reader().directory().bindings.at(name);
     const artifact::Shape shape{320001536, 160};
     if (!binding.whole_object || binding.parts.size() != 1) {
-        throw artifact::ArtifactError("PLE requires a complete raw FP8 table");
+        throw artifact::ArtifactError("PLE requires a complete raw table object");
     }
     const auto& object = binder.reader().directory().tensor(binding.parts.front().object);
     binder.reader().validate_object(binding.parts.front().object);
-    if (object.shape != shape || object.format != "fp8_e4m3fn" ||
-        object.layout != "contiguous_le_v1") {
+    const bool fp8_table = object.format == "fp8_e4m3fn" && object.layout == "contiguous_le_v1";
+    const bool nvfp4_table = object.format == "nvfp4" && object.layout == "block_scale_k16_v1";
+    if (object.shape != shape || (!fp8_table && !nvfp4_table)) {
         throw artifact::ArtifactError("PLE table representation is invalid");
     }
+    // The row count and hash constants are family constants; the stored row format
+    // is recipe-dependent (FP8 160 B/row vs NVFP4 90 B/row + scale_2).
     return {name, shape, binding, artifact::Residency::Host};
 }
 
 PlePlan bind_ple(artifact::Binder& binder, const std::string& prefix) {
-    PlePlan out{
-        .convolution      = device(binder, prefix + "conv1d.weight", QType::BF16, {4, 10240}),
-        .key_projection   = device(binder, prefix + "key_proj.weight", QType::BF16, {10240, 2560}),
-        .convolution_norm = device(binder, prefix + "norm_conv.weight", QType::BF16, {10240}),
-        .key_norm         = device(binder, prefix + "norm_key.weight", QType::BF16, {10240}),
-        .query_norm       = device(binder, prefix + "norm_query.weight", QType::BF16, {10240}),
-        .value_projection = device(binder, prefix + "value_proj.weight", QType::BF16, {2560, 2560}),
-        .embedding_scale =
-            device(binder, prefix + "ple_embedding.ngram_embedding.weight_scale", QType::BF16, {1}),
-    };
+    const auto& bindings = binder.reader().directory().bindings;
+    const std::string table_name = prefix + "ple_embedding.ngram_embedding.weight";
+    const bool nvfp4_table =
+        binder.reader().directory().tensor(bindings.at(table_name).parts.front().object)
+            .format == "nvfp4";
+    PlePlan out{};
+    if (!nvfp4_table) {
+        // Vendor FP8 recipes carry the table scale as its own object; the NVFP4
+        // recipe's scale_2 word lives in the table payload.
+        out.embedding_scale = device(
+            binder, prefix + "ple_embedding.ngram_embedding.weight_scale", QType::BF16, {1});
+    }
+    out.nvfp4_table = nvfp4_table;
+    out.convolution      = device(binder, prefix + "conv1d.weight", QType::BF16, {4, 10240});
+    out.key_projection   = device(binder, prefix + "key_proj.weight", QType::BF16, {10240, 2560});
+    out.convolution_norm = device(binder, prefix + "norm_conv.weight", QType::BF16, {10240});
+    out.key_norm         = device(binder, prefix + "norm_key.weight", QType::BF16, {10240});
+    out.query_norm       = device(binder, prefix + "norm_query.weight", QType::BF16, {10240});
+    out.value_projection = device(binder, prefix + "value_proj.weight", QType::BF16, {2560, 2560});
     out.embedding_table = bind_ple_table(binder, prefix + "ple_embedding.ngram_embedding.weight");
     return out;
 }

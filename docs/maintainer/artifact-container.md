@@ -463,6 +463,7 @@ weight divisor。Materializer 上传 parent 的原始编码，Op 准备其真实
 | A16Only | A16 |
 | AllowA8 | A16、A8 |
 | AllowA4 | A16、A8、A4 |
+| AllowA16 | A16 |
 
 Writer 为需要许可的 projection 使用位置写出明确结果。某个 encoder 的默认规则属于 recipe，
 进入 uses 后已经展开。共享一次激活量化时采用相关用途许可的交集，并满足辅助输入关系。

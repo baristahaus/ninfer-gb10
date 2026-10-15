@@ -52,20 +52,26 @@ in this plan is gated by an unknown row space.
 |---|---|---|
 | Routed experts (48 layers) | NVFP4 W4A4: `weight` U8 `[n,k/2]` + `weight_scale` F8_E4M3 `[n,k/16]` + `weight_scale_2` F32 + `input_scale` F32 | same — **native ingestion already exists** |
 | PLE n-gram tables | **NVFP4 group-16**: `weight` U8 `[2500012, 80]` (=160 el/row) + `weight_scale` F8_E4M3 `[2500012, 10]` + a global `weight_scale_2` F32 scalar **present with a real value** (≈3.3242362e-05 — the decode includes it); **128 shards × 2,500,012 rows = 320,001,536 rows — the same row space and shard split as our source (first-hand, §6)**, spread across 17 of the 41 model files; ~28.8 GB; values retrained during QAD distillation (E1); the three metadata tensors carry the vendor hash constants, bit-identical to the runtime's (§6) | FP8 shards (51.2 GB table; 320,001,536 rows × 160 B; the vendor's FP8 table via the RadixArk source) |
-| Attention, GDN, QSA-indexer, shared-expert projections | **MXFP8**: `weight` F8_E4M3 `[N,K]` + `weight_scale` U8 UE8M0 `[N,K/32]` | BF16 |
+| Attention, GDN, QSA-indexer, shared-expert projections | **MXFP8**: `weight` F8_E4M3 `[N,K]` + `weight_scale` U8 UE8M0 `[N,K/32]`; no `scale_2`, no `input_scale`; UE8M0 bias-127 (O3 resolved, §8) | BF16 |
 | PLE projections/conv, routers, hyper-connections, norms, embeddings, lm_head | BF16/F32 | BF16 — matches |
 | MTP drafter trunk (fc, pre-norms, hyper-connections, self_attn + indexer, mlp.gate, shared_expert) | BF16 (names match our `_mtp_specs()` inventory exactly) | BF16 — matches |
 | MTP routed experts (1 layer, 512 experts) | **NVFP4 W4A16**: `weight` U8 `[640,1280]` per proj + E4M3 scales + F32 `weight_scale_2`; **no `input_scale`** | BF16 dense (fp8mtp pass optionally re-emits A4 banks) |
 | Draft output head | none (tied to 248,320 `lm_head`) | none — converter builds the 147,456-row shortlist head from `lm_head` (unchanged machinery) |
 
-Architecture is declared `Qwen4ExpForConditionalGeneration` / `qwen4_exp` with
-tensors prefixed `model.language_model.`; config carries
-`text_config.mtp_num_hidden_layers: 1` (our validator's requirement, under
-`text_config`); the MTP expert banks live in the separate
-`hybrid-main-0000{1,2}.safetensors` shards. `mtp.layers.48` in
-`hf_quant_config.json` is a stray alias tag (no such tensors). The SGLang
-recipe's `SPARKTALK_FLASH_NEXT_DRAFT_VOCAB=ko64k` is a runtime draft-vocab
-truncation, not a checkpoint shape — out of scope (§5).
+Architecture is declared `Qwen4ExpForConditionalGeneration` / `qwen4_exp`
+(config-verified) with tensors prefixed `model.language_model.`; config
+carries `text_config.mtp_num_hidden_layers: 1` (our validator's requirement,
+under `text_config`) and `text_config.vocab_size: 248,320` (the C4 pin). The
+file split is verified (2026-10-15): `hybrid-main-00001` carries the MTP W4A16
+banks only (4,608 tensors: 512 experts × 3 projections × {weight,
+weight_scale, weight_scale_2}); `hybrid-main-00002` carries all 240
+attention/GDN MXFP8 pairs (36 GDN layers' `in_proj_a/b/qkv/z` + `out_proj`;
+12 QSA layers' `q/k/v/o` + `indexer.index_qk_proj`); the shared-expert MXFP8
+pairs (48 × 3), the NVFP4 W4A4 routed banks, the PLE, and the BF16/F32 bulk
+live in the `model-*` files. `mtp.layers.48` in `hf_quant_config.json` is a
+stray alias tag (no such tensors). The SGLang recipe's
+`SPARKTALK_FLASH_NEXT_DRAFT_VOCAB=ko64k` is a runtime draft-vocab truncation,
+not a checkpoint shape — out of scope (§5).
 
 ## 2. Work item A — MXFP8 dense-leaf route (shared experts, attention, GDN, indexer)
 
@@ -291,12 +297,10 @@ hardcodes those constants, not because the tensors are corrupt. At ~90 B/row
 | E2 | NVFP4 group-16 PLE format route (E2a–E2e, §6) | 2–3 d | low-medium: mirrors the existing NVFP4 bank pattern; the gather/consumer kernel carries the effort |
 | **Total** | | **~3–4 weeks** | dominated by A4; E1 is closed and no gating unknown remains |
 
-Sequencing: E1 is closed, so C first (unblocks everything on real data), then
-B (small, independent), then A (largest), with E2's format route landing beside
-A (its spec and oracle follow the same five-part pattern) and D woven in per
-item. Run O3's scale read before drafting A1 —
-a 15-minute shard read that decides whether "no global scale word" survives;
-don't spec the layout first.
+Sequencing: E1 and O3 are closed, so A1 and E2a's specs draft first (one docs
+pass, both layouts unblocked), then C (unblocks everything on real data), then
+B (small, independent), then A (largest), with E2's packer landing beside B
+(both small, both fully fact-verified) and D woven in per item.
 
 Nothing serves until A lands: attention/GDN/indexer/shared-expert weights are
 MXFP8 and the no-dequant rule leaves no BF16 path, so A is the critical path.
@@ -325,9 +329,15 @@ which still changes the 5090 tiered picture materially (headroom against the
   .kind::mxf8f6f4.block_scale ... ue8m0` (compile-verified `sm_120a` +
   `sm_121a`, CUDA 13.4.92); tcgen05 is unsupported on both and is not the
   repo's MMA family. The GB10 throughput microbench remains (A4).
-- **O3** UE8M0 exponent bias in the ModelOpt export, and whether the MXFP8
-  pairs carry any global scale word (read a `weight_scale` row from a shard;
-  likely bias-127). Runs before drafting A1, not during C2.
+- **O3** (resolved 2026-10-15, first-hand) UE8M0 bias-127 confirmed by
+  magnitude sanity: `layers.0.linear_attn.in_proj_qkv.weight_scale` (in
+  `hybrid-main-00002`) carries bytes 113–117, decoding to exponents
+  2^-14..2^-10, and the sampled max |E4M3 code| 448 × 2^-10 = 0.4375 is a sane
+  projection magnitude. No MXFP8 pair carries a global scale word or an
+  `input_scale` (the F32 inventory holds only the routed experts'
+  `scale_2`/`input_scale`, the MTP banks' `scale_2`, the PLE's `scale_2`, and
+  the norms) — A1's `dense_block_scale_k32_mxfp8_v1` spec stands as drafted,
+  and A1 is unblocked.
 - **O4** A4-for-drafter calibration: only if W4A16 decode cost is visible in
   profiles; would need real calibration data and would deviate from the
   source-declared contract.

@@ -1,6 +1,10 @@
 # Plan: native quantization routes for alternate checkpoint setups (QAD-class)
 
-Status: proposal for effort evaluation. Branch `qad-native-quant-plan`.
+Status: evaluated and approved for execution (2026-10-15); this revision folds the
+evaluation corrections in. Branch `qad-native-quant-plan`. Corrections are grounded in
+code reads plus compile probes on the 5090 box (CUDA 13.4.92); shard-side facts remain
+the GB10-side header reads recorded in section 1 (the `/nfs` checkpoint is not mounted
+on the 5090 box).
 Tracking: beads `ninfer-gb10-<id>` (created with this plan).
 Origin of the request: `/nfs` checkpoint
 `edp1096/Huihui-Qwen3.8-Flash-Next-abliterated-NVFP4-QAD` (93 GB) — a Qwen3.8
@@ -28,12 +32,18 @@ five-part treatment the NVFP4 bank already has:
 Future checkpoints that mix these formats then become inventory data, not new
 machinery.
 
+One limit surfaced by the evaluation: the pattern covers *format* divergence. The
+QAD PLE additionally presents *geometry* divergence — a different row space, not a
+different encoding of the same rows — and that is not a format route. It gets its
+own verification-first treatment (section 6, E1), which runs before everything else
+because its outcome can gate artifact viability.
+
 ## 1. Target checkpoint facts (verified from the shards, 2026-10-15)
 
 | Component | Format on disk (verified dtypes) | Our artifact today |
 |---|---|---|
 | Routed experts (48 layers) | NVFP4 W4A4: `weight` U8 `[n,k/2]` + `weight_scale` F8_E4M3 `[n,k/16]` + `weight_scale_2` F32 + `input_scale` F32 | same — **native ingestion already exists** |
-| PLE n-gram tables | **NVFP4 group-16**: `weight` U8 `[2500012, 80]` (=160 el/row) + `weight_scale` F8_E4M3 `[2500012, 10]`, 11 shards (~2.5M rows — much smaller than our table) | FP8 shards (~51 GB-class table) |
+| PLE n-gram tables | **NVFP4 group-16**: `weight` U8 `[2500012, 80]` (=160 el/row) + `weight_scale` F8_E4M3 `[2500012, 10]`, 11 shards (~2.5M rows — much smaller than our table; structurally different row space, see §6/E1) | FP8 shards (~51 GB-class table; 320,001,536 rows × 160 B) |
 | Attention, GDN, QSA-indexer, shared-expert projections | **MXFP8**: `weight` F8_E4M3 `[N,K]` + `weight_scale` U8 UE8M0 `[N,K/32]` | BF16 |
 | PLE projections/conv, routers, hyper-connections, norms, embeddings, lm_head | BF16/F32 | BF16 — matches |
 | MTP drafter trunk (fc, pre-norms, hyper-connections, self_attn + indexer, mlp.gate, shared_expert) | BF16 (names match our `_mtp_specs()` inventory exactly) | BF16 — matches |
@@ -68,17 +78,35 @@ prefill GPU time; gdn.prefill 35%).
   `convert.py:397-399`.
 - **A3 binder.** `projection()` (`load_plan.cpp:41-55`) accepts the new format
   alongside BF16 / `fp8_e4m3fn_row_bf16`; Use roles unchanged.
-- **A4 kernels.** Two-step decision:
-  1. Probe tcgen05 MXFP8 MMA availability on `sm_121a` (0.5 d; unknown — O2).
-  2. Fallback (bounded): in-kernel dequant — E4M3→BF16 LUT × 2^(UE8M0 e) —
-     into the existing BF16 HMMA projection paths
-     (`src/ops/linear/bf16/flash_next/*`, GDN `in_proj` sites). Dequant
-     *in the kernel* is not the forbidden conversion-side dequant; the stored
-     format and the oracle stay MXFP8.
+- **A4 kernels.** O2 is resolved by the evaluation: the MXFP8 MMA exists on both
+  lanes, via the instruction family the repo already uses — not tcgen05.
+  - The Blackwell MMA library is `mma.sync` (`src/ops/common/mma.cuh`: BF16
+    `m16n8k16`, `kind::f8f6f4` FP8, and the shipped `mxf4nvf4` block-scale NVFP4
+    wrapper). tcgen05 is not used in-tree and is unsupported on `sm_120a`/`sm_121a`
+    (compile probe, CUDA 13.4.92: `tcgen05.fence` rejected on both targets).
+  - `mma.sync.aligned.kind::mxf8f6f4.block_scale.scale_vec::1X.m16n8k32.
+    row.col.f32.e4m3.e4m3.f32.ue8m0` compiles clean for `sm_120a` and `sm_121a`
+    (CUDA 13.4.92, 5090 box, 2026-10-15 probe). Route: native MXFP8 block-scale MMA
+    as the primary path — expected ~2x the BF16 MMA ceiling on compute-bound prefill
+    GEMMs plus halved weight traffic.
+  - Keep a 0.5 d GB10 throughput microbench: GB10 runs CUDA 13.0.88 and the probe
+    box 13.4.92 (the kind set only grew between 13.0 and 13.4) — confirm
+    throughput, not existence.
+  - Fallback (bounded, kept as the A/B baseline): in-kernel dequant —
+    E4M3→BF16 LUT × 2^(UE8M0 e) — into the existing BF16 HMMA projection paths
+    (`src/ops/linear/bf16/flash_next/*`, GDN `in_proj` sites). Dequant *in the
+    kernel* is not the forbidden conversion-side dequant; the stored format and
+    the oracle stay MXFP8.
+  Perf caveat: SP-6 measured prefill kernels at 7–33% of modeled minimums
+  (qsa.select 7%, gdn.prefill 15%). MXFP8 halves MMA work and weight traffic but
+  does not fix that inefficiency; the realized prefill win is bounded by each
+  site's MMA/traffic share, and the step-3 A/B measures it.
   Sites: `flash_next_project_query_gate` (packed q+gate), k/v projections,
   GDN `in_proj_a/b/qkv/z` + `out_proj`, QSA indexer `index_qk_proj`,
-  shared-expert gate/up/down (shared expert sits inside the MoE wrapper —
-  route selection question O5).
+  shared-expert gate/up/down. O5 is resolved: the shared expert is bound through
+  the dense `projection()` route (`load_plan.cpp:106-108`, leaves
+  {640,2560}/{2560,640}) — A3's format-set extension plus one more A4 kernel
+  site; no wrapper-topology decision exists.
 - **A5 oracle.** Independent FP32 reference: exact `E4M3 × 2^e` products
   accumulated in FP32; production routes compared at BF16-appropriate
   tolerance. Definition recorded next to `nvfp4_maxabs`
@@ -98,8 +126,12 @@ prefill GPU time; gdn.prefill 35%).
   handling — that is the W4A16 contract.
 - **B3 runtime.** W4A16 variant of the MTP MoE decode route: gather top-10
   experts, in-kernel dequant `E2M1 × E4M3 × divisor → BF16`, BF16 MMA.
-  Route selection extends `bind_mtp_moe`'s either/or (`load_plan.cpp:137-156`)
-  and the sparse-MoE wrapper variant flag (`src/ops/wrapper/sparse_moe.cpp`).
+  Route selection extends `bind_mtp_moe`'s either/or (`load_plan.cpp:137-156`).
+  Corrected pointer (evaluation): the Flash-Next MTP MoE is `ops::flash_next_moe`
+  under `src/ops/sparse_moe/flash_next/` — the W4A16 variant sits beside the
+  existing W4A4 path (`flash_next_nvfp4_w4a4.cuh`) and the BF16 GEMM machinery
+  there. `src/ops/wrapper/sparse_moe.cpp` is the Qwen3.5 family's MoE wrapper:
+  wrong family, no touch.
   Perf expectation: drafter expert GEMMs are small-M and memory-bound; W4A16
   banks are ¼ the BF16 traffic. The existing A4 kernel remains available if
   later calibration justifies A4 for the drafter (deferred, O4 — the source
@@ -135,50 +167,103 @@ prefill GPU time; gdn.prefill 35%).
 5. Abliteration sanity: refusal-direction weights are inert at the engine
    level; the tokenizer/template pins are unchanged (248,077 tokens).
 
-## 6. Work item E — PLE native route (verify-first)
+## 6. Work item E — PLE native route (re-scoped by the evaluation: geometry, not format)
 
-The QAD PLE tables are NVFP4 group-16 (codes U8, E4M3 scales) and much smaller
-than ours (~2.5M rows). Our PLE ingestion expects FP8 shards. First 0.5 d:
-verify the exact row/element geometry (160 el/row at group 16 — matches the
-shard shapes) and what the runtime PLE stage assumes about table size (the
-binder carries table geometry, so a smaller table should bind — verify). Then
-size the gather-path work: NVFP4 rows dequant-in-gather vs a new gather
-kernel. Risk-bearing only if the runtime pins the FP8 row format in the file
-page-in path (`flash_next_ple_stage.cu`).
+The evaluation's headline correction: this is not a gather-format question, it is a
+row-space question, and it is the plan's only correctness-blocking unknown.
+
+Runtime facts (code, verified): the PLE geometry is NOT carried by the binder — it
+is compile-time constants of the family runtime. `ple_table.h`: `kPleRows =
+320,001,536`, `kPleHeadWidth = 160` bytes FP8, `kPleHeads = 16`. `ple_table.cpp`:
+a 16-head pyramid of prime-sized ~20M-row tables (`kSizes = 20000003, 20000023,
+...` with running `kOffsets`), hashed by fixed `kMultipliers` (8 bigram + 8
+trigram heads). `gather_ple_fp8` throws unless the table is exactly
+320,001,536 × 160 bytes (51,200,245,760) — a smaller table cannot bind.
+
+Shard facts (GB10-side header reads): 11 shards × 2,500,012 rows × 160 elements
+NVFP4 group-16 ≈ 225 MB total. Per-row *width* matches ours (160 elements). The
+row *space* is ~12–128x smaller on any reading of the shard counts, and the table
+count differs (11 vs 16). A format swap cannot explain that: the QAD PLE is a
+structurally different pyramid — pruned to used rows, re-indexed, or re-configured.
+
+- **E1 — row-space/mapping verification (runs FIRST, before C).** Object of
+  study: the QAD packer's inference-side hash/compaction scheme (the same SGLang
+  patch already referenced for the draft-vocab finding), plus the shards' real
+  per-shard row counts. Outcomes:
+  (a) a discoverable row space ⇒ E2 sized as below, plus a second fixed dimension
+      set in the 125B package (`kSizes`/`kOffsets`/`kMultipliers`/`kPleRows` +
+      the gather assert become recipe-dependent — real work the original estimate
+      did not contain);
+  (b) the mapping is unrecoverable from the export ⇒ the PLE is blocked pending
+      either the packer's compaction artifact or a user decision on our own
+      NVFP4 requant of the standard 320M-row table — a new quantization with its
+      own qualification, not native ingestion.
+- **E2 — gather/consumer kernel work (only after E1).** NVFP4 rows
+  dequant-in-gather vs a new gather kernel; the staged FP8 contract
+  (`kPleEmbeddingDim` bytes/token in `ple_stage.h/.cpp`) and the first PLE
+  consumer's format decide where the decode lives.
+- Side effect to record in D: if the PLE resolves at ~225 MB, the SP-6
+  cold-collapse case (169–171 → 2.14 GB/s, 114.9 µs/faulted row) largely
+  evaporates for this artifact — the demand-paging pressure profile changes
+  character.
+- Estimate fork: 0.5 d for E1; E2 bounded after E1; the blocked fork can gate
+  artifact viability and is the plan's largest estimate risk.
 
 ## 7. Effort estimate (single owner, rough; for evaluation)
 
 | Item | Content | Estimate | Risk |
 |---|---|---|---|
 | A1–A3 | spec + codec + converter + binder | 2–3 d | low |
-| A4 | kernel probe + route (tcgen05 or SIMT fallback) + tuning | 4–6 d | **medium: tcgen05 MXFP8 on sm_121a unverified (O2)**; SIMT fallback bounds it |
+| A4 | kernel route (native mma.sync MXFP8, O2 resolved) + tuning + GB10 throughput microbench | 4–6 d | low-medium: instruction compile-verified on both lanes; SP-6 kernel inefficiency bounds the realized win |
 | A5 + D1 | oracles + tests | 1–2 d | low |
 | B1–B3 | bank route + binder role + W4A16 kernel | 3–4 d | low-medium |
 | B4 + D1 | oracle + tests | 1 d | low |
 | C1–C4 | source adapter + recipe | 2–3 d | low (mechanical, wide validation surface) |
 | D2–D4 | GPU evidence campaign | 2–3 d | low |
-| E | PLE verify + (conditionally) gather route | 0.5 d + TBD | medium (O1 geometry verified; runtime pinning unknown) |
-| **Total** | | **~3–4 weeks** | dominated by A4 |
+| E1 | PLE row-space/mapping verification (packer scheme + shard row counts) | 0.5 d | **can gate artifact viability** (blocked fork is packer-dependent) |
+| E2 | PLE gather/consumer kernel work (after E1) | TBD after E1 | low-medium once the row space is known |
+| **Total** | | **~3–4 weeks if E1 resolves benignly** | dominated by A4; the E1 blocked fork is the timeline risk |
 
-Sequencing: C first (unblocks everything on real data), then B (small,
-independent), then A (largest), with D woven in per item. B alone (with C)
-already yields a servable artifact if A is deferred — attention would then be
-the only piece needing the BF16 conversion path, which the user has ruled out;
-so A is on the critical path for this checkpoint, and B/C can land first for
-the MTP-only consumers.
+Sequencing (corrected): E1 first (its outcome gates artifact viability), then
+C (unblocks everything on real data), then B (small, independent), then A
+(largest), with D woven in per item. Run O3's scale read before drafting A1 —
+a 15-minute shard read that decides whether "no global scale word" survives;
+don't spec the layout first.
+
+Nothing serves until A lands: attention/GDN/indexer/shared-expert weights are
+MXFP8 and the no-dequant rule leaves no BF16 path, so A is the critical path.
+B and C land first as validated increments (the MTP drafter and the converter),
+not as a servable artifact.
+
+Lane note: the artifact and kernels serve both lanes, and the 5090 (`sm_120a`)
+is the default build target — the MXFP8 compile probe covers both `sm_120a` and
+`sm_121a`, and each evidence row in D records which lane it came from. If E1
+resolves benignly, the artifact shrinks from ~126 GB toward ~70–75 GB (MXFP8
+dense leaves + a ~225 MB PLE; order estimate pending C), which materially
+changes the 5090 tiered picture (headroom against the 73.7 GiB SP-7 tiered
+load ceiling).
 
 ## 8. Open questions
 
-- **O1** PLE runtime pinning: does the PLE stage/file page-in path assume the
-  FP8 row format, or is the format carried per artifact? (verify first, §6)
-- **O2** tcgen05 MXFP8 MMA availability on `sm_121a` (probe, A4).
-- **O3** UE8M0 exponent bias in the ModelOpt export (read a `weight_scale`
-  row from a shard during C2; likely bias-127).
+- **O1** (re-scoped) the QAD packer's PLE row-space/compaction scheme — the
+  mapping from the vendor pyramid (16 prime-sized ~20M-row tables, hashed into
+  a 320,001,536-row space) to the QAD shards (11 × ~2.5M rows). Resolved
+  negative on the original premise: the runtime pins the FP8 row format AND the
+  exact table byte length as compile-time constants (`gather_ple_fp8` asserts
+  320,001,536 × 160). The open part is the packer's mapping (E1, §6).
+- **O2** (resolved) MXFP8 MMA exists on both lanes via `mma.sync
+  .kind::mxf8f6f4.block_scale ... ue8m0` (compile-verified `sm_120a` +
+  `sm_121a`, CUDA 13.4.92); tcgen05 is unsupported on both and is not the
+  repo's MMA family. The GB10 throughput microbench remains (A4).
+- **O3** UE8M0 exponent bias in the ModelOpt export, and whether the MXFP8
+  pairs carry any global scale word (read a `weight_scale` row from a shard;
+  likely bias-127). Runs before drafting A1, not during C2.
 - **O4** A4-for-drafter calibration: only if W4A16 decode cost is visible in
   profiles; would need real calibration data and would deviate from the
   source-declared contract.
-- **O5** shared-expert MXFP8: joins the routed-expert wrapper's dense side or
-  a separate projection route (wrapper topology decision during A3).
+- **O5** (resolved) the shared expert is bound through the dense `projection()`
+  route (`load_plan.cpp:106-108`); A3's format-set extension plus one more A4
+  kernel site. No wrapper-topology decision.
 
 ## 9. Explicitly out of scope
 

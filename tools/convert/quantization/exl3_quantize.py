@@ -52,18 +52,10 @@ def _validate_integer_rate(k2: int) -> None:
 
 
 def _codebook_values(codebook: str, device: torch.device) -> torch.Tensor:
-    """float32 codebook values of all 65,536 states, [65536].
-
-    The codebooks map some states to NaN bit patterns (the LOP3 fold can pair opposite-signed
-    infinities). No usable ring visits them, but a NaN squared error would propagate through
-    ``torch.min`` and poison the accumulated costs, so those states carry +inf instead and the
-    DP excludes them naturally.
-    """
+    """float32 codebook values of all 65,536 states, [65536]."""
 
     bits = exl3.codebook_bits(np.arange(1 << STATE_BITS, dtype=np.uint16), codebook)
-    values = bits.view(np.float16).astype(np.float32)
-    values[np.isnan(values)] = np.inf
-    return torch.as_tensor(values, device=device)
+    return torch.as_tensor(bits.view(np.float16).astype(np.float32), device=device)
 
 
 # ---------------------------------------------------------------------------

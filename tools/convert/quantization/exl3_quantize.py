@@ -657,3 +657,97 @@ def g_scale_search(
             offset = max(-0.5, min(0.5, 0.5 * (y0 - y2) / denom))
     g_scale = max(fine[best] + offset * step, 0.01)
     return g_scale, mse_fine[best]
+
+
+# ---------------------------------------------------------------------------
+# Post-quantization scale refit (step 3 polish)
+# ---------------------------------------------------------------------------
+
+
+def refit_scales(
+    weight: torch.Tensor,  # [k, n] float32, the ORIGINAL-basis weight
+    weight_inner_q: torch.Tensor,  # [k, n] float32, the quantized inner weight (trellis fixed)
+    suh: torch.Tensor,  # [k] float32, the stored input scales
+    svh: torch.Tensor,  # [n] float32, the stored output scales
+    hessian: torch.Tensor,  # [k, k] float32, the damped ORIGINAL-basis Hessian
+    *,
+    rounds: int = 2,
+    chunk: int = 16384,
+    damping_share: float = 0.0,
+) -> tuple[torch.Tensor, torch.Tensor, float, float]:
+    """Refit the stored per-channel scales to the quantized weight in the Hessian metric,
+    holding the trellis fixed -- free at inference, since the decode applies the same scales.
+
+    The current reconstruction is ``Q = diag(suh) * Hn_k * weight_inner_q * Hn_n * diag(svh)``
+    (section 2.1). Per output column the optimal scale is the closed form
+    ``c_n = (q_n^T H w_n) / (q_n^T H q_n)``; per input row the scales solve
+    ``((Q Q^T) ⊙ H) r = rowsum(Q ⊙ (H W))`` with a small diagonal lift for the solve.
+    Alternating the two fits, each round rescales Q and the stored scale vectors in lockstep.
+
+    ``damping_share`` is the share of the Hessian's mean diagonal that the capture added;
+    it is taken back out of the diagonal for the reported error only. The fits themselves use
+    the Hessian as given (damped).
+
+    Returns ``(suh, svh, error_before, error_after)`` with the errors normalized as
+    ``trace(E H E^T) / trace(W H W^T)``.
+    """
+
+    if weight.shape != weight_inner_q.shape:
+        raise ValueError("refit_scales expects the original and inner weights to share shape")
+    k, n = weight.shape
+    device = weight.device
+    h = hessian.to(device=device, dtype=torch.float32)
+    if damping_share > 0.0:
+        h_err = h.clone()
+        h_err.diagonal().sub_(damping_share * h.diagonal().mean().item())
+    else:
+        h_err = h
+    su = suh.reshape(k, 1).to(device=device, dtype=torch.float32).clone()
+    sv = svh.reshape(1, n).to(device=device, dtype=torch.float32).clone()
+
+    # H @ W once (streamed over columns), reused by both fits; the normalizer trace(W H W^T).
+    hw = torch.empty((k, n), dtype=torch.float32, device=device)
+    den = 0.0
+    den_err = 0.0
+    for a in range(0, n, chunk):
+        b = min(a + chunk, n)
+        wc = weight[:, a:b].to(device=device, dtype=torch.float32)
+        hw[:, a:b] = h @ wc
+        den += float((wc * hw[:, a:b]).sum())
+        if h_err is not h:
+            den_err += float((wc * (h_err @ wc)).sum())
+    if h_err is h:
+        den_err = den
+
+    def err(reconstruction: torch.Tensor) -> float:
+        total = 0.0
+        for a in range(0, n, chunk):
+            b = min(a + chunk, n)
+            e = weight[:, a:b].to(device=device, dtype=torch.float32) - reconstruction[:, a:b]
+            total += float((e * (h_err @ e)).sum())
+        return total / max(den_err, 1e-30)
+
+    q = decode_composition(su.reshape(-1), weight_inner_q, sv.reshape(-1))
+    e_before = err(q)
+    for _ in range(rounds):
+        # Output-side scales: the closed form per column.
+        num = torch.zeros(n, device=device)
+        dn = torch.zeros(n, device=device)
+        for a in range(0, n, chunk):
+            b = min(a + chunk, n)
+            hq = h @ q[:, a:b]
+            num[a:b] = (q[:, a:b] * hw[:, a:b]).sum(dim=0)
+            dn[a:b] = (q[:, a:b] * hq).sum(dim=0)
+        c = torch.where(dn > 1e-30, num / dn.clamp(min=1e-30), torch.ones_like(num))
+        q = q * c.view(1, n)
+        sv = sv * c.view(1, n)
+        # Input-side scales: the coupled solve, with a diagonal lift for stability.
+        a_mat = (q @ q.T) * h
+        b_vec = (q * hw).sum(dim=1)
+        a_mat.diagonal().add_(1e-6 * a_mat.diagonal().mean())
+        r = torch.linalg.solve(a_mat, b_vec)
+        r = torch.where(torch.isfinite(r) & (r > 0), r, torch.ones_like(r))
+        q = q * r.view(k, 1)
+        su = su * r.view(k, 1)
+    e_after = err(q)
+    return su.reshape(-1), sv.reshape(-1), e_before, e_after

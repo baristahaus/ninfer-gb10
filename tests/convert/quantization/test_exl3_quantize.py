@@ -338,3 +338,37 @@ def test_g_scale_search_beats_the_default_scale():
     # And the optimum the search claims is genuinely better than its coarse neighbors.
     for neighbor in (0.8, 1.3):
         assert e_searched < nmse_at(neighbor), f"searched scale loses to neighbor {neighbor}"
+
+
+# ---------------------------------------------------------------------------
+# Post-quantization scale refit (step 3 polish)
+# ---------------------------------------------------------------------------
+
+
+def test_refit_scales_polish_the_stored_scales():
+    """The full pipeline -- incoherence, LDLQ with the per-tensor metric factor, refit --
+    must end with the refit improving the original-basis Hessian error, and the returned
+    scales must reproduce exactly the error the refit reports."""
+    torch.manual_seed(17)
+    k, n = 256, 512
+    w = torch.randn(k, n, device="cuda") * 0.05
+    a = torch.randn(k, k, device="cuda") * 0.05
+    h = a @ a.T + torch.eye(k, device="cuda") * 0.1
+    su = torch.sign(torch.randn(k, device="cuda"))
+    sv = torch.sign(torch.randn(n, device="cuda"))
+    suh, svh, inner, _ = q.incoherence(w, su, sv)
+    factor = q.scaled_ldl(h, suh)
+    inner_q, _ = q.ldlq(inner, factor, 2, "mcg")
+    suh2, svh2, e_before, e_after = q.refit_scales(w, inner_q, suh, svh, h, rounds=2)
+    assert e_after < e_before, f"refit worsened the error: {e_before} -> {e_after}"
+
+    # The returned scales must reproduce the reported error exactly.
+    def orig_err(reconstruction):
+        e = w - reconstruction
+        return float((e * (h @ e)).sum()) / float((w * (h @ w)).sum())
+
+    assert abs(orig_err(q.decode_composition(suh2, inner_q, svh2)) - e_after) < 1e-6
+
+    # And a zero-round refit must report the unrefit error for the given scales.
+    _, _, e0, e0b = q.refit_scales(w, inner_q, suh, svh, h, rounds=0)
+    assert abs(e0 - e0b) < 1e-9 and abs(e0 - e_before) < 1e-6

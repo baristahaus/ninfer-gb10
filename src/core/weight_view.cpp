@@ -85,6 +85,12 @@ WeightGeometry weight_geometry(QType format, QuantLayout layout,
     out.layout = layout;
     out.shape.assign(shape.begin(), shape.end());
     out.elements = weight_element_count(shape);
+    if (layout == QuantLayout::Exl3ExpertBank) {
+        // Mixed per-expert bitrates make the EXL3 bank's byte size the sum of the experts'
+        // own trellis extents: the geometry resolves directory-aware from the payload
+        // (ninfer::artifact::describe_exl3_bank), never from the shape alone.
+        throw std::invalid_argument("EXL3 expert bank geometry resolves directory-aware");
+    }
     if (layout == QuantLayout::Contiguous) {
         out.bytes = out.code_bytes = mul(out.elements, word_bytes(format));
         if (shape.size() == 2) {

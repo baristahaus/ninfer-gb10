@@ -277,6 +277,40 @@ prepare_sparse_moe_weights(const WeightInput& router, const WeightInput& shared_
     const auto down        = prepare_linear_weight(shared_down);
     const auto gate_format = view_parent(expert_gate_up.front())->geometry.format;
     const auto down_format = view_parent(expert_down.front())->geometry.format;
+    // SP-7 EXL3: gate and up are separate complete banks (contract 2.2), paired per expert
+    // in binding order (gate, up, gate, up, ...). The route is untiered: SP-4's tiered
+    // packing assumes one constant per-expert byte size, which per-expert bitrates break
+    // (contract section 5 refuses the split at plan time).
+    if (gate_format == QType::EXL3) {
+        require(down_format == QType::EXL3,
+                 "SparseMoe EXL3 gate/up banks require an EXL3 down bank");
+        require(expert_gate_up.size() % 2 == 0, "SparseMoe EXL3 gate/up views must pair");
+        std::vector<WeightInput> gates;
+        std::vector<WeightInput> ups;
+        gates.reserve(expert_gate_up.size() / 2);
+        ups.reserve(expert_gate_up.size() / 2);
+        for (std::size_t index = 0; index < expert_gate_up.size(); ++index) {
+            (index % 2 == 0 ? gates : ups).push_back(expert_gate_up[index]);
+        }
+        const auto gate_bank = single(gates);
+        const auto up_bank   = single(ups);
+        const auto down_bank = single(expert_down);
+        for (const auto* bank : {&gate_bank.weight, &up_bank.weight, &down_bank.weight}) {
+            require(bank->qtype == QType::EXL3 && bank->layout == QuantLayout::Exl3ExpertBank,
+                    "SparseMoe EXL3 banks must resolve as complete EXL3 expert banks");
+            require(bank->exl3_codebook == 1 || bank->exl3_codebook == 2,
+                    "SparseMoe refuses 3INST EXL3 banks until a qualified route exists");
+            require(bank->exl3_experts == 256 && bank->payload != nullptr,
+                    "SparseMoe EXL3 bank geometry differs from the routed bank contract");
+        }
+        require(gate_bank.weight.k == 2048 && gate_bank.weight.exl3_rows_per_expert == 512 &&
+                    up_bank.weight.k == 2048 && up_bank.weight.exl3_rows_per_expert == 512 &&
+                    down_bank.weight.k == 512 && down_bank.weight.exl3_rows_per_expert == 2048,
+                "SparseMoe EXL3 bank shapes differ from the 35B bank contract");
+        return {router_bank.weight, Weight{},       down_bank.weight, shared.weight,
+                down.weight,        Weight{},       Weight{},         0,
+                nullptr,            nullptr,        gate_bank.weight, up_bank.weight};
+    }
     require(router_bank.weight.qtype == QType::BF16 && shared.weight.qtype == QType::Q8_G32_FP16 &&
                 down.weight.qtype == QType::Q8_G32_FP16 &&
                 ((gate_format == QType::Q4_G64_FP16 &&

@@ -51,6 +51,18 @@ struct Weight {
     std::int64_t scale_nb[4]   = {0, 0, 0, 0};
     float weight_scale_divisor = 0.0F;
     float input_scale_divisor  = 0.0F;
+
+    // EXL3 expert bank (SP-7; QType::EXL3, layout Exl3ExpertBank). `payload` addresses the
+    // complete bank; the per-expert directory at its start resolves each expert's trellis
+    // extent and bitrate at runtime, so mixed-width banks need no host-side tables. Plane
+    // offsets are payload-relative; the directory entry is {u64 offset, u32 extent, u8 2K,
+    // three zero bytes} per expert.
+    std::uint64_t exl3_trellis_offset = 0;
+    std::uint64_t exl3_suh_offset      = 0;
+    std::uint64_t exl3_svh_offset      = 0;
+    std::uint32_t exl3_codebook        = 0;  // 0 = 3inst, 1 = mcg, 2 = mul1
+    std::uint32_t exl3_experts         = 0;
+    std::uint32_t exl3_rows_per_expert = 0;
 };
 
 } // namespace ninfer

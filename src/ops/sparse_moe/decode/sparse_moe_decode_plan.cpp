@@ -18,19 +18,27 @@ std::size_t sparse_moe_decode_workspace_bytes() {
     return layout.peak_bytes(1);
 }
 
+std::size_t sparse_moe_exl3_decode_workspace_bytes() {
+    WorkspaceLayoutBuilder layout;
+    (void)allocate_sparse_moe_decode_workspace(layout, true);
+    return layout.peak_bytes(1);
+}
+
 SparseMoeDecodePlan resolve_sparse_moe_decode_plan(QType routed_gate_up, QType routed_down,
                                                    const SparseMoeHints& hints) {
+    const bool exl3_profile = routed_gate_up == QType::EXL3 && routed_down == QType::EXL3;
     const bool main_profile =
         routed_gate_up == QType::Q4_G64_FP16 &&
         (routed_down == QType::Q5_G64_FP16 || routed_down == QType::Q6_G64_FP16);
     const bool mtp_profile =
         routed_gate_up == QType::Q8_G32_FP16 && routed_down == QType::Q8_G32_FP16;
-    if (!main_profile && !mtp_profile) {
+    if (!exl3_profile && !main_profile && !mtp_profile) {
         throw std::invalid_argument("sparse_moe: unsupported routed codec profile");
     }
 
     SparseMoeDecodePlan plan;
-    plan.workspace_bytes = sparse_moe_decode_workspace_bytes();
+    plan.workspace_bytes = exl3_profile ? sparse_moe_exl3_decode_workspace_bytes()
+                                       : sparse_moe_decode_workspace_bytes();
     if (hints.next_weight_prefetch != nullptr) {
         plan.next_weight_prefetch = hints.next_weight_prefetch;
         plan.next_weight_prefetch_bytes =

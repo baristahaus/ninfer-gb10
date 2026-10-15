@@ -33,6 +33,13 @@ struct SparseMoeWeights {
     // tier, the low bits are the expert's compacted rank in its bank. Null selects the
     // untiered direct path where every expert reads the device banks at its own rank.
     const std::uint32_t* expert_residency = nullptr;
+    // SP-7 EXL3: gate and up are separate banks (one fused weight cannot carry two input-side
+    // vectors). A non-null `exl3_routed_gate.payload` marks the EXL3 route: `routed_gate_up`
+    // and the warm twins stay null, `routed_down` carries the EXL3 down bank, and every
+    // routed projection carries its own transforms. The route is untiered until the SP-4
+    // variable-extent change (contract section 5).
+    Weight exl3_routed_gate;
+    Weight exl3_routed_up;
 };
 
 enum class SparseMoeEpilogue : std::uint8_t {

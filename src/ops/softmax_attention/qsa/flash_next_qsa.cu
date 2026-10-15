@@ -1593,8 +1593,8 @@ void flash_next_project_query_gate(const Tensor& input, const Weight& query_gate
     }
     require_weight(query_gate, 12288, 2560,
                    "flash_next_project_query_gate: invalid packed weight",
-                   WeightFormats::Bf16OrFp8);
-    if (tokens == 1) {
+                   WeightFormats::Bf16Fp8OrMxfp8);
+    if (tokens == 1 && (fp8_row_weight(query_gate) || query_gate.qtype == QType::BF16)) {
         if (fp8_row_weight(query_gate)) {
             detail::flash_next::launch_fp8_query_gate_decode(input, query_gate, query, gate,
                                                              stream);
@@ -1685,13 +1685,17 @@ void flash_next_qsa(const Tensor& input, const Tensor& cache_positions,
         throw std::invalid_argument("flash_next_qsa: invalid auxiliary cache geometry");
     }
     require_weight(weights.query_gate, 12288, 2560,
-                   "flash_next_qsa: invalid packed query/gate weight", WeightFormats::Bf16OrFp8);
-    require_weight(weights.key, 512, 2560, "flash_next_qsa: invalid key weight");
-    require_weight(weights.value, 512, 2560, "flash_next_qsa: invalid value weight");
+                   "flash_next_qsa: invalid packed query/gate weight", WeightFormats::Bf16Fp8OrMxfp8);
+    require_weight(weights.key, 512, 2560, "flash_next_qsa: invalid key weight",
+                   WeightFormats::Bf16Fp8OrMxfp8);
+    require_weight(weights.value, 512, 2560, "flash_next_qsa: invalid value weight",
+                   WeightFormats::Bf16Fp8OrMxfp8);
     require_weight(weights.output, 2560, 6144, "flash_next_qsa: invalid output weight",
-                   WeightFormats::Bf16OrFp8);
-    require_weight(weights.index_query, 512, 2560, "flash_next_qsa: invalid index query weight");
-    require_weight(weights.index_key, 128, 2560, "flash_next_qsa: invalid index key weight");
+                   WeightFormats::Bf16Fp8OrMxfp8);
+    require_weight(weights.index_query, 512, 2560, "flash_next_qsa: invalid index query weight",
+                   WeightFormats::Bf16Fp8OrMxfp8);
+    require_weight(weights.index_key, 128, 2560, "flash_next_qsa: invalid index key weight",
+                   WeightFormats::Bf16Fp8OrMxfp8);
     auto scope = workspace.scope();
     Tensor query = workspace.alloc(DType::BF16, {6144, tokens});
     Tensor gate = workspace.alloc(DType::BF16, {6144, tokens});

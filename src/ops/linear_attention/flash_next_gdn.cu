@@ -203,15 +203,16 @@ void validate(const Tensor& input, const FlashNextGdnWeights& weights,
         throw std::invalid_argument("flash_next_gdn: invalid exact tensor geometry");
     }
     require_weight(weights.a_projection, kHeads, kHidden,
-                   "flash_next_gdn: invalid a projection");
+                   "flash_next_gdn: invalid a projection", WeightFormats::Bf16Fp8OrMxfp8);
     require_weight(weights.b_projection, kHeads, kHidden,
-                   "flash_next_gdn: invalid b projection");
+                   "flash_next_gdn: invalid b projection", WeightFormats::Bf16Fp8OrMxfp8);
     require_weight(weights.query_key_value, kConvolution, kHidden,
-                   "flash_next_gdn: invalid qkv projection", WeightFormats::Bf16OrFp8);
+                   "flash_next_gdn: invalid qkv projection", WeightFormats::Bf16Fp8OrMxfp8);
     require_weight(weights.output_gate, kValue, kHidden,
-                   "flash_next_gdn: invalid output gate projection", WeightFormats::Bf16OrFp8);
+                   "flash_next_gdn: invalid output gate projection",
+                   WeightFormats::Bf16Fp8OrMxfp8);
     require_weight(weights.output, kHidden, kValue, "flash_next_gdn: invalid output projection",
-                   WeightFormats::Bf16OrFp8);
+                   WeightFormats::Bf16Fp8OrMxfp8);
 }
 
 } // namespace

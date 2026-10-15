@@ -14,7 +14,7 @@ require_binary "$BENCH_BIN"
 require_untraced_build
 
 log "building and running the memory bandwidth probe"
-if "$NVCC" -O3 -std=c++17 -arch="$NINFER_CUDA_ARCH" tools/hbm_bandwidth_probe.cu -o "$dir/hbm_bandwidth_probe" \
+if "$NVCC" -O3 -std=c++17 -arch="sm_${NINFER_CUDA_ARCH}" tools/hbm_bandwidth_probe.cu -o "$dir/hbm_bandwidth_probe" \
     >"$dir/probe_build.log" 2>&1; then
     "$dir/hbm_bandwidth_probe" --peak-gbps 273 >"$dir/bandwidth.txt" 2>&1 || true
 else

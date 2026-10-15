@@ -31,7 +31,7 @@ scratch=$dir/scratch.bin
 
 echo "[gb10] building file-page probe" >&2
 ARCH=${NINFER_CUDA_ARCH:-$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader,nounits | head -1 | tr -d .)a}
-"$NVCC" -O3 -std=c++17 -arch="$ARCH" tools/gb10/file_page_probe.cu -o "$dir/file_page_probe"
+"$NVCC" -O3 -std=c++17 -arch="sm_${ARCH}" tools/gb10/file_page_probe.cu -o "$dir/file_page_probe"
 echo "[gb10] evictor: $evictor" >&2
 
 {

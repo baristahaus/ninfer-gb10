@@ -372,3 +372,86 @@ def test_refit_scales_polish_the_stored_scales():
     # And a zero-round refit must report the unrefit error for the given scales.
     _, _, e0, e0b = q.refit_scales(w, inner_q, suh, svh, h, rounds=0)
     assert abs(e0 - e0b) < 1e-9 and abs(e0 - e_before) < 1e-6
+
+
+# ---------------------------------------------------------------------------
+# Per-linear quantization route (step 4: the assembled tensor set)
+# ---------------------------------------------------------------------------
+
+
+def _inner_round_trip(trellis: torch.Tensor, k2: int, codebook: str, k: int, n: int) -> torch.Tensor:
+    """The full artifact round trip: packed trellis -> oracle states -> codebook values ->
+    ring (lane) positions -> the row-major inner weight [k, n]."""
+    cb = q._codebook_values(codebook, trellis.device)
+    rows, cols = exl3.tile_element_order()
+    seq = torch.as_tensor(rows * 16 + cols, device=trellis.device)
+    tiles_k, tiles_n = k // 16, n // 16
+    inner = torch.zeros(tiles_k, tiles_n, 256, dtype=torch.int64, device=trellis.device)
+    for tk in range(tiles_k):
+        for tn in range(tiles_n):
+            t = trellis[tk, tn].cpu().numpy().astype(np.uint16)
+            inner[tk, tn] = torch.as_tensor(exl3.tile_states(t, k2), device=trellis.device)
+    vals = cb[inner][..., torch.argsort(seq)]  # ring -> row-major: the inverse of seq
+    return vals.reshape(tiles_k, tiles_n, 16, 16).permute(0, 2, 1, 3).reshape(k, n)
+
+
+def test_quantize_linear_assembles_the_tensor_set():
+    """Both paths produce the stored tensor set (fp16 scales, packed int16 trellis) whose
+    artifact round trip reproduces the reported NMSE -- the fp16 scale storage alone may
+    differ by roundoff."""
+    torch.manual_seed(21)
+    k, n = 256, 512
+    w = torch.randn(k, n, device="cuda") * 0.05
+    su = torch.sign(torch.randn(k, device="cuda"))
+    sv = torch.sign(torch.randn(n, device="cuda"))
+    a = torch.randn(k, k, device="cuda") * 0.05
+    h_raw = a @ a.T + torch.eye(k, device="cuda") * 0.1
+
+    for tag, out in (("fallback", q.quantize_linear(w, 2, "mcg", su, sv, hessian=None)),
+                     ("hessian", q.quantize_linear(w, 2, "mcg", su, sv, hessian=h_raw))):
+        assert out["suh"].dtype == torch.float16 and out["suh"].shape == (k,)
+        assert out["svh"].dtype == torch.float16 and out["svh"].shape == (n,)
+        assert out["trellis"].dtype == torch.int16
+        assert tuple(out["trellis"].shape) == (k // 16, n // 16, 16)
+        assert out["q_fallback"] == (tag == "fallback")
+        assert out["nmse"] > 0
+        inner_rt = _inner_round_trip(out["trellis"], 2, "mcg", k, n)
+        recon = q.decode_composition(out["suh"].float(), inner_rt, out["svh"].float())
+        nmse_rt = float(((recon - w) ** 2).sum() / (w ** 2).sum())
+        assert abs(nmse_rt - out["nmse"]) < 1e-4, (tag, nmse_rt, out["nmse"])
+        if tag == "hessian":
+            assert out["hessian_err"] is not None and out["hessian_err"] > 0
+        else:
+            assert out["hessian_err"] is None
+
+
+def test_quantize_linear_hessian_path_beats_fallback_in_its_metric():
+    """The feedback and refit optimize the Hessian metric; measured in that metric (the
+    damping share taken out, as the reported error does) the Hessian path must beat the
+    fallback's plain quantization."""
+    torch.manual_seed(21)
+    k, n = 256, 512
+    w = torch.randn(k, n, device="cuda") * 0.05
+    su = torch.sign(torch.randn(k, device="cuda"))
+    sv = torch.sign(torch.randn(n, device="cuda"))
+    a = torch.randn(k, k, device="cuda") * 0.05
+    h_raw = a @ a.T + torch.eye(k, device="cuda") * 0.1
+    sigma = 0.025
+    h_damped = h_raw.clone()
+    h_damped.diagonal().add_(sigma * h_raw.diagonal().mean())
+    h_err = h_damped.clone()
+    h_err.diagonal().sub_((sigma / (1 + sigma)) * h_damped.diagonal().mean())
+
+    def undamped_err(reconstruction):
+        e = w - reconstruction
+        return float((e * (h_err @ e)).sum() / (w * (h_err @ w)).sum())
+
+    out_fb = q.quantize_linear(w, 2, "mcg", su, sv, hessian=None)
+    out_h = q.quantize_linear(w, 2, "mcg", su, sv, hessian=h_raw)
+    suh, svh, inner, _ = q.incoherence(w, su, sv)
+    inner = inner * out_fb["g_scale"]
+    suh = suh / out_fb["g_scale"]
+    inner_q_fb, _ = q.quantize_weight(inner, 2, "mcg")
+    e_fb = undamped_err(q.decode_composition(suh, inner_q_fb, svh))
+    assert out_h["hessian_err"] < 0.9 * e_fb, \
+        f"hessian path {out_h['hessian_err']} did not beat fallback {e_fb} by 10%"

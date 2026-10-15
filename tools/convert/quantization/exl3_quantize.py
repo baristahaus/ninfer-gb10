@@ -751,3 +751,99 @@ def refit_scales(
         su = su * r.view(k, 1)
     e_after = err(q)
     return su.reshape(-1), sv.reshape(-1), e_before, e_after
+
+
+# ---------------------------------------------------------------------------
+# Per-linear quantization route (step 4: the assembled tensor set)
+# ---------------------------------------------------------------------------
+
+
+def quantize_linear(
+    weight: torch.Tensor,  # [k, n] float32, the ORIGINAL basis
+    k2: int,
+    codebook: str,
+    su_signs: torch.Tensor,  # [k] float32, +-1: the shared-per-input signs
+    sv_signs: torch.Tensor,  # [n] float32, +-1: this tensor's output signs
+    hessian: torch.Tensor | None = None,  # [k, k] float32: the RAW (undamped) capture, or None
+    *,
+    sigma_reg: float = 0.025,
+    g_scale: float | None = None,  # a given scale skips the search
+    apply_out_scales: bool | None = None,
+    refit_rounds: int = 2,  # 0 disables the scale polish
+) -> dict:
+    """The per-linear EXL3 quantization route, composing the verified pieces.
+
+    With a Hessian: damp it (``sigma_reg`` times its mean diagonal, the capture's
+    regularization), run the incoherence transforms with the global-scale search, factor the
+    per-tensor metric ``P diag(suh) H diag(suh) P`` (the regularized weight's rows were
+    divided by ``suh`` and Hadamard transformed, so the shared sign-only factorization would
+    weight every row alike while an error in a heavily scaled row returns at full size),
+    quantize with the block-LDLQ error feedback, then refit the stored scales in the
+    original-basis Hessian metric. Without a Hessian (the uncalibrated fallback): the same
+    incoherence and scale search, then the plain quantization with no feedback and no refit.
+
+    Returns the stored tensor set and metrics:
+    ``{"suh" fp16 [k], "svh" fp16 [n], "trellis" int16 [k // 16, n // 16, 8 * k2],
+    "codebook", "k2", "g_scale", "q_fallback", "nmse", "hessian_err"}`` with ``nmse`` the
+    plain original-basis ``|W_q - W|^2 / |W|^2`` and ``hessian_err`` the refit's reported
+    error (the damping share taken back out) on the Hessian path, ``None`` on the fallback.
+    """
+
+    _validate_quantize_rate(k2, codebook)
+    if weight.ndim != 2 or weight.shape[0] % 16 or weight.shape[1] % 16:
+        raise ValueError("quantize_linear expects a [k, n] weight with k, n multiples of 16")
+    device = weight.device
+    k, n = weight.shape
+    su = su_signs.reshape(-1).to(device=device, dtype=torch.float32)
+    sv = sv_signs.reshape(-1).to(device=device, dtype=torch.float32)
+
+    # The capture's damping, applied to the raw Hessian before any use.
+    h_damped = None
+    if hessian is not None:
+        if hessian.shape != (k, k):
+            raise ValueError("quantize_linear expects the Hessian to match the input dimension")
+        h_damped = hessian.to(device=device, dtype=torch.float32).clone()
+        h_damped.diagonal().add_(sigma_reg * h_damped.diagonal().mean())
+
+    # Step 2: the incoherence transforms, then the global scale search on the inner weight.
+    suh, svh, inner, applied = incoherence(
+        weight, su, sv, apply_out_scales=apply_out_scales)
+    if g_scale is None:
+        g_scale, _ = g_scale_search(inner, k2, codebook)
+    inner = inner * g_scale
+    suh = suh / g_scale
+
+    # Step 3: the quantization. The Hessian path feeds back through the per-tensor metric
+    # factor; the fallback quantizes plainly with no feedback.
+    q_fallback = h_damped is None
+    if q_fallback:
+        inner_q, states = quantize_weight(inner, k2, codebook)
+        hessian_err = None
+    else:
+        factor = scaled_ldl(h_damped, suh)
+        inner_q, states = ldlq(inner, factor, k2, codebook)
+        hessian_err = None  # set by the refit below
+
+    # Step 3 polish: the stored scales refit, holding the trellis fixed.
+    if not q_fallback and refit_rounds > 0:
+        damping_share = sigma_reg / (1.0 + sigma_reg)
+        suh, svh, _, hessian_err = refit_scales(
+            weight, inner_q, suh, svh, h_damped,
+            rounds=refit_rounds, damping_share=damping_share)
+
+    # Step 4: the packed tensor set and the metrics.
+    trellis = pack_trellis(states.reshape(-1, TILE_WEIGHTS).to(torch.uint16), k2)
+    trellis = trellis.reshape(k // 16, n // 16, 8 * k2)
+    reconstruction = decode_composition(suh, inner_q, svh)
+    nmse = float(((reconstruction - weight) ** 2).sum() / (weight ** 2).sum())
+    return {
+        "suh": suh.to(torch.float16).contiguous(),
+        "svh": svh.to(torch.float16).contiguous(),
+        "trellis": trellis,
+        "codebook": codebook,
+        "k2": k2,
+        "g_scale": float(g_scale),
+        "q_fallback": q_fallback,
+        "nmse": nmse,
+        "hessian_err": hessian_err,
+    }

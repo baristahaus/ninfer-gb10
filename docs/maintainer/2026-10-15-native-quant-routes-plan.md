@@ -1,7 +1,10 @@
 # Plan: native quantization routes for alternate checkpoint setups (QAD-class)
 
-Status: evaluated and approved for execution (2026-10-15); this revision folds the
-closed E1 verification and its binding consequence in (E1 closed 2026-10-15).
+Status: C, A1-A3, B1-B2 and E2a-E2c are executed (2026-10-15: the converter, binder
+routes and both storage specs landed as a274d9aa/8145f705/449edc04; the conversion run
+completed and verified — see section 10); A4, B3 and E2d (the kernel routes) remain,
+and nothing serves until they land. Earlier: evaluated and approved 2026-10-15, with
+E1/O3 and the first-hand shard facts folded in.
 Branch `qad-native-quant-plan`. Corrections are grounded in code reads plus compile
 probes on the 5090 box (CUDA 13.4.92); the `/nfs` checkpoint is now mounted on
 the 5090 box (verified 2026-10-15), so the PLE facts below are first-hand reads
@@ -53,7 +56,7 @@ in this plan is gated by an unknown row space.
 | Routed experts (48 layers) | NVFP4 W4A4: `weight` U8 `[n,k/2]` + `weight_scale` F8_E4M3 `[n,k/16]` + `weight_scale_2` F32 + `input_scale` F32 | same — **native ingestion already exists** |
 | PLE n-gram tables | **NVFP4 group-16**: `weight` U8 `[2500012, 80]` (=160 el/row) + `weight_scale` F8_E4M3 `[2500012, 10]` + a global `weight_scale_2` F32 scalar **present with a real value** (≈3.3242362e-05 — the decode includes it); **128 shards × 2,500,012 rows = 320,001,536 rows — the same row space and shard split as our source (first-hand, §6)**, spread across 17 of the 41 model files; ~28.8 GB; values retrained during QAD distillation (E1); the three metadata tensors carry the vendor hash constants, bit-identical to the runtime's (§6) | FP8 shards (51.2 GB table; 320,001,536 rows × 160 B; the vendor's FP8 table via the RadixArk source) |
 | Attention, GDN, QSA-indexer, shared-expert projections | **MXFP8**: `weight` F8_E4M3 `[N,K]` + `weight_scale` U8 UE8M0 `[N,K/32]`; no `scale_2`, no `input_scale`; UE8M0 bias-127 (O3 resolved, §8) | BF16 |
-| PLE projections/conv, routers, hyper-connections, norms, embeddings, lm_head | BF16/F32 | BF16 — matches |
+| PLE projections/conv, routers, hyper-connections, norms, embeddings, lm_head | BF16/F32 — **except the 97 main-model `hc_norm` and PLE norm vectors, which are F32 in this source** (the MTP trunk's are BF16) | BF16; the artifact keeps the vendor BF16 contract for the norms with round-to-nearest conversion of the F32 sources — a real requant of those 97 vectors, pinned in the closed set, not a verbatim copy |
 | MTP drafter trunk (fc, pre-norms, hyper-connections, self_attn + indexer, mlp.gate, shared_expert) | BF16 (names match our `_mtp_specs()` inventory exactly) | BF16 — matches |
 | MTP routed experts (1 layer, 512 experts) | **NVFP4 W4A16**: `weight` U8 `[640,1280]` per proj + E4M3 scales + F32 `weight_scale_2`; **no `input_scale`** | BF16 dense (fp8mtp pass optionally re-emits A4 banks) |
 | Draft output head | none (tied to 248,320 `lm_head`) | none — converter builds the 147,456-row shortlist head from `lm_head` (unchanged machinery) |
@@ -345,7 +348,36 @@ which still changes the 5090 tiered picture materially (headroom against the
   route (`load_plan.cpp:106-108`); A3's format-set extension plus one more A4
   kernel site. No wrapper-topology decision.
 
-## 9. Explicitly out of scope
+## 9. Conversion run record (executed 2026-10-15, the QAD-native artifact)
+
+The tooling (a274d9aa formats/layouts/codecs/AllowA16/recipe/oracles, 8145f705 binder
+routes, 449edc04 the NVFP4 PLE binding and package-boundary refusal) produced
+`out/qwen3_8_flash_next_125b_a6b_qad_native.ninfer` — 1,634 objects, 105,891,776,256
+bytes (98.6 GiB), weights id `qad_native`, converted in 2,069 s. Gates: the closed-set
+validation passed with no unexpected or missing tensors; per-tensor signatures were
+verified against the real 43-file checkpoint before writing; the post-write reopen and
+payload verification (D2) matched all 1,634 payloads by full SHA-256; D1's 68 oracle
+tests passed (independent float64 E4M3×2^(e−127) and NVFP4 decodes at real shapes); the
+C++ binder smoke validated all objects and bound the full text+MTP+vision plan (1,625
+device objects, 76.9 GB device capacity, PLE file-backed); the vendor regression held
+(fp8mtp load-plan unchanged, the focused Flash-Next ctest set green). Payload
+exactness: the PLE object is 320,001,536×90+4 bytes exactly; the MTP bank planes match
+the bank geometry to the byte on the AllowA16 + weight_divisor contract.
+
+Deviations from the guidance's letter, recorded: the run used a dedicated
+`qad_convert` module rather than extending the vendor converter (the vendor route and
+its closed contract stay untouched — zero regression surface — at the cost of a
+duplicated packing surface to maintain); the run executed on CPU (the venv torch is
+CPU-only and pick_device fell back; encoder determinism means the verification is
+unaffected); and the 97 F32 main-model norm vectors were rounded to the vendor BF16
+contract (section 1's corrected row) rather than kept F32.
+
+Serving remains blocked at the package boundary by design: `model.cpp` refuses the
+NVFP4 PLE with a named error until A4 (MXFP8 MMA kernels + the GB10 microbench), B3
+(the W4A16 MTP MoE route) and E2d (the NVFP4 PLE gather) land — the plan's "nothing
+serves until A".
+
+## 10. Explicitly out of scope
 
 - Conversion-side dequant-to-BF16 (user decision, 2026-10-15).
 - Reduced draft vocabulary (the ko64k runtime trick); draft/verify/accept

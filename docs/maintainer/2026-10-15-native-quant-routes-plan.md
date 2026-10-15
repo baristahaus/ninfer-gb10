@@ -3,13 +3,17 @@
 Status: evaluated and approved for execution (2026-10-15); this revision folds the
 closed E1 verification and its binding consequence in (E1 closed 2026-10-15).
 Branch `qad-native-quant-plan`. Corrections are grounded in code reads plus compile
-probes on the 5090 box (CUDA 13.4.92); shard-side facts remain the GB10-side
-header reads recorded in section 1 (the `/nfs` checkpoint is not mounted
-on the 5090 box), with the PLE row superseded by E1's verified geometry.
+probes on the 5090 box (CUDA 13.4.92); the `/nfs` checkpoint is now mounted on
+the 5090 box (verified 2026-10-15), so the PLE facts below are first-hand reads
+from the shards and both model cards.
 Tracking: beads `ninfer-gb10-<id>` (created with this plan).
 Origin of the request: `/nfs` checkpoint
 `edp1096/Huihui-Qwen3.8-Flash-Next-abliterated-NVFP4-QAD` (93 GB) — a Qwen3.8
-Flash-Next 125B-A6B whose quantization mix differs from our closed recipe. The
+Flash-Next 125B-A6B of a different training lineage (the LIL QAD student,
+abliterated and ModelOpt-requantized) whose quantization mix differs from our
+closed recipe. Its weights were trained in the source-declared formats (the
+student's forward pass used the quantized weights), which is the strongest case
+for serving them natively. The
 user decision governing this plan: **no dequant-to-BF16 fallbacks; alternate
 quant setups are handled natively** (converter packs, artifact stores, kernels
 compute in the source-declared format).
@@ -47,7 +51,7 @@ in this plan is gated by an unknown row space.
 | Component | Format on disk (verified dtypes) | Our artifact today |
 |---|---|---|
 | Routed experts (48 layers) | NVFP4 W4A4: `weight` U8 `[n,k/2]` + `weight_scale` F8_E4M3 `[n,k/16]` + `weight_scale_2` F32 + `input_scale` F32 | same — **native ingestion already exists** |
-| PLE n-gram tables | **NVFP4 group-16**: `weight` U8 `[2500012, 80]` (=160 el/row) + `weight_scale` F8_E4M3 `[2500012, 10]`; **128 shards × 2,500,012 rows = 320,001,536 rows — the same row space and shard split as our source (E1-verified, §6)**; ~28.8 GB; values retrained during QAD distillation (E1); no global `scale_2`; three corrupt metadata tensors covered by the converter's `_PLE_METADATA` ignore-set | FP8 shards (51.2 GB table; 320,001,536 rows × 160 B; the RadixArk source's own values) |
+| PLE n-gram tables | **NVFP4 group-16**: `weight` U8 `[2500012, 80]` (=160 el/row) + `weight_scale` F8_E4M3 `[2500012, 10]` + a global `weight_scale_2` F32 scalar **present with a real value** (≈3.3242362e-05 — the decode includes it); **128 shards × 2,500,012 rows = 320,001,536 rows — the same row space and shard split as our source (first-hand, §6)**, spread across 17 of the 41 model files; ~28.8 GB; values retrained during QAD distillation (E1); the three metadata tensors carry the vendor hash constants, bit-identical to the runtime's (§6) | FP8 shards (51.2 GB table; 320,001,536 rows × 160 B; the vendor's FP8 table via the RadixArk source) |
 | Attention, GDN, QSA-indexer, shared-expert projections | **MXFP8**: `weight` F8_E4M3 `[N,K]` + `weight_scale` U8 UE8M0 `[N,K/32]` | BF16 |
 | PLE projections/conv, routers, hyper-connections, norms, embeddings, lm_head | BF16/F32 | BF16 — matches |
 | MTP drafter trunk (fc, pre-norms, hyper-connections, self_attn + indexer, mlp.gate, shared_expert) | BF16 (names match our `_mtp_specs()` inventory exactly) | BF16 — matches |
@@ -150,9 +154,9 @@ prefill GPU time; gdn.prefill 35%).
   `model-*.safetensors` + `hybrid-main-*.safetensors`; accept
   `Qwen4ExpForConditionalGeneration`; read `mtp_num_hidden_layers` from
   `text_config`.
-- **C2 signatures.** MXFP8 pairs (A2), W4A16 banks (B2), PLE per E1's closed
-  findings (128 NVFP4 group-16 shards, no `scale_2`, corrupt metadata via the
-  existing ignore-set);
+- **C2 signatures.** MXFP8 pairs (A2), W4A16 banks (B2), PLE per the verified
+  shard facts (128 NVFP4 group-16 shard pairs + the global `weight_scale_2`
+  scalar; hash-constant metadata via the existing ignore-set);
   closed-set validation updated so *unexpected* tensors still fail loudly.
 - **C3 recipe.** `qwen3_8_flash_next_125b_a6b_qad_native-v1`, own output
   basename, conversion report with the usual payload verification.
@@ -193,15 +197,22 @@ trigram heads). `gather_ple_fp8` throws unless the table is exactly
 runtime constant E2c must make recipe-dependent; `kPleRows` and the hash constants
 are unchanged.
 
-Shard facts (E1-verified 2026-10-15, CPU-only, on the QAD layer-1 PLE): 128 NVFP4
-shards × 2,500,012 rows, width 160, E2M1 low-nibble-first + per-16 E4M3 scales —
-the community sidecar convention (`primitive-ai/Qwen3.8-Flash-Next-PLE-quant`);
-128 × 2,500,012 = 320,001,536 = exactly `kPleRows` — the same row space and the
-same shard split as our RadixArk source: no compaction, no pruning, no second fixed
-dimension. QAD omits the global `scale_2`; its three metadata tensors are corrupt
-and safely ignored (the converter's `_PLE_METADATA` ignore-set already covers
-them). At ~90 B/row (codes + scales) the table is ~28.8 GB NVFP4 vs our 51.2 GB
-FP8.
+Shard facts (first-hand reads 2026-10-15, from the now-mounted `/nfs` checkpoint):
+128 NVFP4 shards × 2,500,012 rows, width 160, E2M1 low-nibble-first + per-16 E4M3
+scales — the community sidecar convention
+(`primitive-ai/Qwen3.8-Flash-Next-PLE-quant`); 128 × 2,500,012 = 320,001,536 =
+exactly `kPleRows` — the same row space and the same shard split as our RadixArk
+source: no compaction, no pruning, no second fixed dimension. A global
+`weight_scale_2` F32 scalar is present with a real value (3.324236240587197e-05),
+so the decode is code × block scale × global scale — the standard NVFP4 pattern;
+the earlier "QAD omits the global scale_2" reading is corrected. The three
+metadata tensors are not corrupt: they carry the vendor hash constants,
+bit-identical to the runtime's hardcoded values (`layer_multipliers` =
+`kMultipliers`, `ngram_heads_offsets` = `kOffsets`,
+`ngram_heads_vocab_sizes` = `kSizes`, verified against `ple_table.cpp`), and the
+converter's `_PLE_METADATA` ignore-set stays correct because the runtime
+hardcodes those constants, not because the tensors are corrupt. At ~90 B/row
+(codes + scales) the table is ~28.8 GB NVFP4 vs our 51.2 GB FP8.
 
 - **E1 — row-space/mapping verification (closed 2026-10-15).** Values: three
   tests against 128 rows gathered from our artifact at our SGLang-qualified hash
@@ -224,20 +235,31 @@ FP8.
   through both conversion stages (convert.py emits the shards as-is; dense_fp8
   copies the PLE table byte for byte), and its dense weights are the same
   source's, so no shipped or planned artifact mixes lineages, and the QAD PLE
-  cannot be sourced from fp8mtp's table. The hash scheme
+  cannot be sourced from fp8mtp's table. The lineage is card-verified on both
+  sides: the RadixArk source is a post-training quantization of the vendor model
+  whose PLE is the FP8 table from Qwen's own
+  `Qwen/Qwen3.8-Flash-Next-FP8` revision (128 shards F8_E4M3 + per-table
+  scalar), and the QAD family is the LIL QAD student — trained against the BF16
+  teacher with quantized weights in its forward pass, its PLE trained in that
+  distillation per the card's "What's quantized" table — which Huihui then
+  abliterated and ModelOpt-requantized; that lineage split is exactly why E1
+  found no shared values. The hash scheme
   (`kSizes`/`kOffsets`/`kMultipliers`) is architecture-constant, not a trained
-  parameter, so bucket indexing carries across the QAD retraining; that
-  invariance cannot be value-validated (the values are lineage-specific) and is
-  accepted behaviorally through D3's PPL and acceptance records.
+  parameter, and the export's own metadata tensors carry exactly those
+  constants bit-identically, so bucket indexing carries across the QAD
+  retraining by direct evidence; D3's PPL and acceptance records remain the
+  behavioral corroboration.
 - **E2 — NVFP4 group-16 PLE format route (five parts, like A and B; after C).**
   - E2a storage spec: the NVFP4 group-16 PLE layout — E2M1 codes (low-nibble
-    first) + per-16 E4M3 scales along the 160-element row, no global scale word
-    (QAD omits `scale_2`); spec'd in `tensor-formats.md` and `storage-layouts.md`
-    beside the MXFP8 spec (A1).
+    first) + per-16 E4M3 scales along the 160-element row + the global
+    `weight_scale_2` F32 scalar (present in the export at ≈3.3242362e-05; the
+    decode is code × block scale × global scale); spec'd in
+    `tensor-formats.md` and `storage-layouts.md` beside the MXFP8 spec (A1).
   - E2b converter: source-signature validation (`weight` U8 `[2500012, 80]` +
-    `weight_scale` F8_E4M3 `[2500012, 10]` per shard, 128 shards, corrupt
-    metadata via the existing ignore-set) and the flat shard concat into the one
-    table payload — mirroring the FP8 PLE route structurally.
+    `weight_scale` F8_E4M3 `[2500012, 10]` per shard, 128 shards, the global
+    `weight_scale_2` scalar, hash-constant metadata via the existing ignore-set)
+    and the flat shard concat into the one table payload — mirroring the FP8
+    PLE route structurally.
   - E2c binder: the table byte-length/format assert becomes recipe-dependent
     (FP8 160 B/row vs NVFP4 ~90 B/row); `kPleRows` and the hash constants are
     unchanged.

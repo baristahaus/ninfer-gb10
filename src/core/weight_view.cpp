@@ -234,7 +234,8 @@ std::uint64_t weight_scale_offset(const WeightGeometry& geometry, std::uint64_t 
         return geometry.scale_offset + (row / 128 * (geometry.shape[1] / 64) + group / 4) * 512 +
                inner % 32 * 16 + inner / 32 * 4 + group % 4;
     }
-    return geometry.scale_offset + row * geometry.scale_bytes_per_row + group * 2;
+    const auto group_bytes = geometry.layout == QuantLayout::RowSplit ? 2 : 1;
+    return geometry.scale_offset + row * geometry.scale_bytes_per_row + group * group_bytes;
 }
 
 WeightRowPlanes weight_row_planes(const WeightRegion& region) {
@@ -328,6 +329,15 @@ Weight native_weight(const WeightView& view, float input_divisor) {
         out.scale_nb[1] = out.scale_nb[2] = out.scale_nb[3] = static_cast<std::int64_t>(out.n) * 2;
     } else if (g.layout == QuantLayout::BlockScaleK16M128x4) {
         out.scale_dtype = DType::FP8_E4M3FN;
+    } else if (g.layout == QuantLayout::DenseBlockScaleK32Mxfp8) {
+        // UE8M0 exponent words: unsigned 8-bit biased exponents, one per K-group of 32.
+        out.scale_dtype = DType::U8;
+        out.scale_ne[0] = dimension(g.padded_columns / 32);
+        out.scale_ne[1] = out.n;
+        out.scale_nb[0] = 1;
+        out.scale_nb[1] = static_cast<std::int64_t>(g.scale_bytes_per_row);
+        out.scale_nb[2] = out.scale_nb[1] * out.n;
+        out.scale_nb[3] = out.scale_nb[2];
     }
     return out;
 }

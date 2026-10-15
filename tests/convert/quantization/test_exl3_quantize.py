@@ -11,6 +11,7 @@ properties on constructed rings and quantify the DP against a greedy feasible ba
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -214,3 +215,97 @@ def test_incoherence_zero_output_channels():
     assert applied
     assert float(svh.abs().max()) == 0.0
     assert float(q.decode_composition(suh, w_inner, svh).abs().max()) == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Block-LDLQ (step 3's error feedback)
+# ---------------------------------------------------------------------------
+
+
+def _coupled_metric(k: int, rho: float = 0.9) -> torch.Tensor:
+    """A normalized SPD metric with strong adjacent-row coupling."""
+    idx = torch.arange(k, device="cuda")
+    cov = rho ** (idx.reshape(-1, 1) - idx.reshape(1, -1)).abs()
+    cov = cov + torch.eye(k, device="cuda") * 0.01
+    return cov / cov.diagonal().mean()
+
+
+def test_block_ldl_identity_and_degenerate_metrics():
+    torch.manual_seed(3)
+    k = 256
+    a = torch.randn(k, k, device="cuda") * 0.05
+    h = a @ a.T + torch.eye(k, device="cuda") * 0.1
+    L = q.block_ldl(h, 16)
+    # H = L' * blockdiag(DL DL^T) * L'^T with the identity diagonal blocks restored.
+    l_full = L.clone()
+    dr = torch.arange(k, device="cuda")
+    l_full[dr, dr] = 1.0
+    l0 = torch.linalg.cholesky(h)
+    dl = torch.diagonal(l0.reshape(k // 16, 16, k // 16, 16), dim1=0, dim2=2).permute(2, 0, 1).contiguous()
+    dbig = torch.zeros(k, k, device="cuda")
+    for i in range(k // 16):
+        dbig[i*16:(i+1)*16, i*16:(i+1)*16] = dl[i] @ dl[i].T
+    recon = l_full @ dbig @ l_full.T
+    assert float((recon - h).norm() / h.norm()) < 1e-5
+    # Identity and diagonal metrics carry no cross-row coupling: L must be zero.
+    assert float(q.block_ldl(torch.eye(k, device="cuda"), 16).abs().max()) == 0.0
+    d = torch.rand(k, device="cuda") + 0.5
+    assert float(q.block_ldl(torch.diag(d), 16).abs().max()) == 0.0
+
+
+def test_ldlq_with_zero_factor_equals_plain_quantization():
+    torch.manual_seed(5)
+    k, n = 256, 512
+    weight = torch.randn(k, n, device="cuda") * 0.05
+    plain_q, plain_states = q.quantize_weight(weight, 2, "mcg")
+    ldlq_q, ldlq_states = q.ldlq(weight, torch.zeros(k, k, device="cuda"), 2, "mcg")
+    assert bool((ldlq_q == plain_q).all()), "zero factor must reproduce the plain quantization"
+    assert bool((ldlq_states == plain_states.to(ldlq_states.dtype)).all())
+
+def test_ldlq_beats_plain_on_a_coupled_metric():
+    torch.manual_seed(5)
+    k, n = 256, 512
+    weight = torch.randn(k, n, device="cuda") * 0.05
+    h = _coupled_metric(k)
+    plain_q, _ = q.quantize_weight(weight, 2, "mcg")
+    ldlq_q, _ = q.ldlq(weight, q.block_ldl(h, 16), 2, "mcg")
+
+    def hess_err(quantized):
+        e = weight - quantized
+        return float((e * (h @ e)).sum())
+
+    e_plain, e_ldlq = hess_err(plain_q), hess_err(ldlq_q)
+    assert e_ldlq < 0.9 * e_plain, f"ldlq {e_ldlq} did not beat plain {e_plain} by 10%"
+
+
+def test_ldlq_matches_the_reference_kernel():
+    """The reference ext's ldlq on the same weight and factor: the Hessian-metric errors must
+    agree within the tie-breaking band (the codebook's tied rings propagate differently through
+    the feedback), and the feedback must beat the plain quantization decisively at the codebook's
+    operating scale."""
+    try:
+        sys.path.insert(0, "/home/barista/src/exllamav3")
+        from exllamav3.modules.quant.exl3_lib.quantize import ldlq as ref_ldlq
+    except Exception as exc:  # pragma: no cover - the reference ext is a local prerequisite
+        pytest.skip(f"exllamav3 ext unavailable: {exc}")
+
+    torch.manual_seed(5)
+    k, n = 256, 512
+    cb = q._codebook_values("mcg", torch.device("cuda"))
+    rms = float(cb.square().mean().sqrt())
+    weight = torch.randn(k, n, device="cuda") * rms
+    h = _coupled_metric(k)
+    factor = q.block_ldl(h, 16)
+    quant_args = {"K": 1, "buf_size_k": 128, "devices": ["cuda:0"], "mcg": True,
+                  "apply_out_scales": None}
+    w_q_ref, _ = ref_ldlq(weight.clone(), factor.clone(), quant_args)
+    w_q_mine, _ = q.ldlq(weight.clone(), factor.clone(), 2, "mcg")
+    plain_q, _ = q.quantize_weight(weight, 2, "mcg")
+
+    def hess_err(quantized):
+        e = weight - quantized
+        return float((e * (h @ e)).sum())
+
+    e_ref, e_mine, e_plain = hess_err(w_q_ref), hess_err(w_q_mine), hess_err(plain_q)
+    assert e_mine < 0.9 * e_plain, f"feedback improvement too small: {e_mine} vs plain {e_plain}"
+    assert abs(e_mine / e_ref - 1.0) < 0.03, f"metric error diverged from the reference: {e_mine} vs {e_ref}"

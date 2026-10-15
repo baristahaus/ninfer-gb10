@@ -194,6 +194,20 @@ def _backward(
     return states, wrap_edge
 
 
+def tile_lane_perm(device: torch.device) -> torch.Tensor:
+    """Ring position -> tile element index within a 16x16 tile, [256].
+
+    The artifact's ring binds the trellis positions to the tensor-core lane order (the
+    oracle's ``tile_element_order``, the same map as the reference's ``tensor_core_perm``):
+    ring position l carries the tile element (rows[l], cols[l]), not the row-major element l.
+    Tiles entering the Viterbi must be gathered into this order, and decoded values gathered
+    back out of it; the emitted rings are already in it and pack unchanged.
+    """
+
+    rows, cols = exl3.tile_element_order()
+    return torch.as_tensor(rows * 16 + cols, dtype=torch.int64, device=device)
+
+
 def quantize_tiles(targets: torch.Tensor, k2: int, codebook: str) -> tuple[torch.Tensor, torch.Tensor]:
     """Quantize target tiles ``[B, 256]`` (tensor-core order, float) at integer rate ``k2/2``.
 
@@ -336,3 +350,144 @@ def decode_composition(suh: torch.Tensor, weight_inner: torch.Tensor, svh: torch
     w = w * suh.reshape(-1, 1)  # diag(suh) applied after the left Hadamard
     w = block_hadamard_right(w)  # * Hn_n
     return w * svh.reshape(1, -1)  # * diag(svh)
+
+
+# ---------------------------------------------------------------------------
+# Block-LDLQ (step 3's error feedback)
+# ---------------------------------------------------------------------------
+
+
+def block_ldl(hessian: torch.Tensor, block: int = 16) -> torch.Tensor:
+    """The block-LDL factor of a damped SPD Hessian.
+
+    From the Cholesky factor ``L0`` (``H = L0 @ L0.T``), each block-column is right-multiplied
+    by the inverse of its diagonal block ``DL[i]`` (16x16 lower-triangular), giving the
+    block-unit-lower factor ``L'`` with identity diagonal blocks and the block-LDL identity
+    ``H = L' @ blockdiag(DL[i] @ DL[i].T) @ L'.T``. The scalar diagonal is then zeroed as the
+    reference's ``ldlq()`` expects. The input must already carry the capture's damping; a
+    Cholesky failure retries with incremental diagonal damping exactly as the reference does.
+    """
+
+    n = hessian.shape[0]
+    if n % block:
+        raise ValueError(f"Hessian dimension {n} is not a multiple of the block size {block}")
+    m = n // block
+    h = hessian.clone()
+    retries = 0
+    while True:
+        try:
+            l0 = torch.linalg.cholesky(h)
+            break
+        except Exception:
+            retries += 1
+            if retries > 10:
+                raise
+            h.diagonal().add_(2.0 * 0.025 * h.diagonal().mean())
+    # The diagonal blocks of L0: [m, block, block].
+    dl = torch.diagonal(l0.reshape(m, block, m, block), dim1=0, dim2=2).permute(2, 0, 1).contiguous()
+    dl_inv = torch.linalg.inv(dl)
+    # Scale each block-column: L'[rows, block i] = L0[rows, block i] @ DL[i]^-1.
+    l = torch.einsum("rib,ibj->rij", l0.reshape(n, m, block), dl_inv).reshape(n, n)
+    # The diagonal blocks are identities up to roundoff; enforce them exactly, then zero the
+    # scalar diagonal. (In the block-grid layout [m, m, b, b] the pair-indexed [i, i] selects
+    # the diagonal blocks; in the raw [m, b, m, b] layout it would hit dims 0 and 1 instead.)
+    l_blocks = l.reshape(m, block, m, block).permute(0, 2, 1, 3)
+    idx = torch.arange(m, device=l.device)
+    l_blocks[idx, idx] = torch.eye(block, device=l.device, dtype=l.dtype)
+    dr = torch.arange(n, device=l.device)
+    l[dr, dr] = 0
+    return l
+
+
+def scaled_ldl(hessian: torch.Tensor, suh: torch.Tensor, block: int = 16) -> torch.Tensor:
+    """The per-tensor metric factor for the LDLQ of a regularized weight.
+
+    The regularized weight's rows were divided by ``suh`` and block-Hadamard transformed, so
+    its error metric is ``P @ diag(suh) @ H @ diag(suh) @ P`` with ``P`` the blockwise
+    128-Hadamard (its own inverse) and the full ``suh`` (signs and scales -- the global scale
+    cancels). The input Hessian must already be damped (the capture's ``sigma_reg`` share of
+    its mean diagonal).
+    """
+
+    s = suh.reshape(-1).to(hessian.dtype).to(hessian.device)
+    h = hessian * s.reshape(1, -1)  # H @ diag(suh)
+    h = h * s.reshape(-1, 1)  # diag(suh) @ H
+    h = block_hadamard_right(h)  # @ P
+    h = block_hadamard_left(h)  # P @
+    return block_ldl(h, block)
+
+
+def quantize_weight(weight: torch.Tensor, k2: int, codebook: str = "mcg") -> tuple[torch.Tensor, torch.Tensor]:
+    """The plain (no-feedback) whole-matrix tile quantization.
+
+    Returns ``(values [k, n], states [k // 16, n // 16, 256])`` with the values in the weight's
+    row-major layout and the rings in the storage's ring (lane) order.
+    """
+
+    size_k, size_n = weight.shape
+    if size_k % 16 or size_n % 128:
+        raise ValueError("quantize_weight expects k a multiple of 16 and n a multiple of 128")
+    tiles_n = size_n // 16
+    lane = tile_lane_perm(weight.device)
+    lane_inv = torch.argsort(lane)
+    tiles = weight.reshape(size_k // 16, 16, tiles_n, 16).permute(0, 2, 1, 3).reshape(-1, 256)
+    tiles = tiles[:, lane]  # row-major -> ring (lane) order
+    values, states = quantize_tiles(tiles, k2, codebook)
+    values = values[:, lane_inv].reshape(size_k // 16, tiles_n, 16, 16).permute(0, 2, 1, 3).reshape(size_k, size_n)
+    return values, states.reshape(size_k // 16, tiles_n, 256)
+
+
+def ldlq(
+    weight: torch.Tensor,  # [k, n] float32, the regularized weight; k a multiple of 16, n of 128
+    L: torch.Tensor,  # [k, k] the block-LDL factor of the metric (zero diagonal)
+    k2: int,  # tile bitrate
+    codebook: str = "mcg",
+    buf_size_k: int = 128,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """The block-LDLQ recursion: the reference's ``ldlq()`` on the fork's Viterbi.
+
+    The input rows are quantized bottom-up in 16-row steps. Quantizing a step feeds its
+    residual back through the strictly-block-lower factor: every not-yet-quantized row ``c``
+    accumulates ``sum_{s > c} L[s, c] * err[s]`` (the buffered spans update the whole cache at
+    once, the within-span steps add their slice), and the adjusted rows are what the trellis
+    Viterbi quantizes. Returns ``(weight_q [k, n], states [k // 16, n // 16, 256])``.
+    """
+
+    size_k, size_n = weight.shape
+    if size_k % 16 or size_n % 128:
+        raise ValueError("ldlq expects k a multiple of 16 and n a multiple of 128")
+    buf = max(buf_size_k, 16)
+    if size_k % buf:
+        raise ValueError(f"k={size_k} is not a multiple of the buffer size {buf}")
+    tiles_n = size_n // 16
+    device = weight.device
+    cb = _codebook_values(codebook, device)
+    lane_perm = tile_lane_perm(device)
+    lane_perm_inv = torch.argsort(lane_perm)
+    prod_cache = torch.zeros_like(weight)
+    weight_q = torch.zeros_like(weight)
+    states = torch.zeros(size_k // 16, tiles_n, 256, dtype=torch.int64, device=device)
+
+    for j in range(size_k, 0, -buf):
+        i = j - buf
+        b_weight = weight[i:j]
+        b_prod_cache = prod_cache[i:j]
+        b_L = L[i:j]
+        for bj in range(buf, 0, -16):
+            bi = bj - 16
+            # The residual of everything already quantized below this step, inside the span.
+            bb_err = b_weight[bj:] - weight_q[i + bj:j]
+            bb_L = b_L[bj:, i + bi:i + bj]  # absolute columns: this block's own rows
+            compensation = b_prod_cache[bi:bj] + (bb_L.T @ bb_err)
+            rows = b_weight[bi:bj] + compensation
+            tiles = rows.reshape(16, tiles_n, 16).permute(1, 0, 2).reshape(tiles_n, 256)
+            tiles = tiles[:, lane_perm]  # row-major -> ring (lane) order
+            values, ring = quantize_tiles(tiles, k2, codebook)
+            values = values[:, lane_perm_inv]  # ring order -> row-major
+            quant_w = values.reshape(tiles_n, 16, 16).permute(1, 0, 2).reshape(16, size_n)
+            weight_q[i + bi:i + bj] = quant_w
+            states[(i + bi) // 16:(i + bj) // 16] = ring
+        # Feed the whole span's residual to every row above it.
+        b_err = b_weight - weight_q[i:j]
+        prod_cache += b_L.T @ b_err
+    return weight_q, states

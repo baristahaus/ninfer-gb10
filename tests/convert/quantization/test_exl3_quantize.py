@@ -157,3 +157,60 @@ def test_quantize_tiles_beat_a_greedy_feasible_path() -> None:
                 prev = np.uint16(best & ((1 << (16 - K)) - 1))
             greedy_error = float(((cb_values[greedy_states] - targets[0]) ** 2).sum())
             assert dp_error <= greedy_error, (k2, codebook, dp_error, greedy_error)
+
+
+# ---------------------------------------------------------------------------
+# Incoherence transforms (step 2)
+# ---------------------------------------------------------------------------
+
+
+def test_hadamard_128_matches_the_sylvester_formula():
+    h = q.hadamard_128(torch.device("cuda")).cpu().numpy()
+    assert h.shape == (128, 128)
+    idx = np.stack([np.random.randint(0, 128, size=64), np.random.randint(0, 128, size=64)])
+    for i, j in idx.T:
+        expected = 1 - 2 * (bin(i & j).count("1") % 2)  # (-1)^popcount(i AND j)
+        assert h[i, j] == expected, (i, j, h[i, j], expected)
+
+
+def test_incoherence_round_trips_the_original_weight():
+    torch.manual_seed(11)
+    k, n = 256, 512
+    w = torch.randn(k, n, device="cuda", dtype=torch.float32) * 0.05
+    su = torch.sign(torch.randn(k, device="cuda"))
+    sv = torch.sign(torch.randn(n, device="cuda"))
+    for g_scale in (1.0, 0.37, 2.9):
+        suh, svh, w_inner, applied = q.incoherence(w, su, sv, g_scale=g_scale)
+        assert applied, "random weight must apply output scales"
+        w_back = q.decode_composition(suh, w_inner, svh)
+        rel = float((w_back - w).norm() / w.norm())
+        assert rel < 1e-5, f"g_scale={g_scale} round-trip relative error {rel}"
+
+    # The composition against explicit full block-diagonal Hadamard matrices.
+    h128 = q.hadamard_128(torch.device("cuda")) / (128 ** 0.5)
+    hk = torch.block_diag(*[h128] * (k // 128))
+    hn = torch.block_diag(*[h128] * (n // 128))
+    suh, svh, w_inner, _ = q.incoherence(w, su, sv, g_scale=0.8)
+    w_contract = suh.reshape(-1, 1) * (hk @ w_inner @ hn) * svh.reshape(1, -1)
+    assert float((w_contract - w).norm() / w.norm()) < 1e-5
+
+
+def test_incoherence_zero_output_channels():
+    torch.manual_seed(13)
+    k, n = 128, 256
+    w = torch.randn(k, n, device="cuda", dtype=torch.float32) * 0.05
+    w[:, [3, 70, 200]] = 0.0  # three dead output channels
+    su = torch.sign(torch.randn(k, device="cuda"))
+    sv = torch.sign(torch.randn(n, device="cuda"))
+    suh, svh, w_inner, applied = q.incoherence(w, su, sv)
+    assert applied
+    assert float(svh[[3, 70, 200]].abs().max()) == 0.0, "dead channels must carry svh == 0"
+    w_back = q.decode_composition(suh, w_inner, svh)
+    rel = float((w_back - w).norm() / w.norm())
+    assert rel < 1e-5, f"zero-channel round-trip relative error {rel}"
+
+    # The fully-zero weight: the reference keeps the flag True and carries the zeros in svh.
+    suh, svh, w_inner, applied = q.incoherence(torch.zeros(k, n, device="cuda"), su, sv)
+    assert applied
+    assert float(svh.abs().max()) == 0.0
+    assert float(q.decode_composition(suh, w_inner, svh).abs().max()) == 0.0

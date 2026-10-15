@@ -15,8 +15,10 @@ Three pieces, each verified against ``exl3.py`` (the exact decode oracle):
   the half-integer MUL1 rates land as the follow-up piece.
 - ``incoherence`` is step 2's transform sequence: output-channel scales folded into ``svh``,
   the output-side Hadamard, block-RMS input-channel scales and the codebook scale folded into
-  ``suh``, the input-side Hadamard, and the global scale folded into ``suh`` (section 2.1's
-  ``W = diag(suh) * Hn_k * W_inner * Hn_n * diag(svh)`` is the exact inverse).
+  ``suh``, the input-side Hadamard, and the global scale folded into ``suh``. The division
+  precedes the Hadamard on each side; because the decode applies ``Hn`` once and the encode
+  once, ``Hn * Hn = I`` makes the round trip through section 2.1's
+  ``W = diag(suh) * Hn_k * W_inner * Hn_n * diag(svh)`` exact.
 
 The cost arithmetic accumulates in float32. The reference kernel uses float16 costs; the
 contract pins the format and the decode, not the encoder's tie-breaking, so a wider cost
@@ -224,3 +226,113 @@ def quantize_tiles(targets: torch.Tensor, k2: int, codebook: str) -> tuple[torch
     states, _ = _backward(argmin2, wrap_state, k2)
     values = cb[states]
     return values, states.to(torch.uint16)
+
+
+# ---------------------------------------------------------------------------
+# Incoherence transforms (step 2)
+# ---------------------------------------------------------------------------
+
+
+def hadamard_128(device: torch.device) -> torch.Tensor:
+    """H128, the Sylvester Hadamard matrix in natural order (section 2.1), float32 [128, 128]."""
+
+    h = torch.ones(1, 1, dtype=torch.float32, device=device)
+    for _ in range(7):
+        h = torch.cat([torch.cat([h, h], dim=1), torch.cat([h, -h], dim=1)], dim=0)
+    return h
+
+
+def block_hadamard_right(x: torch.Tensor) -> torch.Tensor:
+    """``x * Hn`` along the output dimension: every 128-column block right-multiplied by
+    ``H128 / sqrt(128)``."""
+
+    k, n = x.shape
+    if n % HADAMARD:
+        raise ValueError(f"output dimension {n} is not a multiple of {HADAMARD}")
+    h = hadamard_128(x.device) / (HADAMARD ** 0.5)
+    blocks = x.reshape(k, n // HADAMARD, HADAMARD)
+    return (blocks @ h).reshape(k, n)
+
+
+def block_hadamard_left(x: torch.Tensor) -> torch.Tensor:
+    """``Hn * x`` along the input dimension: every 128-row block left-multiplied by
+    ``H128 / sqrt(128)``."""
+
+    k, n = x.shape
+    if k % HADAMARD:
+        raise ValueError(f"input dimension {k} is not a multiple of {HADAMARD}")
+    h = hadamard_128(x.device) / (HADAMARD ** 0.5)
+    blocks = x.reshape(k // HADAMARD, HADAMARD, n)
+    return (h @ blocks).reshape(k, n)
+
+
+def incoherence(
+    weight: torch.Tensor,  # [k, n] float32, both dimensions multiples of 128
+    su_signs: torch.Tensor,  # [k] float32, +-1
+    sv_signs: torch.Tensor,  # [n] float32, +-1
+    *,
+    codebook_scale: float = CODEBOOK_SCALE,
+    g_scale: float = 1.0,
+    apply_out_scales: bool | None = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, bool]:
+    """Step 2's transform sequence, the reference method's order.
+
+    Returns ``(suh [k], svh [n], weight_inner [k, n], apply_out_scales)``. The divisions
+    precede the Hadamards on each side, and the global scale multiplies the inner weight
+    while dividing ``suh`` -- so the decode composition reproduces the original weight
+    exactly (verified by the composition test). The epsilon guards and the zero-channel
+    handling follow the reference: the output channels whose RMS underflows are zeroed in
+    ``svh``, and ``apply_out_scales`` reports whether the output scales were normalized.
+    """
+
+    if weight.ndim != 2 or weight.shape[0] % HADAMARD or weight.shape[1] % HADAMARD:
+        raise ValueError("incoherence expects a [k, n] weight with k, n multiples of 128")
+    weight = weight.clone()
+    su = su_signs.reshape(-1).to(weight.dtype).to(weight.device)
+    sv = sv_signs.reshape(-1).to(weight.dtype).to(weight.device)
+
+    # Output-channel scales: the RMS over the input dimension, normalized by its mean. Dead
+    # channels (RMS underflow) divide by 0.1, not by their stored zero -- 0/0 would put NaN
+    # into the transformed weight and poison the trellis quantization of healthy tiles sharing
+    # the dead column. Their stored svh is zeroed only after the division, which the decode's
+    # diag(svh) turns into an exact zero of the dead output.
+    apply_out_scales = True if apply_out_scales is None else bool(apply_out_scales)
+    out_scales = weight.square().mean(dim=0).sqrt()
+    mean = float(out_scales.mean())
+    if apply_out_scales and mean > 1e-30:
+        out_scales = out_scales / mean
+    if apply_out_scales:
+        zero = out_scales.abs() < 1e-30
+        out_scales = torch.where(zero, torch.full_like(out_scales, 0.1), out_scales)
+        svh = sv * out_scales + 1e-10
+    else:
+        svh = sv.clone()
+        zero = out_scales.abs() < 1e-30
+    weight = weight / svh
+    svh = torch.where(zero, torch.zeros_like(svh), svh)
+
+    # Output-side Hadamard.
+    weight = block_hadamard_right(weight)
+
+    # Input-channel scales: the RMS over the output dimension; the codebook scale folds in
+    # with a negation (the reference's -1/codebook_scale convention).
+    in_scales = weight.square().mean(dim=1).sqrt()
+    in_scales = torch.where(in_scales.abs() < 1e-30,
+                            torch.full_like(in_scales, 0.1), in_scales)
+    suh = su * in_scales / (-codebook_scale) + 1e-10
+    weight = weight / suh.reshape(-1, 1)
+
+    # Input-side Hadamard, then the global scale.
+    weight = block_hadamard_left(weight)
+    weight = weight * g_scale
+    suh = suh / g_scale
+    return suh, svh, weight, apply_out_scales
+
+
+def decode_composition(suh: torch.Tensor, weight_inner: torch.Tensor, svh: torch.Tensor) -> torch.Tensor:
+    """Section 2.1's composition: ``W = diag(suh) * Hn_k * W_inner * Hn_n * diag(svh)``."""
+
+    w = block_hadamard_left(weight_inner)  # Hn_k * W_inner
+    w = w * suh.reshape(-1, 1)  # diag(suh) applied after the left Hadamard
+    w = block_hadamard_right(w)  # * Hn_n
+    return w * svh.reshape(1, -1)  # * diag(svh)

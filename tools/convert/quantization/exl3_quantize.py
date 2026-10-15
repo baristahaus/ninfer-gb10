@@ -572,3 +572,88 @@ def ldlq(
         b_err = b_weight - weight_q[i:j]
         prod_cache += b_L.T @ b_err
     return weight_q, states
+
+
+# ---------------------------------------------------------------------------
+# Global-scale search (step 2 completion)
+# ---------------------------------------------------------------------------
+
+# LDLQ error feedback inflates the tiles the quantizer actually sees relative to the pre-feedback
+# weight (the accumulated compensation grows along the recursion). Mean stream RMS over the
+# recursion relative to the first block, measured on Qwen3-8B (q/up/down, layer 10) by the
+# reference; the scale search runs on the pre-feedback weight, so its sample tiles are inflated
+# by the expected drift and the scale it picks lands the recursion's mean input at the
+# codebook's operating point.
+LDLQ_DRIFT = {1.0: 1.08, 1.5: 1.035, 2.0: 1.018, 2.5: 1.009, 3.0: 1.004}
+
+
+def _sample_scale_tiles(weight: torch.Tensor, width: int = 3) -> torch.Tensor:
+    """Sample tiles for the global-scale search, in ring (lane) order.
+
+    A wrapped diagonal guarantees every tile row and column is sampled at least once (outliers
+    are typically whole input or output channels), plus the highest- and lowest-RMS tiles as
+    explicit outlier insurance for anything the diagonal misses.
+    """
+
+    tiles_k = weight.shape[0] // 16
+    tiles_n = weight.shape[1] // 16
+    w4 = weight.reshape(tiles_k, 16, tiles_n, 16)
+    diag_len = max(tiles_k, tiles_n)
+    ii = torch.arange(diag_len, device=weight.device).repeat_interleave(width)
+    ww = torch.arange(width, device=weight.device).repeat(diag_len)
+    kk = ii % tiles_k
+    nn = (ii + ww) % tiles_n
+    num_x = max(8, (diag_len * width) // 16)
+    tile_ms = w4.square().mean(dim=(1, 3)).flatten()
+    num_x = min(num_x, (tile_ms.shape[0] + 1) // 2)
+    hi = torch.topk(tile_ms, num_x).indices
+    lo = torch.topk(tile_ms, num_x, largest=False).indices
+    xk = torch.cat((hi, lo)) // tiles_n
+    xn = torch.cat((hi, lo)) % tiles_n
+    tiles = w4[torch.cat((kk, xk)), :, torch.cat((nn, xn)), :].reshape(-1, 256)
+    return tiles[:, tile_lane_perm(weight.device)].contiguous()
+
+
+def g_scale_search(
+    weight: torch.Tensor,  # [k, n] float32, the regularized (pre-feedback) inner weight
+    k2: int,
+    codebook: str = "mcg",
+    width: int = 3,
+) -> tuple[float, float]:
+    """The global-scale search: the reference's coarse-then-fine grid with parabolic refinement.
+
+    The sampled error curve is flat near the optimum but not perfectly unimodal, so a sequential
+    golden-section search can converge on a local wiggle well away from the true minimum;
+    instead a coarse grid over the full range on a subsample, then a fine grid around the coarse
+    minimum on the full sample, refined by parabolic interpolation. The sample tiles carry the
+    expected LDLQ drift so the chosen scale lands the recursion's mean input at the codebook's
+    operating point. The objective is the inflated-domain mean squared error of the sample tiles
+    quantized at the candidate scale and de-scaled back.
+
+    Returns ``(g_scale, mse)``.
+    """
+
+    _validate_quantize_rate(k2, codebook)
+    if weight.ndim != 2 or weight.shape[0] % 16 or weight.shape[1] % 16:
+        raise ValueError("g_scale_search expects a [k, n] weight with k, n multiples of 16")
+    tiles = _sample_scale_tiles(weight, width) * LDLQ_DRIFT.get(k2 / 2, 1.0)
+
+    def mse_at(scale: float, batch: torch.Tensor) -> float:
+        values, _ = quantize_tiles(batch * scale, k2, codebook)
+        return float(((values / scale - batch) ** 2).mean())
+
+    coarse = [0.1 + 0.2 * i for i in range(10)]
+    mse_coarse = [mse_at(s, tiles[::3]) for s in coarse]
+    center = coarse[int(np.argmin(mse_coarse))]
+    step = 0.075
+    fine = [center + step * (i - 2) for i in range(5)]
+    mse_fine = [mse_at(s, tiles) for s in fine]
+    best = int(np.argmin(mse_fine))
+    offset = 0.0
+    if 0 < best < 4:
+        y0, y1, y2 = mse_fine[best - 1], mse_fine[best], mse_fine[best + 1]
+        denom = y0 - 2.0 * y1 + y2
+        if denom > 0:
+            offset = max(-0.5, min(0.5, 0.5 * (y0 - y2) / denom))
+    g_scale = max(fine[best] + offset * step, 0.01)
+    return g_scale, mse_fine[best]

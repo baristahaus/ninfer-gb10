@@ -308,3 +308,33 @@ def test_ldlq_matches_the_reference_kernel():
     e_ref, e_mine, e_plain = hess_err(w_q_ref), hess_err(w_q_mine), hess_err(plain_q)
     assert e_mine < 0.9 * e_plain, f"feedback improvement too small: {e_mine} vs plain {e_plain}"
     assert abs(e_mine / e_ref - 1.0) < 0.03, f"metric error diverged from the reference: {e_mine} vs {e_ref}"
+
+
+# ---------------------------------------------------------------------------
+# Global-scale search (step 2 completion)
+# ---------------------------------------------------------------------------
+
+
+def test_g_scale_search_beats_the_default_scale():
+    """The searched scale must not lose to the default 1.0 on the full inner weight: the
+    sample (wrapped diagonal plus RMS outliers) is representative, and the drift inflation
+    lands the recursion's input at the codebook's operating point."""
+    torch.manual_seed(9)
+    k, n = 256, 512
+    w = torch.randn(k, n, device="cuda") * 0.05
+    su = torch.sign(torch.randn(k, device="cuda"))
+    sv = torch.sign(torch.randn(n, device="cuda"))
+    _, _, inner, _ = q.incoherence(w, su, sv)
+    g, mse = q.g_scale_search(inner, 2, "mcg")
+    assert 0.01 < g < 2.1, f"g_scale {g} outside the search range"
+
+    def nmse_at(scale):
+        values, _ = q.quantize_weight(inner * scale, 2, "mcg")
+        e = values / scale - inner
+        return float((e ** 2).mean() / (inner ** 2).mean())
+
+    e_searched, e_default = nmse_at(g), nmse_at(1.0)
+    assert e_searched < e_default, f"searched scale {g}: NMSE {e_searched} >= default {e_default}"
+    # And the optimum the search claims is genuinely better than its coarse neighbors.
+    for neighbor in (0.8, 1.3):
+        assert e_searched < nmse_at(neighbor), f"searched scale loses to neighbor {neighbor}"

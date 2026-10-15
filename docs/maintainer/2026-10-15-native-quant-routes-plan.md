@@ -1,10 +1,11 @@
 # Plan: native quantization routes for alternate checkpoint setups (QAD-class)
 
 Status: evaluated and approved for execution (2026-10-15); this revision folds the
-evaluation corrections in. Branch `qad-native-quant-plan`. Corrections are grounded in
-code reads plus compile probes on the 5090 box (CUDA 13.4.92); shard-side facts remain
-the GB10-side header reads recorded in section 1 (the `/nfs` checkpoint is not mounted
-on the 5090 box).
+closed E1 verification and its binding consequence in (E1 closed 2026-10-15).
+Branch `qad-native-quant-plan`. Corrections are grounded in code reads plus compile
+probes on the 5090 box (CUDA 13.4.92); shard-side facts remain the GB10-side
+header reads recorded in section 1 (the `/nfs` checkpoint is not mounted
+on the 5090 box), with the PLE row superseded by E1's verified geometry.
 Tracking: beads `ninfer-gb10-<id>` (created with this plan).
 Origin of the request: `/nfs` checkpoint
 `edp1096/Huihui-Qwen3.8-Flash-Next-abliterated-NVFP4-QAD` (93 GB) — a Qwen3.8
@@ -32,18 +33,21 @@ five-part treatment the NVFP4 bank already has:
 Future checkpoints that mix these formats then become inventory data, not new
 machinery.
 
-One limit surfaced by the evaluation: the pattern covers *format* divergence. The
-QAD PLE additionally presents *geometry* divergence — a different row space, not a
-different encoding of the same rows — and that is not a format route. It gets its
-own verification-first treatment (section 6, E1), which runs before everything else
-because its outcome can gate artifact viability.
+One limit surfaced by the evaluation — the QAD PLE as a *geometry* divergence, a
+different row space, gated behind a verification-first treatment (E1) — is closed
+and overturned: the QAD PLE occupies the same 320,001,536-row space as ours (128
+shards × 2,500,012 rows = exactly `kPleRows`), with lineage-specific trained
+values. It is a format route after all — NVFP4 group-16 native ingestion of the
+same row space — and the five-part pattern below covers the QAD family without
+exception. Section 6 records the verification and its binding consequence; no item
+in this plan is gated by an unknown row space.
 
 ## 1. Target checkpoint facts (verified from the shards, 2026-10-15)
 
 | Component | Format on disk (verified dtypes) | Our artifact today |
 |---|---|---|
 | Routed experts (48 layers) | NVFP4 W4A4: `weight` U8 `[n,k/2]` + `weight_scale` F8_E4M3 `[n,k/16]` + `weight_scale_2` F32 + `input_scale` F32 | same — **native ingestion already exists** |
-| PLE n-gram tables | **NVFP4 group-16**: `weight` U8 `[2500012, 80]` (=160 el/row) + `weight_scale` F8_E4M3 `[2500012, 10]`, 11 shards (~2.5M rows — much smaller than our table; structurally different row space, see §6/E1) | FP8 shards (~51 GB-class table; 320,001,536 rows × 160 B) |
+| PLE n-gram tables | **NVFP4 group-16**: `weight` U8 `[2500012, 80]` (=160 el/row) + `weight_scale` F8_E4M3 `[2500012, 10]`; **128 shards × 2,500,012 rows = 320,001,536 rows — the same row space and shard split as our source (E1-verified, §6)**; ~28.8 GB; values retrained during QAD distillation (E1); no global `scale_2`; three corrupt metadata tensors covered by the converter's `_PLE_METADATA` ignore-set | FP8 shards (51.2 GB table; 320,001,536 rows × 160 B; the RadixArk source's own values) |
 | Attention, GDN, QSA-indexer, shared-expert projections | **MXFP8**: `weight` F8_E4M3 `[N,K]` + `weight_scale` U8 UE8M0 `[N,K/32]` | BF16 |
 | PLE projections/conv, routers, hyper-connections, norms, embeddings, lm_head | BF16/F32 | BF16 — matches |
 | MTP drafter trunk (fc, pre-norms, hyper-connections, self_attn + indexer, mlp.gate, shared_expert) | BF16 (names match our `_mtp_specs()` inventory exactly) | BF16 — matches |
@@ -146,7 +150,9 @@ prefill GPU time; gdn.prefill 35%).
   `model-*.safetensors` + `hybrid-main-*.safetensors`; accept
   `Qwen4ExpForConditionalGeneration`; read `mtp_num_hidden_layers` from
   `text_config`.
-- **C2 signatures.** MXFP8 pairs (A2), W4A16 banks (B2), PLE per E's findings;
+- **C2 signatures.** MXFP8 pairs (A2), W4A16 banks (B2), PLE per E1's closed
+  findings (128 NVFP4 group-16 shards, no `scale_2`, corrupt metadata via the
+  existing ignore-set);
   closed-set validation updated so *unexpected* tensors still fail loudly.
 - **C3 recipe.** `qwen3_8_flash_next_125b_a6b_qad_native-v1`, own output
   basename, conversion report with the usual payload verification.
@@ -160,17 +166,22 @@ prefill GPU time; gdn.prefill 35%).
 3. Real-artifact battery on GB10: step 0; step 7a (first PPL record for this
    model — the 5090's fp8mtp PPL gates do not transfer); MTP acceptance
    compared against the checkpoint's SGLang reference (35.8–39.1 tok/s at 64k,
-   mtp_steps 3, `runtime-qualification.json`).
+   mtp_steps 3, `runtime-qualification.json`). These PPL and acceptance records
+   are also the acceptance evidence for the PLE binding's residual assumption —
+   hash-scheme invariance across the QAD retraining (§6) — which cannot be
+   value-validated because the values are lineage-specific.
 4. Serving smoke incl. vision; MXFP8-attention A/B against the BF16-attention
    artifact for prefill/decode attribution (step 3 harness, now working on
    GB10).
 5. Abliteration sanity: refusal-direction weights are inert at the engine
    level; the tokenizer/template pins are unchanged (248,077 tokens).
 
-## 6. Work item E — PLE native route (re-scoped by the evaluation: geometry, not format)
+## 6. Work item E — PLE native route (E1 closed 2026-10-15: a format route, same row space)
 
-The evaluation's headline correction: this is not a gather-format question, it is a
-row-space question, and it is the plan's only correctness-blocking unknown.
+The evaluation had re-scoped this item as a row-space question and the plan's only
+correctness-blocking unknown. E1 closed it: the re-scoping is overturned — the row
+space is the same — and the values are retrained, not remapped, so no conversion-side
+remap exists and the route is native ingestion of the source's own table.
 
 Runtime facts (code, verified): the PLE geometry is NOT carried by the binder — it
 is compile-time constants of the family runtime. `ple_table.h`: `kPleRows =
@@ -178,36 +189,70 @@ is compile-time constants of the family runtime. `ple_table.h`: `kPleRows =
 a 16-head pyramid of prime-sized ~20M-row tables (`kSizes = 20000003, 20000023,
 ...` with running `kOffsets`), hashed by fixed `kMultipliers` (8 bigram + 8
 trigram heads). `gather_ple_fp8` throws unless the table is exactly
-320,001,536 × 160 bytes (51,200,245,760) — a smaller table cannot bind.
+320,001,536 × 160 bytes (51,200,245,760) — the byte-format assert is the one
+runtime constant E2c must make recipe-dependent; `kPleRows` and the hash constants
+are unchanged.
 
-Shard facts (GB10-side header reads): 11 shards × 2,500,012 rows × 160 elements
-NVFP4 group-16 ≈ 225 MB total. Per-row *width* matches ours (160 elements). The
-row *space* is ~12–128x smaller on any reading of the shard counts, and the table
-count differs (11 vs 16). A format swap cannot explain that: the QAD PLE is a
-structurally different pyramid — pruned to used rows, re-indexed, or re-configured.
+Shard facts (E1-verified 2026-10-15, CPU-only, on the QAD layer-1 PLE): 128 NVFP4
+shards × 2,500,012 rows, width 160, E2M1 low-nibble-first + per-16 E4M3 scales —
+the community sidecar convention (`primitive-ai/Qwen3.8-Flash-Next-PLE-quant`);
+128 × 2,500,012 = 320,001,536 = exactly `kPleRows` — the same row space and the
+same shard split as our RadixArk source: no compaction, no pruning, no second fixed
+dimension. QAD omits the global `scale_2`; its three metadata tensors are corrupt
+and safely ignored (the converter's `_PLE_METADATA` ignore-set already covers
+them). At ~90 B/row (codes + scales) the table is ~28.8 GB NVFP4 vs our 51.2 GB
+FP8.
 
-- **E1 — row-space/mapping verification (runs FIRST, before C).** Object of
-  study: the QAD packer's inference-side hash/compaction scheme (the same SGLang
-  patch already referenced for the draft-vocab finding), plus the shards' real
-  per-shard row counts. Outcomes:
-  (a) a discoverable row space ⇒ E2 sized as below, plus a second fixed dimension
-      set in the 125B package (`kSizes`/`kOffsets`/`kMultipliers`/`kPleRows` +
-      the gather assert become recipe-dependent — real work the original estimate
-      did not contain);
-  (b) the mapping is unrecoverable from the export ⇒ the PLE is blocked pending
-      either the packer's compaction artifact or a user decision on our own
-      NVFP4 requant of the standard 320M-row table — a new quantization with its
-      own qualification, not native ingestion.
-- **E2 — gather/consumer kernel work (only after E1).** NVFP4 rows
-  dequant-in-gather vs a new gather kernel; the staged FP8 contract
-  (`kPleEmbeddingDim` bytes/token in `ple_stage.h/.cpp`) and the first PLE
-  consumer's format decide where the decode lives.
-- Side effect to record in D: if the PLE resolves at ~225 MB, the SP-6
-  cold-collapse case (169–171 → 2.14 GB/s, 114.9 µs/faulted row) largely
-  evaporates for this artifact — the demand-paging pressure profile changes
-  character.
-- Estimate fork: 0.5 d for E1; E2 bounded after E1; the blocked fork can gate
-  artifact viability and is the plan's largest estimate risk.
+- **E1 — row-space/mapping verification (closed 2026-10-15).** Values: three
+  tests against 128 rows gathered from our artifact at our SGLang-qualified hash
+  IDs — flat shard concat (global = s×2,500,012 + i) and per-head padded blocks
+  (h×20,000,096 + intra-head row) both at cosine ≈ 0 in both nibble orders; a
+  full-table NN scan (128 queries × 320,001,536 QAD rows, 390 s) found best
+  +0.41 / median +0.28 — the noise floor (a random 160-dim query peaks ~+0.30
+  within one shard, ~+0.5 expected over the full table; NVFP4 reconstruction of
+  a matching vector would be ≥0.99). The scan searched every row, so it also
+  excludes any same-values-different-hash hypothesis. Conclusion: the QAD table
+  is retrained during QAD distillation (consistent with the LIL card) and
+  contains the Qwen-lineage vectors under no mapping, in no order.
+- **E1 binding consequence (provenance, resolved from the repo records the same
+  day).** The QAD-native artifact binds the QAD source's OWN retrained table —
+  native NVFP4 group-16 ingestion through the same flat shard concat the FP8
+  route already uses (`convert.py:_ple_payload` validates each shard's
+  signature and concatenates the 128 in order; no reindexing exists to do, and
+  none is needed). Our current artifacts need nothing: fp8mtp is single-source
+  coherent — its PLE is the RadixArk source's own layer-1 table, byte-preserved
+  through both conversion stages (convert.py emits the shards as-is; dense_fp8
+  copies the PLE table byte for byte), and its dense weights are the same
+  source's, so no shipped or planned artifact mixes lineages, and the QAD PLE
+  cannot be sourced from fp8mtp's table. The hash scheme
+  (`kSizes`/`kOffsets`/`kMultipliers`) is architecture-constant, not a trained
+  parameter, so bucket indexing carries across the QAD retraining; that
+  invariance cannot be value-validated (the values are lineage-specific) and is
+  accepted behaviorally through D3's PPL and acceptance records.
+- **E2 — NVFP4 group-16 PLE format route (five parts, like A and B; after C).**
+  - E2a storage spec: the NVFP4 group-16 PLE layout — E2M1 codes (low-nibble
+    first) + per-16 E4M3 scales along the 160-element row, no global scale word
+    (QAD omits `scale_2`); spec'd in `tensor-formats.md` and `storage-layouts.md`
+    beside the MXFP8 spec (A1).
+  - E2b converter: source-signature validation (`weight` U8 `[2500012, 80]` +
+    `weight_scale` F8_E4M3 `[2500012, 10]` per shard, 128 shards, corrupt
+    metadata via the existing ignore-set) and the flat shard concat into the one
+    table payload — mirroring the FP8 PLE route structurally.
+  - E2c binder: the table byte-length/format assert becomes recipe-dependent
+    (FP8 160 B/row vs NVFP4 ~90 B/row); `kPleRows` and the hash constants are
+    unchanged.
+  - E2d kernels: NVFP4 rows dequant-in-gather vs a new gather kernel; the
+    staged FP8 contract (`kPleEmbeddingDim` bytes/token in `ple_stage.h/.cpp`)
+    and the first PLE consumer's format decide where the decode lives.
+  - E2e oracle: the NVFP4 group-16 decode (E2M1 × per-16 E4M3) at real row
+    shapes — the same independent-oracle discipline as every NVFP4 bank (B4).
+- Side effect to record in D: the QAD PLE resolves at ~28.8 GB NVFP4 (not the
+  ~225 MB the earlier shard read implied) vs 51.2 GB FP8 — faulted-row bytes
+  roughly halve, so the SP-6 cold-collapse case (169–171 → 2.14 GB/s, 114.9
+  µs/faulted row) persists at reduced scale rather than evaporating.
+- Estimate: E1 is closed (0.5 d, benign); E2 is bounded like B (2–3 d) — spec
+  and converter/binder are small, the gather/consumer kernel carries the
+  effort, and no gating unknown remains in this plan.
 
 ## 7. Effort estimate (single owner, rough; for evaluation)
 
@@ -220,13 +265,14 @@ structurally different pyramid — pruned to used rows, re-indexed, or re-config
 | B4 + D1 | oracle + tests | 1 d | low |
 | C1–C4 | source adapter + recipe | 2–3 d | low (mechanical, wide validation surface) |
 | D2–D4 | GPU evidence campaign | 2–3 d | low |
-| E1 | PLE row-space/mapping verification (packer scheme + shard row counts) | 0.5 d | **can gate artifact viability** (blocked fork is packer-dependent) |
-| E2 | PLE gather/consumer kernel work (after E1) | TBD after E1 | low-medium once the row space is known |
-| **Total** | | **~3–4 weeks if E1 resolves benignly** | dominated by A4; the E1 blocked fork is the timeline risk |
+| E1 | PLE row-space/mapping verification | closed 2026-10-15 (0.5 d) | resolved benignly: same row space, retrained values, no remap (§6) |
+| E2 | NVFP4 group-16 PLE format route (E2a–E2e, §6) | 2–3 d | low-medium: mirrors the existing NVFP4 bank pattern; the gather/consumer kernel carries the effort |
+| **Total** | | **~3–4 weeks** | dominated by A4; E1 is closed and no gating unknown remains |
 
-Sequencing (corrected): E1 first (its outcome gates artifact viability), then
-C (unblocks everything on real data), then B (small, independent), then A
-(largest), with D woven in per item. Run O3's scale read before drafting A1 —
+Sequencing: E1 is closed, so C first (unblocks everything on real data), then
+B (small, independent), then A (largest), with E2's format route landing beside
+A (its spec and oracle follow the same five-part pattern) and D woven in per
+item. Run O3's scale read before drafting A1 —
 a 15-minute shard read that decides whether "no global scale word" survives;
 don't spec the layout first.
 
@@ -237,20 +283,22 @@ not as a servable artifact.
 
 Lane note: the artifact and kernels serve both lanes, and the 5090 (`sm_120a`)
 is the default build target — the MXFP8 compile probe covers both `sm_120a` and
-`sm_121a`, and each evidence row in D records which lane it came from. If E1
-resolves benignly, the artifact shrinks from ~126 GB toward ~70–75 GB (MXFP8
-dense leaves + a ~225 MB PLE; order estimate pending C), which materially
-changes the 5090 tiered picture (headroom against the 73.7 GiB SP-7 tiered
-load ceiling).
+`sm_121a`, and each evidence row in D records which lane it came from. E1
+resolved benignly but the PLE is ~28.8 GB NVFP4 (not ~225 MB), so the artifact
+shrinks from ~126 GB toward ~95–105 GB (MXFP8 dense leaves at −4.15 GB, the
+halved PLE at −22.4 GB, W4A16 MTP banks at −3.6 GB; order estimate pending C),
+which still changes the 5090 tiered picture materially (headroom against the
+73.7 GiB SP-7 tiered load ceiling).
 
 ## 8. Open questions
 
-- **O1** (re-scoped) the QAD packer's PLE row-space/compaction scheme — the
-  mapping from the vendor pyramid (16 prime-sized ~20M-row tables, hashed into
-  a 320,001,536-row space) to the QAD shards (11 × ~2.5M rows). Resolved
-  negative on the original premise: the runtime pins the FP8 row format AND the
-  exact table byte length as compile-time constants (`gather_ple_fp8` asserts
-  320,001,536 × 160). The open part is the packer's mapping (E1, §6).
+- **O1** (resolved 2026-10-15, E1) the QAD PLE row-space/mapping question is
+  closed: the QAD export is the full 320,001,536-row space in 128 shards of
+  2,500,012 rows — the same space and shard split as our source — with values
+  retrained during QAD distillation and no remap of the Qwen-lineage vectors
+  under any mapping. The binding is native ingestion of the source's own table
+  (§6). The residual assumption — hash-scheme invariance across the retraining
+  — is accepted behaviorally through D3's PPL and acceptance records.
 - **O2** (resolved) MXFP8 MMA exists on both lanes via `mma.sync
   .kind::mxf8f6f4.block_scale ... ue8m0` (compile-verified `sm_120a` +
   `sm_121a`, CUDA 13.4.92); tcgen05 is unsupported on both and is not the

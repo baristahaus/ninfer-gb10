@@ -29,6 +29,22 @@ inline Tensor as_dense(const Weight& weight) {
 
 // Geometry describes one complete encoded parent. Regions address its logical elements;
 // padding and scale words do not belong to that element domain.
+struct Exl3BankGeometry {
+    // Directory-aware planes (SP-7 contract section 4). `trellis_extents` and `k2` are
+    // per expert, in expert id order; mixed bitrates give unequal extents.
+    std::uint64_t trellis_offset = 0;
+    std::uint64_t trellis_bytes  = 0;
+    std::uint64_t suh_offset     = 0;
+    std::uint64_t suh_bytes      = 0;
+    std::uint64_t svh_offset     = 0;
+    std::uint64_t svh_bytes      = 0;
+    std::uint32_t experts         = 0;
+    std::uint32_t rows_per_expert = 0;
+    std::uint32_t codebook       = 0;  // 0 = 3inst, 1 = mcg, 2 = mul1
+    std::vector<std::uint32_t> trellis_extents;
+    std::vector<std::uint32_t> k2;
+};
+
 struct WeightGeometry {
     QType format       = QType::BF16;
     QuantLayout layout = QuantLayout::Contiguous;
@@ -47,6 +63,7 @@ struct WeightGeometry {
     std::uint64_t scale_offset        = 0;
     std::uint64_t scale_bytes         = 0;
     std::uint64_t divisor_offset      = 0;
+    Exl3BankGeometry exl3;  // Empty for every non-EXL3 geometry.
 };
 
 [[nodiscard]] WeightGeometry weight_geometry(QType format, QuantLayout layout,

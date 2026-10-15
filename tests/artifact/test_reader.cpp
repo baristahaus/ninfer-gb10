@@ -22,11 +22,11 @@ void file_set_and_bindings() {
     require(bytes.size() == 528 &&
                 std::equal(bytes.begin(), bytes.end(), fixture.payload.begin() + 256),
             "cross-file parent bytes changed");
-    require(reader.read_range(1344, 0).empty(), "empty terminal range failed");
-    rejects([&] { (void)reader.read_range(1344, 1); }, "out-of-range read accepted");
+    require(reader.read_range(7940, 0).empty(), "empty terminal range failed");
+    rejects([&] { (void)reader.read_range(7940, 1); }, "out-of-range read accepted");
     rejects([&] { (void)reader.geometry(reader.find("unused")); },
             "unknown selected encoding accepted");
-    rejects([&] { (void)reader.read_range(1280, 64); }, "required missing part accepted");
+    rejects([&] { (void)reader.read_range(7876, 64); }, "required missing part accepted");
 
     Binder binder(reader);
     const auto full = binder.parameter("matrix", {2, 130});
@@ -184,10 +184,83 @@ void invalid_directories() {
 
 } // namespace
 
+void exl3_bank_geometry_and_validation() {
+    rejects<std::invalid_argument>(
+        [&] {
+            (void)weight_geometry(QType::EXL3, QuantLayout::Exl3ExpertBank,
+                                  std::array<std::uint64_t, 2>{256, 128});
+        },
+        "EXL3 geometry resolved from the shape alone");
+
+    Fixture fixture;
+    fixture.write();
+    Reader reader(fixture.entry);
+    const auto handle = reader.find("exl3_bank");
+    reader.validate_object(handle);
+    const auto& geometry = reader.geometry(handle);
+    require(geometry.format == QType::EXL3 &&
+                geometry.layout == QuantLayout::Exl3ExpertBank &&
+                geometry.bytes == 6404 && geometry.alignment == 256,
+            "EXL3 bank lost its format, layout, size or alignment");
+    const auto& bank = geometry.exl3;
+    require(bank.experts == 2 && bank.rows_per_expert == 128 && bank.codebook == 2,
+            "EXL3 bank expert count, row split or codebook was misresolved");
+    require(bank.trellis_extents.size() == 2 && bank.trellis_extents[0] == 2048 &&
+                bank.trellis_extents[1] == 3072 && bank.k2[0] == 2 && bank.k2[1] == 3,
+            "EXL3 bank extents or bitrates were misresolved");
+    require(bank.trellis_offset == 256 && bank.trellis_bytes == 5120 &&
+                bank.suh_offset == 5376 && bank.suh_bytes == 512 &&
+                bank.svh_offset == 5888 && bank.svh_bytes == 512,
+            "EXL3 bank plane offsets were misresolved");
+
+    Binder binder(reader);
+    rejects([&] { (void)binder.set_tier(handle, {0}, {1}); },
+            "tiered EXL3 bank was accepted before the SP-4 variable-extent change");
+
+    // A 3inst codebook cannot carry the odd rate: the mul1 requirement is a load check.
+    {
+        Fixture corrupted;
+        put_word(corrupted.payload, 1536 + 6400, 0, 4);
+        corrupted.write();
+        Reader bad(corrupted.entry);
+        rejects([&] { (void)bad.geometry(bad.find("exl3_bank")); },
+                "3inst codebook accepted an odd half-integer bitrate");
+    }
+    // An extent that disagrees with its entry's 2K is a load check.
+    {
+        Fixture corrupted;
+        put_word(corrupted.payload, 1536 + 12, 4, 1);  // expert 0: 2K = 4, extent stays 2048
+        corrupted.write();
+        Reader bad(corrupted.entry);
+        rejects([&] { (void)bad.geometry(bad.find("exl3_bank")); },
+                "EXL3 extent that disagrees with its bitrate was accepted");
+    }
+    // A directory entry with nonzero reserved bytes is not a directory.
+    {
+        Fixture corrupted;
+        corrupted.payload[1536 + 13] = std::byte{7};
+        corrupted.write();
+        Reader bad(corrupted.entry);
+        rejects([&] { (void)bad.geometry(bad.find("exl3_bank")); },
+                "EXL3 directory accepted nonzero reserved bytes");
+    }
+    // A truncated object whose planes cannot end at its declared bytes is a load check.
+    {
+        Fixture corrupted;
+        auto text       = corrupted.root;
+        text["objects"][4]["bytes"] = 6400;
+        corrupted.write(false, text.dump());
+        Reader bad(corrupted.entry);
+        rejects([&] { (void)bad.geometry(bad.find("exl3_bank")); },
+                "EXL3 object accepted a size its planes do not reach");
+    }
+}
+
 int main(int argc, char** argv) {
     try {
         file_set_and_bindings();
         geometry_and_views();
+        exl3_bank_geometry_and_validation();
         mapped_shards();
         invalid_directories();
         // Optional production-writer fixture or explicitly selected real artifact.

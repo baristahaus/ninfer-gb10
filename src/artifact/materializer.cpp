@@ -210,6 +210,10 @@ MaterializedArtifact materialize(const Reader& reader, MaterializationPlan&& pla
     const auto upload_start = std::chrono::steady_clock::now();
     for (const auto& tier : plan.tier_objects) {
         const auto& geometry = reader.geometry(tier.object);
+        if (geometry.format == QType::EXL3) {
+            // Refused at plan time (Binder::set_tier); this is the load-time backstop.
+            throw ArtifactError("tiered EXL3 banks require the SP-4 variable-extent change");
+        }
         const auto rows      = geometry.shape[0];
         const auto experts   = tier.new_order.size();
         if (geometry.shape.size() != 2 || rows == 0 || geometry.shape[1] == 0 ||

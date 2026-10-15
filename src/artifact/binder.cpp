@@ -49,6 +49,12 @@ void Binder::set_tier(ObjectHandle object, const std::vector<std::uint32_t>& hot
         shape[0] == 0 || shape[1] == 0) {
         throw ArtifactError("tiered bank requires an untouched two-dimensional object");
     }
+    if (reader_.geometry(object).format == QType::EXL3) {
+        // SP-4's tiered packing assumes one constant per-expert byte size per bank; EXL3's
+        // per-expert bitrates give unequal extents, so tiering needs the SP-4 variable-extent
+        // change (contract section 5) and is refused here rather than packed wrongly.
+        throw ArtifactError("tiered EXL3 banks require the SP-4 variable-extent change");
+    }
     if (hot.empty() || warm.empty() || shape[0] % (hot.size() + warm.size()) != 0) {
         throw ArtifactError("tiered bank requires a strict, nonempty hot/warm expert split "
                             "whose experts divide the rows");

@@ -39,6 +39,11 @@ WeightId Bindings::parameter(std::string name, artifact::Shape shape,
         case artifact::ActivationPolicy::AllowA4:
             result.policy = ops::LinearPolicy::AllowA4;
             break;
+        case artifact::ActivationPolicy::AllowA16:
+            // AllowA16 admits BF16 activations only (W4A16 expert banks); the
+            // activation-side contract is the A16 path.
+            result.policy = ops::LinearPolicy::A16Only;
+            break;
         }
         for (const auto& [role, binding] : use.auxiliaries) {
             if (role != "activation_input_divisor") {

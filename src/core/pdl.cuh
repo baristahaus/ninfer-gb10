@@ -36,10 +36,21 @@ launch_dependent(const LaunchConfig& launch, void (*kernel)(KernelArgs...), Call
 }
 
 // Every producer CTA must call this at least once or exit. This enables dependent scheduling but
-// does not make producer writes visible to the consumer.
+// does not make producer writes visible to the consumer; the trigger belongs where the launch
+// overlap is wanted (typically the producer's start, so the dependent's producer-independent
+// preamble and grid dispatch hide behind the producer's execution).
 __device__ __forceinline__ void trigger_dependents() { cudaTriggerProgrammaticLaunchCompletion(); }
 
 // Call on every consumer control path before its first access to producer-dependent data.
-__device__ __forceinline__ void wait_for_dependencies() { cudaGridDependencySynchronize(); }
+// griddepcontrol.wait blocks only while prerequisite grids are still in flight, and its
+// visibility guarantee is tied to that blocking path: when the producer already completed
+// before the consumer's CTAs reach the wait (a short producer overlapped by a longer-preamble
+// consumer), the wait returns without an acquire and the consumer's first reads race the
+// producer's L2 flush. The explicit gpu-scope acquire below pairs with the producer's grid
+// completion release under every timing, so the reads after this call are always ordered.
+__device__ __forceinline__ void wait_for_dependencies() {
+    cudaGridDependencySynchronize();
+    __threadfence();
+}
 
 } // namespace ninfer::pdl

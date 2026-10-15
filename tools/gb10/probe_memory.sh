@@ -31,7 +31,7 @@ fi
 
 echo "[gb10] building memory probe" >&2
 ARCH=${NINFER_CUDA_ARCH:-$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader,nounits | head -1 | tr -d .)a}
-"$NVCC" -O3 -std=c++17 -arch="$ARCH" tools/gb10/memory_probe.cu -o "$dir/memory_probe"
+"$NVCC" -O3 -std=c++17 -arch="sm_${ARCH}" tools/gb10/memory_probe.cu -o "$dir/memory_probe"
 echo "[gb10] running memory probe" >&2
 "$dir/memory_probe" "${samples[@]}" "$@" | tee "$dir/summary.md"
 echo "[gb10] summary: $dir/summary.md" >&2

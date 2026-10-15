@@ -14,7 +14,7 @@ mkdir -p "$dir"
 
 echo "[gb10] building sync probe" >&2
 ARCH=${NINFER_CUDA_ARCH:-$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader,nounits | head -1 | tr -d .)a}
-"$NVCC" -O3 -std=c++17 -arch="$ARCH" tools/gb10/sync_probe.cu -o "$dir/sync_probe"
+"$NVCC" -O3 -std=c++17 -arch="sm_${ARCH}" tools/gb10/sync_probe.cu -o "$dir/sync_probe"
 
 {
     echo "## Round-boundary probe — $(date -u +%FT%TZ)"

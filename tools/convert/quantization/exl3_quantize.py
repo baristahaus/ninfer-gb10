@@ -11,8 +11,9 @@ Three pieces, each verified against ``exl3.py`` (the exact decode oracle):
   constrained at both ends, so the traced path closes the ring. Every position evaluates all
   65,536 window states, grouped as ``2**(16-K)`` out-edges by ``2**K`` branch candidates whose
   in-edge is the state's top ``16-K`` bits (section 2.4's shift relation
-  ``s_i = ((s_{i-1} << K) | new) & 0xFFFF``). Integer rates 1..8 for every codebook;
-  the half-integer MUL1 rates land as the follow-up piece.
+  ``s_i = ((s_{i-1} << K) | new) & 0xFFFF``). Integer rates 1..8 for every codebook; the
+  half-integer MUL1 rates (k2 = 3, 5, 7) take the same two-pass structure with per-ring-
+  position step widths, the accumulated costs indexed by each position's next out-edge.
 - ``incoherence`` is step 2's transform sequence: output-channel scales folded into ``svh``,
   the output-side Hadamard, block-RMS input-channel scales and the codebook scale folded into
   ``suh``, the input-side Hadamard, and the global scale folded into ``suh``. The division
@@ -46,9 +47,12 @@ def _validate_pack_rate(k2: int) -> None:
     exl3.validate_rate(k2, "3inst" if k2 % 2 == 0 else "mul1")
 
 
-def _validate_integer_rate(k2: int) -> None:
-    if k2 % 2 or not 2 <= k2 <= 16:
-        raise NotImplementedError(f"integer rates only for now: k2={k2} (half-integer MUL1 follows)")
+def _validate_quantize_rate(k2: int, codebook: str) -> None:
+    """Every admitted rate reaches the Viterbi: integer for all codebooks, half-integer MUL1."""
+
+    if not 2 <= k2 <= 16:
+        raise ValueError(f"k2={k2} outside the admitted 2..16 range")
+    exl3.validate_rate(k2, codebook)
 
 
 def _codebook_values(codebook: str, device: torch.device) -> torch.Tensor:
@@ -186,6 +190,79 @@ def _backward(
     return states, wrap_edge
 
 
+def _frac_viterbi_pass(
+    targets: torch.Tensor,  # [B, 256] float32, the sequence this pass covers
+    codebook_values: torch.Tensor,  # [65536] float32
+    ring_widths: torch.Tensor,  # [256] int64: the RING position's step width at each pass index
+    wrap_state: torch.Tensor | None,  # [B] int64: position 0's constrained in-edge, or None
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """One DP pass over positions with per-ring-position step widths.
+
+    The state at position i is the 16-bit window ending at position i's last bit (section 2.4),
+    so position i's d_i new bits enter at the state's low end, its in-edge shared with position
+    i-1 is ``s >> d_i``, and its out-edge shared with position i+1 is ``s & (2^(16-d_{i+1}) -
+    1)`` -- the accumulated costs after each position are indexed by that next edge, whose
+    width follows the NEXT position's step. The out-edge group's free part is the state's HIGH
+    bits, so the regroup is a reshape [B, 2^d_{i+1}, 2^(16-d_{i+1})] minimized along the high
+    axis.
+
+    Returns (final accumulated costs [B, 2^(16-d_wrap)], backpointers [256, B, E_max] uint8
+    holding each out-edge group's argmin high part, valid on the per-position prefix).
+    """
+
+    device = targets.device
+    B = targets.shape[0]
+    d0 = int(ring_widths[0].item())
+    acc = torch.zeros(B, 1 << (STATE_BITS - d0), dtype=torch.float32, device=device)
+    e_max = 1 << (STATE_BITS - int(ring_widths.min().item()))
+    states_all = torch.arange(1 << STATE_BITS, device=device, dtype=torch.int64)
+    bp = torch.zeros(TILE_WEIGHTS, B, e_max, dtype=torch.uint8, device=device)
+    for i in range(TILE_WEIGHTS):
+        d_i = int(ring_widths[i].item())
+        d_next = int(ring_widths[(i + 1) % TILE_WEIGHTS].item())
+        in_edge = states_all >> d_i  # [65536]
+        err = (codebook_values[None, :] - targets[:, i : i + 1]) ** 2  # [B, 65536]
+        cost = err + acc[:, in_edge]
+        if wrap_state is not None and i == 0:
+            # The closure constraint, as in the integer pass: masked_fill, not an inf multiply.
+            blocked = in_edge[None, :] != wrap_state[:, None]
+            cost = cost.masked_fill(blocked, float("inf"))
+        e_next = 1 << (STATE_BITS - d_next)
+        grouped = cost.reshape(B, 1 << d_next, e_next)  # state = h * e_next + edge
+        best, argmin = grouped.min(dim=1)  # [B, e_next], argmin = the high part h
+        bp[i, :, :e_next] = argmin.to(torch.uint8)
+        acc = best
+    return acc, bp
+
+
+def _frac_backward(
+    bp: torch.Tensor,  # [256, B, E_max] uint8, this pass's backpointers
+    start_edge: torch.Tensor,  # [B] int64: the final position's out-edge
+    ring_widths: torch.Tensor,  # [256] int64, in this pass's order
+    order: torch.Tensor | None = None,  # [256] int64: the ring position of pass index i
+    stop_at_zero: bool = False,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Trace back through the frac backpointers: edge e (shared with i+1) -> h = bp[i, e] ->
+    state = h * e_next + e -> next edge = state >> d_i (shared with i-1)."""
+
+    device = start_edge.device
+    B = start_edge.shape[0]
+    states = torch.zeros(B, TILE_WEIGHTS, dtype=torch.int64, device=device)
+    edge = start_edge.clone()
+    batch = torch.arange(B, device=device)
+    for i in range(TILE_WEIGHTS - 1, -1, -1):
+        ri = i if order is None else int(order[i].item())
+        d_next = int(ring_widths[(i + 1) % TILE_WEIGHTS].item())
+        d_i = int(ring_widths[i].item())
+        h = bp[i, batch, edge].to(torch.int64)  # [B] the high part
+        state = h * (1 << (STATE_BITS - d_next)) + edge
+        states[:, ri] = state
+        edge = state >> d_i  # the in-edge shared with position i-1
+        if stop_at_zero and ri == 0:
+            break
+    return states, edge
+
+
 def tile_lane_perm(device: torch.device) -> torch.Tensor:
     """Ring position -> tile element index within a 16x16 tile, [256].
 
@@ -208,8 +285,7 @@ def quantize_tiles(targets: torch.Tensor, k2: int, codebook: str) -> tuple[torch
     the decoded values bit-exactly.
     """
 
-    _validate_integer_rate(k2)
-    exl3.validate_rate(k2, codebook)
+    _validate_quantize_rate(k2, codebook)
     if targets.shape[-1] != TILE_WEIGHTS:
         raise ValueError("quantize_tiles expects 256-position tiles")
     device = targets.device
@@ -221,15 +297,28 @@ def quantize_tiles(targets: torch.Tensor, k2: int, codebook: str) -> tuple[torch
     # is a valid ring and its boundary at ring position 0 estimates the wrap state.
     order_pass1 = torch.tensor([(i + roll) % TILE_WEIGHTS for i in range(TILE_WEIGHTS)],
                                device=device)
-    targets_pass1 = targets[:, order_pass1]
-    acc1, argmin1 = _viterbi_pass(targets_pass1, cb, k2, None)
-    _, wrap_state = _backward(argmin1, acc1.argmin(dim=1), k2, order=order_pass1, stop_at_zero=True)
-
-    # Pass 2: the natural order, position 0's in-edge constrained to the estimated wrap state.
-    acc2, argmin2 = _viterbi_pass(targets, cb, k2, wrap_state)
-    # The ring closes at both ends on the same boundary: the final position's out-edge is the
-    # wrap state, and the traced path is the optimum under that closure.
-    states, _ = _backward(argmin2, wrap_state, k2)
+    if k2 % 2 == 0:
+        targets_pass1 = targets[:, order_pass1]
+        acc1, argmin1 = _viterbi_pass(targets_pass1, cb, k2, None)
+        _, wrap_state = _backward(argmin1, acc1.argmin(dim=1), k2, order=order_pass1,
+                                  stop_at_zero=True)
+        # Pass 2: the natural order, position 0's in-edge constrained to the estimated wrap
+        # state. The ring closes at both ends on the same boundary: the final position's
+        # out-edge is the wrap state, and the traced path is the optimum under that closure.
+        acc2, argmin2 = _viterbi_pass(targets, cb, k2, wrap_state)
+        states, _ = _backward(argmin2, wrap_state, k2)
+    else:
+        # The half-integer rates: alternating d and d+1-bit steps (mul1 only). The same
+        # two-pass structure with the per-ring-position widths; the rolled pass keeps the
+        # ring's own width at each rolled position (the even roll preserves the period-2
+        # pattern, but the code follows the ring positions, not the pattern).
+        widths = torch.as_tensor(exl3.step_widths(k2), dtype=torch.int64, device=device)
+        targets_pass1 = targets[:, order_pass1]
+        acc1, bp1 = _frac_viterbi_pass(targets_pass1, cb, widths[order_pass1], None)
+        _, wrap_state = _frac_backward(bp1, acc1.argmin(dim=1), widths[order_pass1],
+                                       order=order_pass1, stop_at_zero=True)
+        _, bp2 = _frac_viterbi_pass(targets, cb, widths, wrap_state)
+        states, _ = _frac_backward(bp2, wrap_state, widths)
     values = cb[states]
     return values, states.to(torch.uint16)
 

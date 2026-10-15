@@ -23,6 +23,7 @@ from tools.convert.quantization import exl3_quantize as q
 
 FIXTURE = Path(__file__).resolve().parents[2] / "fixtures" / "exl3" / "exllamav3-1.6.1.json"
 INTEGER_RATES_K2 = (2, 4, 6, 8, 10, 12, 14, 16)
+FRAC_RATES_K2 = (3, 5, 7)  # half-integer shifts, mul1 only
 
 
 def _u16(text: str) -> np.ndarray:
@@ -69,13 +70,11 @@ def test_pack_round_trips_every_fixture_tile(fixture: dict) -> None:
 
 def test_quantize_tiles_reach_zero_error_on_fixture_tiles(fixture: dict) -> None:
     """The fixture's own ring decodes exactly to its inner weights, so a correct tail-biting
-    Viterbi must find a zero-error ring for the same target on every integer-rate tile."""
+    Viterbi must find a zero-error ring for the same target on every admitted tile."""
 
     covered = set()
     for tile in fixture["tiles"]:
         k2, codebook = tile["k2"], tile["codebook"]
-        if k2 % 2:
-            continue  # the half-integer DP lands as the follow-up piece
         targets = _tile_targets(tile)
         values, states = q.quantize_tiles(targets[None], k2, codebook)
         # Bit-exact against the target: the decoded FP16 patterns in sequence order equal
@@ -85,7 +84,8 @@ def test_quantize_tiles_reach_zero_error_on_fixture_tiles(fixture: dict) -> None
         expected_seq = _u16(tile["inner"]).reshape(16, 16)[rows, cols]
         assert (state_bits == expected_seq).all(), (k2, codebook)
         covered.add((k2, codebook))
-    assert covered == {(k2, cb) for k2 in INTEGER_RATES_K2 for cb in exl3.CODEBOOKS}
+    assert covered == ( {(k2, cb) for k2 in INTEGER_RATES_K2 for cb in exl3.CODEBOOKS}
+                        | {(k2, "mul1") for k2 in FRAC_RATES_K2} )
 
 
 def test_emitted_states_are_consistent_rings(fixture: dict) -> None:
@@ -94,8 +94,6 @@ def test_emitted_states_are_consistent_rings(fixture: dict) -> None:
 
     for tile in fixture["tiles"]:
         k2, codebook = tile["k2"], tile["codebook"]
-        if k2 % 2:
-            continue
         targets = _tile_targets(tile)
         _, states = q.quantize_tiles(targets[None], k2, codebook)
         packed = q.pack_trellis(states, k2)
@@ -105,11 +103,12 @@ def test_emitted_states_are_consistent_rings(fixture: dict) -> None:
 
 def test_quantize_tiles_zero_error_on_constructed_rings() -> None:
     """A random valid ring's decoded weights are an achievable target by construction;
-    the Viterbi must reach zero error on every integer rate and codebook."""
+    the Viterbi must reach zero error on every admitted rate and codebook."""
 
     rng = np.random.default_rng(20261015)
-    for k2 in INTEGER_RATES_K2:
-        for codebook in exl3.CODEBOOKS:
+    cases = [(k2, cb) for k2 in INTEGER_RATES_K2 for cb in exl3.CODEBOOKS]
+    cases += [(k2, "mul1") for k2 in FRAC_RATES_K2]
+    for k2, codebook in cases:
             ring_bits = rng.integers(0, 2, size=(1, 128 * k2), dtype=np.uint8)
             words = np.packbits(ring_bits.reshape(-1, 8), axis=-1)  # not the storage order; fix below
             # Build the trellis elements from the ring bits directly (MSB-first per word).

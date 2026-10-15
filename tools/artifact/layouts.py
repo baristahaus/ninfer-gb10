@@ -18,6 +18,7 @@ from .formats import (
     DirectFormat,
     Exl3Format,
     Fp8RowFormat,
+    Mxfp8Format,
     Nvfp4Format,
     NumericFormat,
     QuantFormat,
@@ -135,6 +136,12 @@ ROW_SCALE_V1 = Layout(
 EXPERT_BLOCK_SCALE_K16_M128X4_V1 = Layout(
     "expert_block_scale_k16_m128x4_v1", 256, frozenset(("nvfp4",)))
 
+DENSE_BLOCK_SCALE_K32_MXFP8_V1 = Layout(
+    "dense_block_scale_k32_mxfp8_v1", 256, frozenset(("mxfp8",)))
+
+BLOCK_SCALE_K16_V1 = Layout(
+    "block_scale_k16_v1", 256, frozenset(("nvfp4",)))
+
 EXL3_EXPERT_BANK_V1 = Layout("exl3_expert_bank", 256, frozenset(("exl3",)))
 
 LAYOUTS = MappingProxyType(
@@ -144,6 +151,8 @@ LAYOUTS = MappingProxyType(
             CONTIGUOUS_LE_V1,
             ROW_SPLIT_K128_V1,
             BLOCK_SCALE_K16_M128X4_V1,
+            DENSE_BLOCK_SCALE_K32_MXFP8_V1,
+            BLOCK_SCALE_K16_V1,
             ROW_SCALE_V1,
             EXPERT_BLOCK_SCALE_K16_M128X4_V1,
             EXL3_EXPERT_BANK_V1,
@@ -291,6 +300,85 @@ def row_scale_geometry(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class DenseBlockScaleGeometry:
+    """Plane geometry of ``dense_block_scale_k32_mxfp8_v1``."""
+
+    n: int
+    k: int
+    groups_per_row: int
+    code_plane_bytes: int
+    scale_plane_offset: int
+    scale_plane_bytes: int
+    payload_bytes: int
+
+
+@dataclass(frozen=True, slots=True)
+class BlockScaleK16Geometry:
+    """Plane geometry of the natural (unswizzled) ``block_scale_k16_v1``."""
+
+    n: int
+    k: int
+    groups_per_row: int
+    code_plane_bytes: int
+    scale_plane_offset: int
+    scale_plane_bytes: int
+    scale2_offset: int
+    payload_bytes: int
+
+
+def dense_block_scale_geometry(
+    format: str | Mxfp8Format, shape: Sequence[int]
+) -> DenseBlockScaleGeometry:
+    spec = _format(format)
+    if not isinstance(spec, Mxfp8Format):
+        raise ValueError("dense_block_scale_k32_mxfp8_v1 requires MXFP8")
+    n, k = _shape(shape, rank=2)
+    if k % spec.group_size != 0:
+        raise ValueError(
+            "dense_block_scale_k32_mxfp8_v1 requires K divisible by the group size"
+        )
+    code_plane_bytes = n * k
+    scale_plane_offset = align_up(code_plane_bytes, PLANE_ALIGNMENT)
+    scale_plane_bytes = n * k // spec.group_size
+    return DenseBlockScaleGeometry(
+        n=n,
+        k=k,
+        groups_per_row=k // spec.group_size,
+        code_plane_bytes=code_plane_bytes,
+        scale_plane_offset=scale_plane_offset,
+        scale_plane_bytes=scale_plane_bytes,
+        payload_bytes=scale_plane_offset + scale_plane_bytes,
+    )
+
+
+def block_scale_k16_geometry(
+    format: str | Nvfp4Format, shape: Sequence[int]
+) -> BlockScaleK16Geometry:
+    spec = _format(format)
+    if not isinstance(spec, Nvfp4Format):
+        raise ValueError("block_scale_k16_v1 requires NVFP4")
+    n, k = _shape(shape, rank=2)
+    if k % spec.group_size != 0:
+        raise ValueError(
+            "block_scale_k16_v1 requires K divisible by the group size"
+        )
+    code_plane_bytes = n * k // 2
+    scale_plane_offset = align_up(code_plane_bytes, PLANE_ALIGNMENT)
+    scale_plane_bytes = n * k // spec.group_size
+    scale2_offset = scale_plane_offset + scale_plane_bytes
+    return BlockScaleK16Geometry(
+        n=n,
+        k=k,
+        groups_per_row=k // spec.group_size,
+        code_plane_bytes=code_plane_bytes,
+        scale_plane_offset=scale_plane_offset,
+        scale_plane_bytes=scale_plane_bytes,
+        scale2_offset=scale2_offset,
+        payload_bytes=scale2_offset + 4,
+    )
+
+
 EXL3_CODEBOOK_IDS = MappingProxyType({"3inst": 0, "mcg": 1, "mul1": 2})
 EXL3_MIN_K2 = 2
 EXL3_MAX_K2 = 16
@@ -409,6 +497,14 @@ def encoded_size(
         if not isinstance(numeric_spec, Nvfp4Format):
             raise ValueError("block_scale_k16_m128x4_v1 requires NVFP4")
         return block_scale_geometry(numeric_spec, shape).payload_bytes
+    if layout_spec is DENSE_BLOCK_SCALE_K32_MXFP8_V1:
+        if not isinstance(numeric_spec, Mxfp8Format):
+            raise ValueError("dense_block_scale_k32_mxfp8_v1 requires MXFP8")
+        return dense_block_scale_geometry(numeric_spec, shape).payload_bytes
+    if layout_spec is BLOCK_SCALE_K16_V1:
+        if not isinstance(numeric_spec, Nvfp4Format):
+            raise ValueError("block_scale_k16_v1 requires NVFP4")
+        return block_scale_k16_geometry(numeric_spec, shape).payload_bytes
     if layout_spec is ROW_SCALE_V1:
         if not isinstance(numeric_spec, Fp8RowFormat):
             raise ValueError("row_scale_v1 requires a row-scaled FP8 format")

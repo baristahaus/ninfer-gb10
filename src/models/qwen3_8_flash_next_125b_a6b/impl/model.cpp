@@ -169,6 +169,13 @@ ops::FlashNextMoeWeights moe(const MoePlan& plan, const artifact::MaterializedAr
 }
 
 ops::FlashNextPleWeights ple(const PlePlan& plan, const artifact::MaterializedArtifact& artifact) {
+    if (plan.nvfp4_table) {
+        // The NVFP4 table (block_scale_k16_v1) binds; its staged gather consumer
+        // route (E2d) is not implemented yet, so the recipe cannot serve.
+        throw std::runtime_error(
+            "PLE table is NVFP4 (block_scale_k16_v1); its gather consumer route "
+            "(E2d) is not implemented yet");
+    }
     return {
         .key_projection   = bf16(artifact, plan.key_projection, 10240, 2560),
         .value_projection = bf16(artifact, plan.value_projection, 2560, 2560),

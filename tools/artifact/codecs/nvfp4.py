@@ -8,7 +8,7 @@ from typing import Sequence
 import torch
 
 from ..formats import valid_positive_fp32_word
-from ..layouts import block_scale_geometry
+from ..layouts import block_scale_geometry, block_scale_k16_geometry
 from ._tensor_bytes import (
     Payload,
     _exact_uint8_matrix,
@@ -142,3 +142,72 @@ def decode_nvfp4_words(
         ()
     )
     return codes, scales, divisor
+
+
+def encode_block_scale_k16(
+    packed_codes: torch.Tensor,
+    natural_scales: torch.Tensor,
+    scale2: torch.Tensor | bytes | bytearray | memoryview,
+    shape: Sequence[int],
+) -> bytes:
+    """Encode exact source NVFP4 words into the natural ``block_scale_k16_v1``.
+
+    Unlike the swizzled bank layout, the code plane is row-major packed E2M1
+    (low nibble first), the scale plane is the natural ``[N,K/16]`` E4M3FN word
+    matrix, and the payload ends with one little-endian FP32 ``scale_2`` word.
+    No swizzling and no numerical conversion happen.
+    """
+
+    geometry = block_scale_k16_geometry("nvfp4", shape)
+    codes = _exact_uint8_matrix(
+        packed_codes, (geometry.n, geometry.k // 2), "NVFP4 packed codes"
+    )
+    scales = _exact_uint8_matrix(
+        natural_scales,
+        (geometry.n, geometry.groups_per_row),
+        "NVFP4 scales",
+    )
+    invalid = ((scales & 0x80) != 0) | (scales == 0x7F)
+    if bool(invalid.any()):
+        raise ValueError("NVFP4 scales must be nonnegative finite E4M3FN words")
+    scale2_word = _positive_fp32_word(scale2)
+    payload = bytearray(geometry.payload_bytes)
+    payload[: geometry.code_plane_bytes] = codes.numpy().tobytes()
+    payload[
+        geometry.scale_plane_offset : geometry.scale_plane_offset
+        + geometry.scale_plane_bytes
+    ] = scales.numpy().tobytes()
+    payload[geometry.scale2_offset :] = scale2_word
+    return bytes(payload)
+
+
+def decode_block_scale_k16_words(
+    payload: Payload, shape: Sequence[int]
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Decode exact packed code, natural scale, and ``scale_2`` words."""
+
+    geometry = block_scale_k16_geometry("nvfp4", shape)
+    if _payload_length(payload) != geometry.payload_bytes:
+        raise ValueError(
+            f"NVFP4 payload has {_payload_length(payload)} bytes, "
+            f"expected {geometry.payload_bytes}"
+        )
+    raw = _payload_tensor(payload, torch.device("cpu"))
+    codes = raw[: geometry.code_plane_bytes].clone().reshape(
+        geometry.n, geometry.k // 2
+    )
+    scales = raw[
+        geometry.scale_plane_offset : geometry.scale_plane_offset
+        + geometry.scale_plane_bytes
+    ].clone().reshape(geometry.n, geometry.groups_per_row)
+    invalid = ((scales & 0x80) != 0) | (scales == 0x7F)
+    if bool(invalid.any()):
+        raise ValueError("NVFP4 scales must be nonnegative finite E4M3FN words")
+    scale2_bytes = bytes(raw[geometry.scale2_offset :].numpy())
+    scale2_word = struct.unpack("<I", scale2_bytes)[0]
+    if not valid_positive_fp32_word(scale2_word):
+        raise ValueError("NVFP4 scale_2 must be finite and positive")
+    scale2 = torch.frombuffer(
+        bytearray(scale2_bytes), dtype=torch.float32
+    ).reshape(())
+    return codes, scales, scale2

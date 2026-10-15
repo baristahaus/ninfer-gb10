@@ -163,6 +163,24 @@ WeightGeometry weight_geometry(QType format, QuantLayout layout,
         out.scale_bytes_per_row = k / 16;
         out.code_bytes          = out.elements / 2;
         out.scale_offset        = aligned(out.code_bytes, 256);
+    } else if (layout == QuantLayout::DenseBlockScaleK32Mxfp8) {
+        if (format != QType::MXFP8 || k % 32) {
+            throw std::invalid_argument("MXFP8 DenseBlockScale requires K%32=0");
+        }
+        out.group_size          = 32;
+        out.code_bytes_per_row  = k;
+        out.scale_bytes_per_row = k / 32;
+        out.code_bytes          = out.elements;
+        out.scale_offset        = aligned(out.code_bytes, 256);
+    } else if (layout == QuantLayout::BlockScaleK16) {
+        if (format != QType::NVFP4 || k % 16) {
+            throw std::invalid_argument("NVFP4 BlockScaleK16 requires K%16=0");
+        }
+        out.group_size          = 16;
+        out.code_bytes_per_row  = k / 2;
+        out.scale_bytes_per_row = k / 16;
+        out.code_bytes          = out.elements / 2;
+        out.scale_offset        = aligned(out.code_bytes, 256);
     } else {
         throw std::invalid_argument("unknown quantized weight layout");
     }

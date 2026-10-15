@@ -1,6 +1,6 @@
 # NInfer Persistent Tensor Numeric Formats
 
-This reference defines the ten persistent numeric tensor formats accepted by current `.ninfer`
+This reference defines the twelve persistent numeric tensor formats accepted by current `.ninfer`
 artifacts: their logical words, quantization semantics, canonical reference encoders where
 applicable, and conformance boundaries. [Container framing](artifact-container.md),
 [physical layouts](storage-layouts.md), weight recipes and runtime-state codecs are defined
@@ -8,7 +8,7 @@ separately.
 
 ## 1. Registered formats
 
-NInfer has exactly eleven persistent numeric tensor formats in five categories.
+NInfer has exactly twelve persistent numeric tensor formats in five categories.
 
 Direct scalar formats preserve one logical scalar word per tensor element:
 
@@ -39,6 +39,12 @@ The row-scaled floating-point weight format is:
 | Canonical name | Code | Scale granularity | Scale |
 |---|---|---|---|
 | `fp8_e4m3fn_row_bf16` | E4M3FN, 8 bits/weight | one multiplier per logical row | BF16 |
+
+The block-exponent floating-point weight format is:
+
+| Canonical name | Code | K group | Block scale | Global field |
+|---|---|---:|---|---|
+| `mxfp8` | E4M3FN, 8 bits/weight | 32 | one UE8M0 exponent word/group | none |
 
 The trellis-coded weight format is:
 
@@ -280,6 +286,13 @@ calibration is not part of this weight format. In particular, a
 site-level input divisor used by an NVFP4 execution path is a separate model-role tensor and cannot
 be inferred from `nvfp4`, its block scales, or `d_w`.
 
+The global field's role is layout-specific, not format-specific. The swizzled bank layouts
+(`block_scale_k16_m128x4_v1`, `expert_block_scale_k16_m128x4_v1`) end with a positive weight
+*divisor* `d_w` as defined above. The natural layout `block_scale_k16_v1` instead ends with a
+positive *multiplier* `scale_2`: its represented weight is
+`decode_e2m1(c) * decode_e4m3fn(s) * scale_2`. The code and group-scale words carry the same
+meaning in both layouts.
+
 ### 3.4 `fp8_e4m3fn_row_bf16`
 
 `fp8_e4m3fn_row_bf16` is a rank-two weight matrix `[N,K]` with positive dimensions. Every logical
@@ -334,6 +347,33 @@ qualified bit-exactly against exllamav3 v1.6.1.
 The format does not define how a floating-point source is quantized to a ring. The import recipe
 preserves an existing EXL3 checkpoint's rings verbatim; the quantize route names its own method
 (contract section 6.2).
+
+### 3.6 `mxfp8`
+
+`mxfp8` is a block-exponent floating-point weight representation. For a logical matrix `[N,K]`
+with `K % 32 == 0`, every K-axis group of 32 weights carries exactly one unsigned 8-bit UE8M0
+exponent word. The format has no global scale field: a UE8M0 exponent is its own
+power-of-two scale.
+
+The E4M3FN code meaning is the one defined in Section 3.3. A UE8M0 word `e` in `[0, 255]` decodes
+to the exact scale `2^(e - 127)`; the word is the biased exponent itself, with no sign, mantissa,
+or infinity/NaN forms. Every one of the 256 words is valid.
+
+For code word `c[n,k]` and exponent word `s[n,g]` with `g = floor(k/32)`, the exact represented
+weight is:
+
+```text
+W[n,k] = decode_e4m3fn(c[n,k]) * 2^(s[n,g] - 127)
+```
+
+`import_encoded` copies both planes without requantizing, rescaling, or rebiasing them. The
+product is a multiplication by a power of two only, so the represented values inherit the E4M3FN
+domain exactly and no accumulation error is introduced by the scale.
+
+The format does not define how a floating-point source is quantized to E4M3FN codes and UE8M0
+exponents, nor how activations are quantized at execution time. A recipe either preserves
+already-selected code and exponent words exactly or names its conversion method. Site-level
+activation scales are separate compute concerns, not persistent fields of this format.
 
 ## 4. Grouped signed-integer tensor model
 

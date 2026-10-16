@@ -424,6 +424,19 @@ same corpus-continuation protocol — 33.3 → 26.6 tok/s. The 2026-10-16 resear
   frozen-original ceiling. Only ~10.6 pp of the gap is irreducible; ~31 pp is the
   trainable part. Recovering it takes tokens/round from ~1.92 toward ~2.4 and
   serving throughput up ~20%.
+- **Correction sub-option closed by measurement (2026-10-16 15:20Z).** Paired
+  final-layer hidden states were dumped for both targets on the quick corpus
+  (261,167 aligned positions, temporary `NINFER_SCORE_HIDDEN_DUMP` tap, removed
+  after use). The original-minus-abliterated delta has norm ~49.9 against hidden
+  norms ~174 (≈29% relative), but it is **not** a systematic shift: the mean
+  vector carries 2.4% of the delta energy, rank-256 of the centered delta
+  carries 35%, and a full-rank ridge linear map of the state explains ~13%.
+  The difference is high-rank, per-token computational divergence of the 144
+  changed weight matrices — an affine or low-rank correction at the MTP bridge
+  cannot capture it. This closes the "affine/low-rank input correction" route
+  and leaves distillation (learning the mapping nonlinearly through the draft
+  stack) as the only engine-compatible lever. The paired dumps remain on the
+  shared tank for the trainer's stage (a) warm-up data.
 
 ### F1. Objective
 

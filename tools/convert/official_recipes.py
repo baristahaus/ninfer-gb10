@@ -2,7 +2,16 @@
 
 from __future__ import annotations
 
-from .methods import cast_direct, fp8_row_maxabs, grouped_absmax, import_encoded, import_exl3_bank
+from pathlib import Path
+
+from .methods import (
+    cast_direct,
+    fp8_row_maxabs,
+    grouped_absmax,
+    import_encoded,
+    import_exl3_bank,
+    pack_exl3_dense,
+)
 from .sources.exllamav3 import (
     _check_architecture,
     check_quantization_config,
@@ -121,6 +130,67 @@ def qwen3_6_35b_a3b(model, recipe, sources):
         else:
             format = Q8
         _assign(recipe, name, format)
+
+
+def qwen3_8_27b_exl3_dense(model, recipe, sources):
+    """The 27B dense route with EXL3-encoded projections (SP-7 contract 6.2 step 5).
+
+    `sources["converted"]` names the quantize campaign's output directory: its
+    `layer_NN.pt` files carry every projection's packed result. Every quantizable
+    projection becomes an `exl3_dense_v1` object via `pack_exl3_dense`; the a/b control
+    projections and every non-projection tensor keep the groupwise recipe's formats from
+    the BF16 source (the a/b controls are BF16-width and BF16-consumed by their Op).
+    """
+
+    if "num_experts" in model.config:
+        raise ValueError("this official recipe requires Qwen3.5 Dense mathematics")
+    converted = sources["converted"]
+    _optional(model, recipe)
+    _assign(recipe, "text/token_embedding", Q8)
+    _assign(recipe, "text/output_head", Q6)
+
+    # Parameter role -> the converted tensor key. The model binds the mixer's
+    # query/key/value/z/output and the attention gate as separate parameters (an EXL3
+    # object cannot be row-sliced at load), matching the quantize inventory's separate
+    # tensors; the attention q_proj's packed Q+gate rows were split at quantization.
+    layers = model.config["num_hidden_layers"]
+    for name, parameter in model.parameters.items():
+        if not name.startswith("text/layers/") or not parameter.projection:
+            continue
+        if name.endswith(("/gdn/a_projection", "/gdn/b_projection")):
+            continue
+        parts = name.split("/")
+        layer = int(parts[2])
+        role = parts[-1]
+        gdn = "/gdn/" in name
+        attention = "/attention/" in name
+        converted_key = {
+            ("gdn", "query"): "gdn_query",
+            ("gdn", "key"): "gdn_key",
+            ("gdn", "value"): "gdn_value",
+            ("gdn", "z"): "z",
+            ("gdn", "output"): "out",
+            ("attention", "query"): "query",
+            ("attention", "gate"): "attention_gate",
+            ("attention", "key"): "key",
+            ("attention", "value"): "value",
+            ("attention", "output"): "output",
+            ("mlp", "gate"): "gate",
+            ("mlp", "up"): "up",
+            ("mlp", "down"): "down",
+        }.get(("gdn" if gdn else "attention" if attention else "mlp", role))
+        if converted_key is None:
+            continue
+        recipe.assign(
+            name,
+            format="exl3",
+            layout="exl3_dense_v1",
+            method="pack_exl3_dense",
+            parameters={
+                "layer_file": str(Path(converted) / f"layer_{layer:02d}.pt"),
+                "tensor": converted_key,
+            },
+        )
 
 
 def qwen3_6_35b_a3b_exl3(model, recipe, sources):
@@ -242,4 +312,5 @@ RECIPES = {
     "qwen3_8_27b_nvfp4": qwen3_8_27b_nvfp4,
     "qwen3_6_35b_a3b": qwen3_6_35b_a3b,
     "qwen3_6_35b_a3b_exl3": qwen3_6_35b_a3b_exl3,
+    "qwen3_8_27b_exl3_dense": qwen3_8_27b_exl3_dense,
 }

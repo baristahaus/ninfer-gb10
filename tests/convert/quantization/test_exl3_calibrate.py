@@ -124,16 +124,21 @@ def test_layer_tensor_inventory_groups():
         "layer_types": ["linear_attention", "linear_attention", "linear_attention",
                         "full_attention"],
         "heads": 24, "head_dim": 256,
+        "gdn_key_heads": 16, "gdn_value_heads": 48, "gdn_head_dim": 128,
     }
     from tools.convert.quantization import exl3_convert as conv
-    gdn = {name: (src, group) for name, src, group in conv.layer_tensor_inventory(config, 0)}
-    assert set(gdn) == {"qkv", "z", "out", "gate", "up", "down"}
-    assert gdn["qkv"][1] == "mixer" and gdn["out"][1] == "mixer_out"
+    gdn = {name: (src, group, rows)
+           for name, src, group, rows in conv.layer_tensor_inventory(config, 0)}
+    assert set(gdn) == {"gdn_query", "gdn_key", "gdn_value", "z", "out", "gate", "up", "down"}
+    assert gdn["gdn_query"][2] == (0, 2048) and gdn["gdn_key"][2] == (2048, 4096)
+    assert gdn["gdn_value"][2] == (4096, 10240) and gdn["out"][1] == "mixer_out"
     assert gdn["gate"][1] == "mlp" and gdn["down"][1] == "down"
-    attn = {name: (src, group) for name, src, group in conv.layer_tensor_inventory(config, 3)}
+    attn = {name: (src, group, rows)
+            for name, src, group, rows in conv.layer_tensor_inventory(config, 3)}
     assert set(attn) == {"query", "attention_gate", "key", "value", "output",
                           "gate", "up", "down"}
     assert attn["query"][1] == "mixer" and attn["output"][1] == "mixer_out"
+    assert all(entry[2] is None for entry in attn.values())
 
 
 def test_split_q_gate_interleaves_per_head():

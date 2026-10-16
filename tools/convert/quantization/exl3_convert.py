@@ -21,8 +21,10 @@ from tools.convert.quantization import exl3_calibrate as cal
 from tools.convert.quantization import exl3_quantize as q
 
 
-def layer_tensor_inventory(config: dict, layer: int) -> list[tuple[str, str, str]]:
-    """(tensor name, source suffix, Hessian group) for one layer's linears.
+def layer_tensor_inventory(
+    config: dict, layer: int
+) -> list[tuple[str, str, str, tuple[int, int] | None]]:
+    """(tensor name, source suffix, Hessian group, optional source row range).
 
     The Hessian groups follow the capture: ``mixer`` (the attention/GDN projection input),
     ``mixer_out`` (the o_proj/out_proj input), ``mlp`` (gate/up) and ``down``. The weight's
@@ -41,9 +43,16 @@ def layer_tensor_inventory(config: dict, layer: int) -> list[tuple[str, str, str
     else:
         # The a/b control projections [48, 5120] stay BF16: the C++ Op contract
         # (gdn_gating_proj.h) consumes them as BF16, and their width is not a multiple
-        # of the Hadamard block, so the incoherence transforms do not apply.
+        # of the Hadamard block, so the incoherence transforms do not apply. The fused
+        # in_proj_qkv is quantized as the model's three separate query/key/value
+        # parameters (an EXL3 object cannot be row-sliced at load), in the fused row
+        # order q, k, v with widths kg*dk, kg*dk, vg*dk.
+        kg = config["gdn_key_heads"] * config["gdn_head_dim"]
+        vg = config["gdn_value_heads"] * config["gdn_head_dim"]
         tensors = [
-            ("qkv", "linear_attn.in_proj_qkv.weight", "mixer"),
+            ("gdn_query", (f"linear_attn.in_proj_qkv.weight", 0, kg), "mixer"),
+            ("gdn_key", (f"linear_attn.in_proj_qkv.weight", kg, 2 * kg), "mixer"),
+            ("gdn_value", (f"linear_attn.in_proj_qkv.weight", 2 * kg, 2 * kg + vg), "mixer"),
             ("z", "linear_attn.in_proj_z.weight", "mixer"),
             ("out", "linear_attn.out_proj.weight", "mixer_out"),
         ]
@@ -52,7 +61,9 @@ def layer_tensor_inventory(config: dict, layer: int) -> list[tuple[str, str, str
         ("up", "mlp.up_proj.weight", "mlp"),
         ("down", "mlp.down_proj.weight", "down"),
     ]
-    return [(name, prefix + suffix, group) for name, suffix, group in tensors]
+    return [(name, prefix + (item if isinstance(item, str) else item[0]), group,
+             None if isinstance(item, str) else item[1:])
+            for name, item, group in tensors]
 
 
 def _split_q_gate(weight: torch.Tensor, config: dict) -> tuple[torch.Tensor, torch.Tensor]:
@@ -75,8 +86,10 @@ def convert_layer(reader: cal.ShardReader, config: dict, layer: int,
     inventory = layer_tensor_inventory(config, layer)
     # su is shared per Hessian group within the layer.
     su_cache: dict[str, torch.Tensor] = {}
-    for name, source, group in inventory:
+    for name, source, group, rows in inventory:
         weight = reader.get(source, device).float()
+        if rows is not None:
+            weight = weight[rows[0]:rows[1]]
         if name == "query":
             weight, gate_w = _split_q_gate(weight, config)
         elif name == "attention_gate":

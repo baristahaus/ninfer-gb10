@@ -322,9 +322,12 @@ class Recipe:
             selection = items[0][1]
             layout = selection.layout or default_layout(selection.format)
             declared_bytes = None
-            if selection.format == "exl3" or layout == "exl3_expert_bank":
+            dense_exl3 = selection.format == "exl3" and layout == "exl3_dense_v1"
+            if (selection.format == "exl3" or layout == "exl3_expert_bank") and not dense_exl3:
                 if layout != "exl3_expert_bank" or selection.format != "exl3":
-                    raise ValueError("the EXL3 format exists only as the expert bank")
+                    raise ValueError(
+                        "the EXL3 format exists only as the expert bank or the dense linear"
+                    )
                 experts = []
                 for _, value in items:
                     source = value.source
@@ -354,7 +357,7 @@ class Recipe:
                 encoded_size(
                     layout, selection.format, dims, payload_bytes=declared_bytes
                 )
-            else:
+            elif not dense_exl3:
                 encoded_size(layout, selection.format, dims)
             spec = TensorSpec(
                 f"weight/{len(weights):06d}", dims, selection.format, layout,
@@ -387,6 +390,16 @@ class Recipe:
                 ) from error
             if not isinstance(prepared, PreparedMethod):
                 raise TypeError("conversion method must return request.job(...)")
+            if dense_exl3:
+                if prepared.declared_bytes is None:
+                    raise ValueError(
+                        "a dense EXL3 method must declare its data-dependent byte size"
+                    )
+                declared_bytes = prepared.declared_bytes
+                spec = replace(spec, bytes=declared_bytes)
+                encoded_size(
+                    layout, selection.format, dims, payload_bytes=declared_bytes
+                )
             for key, value in prepared.auxiliaries.items():
                 if key in auxiliary_values and auxiliary_values[key] != value:
                     raise ValueError(

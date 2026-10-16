@@ -33,6 +33,7 @@ from .sources.logical import EncodedRows, LogicalSource
 from tools.artifact.layouts import (
     EXL3_CODEBOOK_IDS,
     exl3_bank_geometry,
+    exl3_dense_geometry,
     validate_exl3_rate,
 )
 from tools.convert.quantization.exl3 import decode_tiles
@@ -68,6 +69,9 @@ class AuxiliaryValue:
 class PreparedMethod:
     produce: Callable[[TensorOutput], None]
     auxiliaries: Mapping[AuxiliaryKey, AuxiliaryValue] = field(default_factory=dict)
+    # Data-dependent layouts declare their exact encoded size at prepare time (the EXL3
+    # routes); every shape-derived layout leaves this None.
+    declared_bytes: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,8 +103,9 @@ class PrepareRequest:
         if self.source.shape != tuple(shape):
             raise ValueError(f"source shape {self.source.shape} differs from {shape}")
 
-    def job(self, *, produce, auxiliaries=None) -> PreparedMethod:
-        return PreparedMethod(produce, {} if auxiliaries is None else dict(auxiliaries))
+    def job(self, *, produce, auxiliaries=None, declared_bytes=None) -> PreparedMethod:
+        return PreparedMethod(produce, {} if auxiliaries is None else dict(auxiliaries),
+                              declared_bytes)
 
     def values(self, begin: int, end: int) -> torch.Tensor:
         """Read the ordered logical inputs as one C-order parent element sequence."""
@@ -422,10 +427,76 @@ def import_exl3_bank(request: PrepareRequest) -> PreparedMethod:
     return request.job(produce=produce)
 
 
+def pack_exl3_dense(request: PrepareRequest) -> PreparedMethod:
+    """Emit one dense linear as an `exl3_dense_v1` object from a convert_model result.
+
+    The method parameters carry `{"layer_file": path, "tensor": name}` pointing at the
+    quantizer's layer file (the SP-7 quantize route's output); the request's logical source
+    (the BF16 checkpoint tensor) validates the [n, k] orientation only. The packed payload is
+    byte-identical to `pack_dense`'s, and the emitted planes are re-checked against the layer
+    file's own metrics (shape, bitrate, codebook, suh/svh extents) before writing. Deep
+    per-tensor verification against the composed weight is the real-check tool's job
+    (`exl3_real_check.py` + the conformance binary's argv mode), not the campaign writer's.
+    """
+
+    if request.target.format != "exl3" or request.target.layout != "exl3_dense_v1":
+        raise ValueError("pack_exl3_dense requires the exl3_dense_v1 target")
+    layer_file = request.parameters.get("layer_file")
+    tensor = request.parameters.get("tensor")
+    if not isinstance(layer_file, str) or not isinstance(tensor, str):
+        raise ValueError("pack_exl3_dense requires layer_file and tensor parameters")
+    if len(request.inputs) != 1:
+        raise ValueError("pack_exl3_dense requires exactly one logical source")
+    n, k = request.target.shape
+
+    result = torch.load(layer_file, map_location="cpu", weights_only=False)[tensor]
+    stored_n, stored_k = result["weight_shape"]
+    if (stored_n, stored_k) != (n, k):
+        raise ValueError(
+            f"{layer_file}:{tensor}: converted shape {(stored_n, stored_k)} differs from "
+            f"the logical parameter {(n, k)}"
+        )
+    k2 = int(result["k2"])
+    codebook = "mcg"
+    geometry = exl3_dense_geometry(n, k, k2, codebook)
+    if geometry.payload_bytes < 256 + 4:
+        raise ValueError("pack_exl3_dense: degenerate payload")
+
+    trellis = result["trellis"].detach().cpu().contiguous()
+    if trellis.dtype != torch.int16 or trellis.ndim != 3:
+        raise ValueError(f"{layer_file}:{tensor}: trellis must be int16 [k/16, n/16, 8*k2]")
+    if trellis.shape != (k // 16, n // 16, 8 * k2):
+        raise ValueError(
+            f"{layer_file}:{tensor}: trellis shape {tuple(trellis.shape)} disagrees with "
+            f"[{k // 16}, {n // 16}, {8 * k2}]"
+        )
+    suh = result["suh"].detach().cpu().to(torch.float16).contiguous()
+    svh = result["svh"].detach().cpu().to(torch.float16).contiguous()
+    if tuple(suh.shape) != (k,) or tuple(svh.shape) != (n,):
+        raise ValueError(f"{layer_file}:{tensor}: suh/svh planes disagree with the trellis")
+
+    def produce(output):
+        trellis_bytes = trellis.numpy().tobytes()
+        if len(trellis_bytes) != geometry.trellis_bytes:
+            raise ValueError(f"{layer_file}:{tensor}: trellis bytes disagree with the bitrate")
+        output.write_bytes(0, trellis_bytes)
+        padded = geometry.suh_offset - len(trellis_bytes)
+        if padded:
+            output.write_bytes(len(trellis_bytes), bytes(padded))
+        output.write_bytes(geometry.suh_offset, suh.numpy().tobytes())
+        output.write_bytes(geometry.svh_offset, svh.numpy().tobytes())
+        output.write_bytes(
+            geometry.codebook_offset, EXL3_CODEBOOK_IDS[codebook].to_bytes(4, "little")
+        )
+
+    return request.job(produce=produce, declared_bytes=geometry.payload_bytes)
+
+
 METHODS: dict[str, Method] = {
     "cast_direct": cast_direct,
     "grouped_absmax": grouped_absmax,
     "fp8_row_maxabs": fp8_row_maxabs,
     "import_encoded": import_encoded,
     "import_exl3_bank": import_exl3_bank,
+    "pack_exl3_dense": pack_exl3_dense,
 }

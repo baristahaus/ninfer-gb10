@@ -23,9 +23,11 @@ std::uint32_t load_acquire(std::uint32_t& value) noexcept {
 
 } // namespace
 
-PleGatherStage::PleGatherStage(const artifact::MappedRange& table)
-    : table_(table), mailbox_(sizeof(ops::FlashNextPleStageMailbox)),
-      staging_(static_cast<std::size_t>(ops::kFlashNextPleStageMaxTokens) * kPleEmbeddingDim) {
+PleGatherStage::PleGatherStage(const artifact::MappedRange& table, bool nvfp4_table)
+    : table_(table), nvfp4_table_(nvfp4_table),
+      mailbox_(sizeof(ops::FlashNextPleStageMailbox)),
+      staging_(static_cast<std::size_t>(ops::kFlashNextPleStageMaxTokens) *
+       static_cast<std::size_t>(kPleStageBytesPerToken)) {
     *mailbox() = {};
     thread_    = std::jthread([this](std::stop_token stop) { run(stop); });
 }
@@ -89,9 +91,10 @@ void PleGatherStage::run(std::stop_token stop) {
             }
             const auto count = static_cast<std::size_t>(tokens);
             std::memcpy(ids.data(), box.ids, count * sizeof(PleIds));
-            gather_ple_fp8(table_, std::span<const PleIds>(ids.data(), count),
-                           std::span<std::byte>(static_cast<std::byte*>(staging_.data()),
-                                                count * kPleEmbeddingDim));
+            gather_ple_rows(table_, nvfp4_table_,
+                            std::span<const PleIds>(ids.data(), count),
+                            std::span<std::byte>(static_cast<std::byte*>(staging_.data()),
+                                                 count * kPleStageBytesPerToken));
         } catch (...) {
             const std::lock_guard lock(mutex_);
             failure_ = std::current_exception();

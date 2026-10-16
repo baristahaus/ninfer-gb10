@@ -1,8 +1,11 @@
 #include "models/qwen3_8_flash_next_125b_a6b/impl/load_plan.h"
 
 #include "artifact/formats.h"
+#include "models/qwen3_8_flash_next/impl/ple_table.h"
 
 #include <array>
+#include <bit>
+#include <cmath>
 #include <cstdint>
 #include <initializer_list>
 #include <stdexcept>
@@ -234,6 +237,22 @@ PlePlan bind_ple(artifact::Binder& binder, const std::string& prefix) {
     out.query_norm       = device(binder, prefix + "norm_query.weight", QType::BF16, {10240});
     out.value_projection = device(binder, prefix + "value_proj.weight", QType::BF16, {2560, 2560});
     out.embedding_table = bind_ple_table(binder, prefix + "ple_embedding.ngram_embedding.weight");
+    if (nvfp4_table) {
+        const auto& table_object = binder.reader().directory().objects.at(
+            binder.reader().find(prefix + "ple_embedding.ngram_embedding.weight").index);
+        const auto word = binder.reader().read_range(
+            artifact::object_offset(table_object) +
+                ninfer::models::qwen3_8_flash_next::kPleNvfp4Scale2Offset,
+            4);
+        std::uint32_t bits = 0;
+        for (std::size_t byte = 0; byte < 4; ++byte) {
+            bits |= static_cast<std::uint32_t>(static_cast<std::uint8_t>(word[byte])) << (8 * byte);
+        }
+        out.ple_scale2 = std::bit_cast<float>(bits);
+        if (!std::isfinite(out.ple_scale2) || out.ple_scale2 <= 0.0F) {
+            throw artifact::ArtifactError("PLE NVFP4 scale_2 must be finite and positive");
+        }
+    }
     return out;
 }
 

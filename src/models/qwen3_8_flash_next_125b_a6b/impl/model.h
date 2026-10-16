@@ -1,6 +1,7 @@
 #pragma once
 
 #include "artifact/materializer.h"
+#include "core/arena.h"
 #include "ninfer/ops/flash_next_moe.h"
 #include "ninfer/ops/flash_next_gdn.h"
 #include "ninfer/ops/flash_next_ple.h"
@@ -102,6 +103,9 @@ struct RuntimeModelView {
     std::optional<EmptyDFlashWeights> dflash;
     std::optional<qwen3_8_flash_next::VisionWeights> vision;
     const artifact::MappedRange* ple_table = nullptr;
+    // True when the mapped table is the NVFP4 block_scale_k16_v1 payload; the
+    // gather sites then decode rows to FP8 codes at gather time.
+    bool ple_nvfp4 = false;
 };
 
 class LoadedModelData {
@@ -110,6 +114,9 @@ public:
 
     artifact::MaterializedArtifact backing;
     artifact::MappedRange ple_mapping;
+    // Device-resident BF16 copy of the NVFP4 table's scale_2 word (multiplier
+    // role); empty for the vendor FP8 recipe.
+    ninfer::DeviceBuffer ple_scale2_buffer;
     qwen3_8_flash_next::FrontendResources frontend;
     RuntimeModelView runtime;
 };

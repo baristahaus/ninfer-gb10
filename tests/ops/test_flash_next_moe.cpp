@@ -284,14 +284,14 @@ struct Nvfp4Bank {
                               geometry.divisor_offset);
     }
 
-    ops::FlashNextExpertBank view(const DeviceBuffer& input_divisor_buffer, int rows,
+    ops::FlashNextExpertBank view(const float* input_divisor_pointer, int rows,
                                   int columns) const {
         const auto* base = static_cast<const std::uint8_t*>(device.p);
         return {.codes  = base,
                 .scales = base + geometry.scale_offset,
                 .weight_scale_divisors =
                     reinterpret_cast<const float*>(base + geometry.divisor_offset),
-                .input_scale_divisors = static_cast<const float*>(input_divisor_buffer.p),
+                .input_scale_divisors = input_divisor_pointer,
                 .qtype                = QType::NVFP4,
                 .experts              = kExperts,
                 .rows                 = rows,
@@ -299,7 +299,7 @@ struct Nvfp4Bank {
     }
 };
 
-int run_nvfp4() {
+int run_nvfp4(const bool a16) {
     std::vector<float> input(static_cast<std::size_t>(kHidden) * kMaxTokens);
     fill_uniform(input, 4101, -1.0F, 1.0F);
     for (int t = 0; t < kMaxTokens; ++t) {
@@ -333,8 +333,9 @@ int run_nvfp4() {
             },
         .shared_down    = bf16_weight(d_shared_down, kHidden, kIntermediate),
         .shared_scale   = bf16_weight(d_shared_scale, 1, kHidden),
-        .routed_gate_up = gate_up.view(d_gate_divisors, 2 * kIntermediate, kHidden),
-        .routed_down    = down.view(d_down_divisors, kHidden, kIntermediate),
+        .routed_gate_up =
+            gate_up.view(a16 ? nullptr : static_cast<const float*>(d_gate_divisors.p), 2 * kIntermediate, kHidden),
+        .routed_down = down.view(a16 ? nullptr : static_cast<const float*>(d_down_divisors.p), kHidden, kIntermediate),
     };
 
     // Each token's 10 experts (pool slots) and their router scores (exact BF16 values on the
@@ -387,7 +388,9 @@ int run_nvfp4() {
                 const std::vector<float> row(
                     input.begin() + static_cast<std::ptrdiff_t>(t) * kHidden,
                     input.begin() + static_cast<std::ptrdiff_t>(t + 1) * kHidden);
-                const std::vector<double> x = nvfp4_activation(row, gate_up.input_divisors[expert]);
+                const std::vector<double> x =
+                    a16 ? std::vector<double>(row.begin(), row.end())
+                        : nvfp4_activation(row, gate_up.input_divisors[expert]);
                 std::vector<float> activation(kIntermediate);
                 for (int r = 0; r < kIntermediate; ++r) {
                     double gate = 0.0, up = 0.0;
@@ -403,7 +406,8 @@ int run_nvfp4() {
                     activation[r]  = bf16_round(g / (1.0 + std::exp(-g)) * bf16_round(up));
                 }
                 const std::vector<double> hidden =
-                    nvfp4_activation(activation, down.input_divisors[expert]);
+                    a16 ? std::vector<double>(activation.begin(), activation.end())
+                        : nvfp4_activation(activation, down.input_divisors[expert]);
                 for (int r = 0; r < kHidden; ++r) {
                     double value = 0.0;
                     for (int k = 0; k < kIntermediate; ++k) {
@@ -470,7 +474,8 @@ int run_nvfp4() {
         failures += guard_failures;
         const std::vector<double> want(expected.begin(),
                                        expected.begin() + static_cast<std::ptrdiff_t>(got.size()));
-        const std::string label = "Flash-Next NVFP4 MoE T=" + std::to_string(tokens);
+        const std::string label = "Flash-Next NVFP4 MoE T=" + std::to_string(tokens) +
+                                  (a16 ? " A16" : "");
         const ReductionStats stats =
             compute_reduction_stats(got.data(), want.data(), static_cast<std::int64_t>(got.size()));
         std::cout << label << ": relative L2 " << std::setprecision(4) << stats.relative_l2
@@ -486,7 +491,8 @@ int run_nvfp4() {
         failures += guard_failures;
         const std::vector<double> want(expected.begin(),
                                        expected.begin() + static_cast<std::ptrdiff_t>(got.size()));
-        failures += verify_reduction("Flash-Next NVFP4 MoE poisoned T=" + std::to_string(tokens),
+        failures += verify_reduction("Flash-Next NVFP4 MoE poisoned T=" + std::to_string(tokens) +
+                                         (a16 ? " A16" : ""),
                                      got, want, kNvfp4MoeCriterion);
     }
 
@@ -506,8 +512,9 @@ int run_nvfp4() {
         auto [got, guard_failures]     = run_rows(kIsolated);
         failures += guard_failures;
         report_tokens("isolated expert", isolated, got, want);
-        failures += verify_reduction("Flash-Next NVFP4 MoE isolated experts", got, want,
-                                     kNvfp4MoeCriterion);
+        failures += verify_reduction("Flash-Next NVFP4 MoE isolated experts" +
+                                         std::string(a16 ? " A16" : ""),
+                                     got, want, kNvfp4MoeCriterion);
     }
     upload_router(shared);
 
@@ -554,7 +561,7 @@ int run_nvfp4() {
 int main() {
     if (ninfer::test::cuda_unavailable()) { return 77; }
     try {
-        const int failures = run() + run_nvfp4();
+        const int failures = run() + run_nvfp4(false) + run_nvfp4(true);
         std::cout << (failures == 0 ? "OK" : "FAIL") << " Flash-Next MoE\n";
         return failures == 0 ? 0 : 1;
     } catch (const std::exception& error) {

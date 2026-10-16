@@ -1025,7 +1025,7 @@ ProgramImplCore::ProgramImplCore(const LoadedModelData& model_in, const Sequence
         if (model.ple_table == nullptr) {
             throw std::logic_error("Flash-Next MTP rounds require the PLE table");
         }
-        ple_gather_stage.emplace(*model.ple_table);
+        ple_gather_stage.emplace(*model.ple_table, model.ple_nvfp4);
     }
 #endif
     if (plan.persistent.flash_ple_records) {
@@ -12240,18 +12240,21 @@ ProgramImplCore::decode_ordinary_batch(std::span<const std::uint32_t> lanes,
                       sequence.ledger.end(), suffix.begin());
             std::vector<qwen3_8_flash_next::PleIds> ids(suffix_size);
             qwen3_8_flash_next::compute_ple_ids(suffix, ids);
-            auto* ple_bytes = static_cast<std::byte*>(flash_ple_host->data()) + row * 2560U;
-            qwen3_8_flash_next::gather_ple_fp8(
+            auto* ple_bytes = static_cast<std::byte*>(flash_ple_host->data()) +
+                row * static_cast<std::size_t>(kPleStageBytesPerToken);
+            qwen3_8_flash_next::gather_ple_rows(
                 *model.ple_table,
+                model.ple_nvfp4,
                 std::span<const qwen3_8_flash_next::PleIds>(ids).subspan(suffix_size - 1U, 1U),
-                std::span<std::byte>(ple_bytes, 2560U));
+                std::span<std::byte>(ple_bytes, static_cast<std::size_t>(kPleStageBytesPerToken)));
 #endif
             materialize_sequence_kv(sequence, frontier + 1, 0);
         }
 
 #ifdef NINFER_QWEN38_FLASH_NEXT
         CUDA_CHECK(cudaMemcpyAsync(flash_decode_ple->data, flash_ple_host->data(),
-                                   lanes.size() * 2560U, cudaMemcpyHostToDevice, device.stream));
+                                   static_cast<std::size_t>(lanes.size()) * static_cast<std::size_t>(kPleStageBytesPerToken),
+                                   cudaMemcpyHostToDevice, device.stream));
 #endif
 
         schedule::OrdinaryBatchContext schedule_state{

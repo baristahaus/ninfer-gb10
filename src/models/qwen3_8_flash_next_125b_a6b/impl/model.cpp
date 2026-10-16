@@ -22,6 +22,14 @@ Weight weight(const artifact::MaterializedArtifact& artifact,
     return native_weight(artifact::bind_view(reference, artifact));
 }
 
+/** Round a host float to nearest-even BF16 (bit pattern). */
+std::uint16_t bf16_round_to_nearest(float value) {
+    const std::uint32_t bits = std::bit_cast<std::uint32_t>(value);
+    const std::uint32_t lsb    = (bits >> 16) & 1;
+    const std::uint32_t rounded = (bits + 0x7FFFU + lsb) & 0xFFFF0000U;
+    return static_cast<std::uint16_t>(rounded >> 16);
+}
+
 const std::byte* data(const artifact::MaterializedArtifact& artifact,
                       const artifact::ParameterReference& reference) {
     const auto view = artifact::bind_view(reference, artifact);
@@ -182,13 +190,19 @@ ops::FlashNextMoeWeights moe(const MoePlan& plan, const artifact::MaterializedAr
     };
 }
 
-ops::FlashNextPleWeights ple(const PlePlan& plan, const artifact::MaterializedArtifact& artifact) {
+ops::FlashNextPleWeights ple(const PlePlan& plan, const artifact::MaterializedArtifact& artifact,
+                             const ninfer::DeviceBuffer& ple_scale2_buffer) {
+    Tensor embedding_scale;
     if (plan.nvfp4_table) {
-        // The NVFP4 table (block_scale_k16_v1) binds; its staged gather consumer
-        // route (E2d) is not implemented yet, so the recipe cannot serve.
-        throw std::runtime_error(
-            "PLE table is NVFP4 (block_scale_k16_v1); its gather consumer route "
-            "(E2d) is not implemented yet");
+        if (ple_scale2_buffer.bytes != 2) {
+            throw std::logic_error("PLE NVFP4 scale_2 buffer is missing");
+        }
+        // The staged FP8 codes carry the row value without the table's scale_2
+        // multiplier, so the consumer applies it exactly like the vendor table's
+        // own embedding scale object.
+        embedding_scale = Tensor(ple_scale2_buffer.p, DType::BF16, {1});
+    } else {
+        embedding_scale = tensor(artifact, plan.embedding_scale, {1});
     }
     return {
         .key_projection   = bf16(artifact, plan.key_projection, 10240, 2560),
@@ -197,7 +211,7 @@ ops::FlashNextPleWeights ple(const PlePlan& plan, const artifact::MaterializedAr
         .query_norm       = tensor(artifact, plan.query_norm, {10240}),
         .convolution_norm = tensor(artifact, plan.convolution_norm, {10240}),
         .convolution      = tensor(artifact, plan.convolution, {10240, 4}),
-        .embedding_scale  = tensor(artifact, plan.embedding_scale, {1}),
+        .embedding_scale  = embedding_scale,
     };
 }
 
@@ -257,6 +271,17 @@ LoadedModelData::LoadedModelData(BindingPlan plan, artifact::MaterializedArtifac
       frontend(take_frontend(backing, plan.frontend)) {
     runtime.weight_bytes    = backing.stats().device_capacity_bytes;
     runtime.token_embedding = bf16(backing, plan.token_embedding, 248320, 2560);
+    for (const auto& layer : plan.text_layers) {
+        if (layer.has_ple && layer.ple.nvfp4_table) {
+            // Allocated before the layer weights: the PLE consumer reads this
+            // device scalar through its weight tensor.
+            ple_scale2_buffer = ninfer::DeviceBuffer(2);
+            const std::uint16_t scale2_bf16 = bf16_round_to_nearest(layer.ple.ple_scale2);
+            ple_scale2_buffer.copy_from_host(&scale2_bf16, 2);
+            runtime.ple_nvfp4 = true;
+            break;
+        }
+    }
     std::size_t full_index  = 0;
     std::size_t gdn_index   = 0;
     for (std::size_t layer = 0; layer < kTextLayers; ++layer) {
@@ -269,7 +294,7 @@ LoadedModelData::LoadedModelData(BindingPlan plan, artifact::MaterializedArtifac
             out.key_norm          = out.projection.key_norm;
             out.output            = out.projection.output;
             out.has_ple           = source.has_ple;
-            if (source.has_ple) { out.ple = ple(source.ple, backing); }
+            if (source.has_ple) { out.ple = ple(source.ple, backing, ple_scale2_buffer); }
             out.mlp_hc     = hc(source.mlp_hc, backing);
             out.post_mixer = moe(source.moe, backing);
         } else {
@@ -280,7 +305,7 @@ LoadedModelData::LoadedModelData(BindingPlan plan, artifact::MaterializedArtifac
             out.norm             = out.projection.norm;
             out.output           = out.projection.output;
             out.has_ple          = source.has_ple;
-            if (source.has_ple) { out.ple = ple(source.ple, backing); }
+            if (source.has_ple) { out.ple = ple(source.ple, backing, ple_scale2_buffer); }
             out.mlp_hc     = hc(source.mlp_hc, backing);
             out.post_mixer = moe(source.moe, backing);
         }

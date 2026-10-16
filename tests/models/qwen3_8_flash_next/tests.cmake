@@ -22,6 +22,8 @@ set_tests_properties(ninfer_flash_next_performance_report_test PROPERTIES WORKIN
 
 ninfer_add_test(ninfer_qwen3_8_flash_next_ple_table_test
   SOURCES models/qwen3_8_flash_next/test_ple_table.cpp LIBRARIES ninfer_model_runtime)
+ninfer_add_test(ninfer_qwen3_8_flash_next_ple_nvfp4_test
+  SOURCES models/qwen3_8_flash_next/test_ple_nvfp4.cpp LIBRARIES ninfer_model_runtime)
 ninfer_add_test(ninfer_qwen3_8_flash_next_load_plan_test
   SOURCES models/qwen3_8_flash_next_125b_a6b/test_load_plan.cpp LIBRARIES ninfer_model_runtime)
 set_tests_properties(ninfer_qwen3_8_flash_next_load_plan_test PROPERTIES SKIP_RETURN_CODE 77)

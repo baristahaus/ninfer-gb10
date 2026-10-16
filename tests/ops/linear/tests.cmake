@@ -42,4 +42,4 @@ ninfer_add_op_test(ninfer_linear_bf16_a16_test
 
 ninfer_add_op_test(ninfer_linear_exl3_dense_a16_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/test_exl3_dense_a16.cpp"
-  LIBRARIES ninfer_linear_test_support)
+  LIBRARIES ninfer_linear_test_support ninfer_artifact)

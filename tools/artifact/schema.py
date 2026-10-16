@@ -7,7 +7,7 @@ import json
 from math import prod
 from typing import ClassVar, Mapping, Sequence, TypeAlias
 
-from .layouts import EXL3_EXPERT_BANK_V1, align_up, encoded_size, get_layout
+from .layouts import EXL3_DENSE_V1, EXL3_EXPERT_BANK_V1, align_up, encoded_size, get_layout
 
 U64_MAX = (1 << 64) - 1
 RAW_BYTES_V1 = "raw_bytes_v1"
@@ -150,14 +150,15 @@ def validate_encoding(obj: ArtifactObject) -> None:
         return
     try:
         alignment = get_layout(obj.layout).alignment
-        if get_layout(obj.layout) is not EXL3_EXPERT_BANK_V1:
+        if get_layout(obj.layout) not in (EXL3_EXPERT_BANK_V1, EXL3_DENSE_V1):
             size = encoded_size(obj.layout, obj.format, obj.shape)
         else:
-            # Mixed per-expert bitrates: the exact bytes are the experts' own
-            # trellis extents, validated directory-aware at load (contract 4).
+            # Mixed per-expert bitrates (bank) and the dense linear's single bitrate: the
+            # exact bytes are the trellis extents, validated against the encoded object at
+            # load (contract 4).
             if obj.bytes < 256 + 4 or obj.bytes % 4:
                 raise ArtifactError(
-                    f"{obj.id}: EXL3 bank needs at least a directory and codebook scalar"
+                    f"{obj.id}: EXL3 needs at least a trellis extent and codebook scalar"
                 )
             size = obj.bytes
     except (TypeError, ValueError) as error:

@@ -140,6 +140,17 @@ def qwen3_8_27b_exl3_dense(model, recipe, sources):
     projection becomes an `exl3_dense_v1` object via `pack_exl3_dense`; the a/b control
     projections and every non-projection tensor keep the groupwise recipe's formats from
     the BF16 source (the a/b controls are BF16-width and BF16-consumed by their Op).
+
+    Bitrate map (the campaign's rate choice, recorded here because the recipe consumes
+    its output): uniform k2 = 4 (4 bits/weight, mcg) for every projection. The budget:
+    64 layers x ~189 MiB of projection trellis plus Q8 token embedding / Q6 output head
+    lands the artifact near 14.5 GiB against the 21.5 GiB NVFP4 artifact and the 32 GiB
+    fully-hot envelope, leaving >10 GiB for KV, state slots and CUDA Graphs - so the
+    strongest rate that fits is chosen rather than a quality ladder. If a smaller
+    RAM-tier artifact is later wanted, the down-rate ladder is: mlp/down and
+    attention/output to k2 = 2.5 first (largest byte win per projected quality loss),
+    then q/k/v/gdn projections to k2 = 3, then gate/up to k2 = 3.5; each step needs its
+    own quantize campaign because the rate is fixed per campaign, not per recipe.
     """
 
     if "num_experts" in model.config:

@@ -71,6 +71,9 @@ struct PlePlan {
     artifact::ParameterReference embedding_scale;
     artifact::ParameterReference embedding_table;
     bool nvfp4_table = false;
+    // The NVFP4 table's trailing FP32 scale_2 word (multiplier role); zero when
+    // the vendor FP8 recipe's separate scale object is bound instead.
+    float ple_scale2 = 0.0F;
 };
 
 struct TextLayerPlan {

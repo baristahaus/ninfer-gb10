@@ -21,7 +21,7 @@ namespace ninfer::models::qwen3_8_flash_next {
 // staging to the device for its first PLE consumer, so the gather overlaps the layers before it.
 class PleGatherStage {
 public:
-    explicit PleGatherStage(const artifact::MappedRange& table);
+    explicit PleGatherStage(const artifact::MappedRange& table, bool nvfp4_table = false);
     ~PleGatherStage();
 
     PleGatherStage(const PleGatherStage&)            = delete;
@@ -29,7 +29,7 @@ public:
 
     [[nodiscard]] ops::FlashNextPleStageMailbox* mailbox() const noexcept;
 
-    // Token-major FP8 rows of the last answered request, kPleEmbeddingDim bytes per token.
+    // Token-major BF16 rows of the last answered request, kPleStageBytesPerToken bytes per token.
     [[nodiscard]] const void* staging() const noexcept { return staging_.data(); }
 
     // Serves requests from now until end_round(); call before submitting work that publishes.
@@ -44,6 +44,7 @@ private:
     void run(std::stop_token stop);
 
     const artifact::MappedRange& table_;
+    bool nvfp4_table_;
     PinnedHostBuffer mailbox_;
     PinnedHostBuffer staging_;
     std::mutex mutex_;

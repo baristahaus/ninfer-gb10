@@ -74,11 +74,16 @@ int run(bool fork) {
     round_to_bf16(state);
 
     const std::uint8_t fp8_values[] = {0x38, 0xb8, 0x30, 0xb0, 0x40, 0xc0};
-    std::vector<std::uint8_t> gathered(kHidden * kTokens);
-    for (std::size_t i = 0; i < gathered.size(); ++i) { gathered[i] = fp8_values[i % 6]; }
     constexpr float embedding_scale = 0.25F;
+    // Staged rows are BF16 values without the embedding scale; the exact E4M3
+    // values convert losslessly.
+    std::vector<float> staged_values(kHidden * kTokens);
+    for (std::size_t i = 0; i < staged_values.size(); ++i) {
+        staged_values[i] = static_cast<float>(fp8_e4m3(fp8_values[i % 6]));
+    }
+    const std::vector<std::uint16_t> gathered = encode(staged_values);
     std::vector<double> embedding(gathered.size());
-    for (std::size_t i = 0; i < gathered.size(); ++i) { embedding[i] = fp8_e4m3(gathered[i]) * embedding_scale; }
+    for (std::size_t i = 0; i < gathered.size(); ++i) { embedding[i] = fp8_e4m3(fp8_values[i % 6]) * embedding_scale; }
 
     std::vector<float> key_weight(static_cast<std::size_t>(kHyper) * kHidden, 0.0F);
     std::vector<float> value_weight(static_cast<std::size_t>(kHidden) * kHidden, 0.0F);
@@ -165,7 +170,7 @@ int run(bool fork) {
     DeviceBuffer d_destination_state = to_device(fork ? encode(stale) : state_bits);
     GuardedDeviceBuffer d_output(expected.size() * sizeof(std::uint16_t));
     Tensor hyper_tensor(d_hyper.p, DType::BF16, {kHyper, kTokens});
-    Tensor gathered_tensor(d_gathered.p, DType::FP8_E4M3FN, {kHidden, kTokens});
+    Tensor gathered_tensor(d_gathered.p, DType::BF16, {kHidden, kTokens});
     Tensor state_tensor(d_state.p, DType::BF16, {kHyper, kState});
     Tensor destination_state_tensor(fork ? d_destination_state.p : d_state.p, DType::BF16,
                                     {kHyper, kState});

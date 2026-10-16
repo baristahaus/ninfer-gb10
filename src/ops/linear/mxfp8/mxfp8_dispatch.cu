@@ -63,10 +63,7 @@ void mxfp8_dispatch(const Tensor& x, const Weight& weight, Tensor& out, LinearPo
     const auto* codes = static_cast<const std::uint8_t*>(weight.qdata);
     const auto* scales = static_cast<const std::uint8_t*>(weight.scales);
 
-    if (tokens == 1) {
-        if (weight.k % (32 * Mxfp8GemvSchedule::kValuesPerLane) != 0) {
-            throw std::invalid_argument("mxfp8 gemv: K must be a whole number of warp phases");
-        }
+    if (tokens == 1 && weight.k % (32 * Mxfp8GemvSchedule::kValuesPerLane) == 0) {
         const int blocks = (weight.n + Mxfp8GemvSchedule::kBlockRows - 1) /
                            Mxfp8GemvSchedule::kBlockRows;
         mxfp8_a16_gemv_kernel<Mxfp8GemvSchedule>
@@ -77,7 +74,8 @@ void mxfp8_dispatch(const Tensor& x, const Weight& weight, Tensor& out, LinearPo
     }
 
     if (weight.k % Mxfp8MmaSchedule::kBlockK != 0) {
-        throw std::invalid_argument("mxfp8 mma: K must be a whole number of K tiles");
+        throw std::invalid_argument(
+            "mxfp8 linear: K must be a whole number of warp phases (gemv) or K tiles (mma)");
     }
     for_each_token_slice(tokens, Mxfp8MmaSchedule::kBlockTokens,
                          [&](std::int32_t offset, std::int32_t count) {

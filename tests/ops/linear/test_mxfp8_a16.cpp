@@ -14,8 +14,9 @@ using namespace ninfer::test::linear;
 
 // The MXFP8 A16 fallback route: GEMV at T=1, the tiled dequant MMA beyond.
 // Shapes are the QAD recipe's MXFP8 projection sites, including the partial
-// 48-row GDN control projections. K values are whole warp phases (K % 512 == 0)
-// and whole MMA K tiles (K % 64 == 0), as the layout guarantees for these sites.
+// 48-row GDN control projections and the K=320 post-mixer gate/up leaves
+// (K % 256 != 0, so T=1 must route through the MMA path). All K values are
+// whole MMA K tiles (K % 64 == 0), as the layout guarantees for these sites.
 std::vector<Invocation> a16_calls() {
     std::vector<Invocation> calls;
     for (int t = 1; t <= 48; ++t) calls.push_back({t});
@@ -44,6 +45,18 @@ int run_mxfp8_a16() {
                           {10240, 2560, 843U, Comparison::Sampled, true, a16_calls()});
     failures += run_shape("MXFP8_A16", ActivationCompute::A16, make_mxfp8_weight,
                           {12288, 2560, 847U, Comparison::Sampled, true, a16_calls()});
+    // The post-mixer gate/up leaves are K=320: not a whole gemv warp phase, so
+    // T=1 must route through the tiled MMA path and stay correct there.
+    failures += run_shape("MXFP8_A16", ActivationCompute::A16, make_mxfp8_weight,
+                          {10240, 320, 853U, Comparison::Sampled, true, a16_calls()});
+    failures += run_shape("MXFP8_A16", ActivationCompute::A16, make_mxfp8_weight,
+                          {320, 10240, 859U, Comparison::Sampled, true, a16_calls()});
+    // The shared-expert down projection is K=640: not a whole gemv warp phase
+    // either, so it also exercises the T=1 MMA route.
+    failures += run_shape("MXFP8_A16", ActivationCompute::A16, make_mxfp8_weight,
+                          {2560, 640, 863U, Comparison::Sampled, true, a16_calls()});
+    failures += run_shape("MXFP8_A16", ActivationCompute::A16, make_mxfp8_weight,
+                          {640, 2560, 877U, Comparison::Sampled, true, a16_calls()});
 
     constexpr std::array policies{ops::LinearPolicy::A16Only, ops::LinearPolicy::AllowA8,
                                   ops::LinearPolicy::AllowA4};

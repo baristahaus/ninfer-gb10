@@ -1647,12 +1647,14 @@ TextContext::prefill_impl(std::span<const int> ids, const TextPrefill* text_pref
             }
             if constexpr (Tap::enabled) { tap.begin(x); }
 #ifdef NINFER_QWEN38_FLASH_NEXT
-            std::vector<std::byte> gathered(static_cast<std::size_t>(len) * 2560U);
-            qwen3_8_flash_next::gather_ple_fp8(
+            std::vector<std::byte> gathered(static_cast<std::size_t>(len) *
+                                            static_cast<std::size_t>(kPleStageBytesPerToken));
+            qwen3_8_flash_next::gather_ple_rows(
                 *weights_.ple_table,
+                weights_.ple_nvfp4,
                 std::span<const qwen3_8_flash_next::PleIds>(ple_ids).subspan(prompt_t0, len),
                 gathered);
-            Tensor gathered_device = work_.alloc(DType::FP8_E4M3FN, {2560, len});
+            Tensor gathered_device = work_.alloc(DType::BF16, {2560, len});
             CUDA_CHECK(cudaMemcpyAsync(gathered_device.data, gathered.data(), gathered.size(),
                                        cudaMemcpyHostToDevice, s));
             ScopedPositions scoped_ple(active_ple_embeddings_, gathered_device);

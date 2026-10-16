@@ -115,3 +115,38 @@ def test_gdn_conv_matches_the_causal_contract():
                 acc += weight[:, 0, tap].float() * x[:, source, :].float()
         # BF16 inputs and accumulation: the criterion carries the storage rounding.
         assert float((out[:, pos, :].float() - acc).abs().max()) < 0.05 * float(acc.abs().max())
+
+
+def test_layer_tensor_inventory_groups():
+    """Every layer linear maps to its capture Hessian group, with the a/b controls excluded
+    (BF16 pass-through per the C++ Op contract)."""
+    config = {
+        "layer_types": ["linear_attention", "linear_attention", "linear_attention",
+                        "full_attention"],
+        "heads": 24, "head_dim": 256,
+    }
+    from tools.convert.quantization import exl3_convert as conv
+    gdn = {name: (src, group) for name, src, group in conv.layer_tensor_inventory(config, 0)}
+    assert set(gdn) == {"qkv", "z", "out", "gate", "up", "down"}
+    assert gdn["qkv"][1] == "mixer" and gdn["out"][1] == "mixer_out"
+    assert gdn["gate"][1] == "mlp" and gdn["down"][1] == "down"
+    attn = {name: (src, group) for name, src, group in conv.layer_tensor_inventory(config, 3)}
+    assert set(attn) == {"query", "attention_gate", "key", "value", "output",
+                          "gate", "up", "down"}
+    assert attn["query"][1] == "mixer" and attn["output"][1] == "mixer_out"
+
+
+def test_split_q_gate_interleaves_per_head():
+    """The packed q_proj holds each head's Q rows then its gate rows; the split extracts
+    them in the converter's row order."""
+    device = torch.device("cuda")
+    from tools.convert.quantization import exl3_convert as conv
+    heads, d, hidden = 4, 8, 16
+    packed = torch.arange(heads * 2 * d * hidden, device=device,
+                          dtype=torch.float32).reshape(heads * 2 * d, hidden)
+    config = {"heads": heads, "head_dim": d}
+    q, gate = conv._split_q_gate(packed, config)
+    assert q.shape == (heads * d, hidden) and gate.shape == (heads * d, hidden)
+    for h in range(heads):
+        assert torch.equal(q[h * d:(h + 1) * d], packed[h * 2 * d: h * 2 * d + d])
+        assert torch.equal(gate[h * d:(h + 1) * d], packed[h * 2 * d + d: (h + 1) * 2 * d])

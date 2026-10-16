@@ -340,7 +340,7 @@ def full_attention_layer(h: torch.Tensor, w: dict, config: dict) -> torch.Tensor
     a = torch.nn.functional.scaled_dot_product_attention(q, k, v, scale=scale, is_causal=True)
     a = a * torch.sigmoid(gate)  # [B, H, T, D]
     a = a.transpose(1, 2).reshape(bsz, t, heads * d)
-    return a @ w["o"].T
+    return a @ w["o"].T, a  # (the block output, the o_proj input)
 
 
 def gdn_conv(qkv: torch.Tensor, conv_weight: torch.Tensor, taps: int) -> torch.Tensor:
@@ -380,7 +380,7 @@ def gdn_layer(h: torch.Tensor, w: dict, config: dict) -> torch.Tensor:
     o = plain_rmsnorm(o, w["gdn_norm"], config["eps"])
     z = torch.nn.functional.silu(h @ w["z"].T).reshape(bsz, t, vg, dk)
     mixed = (o * z).reshape(bsz, t, vg * dk).to(h.dtype)
-    return mixed @ w["out"].T
+    return mixed @ w["out"].T, mixed  # (the block output, the out_proj input)
 
 
 def mlp_layer(h2: torch.Tensor, w: dict) -> tuple[torch.Tensor, torch.Tensor]:
@@ -395,24 +395,29 @@ def mlp_layer(h2: torch.Tensor, w: dict) -> tuple[torch.Tensor, torch.Tensor]:
 
 def layer_forward(x: torch.Tensor, w: dict, layer: int, config: dict,
                   capture: list[torch.Tensor] | None = None) -> torch.Tensor:
-    """One Text block on a batch; when ``capture`` is a list, appends the mixer input, the MLP
-    input, and the down-projection input (the three Hessian groups) to it."""
+    """One Text block on a batch. Returns ``(x, mixer_output)``; when ``capture`` is a list it
+    receives the four Hessian groups in order: the mixer input (the attention/GDN projection
+    input), the mixer output (the o_proj/out_proj input), the MLP input (gate/up), and the
+    down-projection input."""
 
     bsz = x.shape[0]
     h = offset_rmsnorm(x, w["input_norm"], config["eps"])
     if capture is not None:
-        capture.append(h)
+        capture.append(h)  # the mixer-input group: the attention/GDN projection input
     if config["layer_types"][layer] == "full_attention":
-        x = x + full_attention_layer(h, w, config)
+        m, m_pre = full_attention_layer(h, w, config)
     else:
-        x = x + gdn_layer(h, w, config)
+        m, m_pre = gdn_layer(h, w, config)
+    if capture is not None:
+        capture.append(m_pre)  # the mixer-output group: the o_proj / out_proj input
+    x = x + m
     h2 = offset_rmsnorm(x, w["post_norm"], config["eps"])
     if capture is not None:
         capture.append(h2)
     y, mlp_hidden = mlp_layer(h2, w)
     if capture is not None:
         capture.append(mlp_hidden)  # the down-projection input, [T, intermediate]
-    return x + y
+    return x + y, m
 
 
 # ---------------------------------------------------------------------------
@@ -486,14 +491,18 @@ def calibrate(checkpoint: Path, corpus_path: Path, total_tokens: int, seq_len: i
     for layer in range(done, config["layers"]):
         w = load_layer(reader, layer, config, device)
         h_mixer = torch.zeros(config["hidden"], config["hidden"], device=device)
+        h_mixer_out = torch.zeros(config["gdn_value_heads"] * config["gdn_head_dim"],
+                                  config["gdn_value_heads"] * config["gdn_head_dim"],
+                                  device=device)
         h_mlp = torch.zeros(config["hidden"], config["hidden"], device=device)
         h_down = torch.zeros(config["intermediate"], config["intermediate"], device=device)
         x_next = torch.empty_like(x)
         for start in range(0, n_sequences, sub_batch):
             end = min(start + sub_batch, n_sequences)
             captured = []
-            x_next[start:end] = layer_forward(x[start:end], w, layer, config, capture=captured)
-            for acc, act in zip((h_mixer, h_mlp, h_down), captured):
+            x_next[start:end], _ = layer_forward(x[start:end], w, layer, config,
+                                                  capture=captured)
+            for acc, act in zip((h_mixer, h_mixer_out, h_mlp, h_down), captured):
                 flat = act.float().reshape(-1, act.shape[-1])
                 acc += flat.T @ flat
             del captured
@@ -501,6 +510,7 @@ def calibrate(checkpoint: Path, corpus_path: Path, total_tokens: int, seq_len: i
         diag = float(h_mixer.diagonal().mean())
         torch.save({
             "mixer": h_mixer.cpu(),
+            "mixer_out": h_mixer_out.cpu(),
             "mlp": h_mlp.cpu(),
             "down": h_down.cpu(),
             "tokens": torch.tensor(n_sequences * seq_len),

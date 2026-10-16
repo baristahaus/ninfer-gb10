@@ -17,10 +17,11 @@ The storage registry contains exactly these identities:
 | `row_scale_v1` | tensor layout | `fp8_e4m3fn_row_bf16` | rank 2 `[N,K]` | 256 bytes |
 | `expert_block_scale_k16_m128x4_v1` | tensor layout | `nvfp4` | rank 3 `[E,N,K]`, `N % 128 == 0`, `K % 64 == 0` | 256 bytes |
 | `exl3_expert_bank` | tensor layout | `exl3` | rank 2 `[E*N,K]`, `K % 128 == 0`, `N % 128 == 0`, byte size data-dependent | 256 bytes |
+| `exl3_dense_v1` | tensor layout | `exl3` | rank 2 `[N,K]`, `K % 128 == 0`, `N % 128 == 0`, byte size data-dependent | 256 bytes |
 | `raw_bytes_v1` | resource encoding | not applicable | nonempty byte string | 1 byte |
 
 These format/layout pairs define the current codec support. Native consumer requirements are
-covered separately in Section 9.
+covered separately in Section 10.
 
 Object alignment applies to the object's payload-relative `offset` in the `.ninfer` JSON. Internal
 plane offsets and padding belong to the selected layout. Inter-object padding belongs to the
@@ -336,7 +337,36 @@ the extents implied by `2K_e`; an odd `2K_e` requires the `mul1` codebook; `K` a
 multiples of 128; the bank's codebook is uniform; and the directory-implied planes end exactly at
 the object's byte size.
 
-## 6. `row_scale_v1`
+## 6. `exl3_dense_v1`
+
+`exl3_dense_v1` stores one dense EXL3 linear per object with logical shape `[N, K]`, `N` and `K`
+multiples of 128. It is the one-expert case of `exl3_expert_bank` without the directory plane:
+the linear carries a single bitrate `K_b` (stored as `2K_b`), so the trellis extent follows from
+the shape and the bitrate together and the object's byte size is data-dependent. Per the SP-7
+contract ([`exl3-trellis-contract.md`](exl3-trellis-contract.md) section 4):
+
+```text
+trellis_offset   = 0
+trellis_bytes    = align_up(K * N * K_b / 8, 256)
+suh_offset       = trellis_bytes
+suh_bytes        = K * 2
+svh_offset       = suh_offset + suh_bytes
+svh_bytes        = N * 2
+codebook_offset  = svh_offset + svh_bytes
+payload_bytes    = codebook_offset + 4
+```
+
+The `trellis` plane packs the exllamav3 `trellis` bytes verbatim (int16, little-endian) at its
+256-byte-aligned extent; admissible bitrates differ by at least `K·N/16` bytes (1024 at the
+smallest 128×128 linear), far above the 256-byte alignment, so the byte size determines `2K_b`
+uniquely at load. The `suh` plane is FP16 `[K]` and the `svh` plane is FP16 `[N]`. The final four
+bytes are the little-endian codebook id (`0` = `3inst`, `1` = `mcg`, `2` = `mul1`).
+
+Load validation: `N` and `K` are multiples of 128; the codebook id is known; a half-integer
+bitrate (odd `2K_b` in {3, 5, 7}) requires the `mul1` codebook; and the planes plus the codebook
+word end exactly at the object's byte size, which matches no other admissible bitrate.
+
+## 7. `row_scale_v1`
 
 `row_scale_v1` stores only rank-two `fp8_e4m3fn_row_bf16` matrices `[N,K]` with positive
 dimensions. It adds no logical or physical matrix padding. Let:
@@ -363,7 +393,7 @@ encoded by concatenating the selected code rows, recomputing the scale-plane ali
 row count, and appending the selected scale words in the same row order. It does not decode or
 requantize either plane.
 
-## 7. `raw_bytes_v1`
+## 8. `raw_bytes_v1`
 
 `raw_bytes_v1` is a resource encoding, not a tensor layout. Its enclosing object payload is
 the resource byte string itself:
@@ -378,7 +408,7 @@ trailing padding. The resource object's JSON `bytes` is its exact nonzero length
 returns the complete span unchanged. A model contract assigns a resource name and interprets those
 bytes; the common encoding does not infer that meaning from the name.
 
-## 8. Decode boundary
+## 9. Decode boundary
 
 Layout decoding yields only persistent logical words:
 
@@ -395,7 +425,7 @@ Dequantized values follow the reconstruction rule in `tensor-formats.md`. This d
 not select a quantization encoder, output dtype, accumulation dtype, kernel, runtime device layout,
 or model consumer.
 
-## 9. Logical views and native operands
+## 10. Logical views and native operands
 
 Bindings address C-order logical element ranges of a parent object. The parent retains its full
 geometry and backing allocation, so a view can locate code and scale planes using the original

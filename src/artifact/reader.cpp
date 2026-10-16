@@ -112,30 +112,37 @@ const WeightGeometry& Reader::geometry(ObjectHandle handle) const {
     auto& result       = impl_->geometries[handle.index];
     if (!result) {
         if (parse_format(tensor.format) == QType::EXL3) {
-            // Directory-aware resolution (SP-7 contract section 4): the bank's byte size is
-            // the sum of the experts' own trellis extents, so the geometry comes from the
-            // payload's per-expert directory. Entry 0's u64 trellis offset bounds the
-            // directory; the payload's final four bytes are the codebook id.
-            std::array<std::byte, 16> first{};
-            read_into(tensor.offset, first);
-            const auto trellis_offset = [&] {
-                std::uint64_t value = 0;
-                for (unsigned i = 0; i < 8; ++i) {
-                    value |= static_cast<std::uint64_t>(
-                                 static_cast<std::uint8_t>(first[i]))
-                             << (8 * i);
-                }
-                return value;
-            }();
-            if (trellis_offset == 0 || trellis_offset % 256 != 0 ||
-                trellis_offset > tensor.bytes - 4) {
-                throw ArtifactError(tensor.id + ": EXL3 directory bound is invalid");
-            }
-            std::vector<std::byte> directory_bytes(static_cast<std::size_t>(trellis_offset));
-            read_into(tensor.offset, directory_bytes);
+            // The payload's final four bytes are the codebook id in both EXL3 layouts.
             std::array<std::byte, 4> codebook{};
             read_into(tensor.offset + tensor.bytes - 4, codebook);
-            result = describe_exl3_bank(tensor, directory_bytes, codebook);
+            if (parse_layout(tensor.layout) == QuantLayout::Exl3Dense) {
+                // The dense linear's single bitrate follows from its shape and byte size;
+                // there is no directory plane to resolve.
+                result = describe_exl3_dense(tensor, codebook);
+            } else {
+                // Directory-aware resolution (SP-7 contract section 4): the bank's byte size
+                // is the sum of the experts' own trellis extents, so the geometry comes from
+                // the payload's per-expert directory. Entry 0's u64 trellis offset bounds the
+                // directory.
+                std::array<std::byte, 16> first{};
+                read_into(tensor.offset, first);
+                const auto trellis_offset = [&] {
+                    std::uint64_t value = 0;
+                    for (unsigned i = 0; i < 8; ++i) {
+                        value |= static_cast<std::uint64_t>(
+                                     static_cast<std::uint8_t>(first[i]))
+                                 << (8 * i);
+                    }
+                    return value;
+                }();
+                if (trellis_offset == 0 || trellis_offset % 256 != 0 ||
+                    trellis_offset > tensor.bytes - 4) {
+                    throw ArtifactError(tensor.id + ": EXL3 directory bound is invalid");
+                }
+                std::vector<std::byte> directory_bytes(static_cast<std::size_t>(trellis_offset));
+                read_into(tensor.offset, directory_bytes);
+                result = describe_exl3_bank(tensor, directory_bytes, codebook);
+            }
         } else {
             result = describe_tensor(tensor);
         }

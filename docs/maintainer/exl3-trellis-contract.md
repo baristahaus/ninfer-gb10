@@ -29,8 +29,9 @@ acceptance. The delegated work (§9) executes against it. The fork owns every ch
 
 In scope for SP-7: the routed expert banks of the Qwen3.6 35B-A3B MoE (hidden 2048, 256 experts,
 expert intermediate 512, top-8), with every other tensor in the artifact keeping its existing
-representation. Dense projections, the shared expert, attention/GDN projections, the embedding and
-lm_head follow in later steps under this same contract. The 125B Flash-Next banks (512-way MoE) are
+representation. The `exl3_dense_v1` container layout for dense projections is executed (§4); the
+dense consumer route (the shared expert, attention/GDN projections, the embedding and lm_head)
+follows in later steps under this same contract. The 125B Flash-Next banks (512-way MoE) are
 a later step that adds shapes, not semantics.
 
 Out of scope, and rejected at import: exllamav3's n-gram embedding codec (160-element tiles),
@@ -188,7 +189,7 @@ The persistent names below are fixed by this contract. `tensor-formats.md` and `
 gain their entries when the codec lands.
 
 - **Format** `exl3`: numeric decode per §2.3–§2.5. Object scalar: the codebook (`3inst`, `mcg`,
-  `mul1`), uniform within a bank.
+  `mul1`), uniform within an object.
 - **Layout** `exl3_expert_bank`: one object per (layer, projection), i.e. `routed_gate`, `routed_up`
   and `routed_down`, each with logical shape `[E·n, k]` so the existing row convention and the tier
   plan's `experts × rows_per_expert` check (`rows_per_expert = n`) hold unchanged. Planes:
@@ -203,6 +204,22 @@ gain their entries when the codec lands.
 - **Load validation**: offsets increase in expert id order, are 256-byte aligned, and match the
   extents implied by `2K`. An odd `2K` requires MUL1 and `K` ∈ {1.5, 2.5, 3.5}. Both `k` and `n`
   are multiples of 128, and the bank's codebook is uniform.
+- **Layout** `exl3_dense_v1`: one dense linear per object with logical shape `[n, k]` (the executed
+  dense step of §1). It is the one-expert case of the bank without the directory plane: the linear
+  carries a single bitrate, so no per-expert directory exists and the planes are
+
+| Plane | Content |
+|---|---|
+| `trellis` | the exllamav3 `trellis` bytes verbatim at payload offset 0, `k·n·K/8` bytes zero-padded to a multiple of 256 bytes |
+| `suh` | FP16 `[k]` |
+| `svh` | FP16 `[n]` |
+| — | the final four bytes are the codebook id, as in the bank |
+
+  Load validation: `k` and `n` are multiples of 128; an odd `2K` requires MUL1 and `K` ∈
+  {1.5, 2.5, 3.5}; the planes plus the codebook word end exactly at the object's byte size, and
+  because admissible bitrates differ by at least `k·n/16` bytes (above the 256-byte alignment)
+  that size determines `2K` uniquely. The geometry resolves from the shape and the byte size; no
+  directory is read.
 - **Provenance** (descriptive only): the source exllamav3 version and checkpoint identity, or the
   fork converter's recipe and bitrate map. Nothing needed for execution lives in provenance.
 

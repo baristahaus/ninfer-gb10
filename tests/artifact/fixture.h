@@ -45,7 +45,7 @@ struct Fixture {
     Json root;
     std::vector<std::byte> payload;
 
-    Fixture() : payload(7940) {
+    Fixture() : payload(75268) {
         auto pattern = (std::filesystem::temp_directory_path() / "ninfer-artifact-XXXXXX").string();
         std::vector<char> buffer(pattern.begin(), pattern.end());
         buffer.push_back('\0');
@@ -89,7 +89,14 @@ struct Fixture {
                                            {"format", "exl3"},
                                            {"layout", "exl3_expert_bank"},
                                            {"offset", 1536},
-                                           {"bytes", 6404}}})},
+                                           {"bytes", 6404}},
+                                          {{"id", "exl3_dense"},
+                                           {"kind", "tensor"},
+                                           {"shape", {512, 256}},
+                                           {"format", "exl3"},
+                                           {"layout", "exl3_dense_v1"},
+                                           {"offset", 8192},
+                                           {"bytes", 67076}}})},
             {"bindings",
                   {{"matrix", {{"object", "q5"}}},
                    {"row", {{"parts", Json::array({{{"object", "q5"}, {"range", {130, 260}}}})}}},
@@ -97,7 +104,7 @@ struct Fixture {
             {"uses", Json::array()},
             {"files", Json::array({{{"path", nullptr}, {"payload_bytes", 500}},
                                         {{"path", "weights-second.bin"}, {"payload_bytes", 7376}},
-                                        {{"path", "optional.bin"}, {"payload_bytes", 64}}})},
+                                        {{"path", "optional.bin"}, {"payload_bytes", 67392}}})},
             {"metadata", {{"name", "unregistered-training-instance"}}}};
         for (int i = 0; i < 2; ++i) {
             root["uses"].push_back({{"parameter", "row"},
@@ -131,6 +138,14 @@ struct Fixture {
         put_word(payload, bank + 24, 3072, 4);        // expert 1: extent bytes
         put_word(payload, bank + 28, 3, 1);           // expert 1: 2K = 3
         put_word(payload, bank + 6400, 2, 4);         // codebook id: mul1
+        // The exl3_dense_v1 at payload offset 8192 (in optional.bin, present only without
+        // omit_optional): one [512, 256] linear at 2K = 8 (bits 4), the mcg codebook. Planes
+        // are object-relative: trellis 65536 bytes at offset 0 (already 256-byte aligned);
+        // suh 512 bytes; svh 1024 bytes; the codebook id 1 in the final four bytes.
+        put_word(payload, 8192, 0x7e14, 2);            // a trellis word (little-endian int16)
+        put_word(payload, 8192 + 65536, 0x3c00, 2);    // suh[0] = fp16 1.0
+        put_word(payload, 8192 + 66048, 0x3800, 2);    // svh[0] = fp16 0.5
+        put_word(payload, 8192 + 67072, 1, 4);         // codebook id: mcg
     }
 
     ~Fixture() {

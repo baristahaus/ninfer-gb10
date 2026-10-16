@@ -115,6 +115,28 @@ class Exl3BankGeometry:
         return tuple(entries)
 
 
+@dataclass(frozen=True, slots=True)
+class Exl3DenseGeometry:
+    """Plane geometry of one exl3_dense_v1 (SP-7 contract section 4, dense linear).
+
+    One linear, one bitrate: the trellis plane sits at offset 0 with no
+    directory, and the codebook id closes the object.
+    """
+
+    n: int
+    k: int
+    k2: int
+    codebook: str
+    trellis_offset: int
+    trellis_bytes: int
+    suh_offset: int
+    suh_bytes: int
+    svh_offset: int
+    svh_bytes: int
+    codebook_offset: int
+    payload_bytes: int
+
+
 CONTIGUOUS_LE_V1 = Layout("contiguous_le_v1", 256, frozenset(("bf16", "fp32", "int32", "fp8_e4m3fn")))
 ROW_SPLIT_K128_V1 = Layout(
     "row_split_k128_v1",
@@ -137,6 +159,8 @@ EXPERT_BLOCK_SCALE_K16_M128X4_V1 = Layout(
 
 EXL3_EXPERT_BANK_V1 = Layout("exl3_expert_bank", 256, frozenset(("exl3",)))
 
+EXL3_DENSE_V1 = Layout("exl3_dense_v1", 256, frozenset(("exl3",)))
+
 LAYOUTS = MappingProxyType(
     {
         layout.name: layout
@@ -147,6 +171,7 @@ LAYOUTS = MappingProxyType(
             ROW_SCALE_V1,
             EXPERT_BLOCK_SCALE_K16_M128X4_V1,
             EXL3_EXPERT_BANK_V1,
+            EXL3_DENSE_V1,
         )
     }
 )
@@ -363,6 +388,41 @@ def exl3_bank_geometry(
     )
 
 
+def exl3_dense_geometry(n: int, k: int, k2: int, codebook: str) -> "Exl3DenseGeometry":
+    """Plane geometry of one exl3_dense_v1 from its single bitrate.
+
+    The trellis plane sits at offset 0 (no directory plane); its extent is
+    k*n*K/8 bytes, zero-padded to a multiple of 256; the suh/svh planes are
+    fixed-stride FP16 [k] / [n]; the final four bytes are the codebook id.
+    """
+
+    if type(n) is not int or type(k) is not int or type(k2) is not int:
+        raise ValueError("EXL3 dense dimensions and bitrate must be integers")
+    if n <= 0 or k <= 0 or n % 128 or k % 128:
+        raise ValueError("EXL3 dense linear requires N and K divisible by 128")
+    validate_exl3_rate(k2, codebook)
+    trellis_bytes = align_up(n * k * k2 // 16, PLANE_ALIGNMENT)
+    suh_offset = trellis_bytes
+    suh_bytes = k * 2
+    svh_offset = suh_offset + suh_bytes
+    svh_bytes = n * 2
+    codebook_offset = svh_offset + svh_bytes
+    return Exl3DenseGeometry(
+        n=n,
+        k=k,
+        k2=k2,
+        codebook=codebook,
+        trellis_offset=0,
+        trellis_bytes=trellis_bytes,
+        suh_offset=suh_offset,
+        suh_bytes=suh_bytes,
+        svh_offset=svh_offset,
+        svh_bytes=svh_bytes,
+        codebook_offset=codebook_offset,
+        payload_bytes=codebook_offset + 4,
+    )
+
+
 def encoded_size(
     layout: str | Layout,
     format: str | NumericFormat,
@@ -376,15 +436,16 @@ def encoded_size(
         raise ValueError(
             f"layout {layout_spec.name!r} does not accept format {numeric_spec.name!r}"
         )
-    if layout_spec is EXL3_EXPERT_BANK_V1:
+    if layout_spec is EXL3_EXPERT_BANK_V1 or layout_spec is EXL3_DENSE_V1:
         if not isinstance(numeric_spec, Exl3Format):
-            raise ValueError("exl3_expert_bank requires the EXL3 format")
-        # Mixed per-expert bitrates make the payload size data-dependent: it is the
-        # sum of the experts' own trellis extents, resolved from the checkpoint by
-        # the converter and validated directory-aware at load (contract section 4).
+            raise ValueError(f"{layout_spec.name} requires the EXL3 format")
+        # Mixed per-expert bitrates (bank) and the dense linear's single bitrate make the
+        # payload size data-dependent: it is the sum of the trellis extents, resolved by the
+        # converter's plane geometry and validated against the encoded object at load
+        # (contract section 4).
         if type(payload_bytes) is not int or payload_bytes < 256 + 4:
             raise ValueError(
-                "exl3_expert_bank size is data-dependent; supply the bank's exact "
+                f"{layout_spec.name} size is data-dependent; supply the object's exact "
                 "payload bytes"
             )
         _shape(shape, rank=2)

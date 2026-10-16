@@ -212,7 +212,8 @@ MaterializedArtifact materialize(const Reader& reader, MaterializationPlan&& pla
         const auto& geometry = reader.geometry(tier.object);
         if (geometry.format == QType::EXL3) {
             // Refused at plan time (Binder::set_tier); this is the load-time backstop.
-            throw ArtifactError("tiered EXL3 banks require the SP-4 variable-extent change");
+            throw ArtifactError("tiered EXL3 weights (banks and dense linears) require "
+                                "the SP-4 variable-extent change");
         }
         const auto rows      = geometry.shape[0];
         const auto experts   = tier.new_order.size();

@@ -27,6 +27,7 @@ constexpr std::array kLayouts = {
     std::pair{QuantLayout::RowScale, std::string_view{"row_scale_v1"}},
     std::pair{QuantLayout::BlockScaleK16M128x4, std::string_view{"block_scale_k16_m128x4_v1"}},
     std::pair{QuantLayout::Exl3ExpertBank, std::string_view{"exl3_expert_bank"}},
+    std::pair{QuantLayout::Exl3Dense, std::string_view{"exl3_dense_v1"}},
 };
 
 } // namespace

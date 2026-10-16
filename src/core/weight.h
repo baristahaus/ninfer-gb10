@@ -27,6 +27,7 @@ enum class QuantLayout : std::uint16_t {
     RowScale            = 3,
     ExpertBlockScaleK16M128x4 = 4,
     Exl3ExpertBank      = 5,
+    Exl3Dense           = 6,
 };
 
 struct Weight {
@@ -52,11 +53,13 @@ struct Weight {
     float weight_scale_divisor = 0.0F;
     float input_scale_divisor  = 0.0F;
 
-    // EXL3 expert bank (SP-7; QType::EXL3, layout Exl3ExpertBank). `payload` addresses the
-    // complete bank; the per-expert directory at its start resolves each expert's trellis
-    // extent and bitrate at runtime, so mixed-width banks need no host-side tables. Plane
-    // offsets are payload-relative; the directory entry is {u64 offset, u32 extent, u8 2K,
-    // three zero bytes} per expert.
+    // EXL3 expert bank and dense linear (SP-7; QType::EXL3, layouts Exl3ExpertBank and
+    // Exl3Dense). `payload` addresses the complete encoded object; for a bank the per-expert
+    // directory at its start resolves each expert's trellis extent and bitrate at runtime, so
+    // mixed-width banks need no host-side tables; a dense linear is the one-expert case
+    // without a directory (trellis at offset 0, `exl3_experts` = 1). Plane offsets are
+    // payload-relative; the directory entry is {u64 offset, u32 extent, u8 2K, three zero
+    // bytes} per expert.
     std::uint64_t exl3_trellis_offset = 0;
     std::uint64_t exl3_suh_offset      = 0;
     std::uint64_t exl3_svh_offset      = 0;

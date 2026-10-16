@@ -256,12 +256,82 @@ void exl3_bank_geometry_and_validation() {
     }
 }
 
+void exl3_dense_geometry_and_validation() {
+    rejects<std::invalid_argument>(
+        [&] {
+            (void)weight_geometry(QType::EXL3, QuantLayout::Exl3Dense,
+                                  std::array<std::uint64_t, 2>{512, 256});
+        },
+        "EXL3 dense geometry resolved from the shape alone");
+
+    Fixture fixture;
+    fixture.write();
+    Reader reader(fixture.entry);
+    const auto handle = reader.find("exl3_dense");
+    reader.validate_object(handle);
+    const auto& geometry = reader.geometry(handle);
+    require(geometry.format == QType::EXL3 &&
+                geometry.layout == QuantLayout::Exl3Dense &&
+                geometry.bytes == 67076 && geometry.alignment == 256,
+            "EXL3 dense linear lost its format, layout, size or alignment");
+    const auto& dense = geometry.exl3;
+    require(dense.experts == 1 && dense.rows_per_expert == 512 && dense.codebook == 1,
+            "EXL3 dense linear was not resolved as the one-expert case");
+    require(dense.trellis_extents.size() == 1 && dense.trellis_extents[0] == 65536 &&
+                dense.k2[0] == 8,
+            "EXL3 dense extent or bitrate was misresolved");
+    require(dense.trellis_offset == 0 && dense.trellis_bytes == 65536 &&
+                dense.suh_offset == 65536 && dense.suh_bytes == 512 &&
+                dense.svh_offset == 66048 && dense.svh_bytes == 1024,
+            "EXL3 dense plane offsets were misresolved");
+
+    Binder binder(reader);
+    rejects([&] { (void)binder.set_tier(handle, {0}, {1}); },
+            "tiered EXL3 dense linear was accepted without dense tier support");
+
+    // A half-integer bitrate cannot appear without the mul1 codebook.
+    {
+        Fixture corrupted;
+        auto text = corrupted.root;
+        // 2K = 3 gives trellis align256(512*256*3/16) = 24576; total = 24576 + 1540.
+        text["objects"][5]["bytes"] = 24576 + 1540;
+        put_word(corrupted.payload, 8192 + 24576 + 1536, 1, 4);  // mcg word at the new tail
+        corrupted.write(false, text.dump());
+        Reader bad(corrupted.entry);
+        rejects([&] { (void)bad.geometry(bad.find("exl3_dense")); },
+                "EXL3 dense accepted a half-integer bitrate without mul1");
+    }
+    // A byte size that matches no admissible bitrate is a load check.
+    {
+        Fixture corrupted;
+        auto text                   = corrupted.root;
+        text["objects"][5]["bytes"] = 67080;
+        corrupted.write(false, text.dump());
+        rejects([&] {
+                    Reader bad(corrupted.entry);
+                    (void)bad.geometry(bad.find("exl3_dense"));
+                },
+                "EXL3 dense accepted a size no admissible bitrate reaches");
+    }
+    // A non-multiple-of-128 dimension is a load check.
+    {
+        Fixture corrupted;
+        auto text                   = corrupted.root;
+        text["objects"][5]["shape"] = {512, 200};
+        corrupted.write(false, text.dump());
+        Reader bad(corrupted.entry);
+        rejects([&] { (void)bad.geometry(bad.find("exl3_dense")); },
+                "EXL3 dense accepted a non-Hadamard input width");
+    }
+}
+
 int main(int argc, char** argv) {
     try {
         file_set_and_bindings();
-        geometry_and_views();
-        exl3_bank_geometry_and_validation();
-        mapped_shards();
+            geometry_and_views();
+            exl3_bank_geometry_and_validation();
+            exl3_dense_geometry_and_validation();
+            mapped_shards();
         invalid_directories();
         // Optional production-writer fixture or explicitly selected real artifact.
         if (argc == 2) {

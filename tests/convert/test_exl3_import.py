@@ -501,3 +501,46 @@ def test_non_uniform_codebook_and_wrong_shapes_are_rejected(tmp_path):
             recipe = Recipe(model)
             with pytest.raises(ValueError, match="hidden_size"):
                 qwen3_6_35b_a3b_exl3(model, recipe, {"exl3": exl3})
+
+
+def test_dense_geometry_and_packer_round_trip():
+    """exl3_dense_v1: plane geometry per contract section 4 and the packer's exact bytes."""
+
+    from tools.artifact.layouts import exl3_dense_geometry
+    from tools.convert.quantization.exl3_pack import pack_dense
+
+    geometry = exl3_dense_geometry(512, 256, 8, "mcg")
+    assert geometry.trellis_offset == 0
+    assert geometry.trellis_bytes == 512 * 256 * 8 // 16
+    assert geometry.suh_offset == geometry.trellis_bytes
+    assert geometry.suh_bytes == 256 * 2
+    assert geometry.svh_offset == geometry.suh_offset + geometry.suh_bytes
+    assert geometry.svh_bytes == 512 * 2
+    assert geometry.codebook_offset == geometry.svh_offset + geometry.svh_bytes
+    assert geometry.payload_bytes == geometry.codebook_offset + 4
+    with pytest.raises(ValueError, match="divisible by 128"):
+        exl3_dense_geometry(512, 200, 8, "mcg")
+    with pytest.raises(ValueError, match="mul1"):
+        exl3_dense_geometry(512, 256, 5, "mcg")
+
+    tiles_k, tiles_n = 256 // 16, 512 // 16
+    result = {
+        "trellis": torch.randint(-(1 << 15), 1 << 15, (tiles_k, tiles_n, 16 * 4),
+                                 dtype=torch.int16),
+        "suh": torch.randn(256, dtype=torch.float16),
+        "svh": torch.randn(512, dtype=torch.float16),
+        "k2": 8,  # 2K = 8: bits 4, 64 int16 steps per tile
+    }
+    payload = pack_dense(result, "mcg")
+    assert len(payload) == geometry.payload_bytes
+    assert payload[geometry.trellis_offset:geometry.trellis_offset + 2] == \
+        result["trellis"].numpy().tobytes()[:2]
+    assert payload[geometry.suh_offset:geometry.suh_offset + geometry.suh_bytes] == \
+        result["suh"].numpy().tobytes()
+    assert payload[geometry.svh_offset:geometry.svh_offset + geometry.svh_bytes] == \
+        result["svh"].numpy().tobytes()
+    assert struct.unpack_from("<I", payload, geometry.codebook_offset)[0] == \
+        EXL3_CODEBOOK_IDS["mcg"]
+    # The trellis padding region beyond the packed ring is zeroed.
+    ring_bytes = 512 * 256 * 8 // 16
+    assert not any(payload[ring_bytes:geometry.suh_offset])

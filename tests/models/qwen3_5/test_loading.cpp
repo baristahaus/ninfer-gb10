@@ -321,11 +321,73 @@ void invalid_model_data() {
 
 } // namespace
 
+// The dense EXL3 route (SP-7): the FFN's gate/up/down bind as exl3_dense_v1 objects and
+// the load plan resolves their data-dependent geometry.
+void exl3_dense_ffn_binding() {
+    ModelFixture fixture;
+    fixture.file.root["components"]["text"]["config"]["intermediate_size"] = 128;
+    // Replace the fused/BF16 FFN bindings with three exl3_dense_v1 objects at the k2 = 2
+    // (one-bit) rate: trellis zeros decode through the mcg codebook, suh/svh are ones.
+    auto payload = [](std::uint64_t n, std::uint64_t k) {
+        const std::uint64_t trellis = n * k * 2 / 16;  // 2K = 2: one bit per weight
+        const std::uint64_t aligned = (trellis + 255) / 256 * 256;
+        std::vector<std::byte> bytes(aligned + 2 * k + 2 * n + 4, std::byte{0});
+        for (std::uint64_t i = 0; i < k; ++i) {
+            put_word(bytes, aligned + 2 * i, 0x3c00, 2);
+        }
+        for (std::uint64_t i = 0; i < n; ++i) {
+            put_word(bytes, aligned + 2 * k + 2 * i, 0x3c00, 2);
+        }
+        put_word(bytes, aligned + 2 * k + 2 * n, 1, 4);  // mcg
+        return bytes;
+    };
+    for (const auto& [id, shape] : std::array{
+             std::pair{"exl3-gate", std::vector<std::uint64_t>{128, 128}},
+             std::pair{"exl3-up", std::vector<std::uint64_t>{128, 128}},
+             std::pair{"exl3-down", std::vector<std::uint64_t>{128, 128}}}) {
+        const auto bytes = payload(shape[0], shape[1]);
+        const auto offset = (fixture.file.payload.size() + 255) / 256 * 256;
+        fixture.file.payload.resize(offset);
+        fixture.file.payload.insert(fixture.file.payload.end(), bytes.begin(), bytes.end());
+        fixture.file.root["objects"].push_back(
+            {{"id", id},
+             {"kind", "tensor"},
+             {"shape", shape},
+             {"format", "exl3"},
+             {"layout", "exl3_dense_v1"},
+             {"offset", offset},
+             {"bytes", bytes.size()}});
+    }
+    const std::string p = "text/layers/0/";
+    for (const auto& [parameter, object] :
+         std::array{std::pair{p + "mlp/gate", "exl3-gate"},
+                    std::pair{p + "mlp/up", "exl3-up"},
+                    std::pair{p + "mlp/down", "exl3-down"}}) {
+        fixture.file.root["bindings"][parameter] = {{"object", object}};
+    }
+    fixture.file.root["files"][0]["payload_bytes"] = fixture.file.payload.size();
+    fixture.file.write();
+    artifact::Reader reader(fixture.file.entry);
+    for (const auto* id : {"exl3-gate", "exl3-up", "exl3-down"}) {
+        const auto& geometry = reader.geometry(reader.find(id));
+        require(geometry.format == QType::EXL3 && geometry.layout == QuantLayout::Exl3Dense &&
+                    geometry.exl3.experts == 1 && geometry.exl3.k2[0] == 2 &&
+                    geometry.exl3.codebook == 1,
+                "the dense EXL3 object lost its resolved geometry");
+    }
+    auto plan = qwen::plan_load(reader);
+    require(std::get_if<qwen::DenseWeights>(&plan.weights().text.layers[0].ffn) != nullptr,
+            "the EXL3 FFN did not bind as a dense FFN");
+    // The execution-side selection (separate gate/up linears) runs in the Program's
+    // parameter assembly; the binding level pins the objects and their geometry.
+}
+
 int main() {
     try {
         logical_data_and_instances();
         native_uses();
         invalid_model_data();
+        exl3_dense_ffn_binding();
         std::cout << "model config, binding, resources and Use checks passed\n";
         return 0;
     } catch (const std::exception& error) {

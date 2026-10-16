@@ -91,6 +91,17 @@ public:
     }
 
     DenseParameters dense(const DenseWeights& w) const {
+
+        auto format_of = [&](WeightId id) {
+            return model_.weight(id).view.parts.front().parent->geometry.format;
+        };
+        if (format_of(w.gate) == QType::EXL3) {
+            // The EXL3 dense route: gate and up are separate linears (SP-7).
+            if (format_of(w.up) != QType::EXL3) {
+                throw std::invalid_argument("EXL3 FFN requires EXL3 gate and up");
+            }
+            return {{}, linear(w.down), linear(w.gate), linear(w.up)};
+        }
         return {with_context(model_.weight(w.gate).name,
                              [&] {
                                  return ops::prepare_linear_swiglu_weight(model_.input(w.gate),

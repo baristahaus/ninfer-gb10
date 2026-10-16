@@ -30,6 +30,13 @@ using LinearParameters = ops::SingleProjectionWeight;
 struct DenseParameters {
     LinearParameters gate_up;
     LinearParameters down;
+    // The EXL3 dense route (SP-7): gate and up bind as separate linears because one
+    // fused weight cannot carry two input-side transforms; `gate_up` stays
+    // default-constructed and unused on that route.
+    std::optional<LinearParameters> exl3_gate;
+    std::optional<LinearParameters> exl3_up;
+
+    [[nodiscard]] bool exl3() const { return exl3_gate.has_value(); }
 };
 
 using FfnParameters = std::variant<DenseParameters, ops::SparseMoeWeights>;

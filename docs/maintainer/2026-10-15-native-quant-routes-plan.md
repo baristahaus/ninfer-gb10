@@ -5,6 +5,10 @@ routes and both storage specs landed as a274d9aa/8145f705/449edc04; the conversi
 completed and verified — see section 10); A4, B3 and E2d (the kernel routes) remain,
 and nothing serves until they land. Earlier: evaluated and approved 2026-10-15, with
 E1/O3 and the first-hand shard facts folded in.
+Addition 2026-10-16: the artifact serves on GB10 (the MXFP8 parent routes landed on
+this branch and the B3 blocking NaN was fixed — beads `ninfer-gb10-e86`, closed), and
+section 11 adds work item F: MTP draft realignment by distillation, with the measured
+misalignment evidence that motivates it.
 Branch `qad-native-quant-plan`. Corrections are grounded in code reads plus compile
 probes on the 5090 box (CUDA 13.4.92); the `/nfs` checkpoint is now mounted on
 the 5090 box (verified 2026-10-15), so the PLE facts below are first-hand reads
@@ -388,3 +392,136 @@ serves until A".
 - DFlash/DFlash2 components (absent in this checkpoint family).
 - Abliteration evaluation as a quality matter (weights-only change; out of
   engine scope).
+
+## 11. Work item F — MTP draft realignment by distillation (added 2026-10-16)
+
+### F0. The measured problem
+
+The QAD-native artifact's MTP acceptance is 0.458 accepted/drafted (step 7a phase 2,
+`profiles/bench/gb10/step7a-qadfix/`) against the vendor BF16 artifact's 0.623 on the
+same corpus-continuation protocol — 33.3 → 26.6 tok/s. The 2026-10-16 research cycle
+(beads notes `mtp-acceptance-research-*`, `mtp-improvement-cycle-*`) decomposed it:
+
+- The QAD source's MTP module is **byte-identical** to the original checkpoint's
+  (source `bf16-audit.json`: 144 tensors changed by the abliteration —
+  `linear_attn.out_proj` ×36, `experts.down_proj` ×48, `shared_expert.down_proj`
+  ×48, `self_attn.o_proj` ×12 — MTP 0/31). The artifact therefore already carries
+  the original draft stack (BF16 adapters, NVFP4 expert banks). Swapping any
+  "original BF16 module" in is a no-op.
+- The draft-target misalignment is **not** the recipe: the margin-conditional
+  acceptance curve is monotone for the vendor (verify margin ≥ 8 → 0.91–1.00
+  accept) but flat for QAD (margin ≥ 8 → 0.54): the draft confidently contradicts
+  even unambiguous target top-1s. The draft weights are unchanged, so this is the
+  draft mis-reading the *shifted* hidden states its unchanged `fc_hidden`/
+  `fc_embedding` adapters now receive.
+- **Drift ceiling** (teacher-forced greedy agreement between the original target —
+  the RadixArk vendor artifact — and the abliterated target over 261,167
+  quick-corpus positions): **0.894**. Both targets pick the corpus token as top-1
+  at the same rate (0.7113 / 0.7112), so the 10.6% disagreement is directional
+  drift, not quality. Caveat: each side carries its own quantization noise
+  (NVFP4 experts / MXFP8 leaves), which slightly inflates the measured drift.
+- The draft's position-0 acceptance (0.585) sits **~31 pp below** the 0.894
+  frozen-original ceiling. Only ~10.6 pp of the gap is irreducible; ~31 pp is the
+  trainable part. Recovering it takes tokens/round from ~1.92 toward ~2.4 and
+  serving throughput up ~20%.
+
+### F1. Objective
+
+Fine-tune the QAD artifact's draft stack against the **frozen abliterated target**
+so the draft's next-token distribution matches the target's on the state
+distribution serving actually produces. The abliteration itself is preserved: the
+144 changed tensors, the embeddings, the `lm_head`, the PLE and the target's whole
+forward path stay frozen. Only the draft-side modules train.
+
+### F2. What trains and what stays frozen
+
+| Module | Params (approx) | Trains | Rationale |
+|---|---|---|---|
+| `mtp.pre_fc_norm_*`, `mtp.fc_embedding`, `mtp.fc_hidden` | ~26 M | yes | the input adapters that mis-map the shifted hidden states |
+| `mtp.layers.0` attention + indexer + hyper/mixers + gate + shared expert | ~60 M | yes | the draft's transformer body |
+| `mtp.layers.0.mlp.experts` (routed banks) | ~2.8 B | **no** | quantized weights have no training path; the vendor achieves 0.73/0.51 with NVFP4 draft banks, so they are not the bottleneck; unfreezing would need BF16 master weights (~11 GB) and a requantize pass |
+| target (all 48 layers, PLE, embeddings, `lm_head`) | — | **no** | the alignment target and the product model; touching it changes PPL and the abliteration |
+
+Trainable set ≈ 90 M params: AdamW states ≈ 1.4 GB, gradients 0.2 GB — comfortably
+inside the memory envelope alongside the frozen 70 GB target.
+
+### F3. Loss and data
+
+- **Loss**: forward-KL between the draft logits and the frozen target's
+  next-token distribution, on target-scored positions (standard MTP distillation).
+  Greedy-CE on the target argmax is a cheaper fallback but optimizes the wrong
+  thing near ties; KL also fixes the confident-contradiction shape measured above.
+- **Distribution**: the loss must be computed on the states the serving loop
+  produces. Two stages: (a) teacher-forced warm-up on corpus continuation text
+  (the perplexity-1m corpus is the right base distribution — it is what phase 2
+  measures); (b) on-policy rounds: generate with the current draft+target pair,
+  score the target on the generated sequences, add them to the mix. Stage (b)
+  matters because acceptance is measured on the engine's own committed streams.
+- **Scale**: 50–200 M tokens is the first budget. The throughput reference is the
+  measured scoring rate (732 tok/s at 4096/2048): the target forward dominates, so
+  a 100 M-token pass is roughly 2 days of single-GPU time if run at scoring-like
+  throughput; batch the target forward and the draft forward in one pass to avoid
+  a second sweep.
+
+### F4. Procedure
+
+1. Extract the training interface from the engine: the draft consumes the target's
+   last-layer hidden state plus the terminal token's embedding through
+   `mtp.pre_fc_norm_*`/`fc_*` (see `mtp_impl.h`,
+   `mtp_bridge_and_propose`/`mtp_forward_ar_step`). A standalone training script
+   can reuse the engine for target forwards (the public `score_tokens` route is
+   too narrow; the trainer belongs to the checkpoint lane and may use the source
+   framework directly — the `/nfs` checkpoint loads under the model's own
+   tooling).
+2. Train stage (a), then stage (b); checkpoint the ~90 M trainable params.
+3. Re-export the trained `mtp.*` tensors into a source checkpoint directory in
+   the QAD source layout (`model.language_model`-stripped, `mtp.*` as-is —
+   the converter's closed-set validation in work item C1 accepts exactly these).
+4. Re-run `qad_convert` (no code change: `mtp.*` is in the BF16 ignore set) into
+   a new artifact (`..._qad_native_mtp2.ninfer`, recipe
+   `qwen3_8_flash_next_125b_a6b_qad_native-v2`).
+5. Validate per F5, then promote.
+
+### F5. Validation gates (the fixed battery)
+
+1. **Step 7a phase 2 acceptance** (the primary gate): position-0 acceptance
+   ≥ 0.80 (ceiling 0.894), overall accepted/drafted ≥ 0.55, throughput ≥ the
+   vendor's 33 tok/s. Record per-position and margin-conditional curves as in the
+   2026-10-16 research note, so the remaining gap can be attributed.
+2. **Perplexity unchanged**: the target is frozen, so the phase 1 record must
+   reproduce within measurement noise (the 2026-10-16 record: 3.9649 / 3.7762).
+   A moved PPL means the target was touched — fail.
+3. **Normal tests**: the focused Flash-Next ctest set green; the real engine test
+   passes with the plain-decode canonical golden unchanged (plain decode never
+   reads the draft) and the QAD MTP golden re-recorded per the documented
+   near-tie mechanism if the verify tie-breaks move.
+4. **TEB --short** (the second-order contextual validator): ≥ the recorded
+   baseline (97/100, 15/15, safety gate clean). Full hardmode stays as the
+   existing extended-set record.
+5. **Vendor regression**: the BF16 artifact's real test and battery records
+   unchanged.
+
+### F6. Risks and honest limits
+
+- The 0.894 ceiling is teacher-forced on corpus contexts; on the engine's own
+  on-policy streams the achievable number may differ in either direction. The
+  phase-2 gate, not the ceiling, decides promotion.
+- Distillation can overfit the corpus mix and lose the chat-shaped robustness the
+  TEB --short gate watches for; keep the stage (b) on-policy mix and the TEB gate.
+- The routed expert banks stay frozen, so a residual misalignment through expert
+  selection may cap the recovery below the ceiling; if phase 2 stalls below
+  0.70, escalate to BF16 master weights for the banks (a separate decision —
+  ~11 GB + requantize).
+- Training runs on the checkpoint lane; the engine repo's role ends at
+  ingesting the re-exported `mtp.*` tensors (step 4) — no engine or converter
+  code change is expected.
+
+### F7. Effort estimate
+
+| Step | Content | Estimate | Risk |
+|---|---|---|---|
+| F4.1 | trainer interface + target forward harness | 2–3 d | medium: checkpoint-lane tooling, outside this repo's build |
+| F4.2 | stage (a)+(b) training runs | 2–4 d wall | medium: single-GPU throughput-bound; resumable |
+| F4.3–4.4 | re-export + conversion + new artifact | 0.5 d | low: existing closed pipeline |
+| F5 | the fixed battery + records | 1 d | low |
+| **Total** | | **~1 week** | dominated by the training runs |

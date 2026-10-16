@@ -486,6 +486,18 @@ inside the memory envelope alongside the frozen 70 GB target.
    too narrow; the trainer belongs to the checkpoint lane and may use the source
    framework directly — the `/nfs` checkpoint loads under the model's own
    tooling).
+   **Revised 2026-10-16 after the feasibility probe (beads `ninfer-gb10-6wy`):**
+   the source-framework shortcut is not available — no HF modeling code ships for
+   this architecture, and SGLang's `qwen4_exp` draft is runtime-integrated (QSA
+   indexer metadata from the model_runner; its full server also hits a loader
+   bug on this checkpoint). The trainer's draft forward is therefore built in
+   plain torch from the model doc's exact math, with SGLang's `qwen4_exp_mtp.py`
+   as a cross-reference for the composition (fc fusion: pre-normed embedding +
+   `fc_hidden(pre_fc_norm_hidden(hidden))` per HC slice; `num_hidden_layers=1`,
+   `is_nextn`) and the engine + the paired `/nfs` dumps as the oracle. The
+   module constructs standalone on GB10 (3.89 B params; recipe in the issue).
+   Estimate for this step: **3–5 d**, and the routed expert banks are
+   dequantized ModelOpt-NVFP4 → BF16 (~5 GB: `[512,1280,2560]` + `[512,2560,640]`).
 2. Train stage (a), then stage (b); checkpoint the ~90 M trainable params.
 3. Re-export the trained `mtp.*` tensors into a source checkpoint directory in
    the QAD source layout (`model.language_model`-stripped, `mtp.*` as-is —

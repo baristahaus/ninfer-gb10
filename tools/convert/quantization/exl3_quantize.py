@@ -292,6 +292,25 @@ def quantize_tiles(targets: torch.Tensor, k2: int, codebook: str) -> tuple[torch
     roll = TILE_WEIGHTS // 2
     cb = _codebook_values(codebook, device)
 
+    # The backpointers dominate the pass memory: TILE_WEIGHTS * 2**(16-K) bytes per tile,
+    # 8.4 MB at the widest shift. Large tile batches are quantized in memory-bounded chunks
+    # without changing the callers' contracts (every tile's Viterbi is independent).
+    if k2 % 2 == 0:
+        bp_bytes_per_tile = TILE_WEIGHTS * (1 << (STATE_BITS - k2 // 2))
+    else:
+        bp_bytes_per_tile = TILE_WEIGHTS * (1 << (STATE_BITS - max(k2 // 2, 1)))
+    chunk = max(1, 4_000_000_000 // bp_bytes_per_tile)
+    batch = targets.shape[0]
+    if batch > chunk:
+        values = torch.empty(batch, TILE_WEIGHTS, dtype=torch.float32, device=device)
+        states = torch.empty(batch, TILE_WEIGHTS, dtype=torch.uint16, device=device)
+        for start in range(0, batch, chunk):
+            end = min(start + chunk, batch)
+            v, st = quantize_tiles(targets[start:end], k2, codebook)
+            values[start:end] = v
+            states[start:end] = st
+        return values, states
+
     # Pass 1: the ring rolled by half a period, no initial constraint. The DP's own transition
     # across the wrap (ring position 255 -> 0) enforces the shift relation, so its optimal path
     # is a valid ring and its boundary at ring position 0 estimates the wrap state.

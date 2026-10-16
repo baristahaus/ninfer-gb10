@@ -4,6 +4,8 @@
 // row-split and block-scale codecs remain format-specific beneath one logical fixture interface.
 
 #include "core/weight.h"
+
+#include "exl3_ref.h"
 #include "core/tensor.h"
 
 #include <algorithm>
@@ -229,6 +231,11 @@ inline int unpack_lowbit_code(const std::uint8_t* nibble, const std::uint8_t* hi
 struct PackedWeight {
     std::vector<std::uint8_t> payload;
     std::vector<float> dequant;
+    // EXL3 dense fixture only: the composed FP64 logical weight [n, k] row-major (section 2.1's
+    // diag(suh) Hn_k W_hat Hn_n diag(svh), transposed to the logical orientation). The FP64
+    // Hadamard-block composition cannot be evaluated per element, so the fixture materializes
+    // it once and logical_weight_fp64 reads it.
+    std::vector<double> exl3_dense_composed;
     Weight weight{};
     std::uint64_t code_plane_bytes      = 0;
     std::uint64_t high_plane_offset     = 0;
@@ -688,6 +695,15 @@ inline double logical_weight_fp64(const PackedWeight& packed, std::int32_t row,
         return static_cast<double>(static_cast<float>(decoded));
     }
 
+    if (weight.qtype == QType::EXL3) {
+        if (weight.layout != QuantLayout::Exl3Dense || weight.exl3_experts != 1 ||
+            weight.exl3_rows_per_expert != static_cast<std::uint32_t>(weight.n) ||
+            packed.exl3_dense_composed.empty()) {
+            throw std::invalid_argument("quantized-weight fixture: invalid EXL3 dense metadata");
+        }
+        return packed.exl3_dense_composed[static_cast<std::size_t>(row) * weight.k + column];
+    }
+
     const detail::QuantSpec spec = detail::quant_spec(weight.qtype);
     const std::int32_t padded_k  = weight.padded_shape[1];
     if (padded_k < weight.shape[1] || padded_k % spec.group_size != 0) {
@@ -883,6 +899,134 @@ inline PackedWeight pack_q6_row_split(const std::vector<float>& source, std::int
 inline PackedWeight pack_q8_g32_row_split(const std::vector<float>& source, std::int32_t n,
                                           std::int32_t k) {
     return pack_row_split_lowbit(source, n, k, QType::Q8_G32_FP16);
+}
+
+// The EXL3 dense fixture (SP-7 contract sections 2.1 and 4): a deterministic random trellis,
+// signed power-of-two suh/svh vectors, the exact codec oracle's inner decode, and the composed
+// FP64 logical weight via butterfly Hadamard blocks (exact +-1 sums, one 1/sqrt(128) per
+// transform). The payload is a complete exl3_dense_v1 object.
+inline PackedWeight make_exl3_dense_weight(std::int32_t n, std::int32_t k, std::uint32_t seed,
+                                           int k2, exl3_ref::Codebook codebook) {
+    if (n <= 0 || k <= 0 || n % 128 != 0 || k % 128 != 0) {
+        throw std::invalid_argument("quantized-weight fixture: EXL3 dense requires 128-multiples");
+    }
+    exl3_ref::require_rate(k2, codebook);
+    const std::uint32_t codebook_id =
+        codebook == exl3_ref::Codebook::Inst3 ? 0U : (codebook == exl3_ref::Codebook::Mcg ? 1U : 2U);
+
+    const std::size_t tiles = static_cast<std::size_t>(k) / 16 * (static_cast<std::size_t>(n) / 16);
+    const std::size_t tile_elements = static_cast<std::size_t>(8 * k2);  // exl3_ref's ring size
+    std::vector<std::uint16_t> trellis(tiles * tile_elements);
+    for (std::size_t i = 0; i < trellis.size(); ++i) {
+        trellis[i] = static_cast<std::uint16_t>(detail::mix64(seed * 0x100000001b3ULL + i) & 0xffffU);
+    }
+    const auto scale_word = [&](std::size_t index) {
+        const std::uint64_t hash = detail::mix64(seed + 0x9e3779b9ULL + index);
+        const float magnitude = std::ldexp(1.0F + static_cast<float>(hash & 0xffU) / 256.0F,
+                                           -static_cast<int>((hash >> 8) % 4));
+        return detail::f32_to_f16((hash & 0x8000000000000000ULL) != 0 ? -magnitude : magnitude);
+    };
+    std::vector<std::uint16_t> suh(static_cast<std::size_t>(k));
+    for (std::size_t i = 0; i < suh.size(); ++i) { suh[i] = scale_word(i); }
+    std::vector<std::uint16_t> svh(static_cast<std::size_t>(n));
+    for (std::size_t i = 0; i < svh.size(); ++i) {
+        svh[i] = scale_word(0x40000000ULL + i);
+    }
+
+    // The exact codec oracle decodes the inner weight; the composed logical weight applies the
+    // block Hadamards in FP64 with butterfly passes (each 1/sqrt(128) once per transform).
+    const std::vector<std::uint16_t> inner = exl3_ref::decode_inner(trellis.data(), k, n, k2, codebook);
+    std::vector<double> m(static_cast<std::size_t>(k) * static_cast<std::size_t>(n));
+    for (std::size_t i = 0; i < m.size(); ++i) {
+        m[i] = exl3_ref::binary16_to_double(inner[i]);
+    }
+    const double norm = 1.0 / std::sqrt(128.0);
+    std::vector<double> column(static_cast<std::size_t>(128));
+    // Right transform: every 128-column block of every row.
+    for (std::size_t row = 0; row < static_cast<std::size_t>(k); ++row) {
+        double* line = m.data() + row * static_cast<std::size_t>(n);
+        for (std::int32_t block = 0; block < n / 128; ++block) {
+            double* base = line + static_cast<std::size_t>(block) * 128;
+            for (int len = 1; len < 128; len <<= 1) {
+                for (int i = 0; i < 128; i += len << 1) {
+                    for (int j = i; j < i + len; ++j) {
+                        const double a = base[j], b = base[j + len];
+                        base[j] = a + b;
+                        base[j + len] = a - b;
+                    }
+                }
+            }
+            for (int i = 0; i < 128; ++i) { base[i] *= norm; }
+        }
+    }
+    // Left transform: every 128-row block of every column.
+    for (std::int32_t block = 0; block < k / 128; ++block) {
+        double* base = m.data() + static_cast<std::size_t>(block) * 128 * static_cast<std::size_t>(n);
+        for (std::int32_t col = 0; col < n; ++col) {
+            for (int i = 0; i < 128; ++i) { column[i] = base[static_cast<std::size_t>(i) * n + col]; }
+            for (int len = 1; len < 128; len <<= 1) {
+                for (int i = 0; i < 128; i += len << 1) {
+                    for (int j = i; j < i + len; ++j) {
+                        const double a = column[j], b = column[j + len];
+                        column[j] = a + b;
+                        column[j + len] = a - b;
+                    }
+                }
+            }
+            for (int i = 0; i < 128; ++i) {
+                base[static_cast<std::size_t>(i) * n + col] = column[i] * norm;
+            }
+        }
+    }
+    // The scales: suh rows (k), svh columns (n).
+    for (std::int32_t row = 0; row < k; ++row) {
+        const double suh_value = exl3_ref::binary16_to_double(suh[static_cast<std::size_t>(row)]);
+        for (std::int32_t col = 0; col < n; ++col) {
+            m[static_cast<std::size_t>(row) * n + col] *=
+                suh_value * exl3_ref::binary16_to_double(svh[static_cast<std::size_t>(col)]);
+        }
+    }
+
+    // The logical orientation is the transpose: [n, k] row-major.
+    PackedWeight packed;
+    packed.exl3_dense_composed.resize(static_cast<std::size_t>(n) * static_cast<std::size_t>(k));
+    for (std::int32_t row = 0; row < n; ++row) {
+        for (std::int32_t col = 0; col < k; ++col) {
+            packed.exl3_dense_composed[static_cast<std::size_t>(row) * k + col] =
+                m[static_cast<std::size_t>(col) * n + row];
+        }
+    }
+
+    // The payload: trellis bytes, aligned; suh [k]; svh [n]; the codebook id word.
+    const std::size_t trellis_bytes = trellis.size() * 2;
+    const std::size_t aligned = (trellis_bytes + 255) / 256 * 256;
+    packed.payload.assign(aligned + 2 * static_cast<std::size_t>(k) + 2 * static_cast<std::size_t>(n) + 4,
+                          std::uint8_t{0});
+    for (std::size_t i = 0; i < trellis.size(); ++i) {
+        detail::store_u16_le(packed.payload, 2 * i, trellis[i]);
+    }
+    for (std::size_t i = 0; i < suh.size(); ++i) {
+        detail::store_u16_le(packed.payload, aligned + 2 * i, suh[i]);
+    }
+    const std::size_t svh_offset = aligned + 2 * static_cast<std::size_t>(k);
+    for (std::size_t i = 0; i < svh.size(); ++i) {
+        detail::store_u16_le(packed.payload, svh_offset + 2 * i, svh[i]);
+    }
+    detail::store_u32_le(packed.payload, packed.payload.size() - 4, codebook_id);
+
+    packed.weight.qtype            = QType::EXL3;
+    packed.weight.layout           = QuantLayout::Exl3Dense;
+    packed.weight.ndim             = 2;
+    packed.weight.n = packed.weight.shape[0] = packed.weight.padded_shape[0] = n;
+    packed.weight.k = packed.weight.shape[1] = packed.weight.padded_shape[1] = k;
+    packed.weight.payload_bytes = packed.payload.size();
+    packed.weight.exl3_trellis_offset = 0;
+    packed.weight.exl3_suh_offset     = aligned;
+    packed.weight.exl3_svh_offset     = svh_offset;
+    packed.weight.exl3_codebook       = codebook_id;
+    packed.weight.exl3_experts        = 1;
+    packed.weight.exl3_rows_per_expert = static_cast<std::uint32_t>(n);
+    return packed;
 }
 
 } // namespace ninfer::test::quantized_weight

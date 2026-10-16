@@ -29,9 +29,11 @@ acceptance. The delegated work (§9) executes against it. The fork owns every ch
 
 In scope for SP-7: the routed expert banks of the Qwen3.6 35B-A3B MoE (hidden 2048, 256 experts,
 expert intermediate 512, top-8), with every other tensor in the artifact keeping its existing
-representation. The `exl3_dense_v1` container layout for dense projections is executed (§4); the
-dense consumer route (the shared expert, attention/GDN projections, the embedding and lm_head)
-follows in later steps under this same contract. The 125B Flash-Next banks (512-way MoE) are
+representation. The `exl3_dense_v1` container layout (§4) and its Linear consumer route — the
+fused decode kernels for the 27B dense-route problems at the decode token shapes, qualified
+against the FP64 oracle of §3.2's composition — are executed. The remaining dense consumers (the
+shared expert inside SparseMoe, the embedding and lm_head) and the prefill token route follow in
+later steps under this same contract. The 125B Flash-Next banks (512-way MoE) are
 a later step that adds shapes, not semantics.
 
 Out of scope, and rejected at import: exllamav3's n-gram embedding codec (160-element tiles),

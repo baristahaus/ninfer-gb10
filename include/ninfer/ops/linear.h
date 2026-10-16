@@ -99,9 +99,13 @@ enum class LinearPolicy : std::uint8_t {
  * @par Supported execution domain
  * Registered execution uses RowSplit Q4_G64_FP16, Q5_G64_FP16, Q6_G64_FP16, or Q8_G32_FP16 weights
  * with FP16 scales, block-scaled NVFP4 weights, row-scaled FP8_E4M3FN_ROW_BF16 weights, plus
- * registered contiguous BF16 problems. Each format owns a finite registry of exact physical
- * weight problems and selects its kernel internally; a valid encoding and alignment do not imply
- * arbitrary N/K support. FP8 currently registers `[N,K]` in `{[14336,5120], [16384,5120],
+ * registered contiguous BF16 problems, plus the dense EXL3 route (`exl3_dense_v1` weights,
+ * SP-7 contract sections 4 and 7): the 27B dense-route problems `[1024,5120], [5120,6144],
+ * [6144,5120], [10240,5120], [17408,5120], [5120,17408]` at every decode token extent
+ * `T in 1..8`, A16 compute under every policy, with the mcg and mul1 codebooks (3INST banks are
+ * refused). Prefill token extents are unregistered and refused until their route exists. Each
+ * format owns a finite registry of exact physical weight problems and selects its kernel
+ * internally; a valid encoding and alignment do not imply arbitrary N/K support. FP8 currently registers `[N,K]` in `{[14336,5120], [16384,5120],
  * [34816,5120], [248320,5120], [5120,6144], [5120,17408]}` and the Qwen3.8 Flash-Next problems
  * `{[10240,2560], [6144,2560], [12288,2560], [2560,6144], [320,10240], [248320,2560],
  * [10240,320], [2560,640]}` at every positive T. The current NVFP4

@@ -54,6 +54,7 @@ struct ServeOptions {
     bool enable_vision      = false;
     bool use_cuda_graph     = true;
     bool token_logprobs     = false;
+    std::filesystem::path mtp_capture_path;
     bool allow_prefix_reuse = true;
     std::optional<bool> enable_thinking;
     std::optional<bool> preserve_thinking;

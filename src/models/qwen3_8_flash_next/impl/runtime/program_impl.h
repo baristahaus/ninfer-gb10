@@ -1,4 +1,5 @@
 #include "models/qwen3_8_flash_next/impl/runtime/instance.h"
+#include "models/qwen3_8_flash_next/impl/runtime/mtp_capture.h"
 #include "models/qwen3_8_flash_next/impl/runtime/program.h"
 #include "models/qwen3_8_flash_next/impl/runtime/rebuild_work.h"
 
@@ -991,6 +992,13 @@ ProgramImplCore::ProgramImplCore(const LoadedModelData& model_in, const Sequence
 
     io = qwen3_8_flash_next::RoundState(backing, plan.persistent.round);
     io.report_token_logprobs = plan.token_logprobs;
+    if (!plan.mtp_capture_path.empty()) {
+        if (speculative_backend != SpeculativeBackend::Mtp) {
+            throw std::invalid_argument("--mtp-capture requires --spec mtp");
+        }
+        mtp_capture = qwen3_8_flash_next::detail::MtpCaptureSink::open(
+            plan.mtp_capture_path, plan.draft_window, TextConfig::token_domain);
+    }
     if (io.report_token_logprobs && speculative_backend == SpeculativeBackend::DFlash) {
         // The DFlash verify schedule publishes tokens this report does not cover, so one report per
         // generated token could not hold. The 125B-A6B instance selects no DFlash companion; rejecting
@@ -12530,6 +12538,8 @@ ProgramImplCore::decode_mtp_batch(std::span<const std::uint32_t> lanes,
         egress_range.emplace(nvtx::Name::DecodeMtpEgress, nvtx::Category::Mtp,
                              static_cast<std::uint64_t>(lanes.size()));
         const double seconds = std::chrono::duration<double>(Clock::now() - started).count();
+        const std::uint64_t capture_round =
+            mtp_capture != nullptr ? ++mtp_capture_round : 0;
         for (std::size_t row = 0; row < lanes.size(); ++row) {
             SequenceState& sequence       = active_sequence(lanes[row]);
             RequestControl& request       = requests[lanes[row]];
@@ -12552,6 +12562,14 @@ ProgramImplCore::decode_mtp_batch(std::span<const std::uint32_t> lanes,
             validate_licensed_tokens(row_tokens);
             const std::uint32_t pcur =
                 static_cast<std::uint32_t>(mtp_host_ingress->current_extents[row]);
+            if (mtp_capture != nullptr) {
+                mtp_capture->record(capture_round, lanes[row], base_E, pcur,
+                                    std::span<const TokenId>(
+                                        mtp_host_ingress->current_drafts.data() +
+                                            static_cast<std::ptrdiff_t>(row) * draft_window,
+                                        draft_window),
+                                    row_tokens);
+            }
             if (pcur == 0) {
                 request.speculative_stats.fallback_steps += 1;
             } else {

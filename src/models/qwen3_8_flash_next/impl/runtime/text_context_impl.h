@@ -48,6 +48,12 @@
 #include <utility>
 #include <vector>
 
+#include <atomic>
+#include <cstdio>
+#include <cstdlib>
+
+extern std::atomic<int> ninfer_mtp_phase;
+
 #include "models/qwen3_8_flash_next/impl/ple_table.h"
 
 namespace ninfer::models::qwen3_8_flash_next::detail::NINFER_QWEN38_FLASH_NEXT_RUNTIME_NS::
@@ -491,6 +497,7 @@ void TextContext::mtp_forward_flash_next(const Tensor& ids, const Tensor& hidden
     throw std::logic_error("Flash-Next MTP selected by a non-Flash target");
 #else
     cudaStream_t stream = ctx_.stream;
+    ninfer_mtp_phase.store(1);
     const int tokens    = static_cast<int>(ids.numel());
     const int batch     = active_sequence_batch_ == 0 ? 1 : active_sequence_batch_;
     const int width     = tokens / batch;
@@ -527,9 +534,57 @@ void TextContext::mtp_forward_flash_next(const Tensor& ids, const Tensor& hidden
     ops::linear(normalized_hidden_branches, mtp_.payload->hidden_projection, hyper_branches, stream,
                 bf16_gemm_);
     ops::hyperconnection_add_repeated(projected_embedding, hyper, stream);
+    auto mtp_dump = [&](const char* name, const void* ptr, std::size_t bytes) {
+        if (const char* dump_dir = std::getenv("NINFER_MTP_DUMP")) {
+            std::string path = std::string(dump_dir) + "/" + name + ".bin";
+            if (FILE* f = fopen(path.c_str(), "wb"); f != nullptr) {
+                void* host = std::malloc(bytes);
+                CUDA_CHECK(cudaMemcpyAsync(host, ptr, bytes, cudaMemcpyDeviceToHost, stream));
+                CUDA_CHECK(cudaStreamSynchronize(stream));
+                fwrite(host, 1, bytes, f);
+                std::fclose(f);
+                std::free(host);
+            }
+        }
+    };
+    static std::atomic<int> mtp_dump_count{0};
+    const bool mtp_dump_on = mtp_dump_count.fetch_add(1) == 0;
+    if (mtp_dump_on) {
+        mtp_dump("s1_hyper_in", hyper.data, hyper.bytes());
+        auto wdump = [&](const char* nm, const Weight& w) {
+            std::fprintf(stderr, "[fcump] %s qtype=%d bytes=%zu n=%d k=%d\n", nm,
+                         static_cast<int>(w.qtype), w.payload_bytes, w.n, w.k);
+            const void* wp = w.qdata != nullptr ? w.qdata : w.payload;
+            if (wp != nullptr && w.payload_bytes > 0) {
+                mtp_dump((std::string("fw_") + nm + "_q").c_str(), wp, w.payload_bytes);
+            }
+        };
+        wdump("embedding_projection", mtp_.payload->embedding_projection);
+        wdump("hidden_projection", mtp_.payload->hidden_projection);
+        if (embed_ != nullptr) {
+            std::fprintf(stderr, "[fcump] embed qtype=%d bytes=%zu n=%d k=%d\n",
+                         static_cast<int>(embed_->qtype), embed_->payload_bytes, embed_->n,
+                         embed_->k);
+            const void* ep = embed_->qdata != nullptr ? embed_->qdata : embed_->payload;
+            if (ep != nullptr && embed_->payload_bytes > 0) {
+                mtp_dump("fw_embed_q", ep, embed_->payload_bytes);
+            }
+        }
+        if (lm_head_ != nullptr) {
+            std::fprintf(stderr, "[fcump] lm_head qtype=%d bytes=%zu n=%d k=%d\n",
+                         static_cast<int>(lm_head_->qtype), lm_head_->payload_bytes, lm_head_->n,
+                         lm_head_->k);
+            const void* lp = lm_head_->qdata != nullptr ? lm_head_->qdata : lm_head_->payload;
+            if (lp != nullptr && lm_head_->payload_bytes > 0) {
+                mtp_dump("fw_lm_head_q", lp, lm_head_->payload_bytes);
+            }
+        }
+    }
     Tensor block_input  = work_.alloc(DType::BF16, {2560, tokens});
     Tensor block_output = work_.alloc(DType::BF16, {2560, tokens});
     Tensor injection    = work_.alloc(DType::BF16, {4, tokens});
+    ops::hyperconnection_mix(hyper, mtp_.payload->attention_hc, block_input, &injection, work_,
+                             stream);
     ops::hyperconnection_mix(hyper, mtp_.payload->attention_hc, block_input, &injection, work_,
                              stream);
 
@@ -567,10 +622,20 @@ void TextContext::mtp_forward_flash_next(const Tensor& ids, const Tensor& hidden
         block_input, cache_positions, mrope_positions, valid, rows, mtp_.payload->attention, cache,
         envelope, block_output, work_, stream, bf16_gemm_,
         {.selected_indices = selected_qsa_indices, .reused_indices = reused_qsa_indices});
-    ops::hyperconnection_combine_mix(hyper, block_output, injection, mtp_.payload->mlp_hc,
-                                     block_input, &injection, work_, stream);
     ops::flash_next_moe(block_input, mtp_.payload->post_mixer, block_output, work_, stream,
                         bf16_gemm_);
+    if (mtp_dump_on) {
+        mtp_dump("s2_block1", block_input.data, block_input.bytes());
+        mtp_dump("s2_inj1", injection.data, injection.bytes());
+        mtp_dump("s2_qsa_out", block_output.data, block_output.bytes());
+    }
+    ops::hyperconnection_combine_mix(hyper, block_output, injection, mtp_.payload->mlp_hc,
+                                     block_input, &injection, work_, stream);
+    if (mtp_dump_on) {
+        mtp_dump("s3_block2", block_input.data, block_input.bytes());
+        mtp_dump("s3_inj2", injection.data, injection.bytes());
+        mtp_dump("s3_moe_out", block_output.data, block_output.bytes());
+    }
     ops::hyperconnection_combine(hyper, block_output, injection, stream);
     CUDA_CHECK(cudaMemcpyAsync(predictor_hidden.data, hyper.data, hyper.bytes(),
                                cudaMemcpyDeviceToDevice, stream));
@@ -581,6 +646,12 @@ void TextContext::mtp_forward_flash_next(const Tensor& ids, const Tensor& hidden
         .up   = mtp_.payload->final_hc.up,
     };
     ops::hyperconnection_mix(hyper, final_weights, sample_hidden, nullptr, work_, stream);
+    ninfer_mtp_phase.store(0);
+    if (mtp_dump_on) {
+        mtp_dump("s4_hyper_out", hyper.data, hyper.bytes());
+        mtp_dump("s4_sample", sample_hidden.data, sample_hidden.bytes());
+        std::fprintf(stderr, "[mtp-dump] tokens=%d\n", tokens);
+    }
     (void)envelope;
 #endif
 }
@@ -746,12 +817,13 @@ void TextContext::proposal_argmax(const Tensor& hidden, Tensor& logits, Tensor& 
         if constexpr (Variant::flash_next) {
             constexpr int kRerankTile        = 512;
             constexpr int kCandidatesPerTile = 2;
+            const int shortlist_rows =
+                std::min(proposal_head_n_, static_cast<int>(Variant::draft_head_valid_rows));
             const int candidate_rows =
-                ((Variant::draft_head_valid_rows + kRerankTile - 1) / kRerankTile) *
-                kCandidatesPerTile;
+                ((shortlist_rows + kRerankTile - 1) / kRerankTile) * kCandidatesPerTile;
             Tensor candidate_ids    = work_.alloc(DType::I32, {candidate_rows, T});
             Tensor candidate_scores = work_.alloc(DType::FP32, {candidate_rows, T});
-            ops::shortlist_exact_argmax(hidden, proposal_logits, Variant::draft_head_valid_rows,
+            ops::shortlist_exact_argmax(hidden, proposal_logits, shortlist_rows,
                                         *lm_head_, proposal_head_ids_, candidate_ids,
                                         candidate_scores, proposal_tokens, ctx_.stream);
         } else {

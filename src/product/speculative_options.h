@@ -30,6 +30,16 @@ namespace ninfer::product {
 }
 
 inline void validate_speculative_cli_options(const SpeculativeOptions& options) {
+    if (options.proposal_head_rows != 0 &&
+        (options.proposal_head != ProposalHead::Optimized || options.backend != SpeculativeBackend::Mtp)) {
+        throw std::invalid_argument(
+            "--proposal-head-rows requires --spec mtp with --lm-head-draft");
+    }
+    if (options.proposal_head_rows != 0 &&
+        (options.proposal_head_rows < 1024 || options.proposal_head_rows % 128 != 0)) {
+        throw std::invalid_argument(
+            "--proposal-head-rows must be 0 or a multiple of 128 of at least 1024");
+    }
     switch (options.backend) {
     case SpeculativeBackend::None:
         if (options.draft_tokens != 0 || options.proposal_head != ProposalHead::Full) {

@@ -211,6 +211,7 @@ int main(int argc, char** argv) {
         engine_options.context_cache.enabled = false;
         engine_options.speculative           = options.speculative;
         engine_options.use_cuda_graph        = options.use_cuda_graph;
+        engine_options.mtp_capture_path      = options.mtp_capture_path;
 
         ninfer::bench::BenchEnvironment env;
         env.artifact_path            = options.artifact_path;

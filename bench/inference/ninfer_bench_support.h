@@ -54,6 +54,7 @@ enum class OutputFormat { Table, Json, Csv };
 struct BenchOptions {
     std::string artifact_path;
     std::string corpus_path{kDefaultCorpusPath};
+    std::string mtp_capture_path;
     std::string constraint_file;
     std::optional<OutputConstraint> constraint;
     std::uint32_t concurrency = 1;

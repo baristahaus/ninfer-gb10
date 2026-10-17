@@ -81,6 +81,9 @@ struct SpeculativeOptions {
     // Startup-fixed K: MTP 1..5; DFlash and DFlash2 1..15 (query width K+1).
     std::uint32_t draft_tokens = 0;
     ProposalHead proposal_head = ProposalHead::Full;
+    // Truncate the optimized proposal head to its first N frequency-ranked rows
+    // (0 = artifact default). Flash-Next MTP only.
+    std::uint32_t proposal_head_rows = 0;
 };
 
 enum class StartupPhase : std::uint8_t {
@@ -161,6 +164,9 @@ struct EngineOptions {
     // probabilities against an engine loaded without this capability is rejected rather than
     // answered with placeholders.
     bool token_logprobs = false;
+    // Capture every batched MTP decode round's proposals and verification outcomes to a
+    // binary file for offline analysis. Fixed at startup; requires an MTP backend.
+    std::filesystem::path mtp_capture_path;
     int device                         = 0;
     std::uint32_t max_context          = 2048; // Logical ceiling of one request or score window.
     KvCapacityPolicy kv_capacity       = KvCapacityPolicy::explicit_capacity(2048);

@@ -16,6 +16,7 @@
 #include "models/qwen3_8_flash_next/impl/runtime/dflash_context.h"
 #include "models/qwen3_8_flash_next/impl/runtime/host_kv_extent_store.h"
 #include "models/qwen3_8_flash_next/impl/runtime/logical_kv_store.h"
+#include "models/qwen3_8_flash_next/impl/runtime/mtp_capture.h"
 #include "models/qwen3_8_flash_next/impl/runtime/state_image_store.h"
 #include "models/qwen3_8_flash_next/impl/runtime/prefix_identity.h"
 #include "models/qwen3_8_flash_next/impl/runtime/resource_projection.h"
@@ -683,6 +684,9 @@ public:
     std::optional<ops::GdnReplayFoldPlan> replay_fold;
     std::optional<DFlashPersistentState> dflash;
     qwen3_8_flash_next::RoundState io;
+    // Batched MTP round capture, opened when the engine was loaded with a capture path.
+    std::unique_ptr<qwen3_8_flash_next::detail::MtpCaptureSink> mtp_capture;
+    std::uint64_t mtp_capture_round = 0;
     Tensor prefill_hidden;
     std::optional<Tensor> mtp_prefill_hidden;
     std::optional<Tensor> flash_decode_ple;

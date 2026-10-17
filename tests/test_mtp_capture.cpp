@@ -55,17 +55,27 @@ int main() {
     check(unwritable_rejected, "an unwritable capture path was accepted");
 
     constexpr std::uint32_t k = 2;
+    constexpr std::uint32_t ranks = 3;
     {
         std::unique_ptr<MtpCaptureSink> sink =
-            MtpCaptureSink::open(path, k, 248320);
+            MtpCaptureSink::open(path, k, 248320, ranks);
         for (std::uint64_t round = 1; round <= 4000; ++round) {
             for (std::uint32_t lane = 0; lane < 3; ++lane) {
                 const std::array<TokenId, 5> drafts{
                     static_cast<TokenId>(round * 10 + lane), 7, -1, 0, 1};
                 const std::array<TokenId, 3> committed{
                     static_cast<TokenId>(round * 10 + lane), 42, 43};
-                sink->record(round, lane, round * 100 + lane, 2, drafts,
-                             committed);
+                const std::array<float, 3> chosen{1.0F, 2.5F, 0.0F};
+                std::array<TokenId, 9> top_ids{};
+                std::array<float, 9> top_logprobs{};
+                for (std::uint32_t c = 0; c < 3; ++c) {
+                    for (std::uint32_t r = 0; r < ranks; ++r) {
+                        top_ids[c * ranks + r]  = static_cast<TokenId>(c * 100 + r);
+                        top_logprobs[c * ranks + r] = -0.5F * static_cast<float>(r);
+                    }
+                }
+                sink->record(round, lane, round * 100 + lane, 2, drafts, committed, chosen,
+                             top_ids, top_logprobs);
             }
         }
         check(!sink->failed(), "the writer thread reported a failure");
@@ -81,8 +91,9 @@ int main() {
     check(header.draft_window == k, "header draft window mismatch");
     check(header.record_width == k + 1, "header record width mismatch");
     check(header.token_domain == 248320, "header token domain mismatch");
+    check(header.ranks == ranks, "header ranks mismatch");
 
-    const std::size_t record_bytes = mtp_capture_record_bytes(k);
+    const std::size_t record_bytes = mtp_capture_record_bytes(k, ranks);
     const std::size_t expected = sizeof(header) + 4000 * 3 * record_bytes;
     check(data.size() == expected, "file size does not match header plus records");
 
@@ -94,13 +105,47 @@ int main() {
             std::memcpy(&record, data.data() + at, sizeof(record));
             at += sizeof(record);
             const auto* drafts = reinterpret_cast<const TokenId*>(data.data() + at);
-            at += record_bytes - sizeof(record);
+            at += (2 * k + 1) * sizeof(TokenId);
             records_ok = record.round_index == round && record.lane == lane &&
                          record.base_frontier == round * 100 + lane && record.extent == 2 &&
                          record.committed_count == 3 && drafts[0] == static_cast<int>(round * 10 + lane);
+            for (std::uint32_t c = 0; c < k + 1 && records_ok; ++c) {
+                float chosen = 0.0F;
+                std::memcpy(&chosen, data.data() + at, sizeof(chosen));
+                at += sizeof(chosen);
+                const float expected_chosen = c == 0 ? 1.0F : (c == 1 ? 2.5F : 0.0F);
+                records_ok = chosen == expected_chosen;
+                for (std::uint32_t r = 0; r < ranks && records_ok; ++r) {
+                    TokenId id = 0;
+                    float logprob = 0.0F;
+                    std::memcpy(&id, data.data() + at, sizeof(id));
+                    at += sizeof(id);
+                    std::memcpy(&logprob, data.data() + at, sizeof(logprob));
+                    at += sizeof(logprob);
+                    records_ok = id == static_cast<TokenId>(c * 100 + r) &&
+                                 logprob == -0.5F * static_cast<float>(r);
+                }
+            }
         }
     }
     check(records_ok, "record contents mismatch");
+
+    // Token-only layout (ranks = 0): record size matches the v1 stride.
+    const std::filesystem::path plain_path =
+        (std::filesystem::temp_directory_path() / "ninfer_mtp_capture_plain.bin");
+    {
+        std::unique_ptr<MtpCaptureSink> sink = MtpCaptureSink::open(plain_path, k, 248320);
+        const std::array<TokenId, 2> drafts{5, 6};
+        const std::array<TokenId, 1> committed{9};
+        sink->record(1, 0, 10, 2, drafts, committed);
+    }
+    const std::vector<std::byte> plain = read_file(plain_path);
+    check(plain.size() == sizeof(header) + mtp_capture_record_bytes(k, 0),
+          "token-only record size mismatch");
+    MtpCaptureHeader plain_header{};
+    std::memcpy(&plain_header, plain.data(), sizeof(plain_header));
+    check(plain_header.ranks == 0, "token-only header ranks mismatch");
+    std::filesystem::remove(plain_path);
 
     std::filesystem::remove(path);
     if (failures != 0) { return 1; }

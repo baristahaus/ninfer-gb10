@@ -997,7 +997,8 @@ ProgramImplCore::ProgramImplCore(const LoadedModelData& model_in, const Sequence
             throw std::invalid_argument("--mtp-capture requires --spec mtp");
         }
         mtp_capture = qwen3_8_flash_next::detail::MtpCaptureSink::open(
-            plan.mtp_capture_path, plan.draft_window, TextConfig::token_domain);
+            plan.mtp_capture_path, plan.draft_window, TextConfig::token_domain,
+            plan.token_logprobs ? ops::kMaxReportedLogprobRanks : 0);
     }
     if (io.report_token_logprobs && speculative_backend == SpeculativeBackend::DFlash) {
         // The DFlash verify schedule publishes tokens this report does not cover, so one report per
@@ -12563,12 +12564,30 @@ ProgramImplCore::decode_mtp_batch(std::span<const std::uint32_t> lanes,
             const std::uint32_t pcur =
                 static_cast<std::uint32_t>(mtp_host_ingress->current_extents[row]);
             if (mtp_capture != nullptr) {
-                mtp_capture->record(capture_round, lanes[row], base_E, pcur,
-                                    std::span<const TokenId>(
-                                        mtp_host_ingress->current_drafts.data() +
-                                            static_cast<std::ptrdiff_t>(row) * draft_window,
-                                        draft_window),
-                                    row_tokens);
+                const std::size_t report_base = static_cast<std::size_t>(row) * width;
+                mtp_capture->record(
+                    capture_round, lanes[row], base_E, pcur,
+                    std::span<const TokenId>(mtp_host_ingress->current_drafts.data() +
+                                                 static_cast<std::ptrdiff_t>(row) * draft_window,
+                                             draft_window),
+                    row_tokens,
+                    io.report_token_logprobs
+                        ? std::span<const float>(mtp_host_egress->token_logprobs.data() +
+                                                     report_base,
+                                                 width)
+                        : std::span<const float>{},
+                    io.report_token_logprobs
+                        ? std::span<const TokenId>(
+                              mtp_host_egress->top_ids.data() +
+                                  report_base * ops::kMaxReportedLogprobRanks,
+                              width * ops::kMaxReportedLogprobRanks)
+                        : std::span<const TokenId>{},
+                    io.report_token_logprobs
+                        ? std::span<const float>(
+                              mtp_host_egress->top_logprobs.data() +
+                                  report_base * ops::kMaxReportedLogprobRanks,
+                              width * ops::kMaxReportedLogprobRanks)
+                        : std::span<const float>{});
             }
             if (pcur == 0) {
                 request.speculative_stats.fallback_steps += 1;

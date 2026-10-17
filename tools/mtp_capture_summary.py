@@ -74,12 +74,15 @@ def main(argv=None):
         header = handle.read(HEADER.size)
         if len(header) < HEADER.size:
             return fail("file too small for a capture header")
-        magic, version, header_size, k, width, token_domain, _ = HEADER.unpack(header)
+        magic, version, header_size, k, width, token_domain, ranks = HEADER.unpack(header)
         if magic[:7] != MAGIC[:7]:
             return fail("not an MTP capture file")
-        if version != 1:
+        if version not in (1, 2):
             return fail(f"unsupported capture version {version}")
-        record_bytes = 28 + (2 * k + 1) * 4
+        if version == 1:
+            ranks = 0
+        record_bytes = 28 + (2 * k + 1) * 4 + (k + 1) * (4 + ranks * 8) if ranks else \
+            28 + (2 * k + 1) * 4
         handle.seek(0)
         stream = handle.read()
 
@@ -103,6 +106,11 @@ def main(argv=None):
     rejected_outside = 0
     accepted_inside = 0
     accepted_outside = 0
+    chosen_sum = chosen_n = 0.0
+    chosen_n = 0
+    near_miss = near_miss_rank_sum = 0
+    near_miss_logprob_sum = 0.0
+    rejected_scored = 0
 
     offset = header_size
     while offset + record_bytes <= len(stream):
@@ -113,6 +121,16 @@ def main(argv=None):
         offset += 4 * k
         committed = struct.unpack_from(f"<{k + 1}i", stream, offset)
         offset += 4 * (k + 1)
+        scores = None
+        if ranks:
+            scores = []
+            for _column in range(k + 1):
+                (chosen,) = struct.unpack_from("<f", stream, offset)
+                offset += 4
+                pairs = struct.unpack_from("<" + "if" * ranks, stream, offset)
+                offset += ranks * 8
+                scores.append((chosen, [(pairs[2 * i], pairs[2 * i + 1])
+                                        for i in range(ranks)]))
 
         rows += 1
         rounds.add(round_index)
@@ -127,6 +145,21 @@ def main(argv=None):
         for position in range(committed_count - 1):
             by_position[position] += 1
         bucket_accepted[bucket] = bucket_accepted.get(bucket, 0) + committed_count - 1
+        if scores is not None:
+            for position in range(committed_count - 1):
+                chosen_sum += scores[position + 1][0]
+                chosen_n += 1
+            for position in range(extent):
+                if position < committed_count - 1:
+                    continue
+                column = scores[position + 1][1]
+                for rank, (top_id, top_logprob) in enumerate(column):
+                    if top_id == drafts[position]:
+                        near_miss += 1
+                        near_miss_rank_sum += rank
+                        near_miss_logprob_sum += top_logprob
+                        break
+                rejected_scored += 1
         if prefix is not None:
             for position in range(extent):
                 token = drafts[position]
@@ -151,6 +184,17 @@ def main(argv=None):
     print(f"fallback steps  {fallbacks}   drafted {drafted}   accepted {accepted}")
     if drafted:
         print(f"acceptance      {accepted / drafted:.3f}")
+    if ranks:
+        print(f"target score report (top-{ranks} alternatives per verify column):")
+        if chosen_n:
+            print(f"  mean committed-token logprob: {chosen_sum / chosen_n:.3f} over {chosen_n}")
+        if rejected_scored:
+            print(f"  rejected drafts inside the target top-{ranks}: {near_miss}/{rejected_scored} "
+                  f"({100.0 * near_miss / rejected_scored:.1f}%) - near misses an accept "
+                  "predictor could catch")
+            if near_miss:
+                print(f"    mean rank {near_miss_rank_sum / near_miss:.2f}, "
+                      f"mean logprob {near_miss_logprob_sum / near_miss:.3f}")
     print("acceptance by draft position:")
     for position, hits in enumerate(by_position):
         print(f"  pos {position}: {hits}/{rows - fallbacks}")

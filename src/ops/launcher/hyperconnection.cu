@@ -3,6 +3,12 @@
 #include "ops/flash_next_work.h"
 
 #include "core/device.h"
+
+#include <atomic>
+#include <cstdio>
+#include <cstdlib>
+
+std::atomic<int> ninfer_mtp_phase{0};
 #include "ninfer/ops/linear.h"
 #include "ops/linear/bf16/flash_next/bf16_launch.h"
 #include "ops/linear/fp8/fp8_flash_next.h"
@@ -458,9 +464,24 @@ std::size_t hyperconnection_mix_workspace_capacity_bytes(std::int32_t tokens,
     return static_cast<std::size_t>(bytes) + 4 * 256;
 }
 
+static void wdump_c(const char* dd, const char* name, const void* p, std::size_t by,
+                    cudaStream_t stream) {
+    if (p == nullptr || by == 0) { return; }
+    std::string path = std::string(dd) + "/" + name + ".bin";
+    if (FILE* f = fopen(path.c_str(), "wb"); f != nullptr) {
+        void* host = std::malloc(by);
+        CUDA_CHECK(cudaMemcpyAsync(host, p, by, cudaMemcpyDeviceToHost, stream));
+        CUDA_CHECK(cudaStreamSynchronize(stream));
+        fwrite(host, 1, by, f);
+        std::fclose(f);
+        std::free(host);
+    }
+}
+
 void hyperconnection_mix(const Tensor& hyper, const HyperConnectionWeights& weights,
                          Tensor& block_input, Tensor* injection, WorkspaceArena& workspace,
                          cudaStream_t stream, Bf16GemmContext* bf16_gemm) {
+    static std::atomic<int> mix_dump_n{0};
     NINFER_PERF_SCOPE("hyper.mix", hyper.ne[1], 0, 0,
                       flash_next_work::hyper(hyper.ne[1], injection != nullptr, false,
                                              weights.down.qtype == QType::FP8_E4M3FN_ROW_BF16,
@@ -468,16 +489,94 @@ void hyperconnection_mix(const Tensor& hyper, const HyperConnectionWeights& weig
 
     validate(hyper, weights, block_input, injection);
     const int tokens = hyper.ne[1];
+    {
+        int capt = 0; cudaStreamIsCapturing(stream, (cudaStreamCaptureStatus*)&capt);
+        const char* dd = capt == 0 ? std::getenv("NINFER_MTP_DUMP") : nullptr;
+        if (dd != nullptr && ninfer_mtp_phase.load() != 0) {
+            const int n = mix_dump_n.fetch_add(1);
+            if (n < 32) {
+                auto wdump = [&](const char* nm, const void* p, std::size_t by) {
+                    std::string path = std::string(dd) + "/" + nm + ".bin";
+                    if (FILE* f = fopen(path.c_str(), "wb"); f != nullptr) {
+                        void* host = std::malloc(by);
+                        CUDA_CHECK(cudaMemcpy(host, p, by, cudaMemcpyDeviceToHost));
+                        fwrite(host, 1, by, f);
+                        std::fclose(f);
+                        std::free(host);
+                    }
+                };
+                wdump(("m" + std::to_string(n) + "_hyper").c_str(), hyper.data, hyper.bytes());
+                wdump(("m" + std::to_string(n) + "_normw").c_str(), weights.norm.data,
+                      weights.norm.bytes());
+                if (weights.injection.payload != nullptr) {
+                    wdump(("m" + std::to_string(n) + "_injw").c_str(), weights.injection.qdata,
+                          weights.injection.payload_bytes);
+                    std::fprintf(stderr, "[mixdump] inj qtype=%d bytes=%zu\n",
+                                 static_cast<int>(weights.injection.qtype),
+                                 weights.injection.payload_bytes);
+                }
+                {
+                    const void* dp = weights.down.qdata != nullptr ? weights.down.qdata
+                                                                   : weights.down.payload;
+                    const void* upp = weights.up.qdata != nullptr ? weights.up.qdata
+                                                                  : weights.up.payload;
+                    std::fprintf(stderr,
+                                 "[mixdump] down qtype=%d bytes=%zu up qtype=%d bytes=%zu\n",
+                                 static_cast<int>(weights.down.qtype), weights.down.payload_bytes,
+                                 static_cast<int>(weights.up.qtype), weights.up.payload_bytes);
+                    if (dp != nullptr) {
+                        wdump(("m" + std::to_string(n) + "_downq").c_str(), dp,
+                              weights.down.payload_bytes);
+                    }
+                    if (upp != nullptr) {
+                        wdump(("m" + std::to_string(n) + "_upq").c_str(), upp,
+                              weights.up.payload_bytes);
+                    }
+                }
+
+            }
+        }
+    }
     auto scope = workspace.scope();
     Tensor normalized = workspace.alloc(DType::BF16, {kHyper, tokens});
     const dim3 grid(kStreams, static_cast<unsigned int>(tokens));
     if (injection != nullptr) {
         Tensor partials = workspace.alloc(DType::FP32, {kInjectionPartialsPerToken, tokens});
+        int capN = 0; cudaStreamIsCapturing(stream, (cudaStreamCaptureStatus*)&capN);
+    if (capN == 0 && mix_dump_n.load() > 0 && mix_dump_n.load() <= 64) {
+            const int n = mix_dump_n.load() - 1;
+            std::string path = std::string(std::getenv("NINFER_MTP_DUMP")) + "/mpre" +
+                               std::to_string(n) + "_hyper.bin";
+            if (FILE* f = fopen(path.c_str(), "wb"); f != nullptr) {
+                void* host = std::malloc(hyper.bytes());
+                CUDA_CHECK(cudaMemcpyAsync(host, hyper.data, hyper.bytes(),
+                                           cudaMemcpyDeviceToHost, stream));
+                CUDA_CHECK(cudaStreamSynchronize(stream));
+                fwrite(host, 1, hyper.bytes(), f);
+                std::fclose(f);
+                std::free(host);
+            }
+        }
         grouped_rmsnorm_kernel<true><<<grid, kGroupThreads, 0, stream>>>(
             static_cast<const __nv_bfloat16*>(hyper.data),
             static_cast<const __nv_bfloat16*>(weights.norm.data),
             static_cast<const __nv_bfloat16*>(weights.injection.qdata),
             static_cast<__nv_bfloat16*>(normalized.data), static_cast<float*>(partials.data));
+    int capM = 0; cudaStreamIsCapturing(stream, (cudaStreamCaptureStatus*)&capM);
+    if (capM == 0 && mix_dump_n.load() > 0 && mix_dump_n.load() <= 64) {
+        const int n = mix_dump_n.load() - 1;
+        std::string path = std::string(std::getenv("NINFER_MTP_DUMP")) + "/mn" +
+                           std::to_string(n) + "_normalized.bin";
+        if (FILE* f = fopen(path.c_str(), "wb"); f != nullptr) {
+            void* host = std::malloc(normalized.bytes());
+            CUDA_CHECK(cudaMemcpyAsync(host, normalized.data, normalized.bytes(),
+                                       cudaMemcpyDeviceToHost, stream));
+            CUDA_CHECK(cudaStreamSynchronize(stream));
+            fwrite(host, 1, normalized.bytes(), f);
+            std::fclose(f);
+            std::free(host);
+        }
+    }
         finish_mix(normalized, &partials, weights, block_input, injection, workspace, stream,
                    bf16_gemm);
         return;
@@ -503,6 +602,44 @@ void hyperconnection_combine_mix(Tensor& hyper, const Tensor& previous_block_out
     validate(hyper, weights, block_input, injection);
     validate_combine_inputs(hyper, previous_block_output, previous_injection);
     const int tokens = hyper.ne[1];
+    {
+        static std::atomic<int> cmix_dump_n{0};
+        int capt2 = 0;
+        cudaStreamIsCapturing(stream, (cudaStreamCaptureStatus*)&capt2);
+        const char* dd = capt2 == 0 ? std::getenv("NINFER_MTP_DUMP") : nullptr;
+        if (dd != nullptr && ninfer_mtp_phase.load() != 0) {
+            const int n = cmix_dump_n.fetch_add(1);
+            if (n < 8) {
+                {
+                    const void* dp = weights.down.qdata != nullptr ? weights.down.qdata
+                                                                   : weights.down.payload;
+                    const void* upp = weights.up.qdata != nullptr ? weights.up.qdata
+                                                                  : weights.up.payload;
+                    if (dp != nullptr) {
+                        wdump_c(dd, ("cd" + std::to_string(n) + "_downq").c_str(), dp,
+                                weights.down.payload_bytes, stream);
+                    }
+                    if (upp != nullptr) {
+                        wdump_c(dd, ("cd" + std::to_string(n) + "_upq").c_str(), upp,
+                                weights.up.payload_bytes, stream);
+                    }
+                }
+            }
+            if (n < 4 && weights.injection.payload != nullptr) {
+                std::string path = std::string(dd) + "/c" + std::to_string(n) + "_injw.bin";
+                if (FILE* f = fopen(path.c_str(), "wb"); f != nullptr) {
+                    void* host = std::malloc(weights.injection.payload_bytes);
+                    CUDA_CHECK(cudaMemcpyAsync(host, weights.injection.qdata,
+                                               weights.injection.payload_bytes,
+                                               cudaMemcpyDeviceToHost, stream));
+                    CUDA_CHECK(cudaStreamSynchronize(stream));
+                    fwrite(host, 1, weights.injection.payload_bytes, f);
+                    std::fclose(f);
+                    std::free(host);
+                }
+            }
+        }
+    }
     auto scope = workspace.scope();
     Tensor normalized = workspace.alloc(DType::BF16, {kHyper, tokens});
     const dim3 grid(kStreams, static_cast<unsigned int>(tokens));

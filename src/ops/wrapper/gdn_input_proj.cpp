@@ -3,6 +3,9 @@
 
 #include "core/layout.h"
 #include "ops/gdn_input_proj/fp8/fp8_gdn_conv_plan.h"
+#include "ops/linear/bf16/bf16_dispatch.h"
+#include "ops/linear/exl3/exl3_dense_dispatch.h"
+#include "ops/linear/exl3/exl3_prefill.h"
 #include "ops/gdn_input_proj/fp8/fp8_gdn_input_plan.h"
 #include "ops/gdn_input_proj/gdn_projected_conv.h"
 #include "ops/gdn_input_proj/nvfp4/nvfp4_gdn_input_plan.h"
@@ -293,6 +296,77 @@ void dispatch_single_parent(const Tensor& x, const Weight& weight, Tensor& qkv, 
     const std::int32_t cols = x.ne[1];
     if (cols <= 0) { throw std::invalid_argument("gdn_input_proj: T must be positive"); }
 
+    if (weight.qtype == QType::EXL3) {
+        // The dense EXL3 route (SP-7): the fused [16384, 5120] parent's row groups
+        // (query, key, value, z) dispatch as row-sliced dense linears at decode token
+        // shapes; larger token counts compose the decoded weight with BF16 linears.
+        constexpr std::int32_t kHidden  = 5120;
+        constexpr std::int32_t kQkvRows = 10240;
+        constexpr std::int32_t kZRows   = 6144;
+        constexpr std::int32_t kRows    = kQkvRows + kZRows;
+        require_matrix(x, kHidden, cols, "x");
+        require_matrix(qkv, kQkvRows, cols, "qkv");
+        require_matrix(z, kZRows, cols, "z");
+        require_single_parent_nonoverlap(x, qkv, z);
+        if (weight.n != kRows || weight.k != kHidden || weight.layout != QuantLayout::Exl3Dense) {
+            throw std::invalid_argument("exl3 gdn_input_proj: unsupported weight shape");
+        }
+        if (workspace == nullptr) {
+            throw std::invalid_argument("exl3 gdn_input_proj requires caller workspace");
+        }
+        constexpr std::int32_t kQRows = 2048;
+        constexpr std::int32_t kKRows = 2048;
+        constexpr std::int32_t kVRows = 6144;
+        const Weight query_w = detail::exl3_dense_slice(weight, 0, kQRows);
+        const Weight key_w = detail::exl3_dense_slice(weight, kQRows, kKRows);
+        const Weight value_w = detail::exl3_dense_slice(weight, kQRows + kKRows, kVRows);
+        const Weight z_w = detail::exl3_dense_slice(weight, kQkvRows, kZRows);
+        const auto qkv_rows = [&](std::int32_t row_begin, std::int32_t rows) {
+            return Tensor(static_cast<std::byte*>(qkv.data) +
+                              static_cast<std::ptrdiff_t>(row_begin) * cols * 2,
+                          DType::BF16, {rows, cols});
+        };
+        if (cols <= 8) {
+            auto scope = workspace->scope();
+            Tensor q_view = qkv_rows(0, kQRows);
+            Tensor k_view = qkv_rows(kQRows, kKRows);
+            Tensor v_view = qkv_rows(kQRows + kKRows, kVRows);
+            detail::exl3_dense_dispatch(x, query_w, q_view, workspace, stream);
+            detail::exl3_dense_dispatch(x, key_w, k_view, workspace, stream);
+            detail::exl3_dense_dispatch(x, value_w, v_view, workspace, stream);
+            detail::exl3_dense_dispatch(x, z_w, z, workspace, stream);
+            return;
+        }
+        auto scope = workspace->scope();
+        const auto prime_span = workspace->alloc_bytes(
+            static_cast<std::size_t>(kRows) * static_cast<std::size_t>(kHidden) * 2, 256);
+        const auto u_span = workspace->alloc_bytes(
+            static_cast<std::size_t>(kHidden) * static_cast<std::size_t>(cols) * 2, 256);
+        Tensor prime(prime_span.data, DType::BF16, {kRows, kHidden});
+        Tensor u(u_span.data, DType::BF16, {kHidden, cols});
+        detail::exl3_prefill_dequant(weight, prime, stream);
+        detail::exl3_prefill_transform(x, weight, u, stream);
+        const auto linear_part = [&](std::int32_t row_begin, std::int32_t rows, Tensor& out) {
+            Weight dense;
+            dense.qtype   = QType::BF16;
+            dense.layout  = QuantLayout::Contiguous;
+            dense.ndim    = 2;
+            dense.n = dense.shape[0] = dense.padded_shape[0] = rows;
+            dense.k = dense.shape[1] = dense.padded_shape[1] = kHidden;
+            dense.qdata = static_cast<const std::byte*>(prime.data) +
+                          static_cast<std::ptrdiff_t>(row_begin) * kHidden * 2;
+            detail::bf16_dispatch(u, dense, out, policy, stream);
+        };
+        Tensor q_view = qkv_rows(0, kQRows);
+        Tensor k_view = qkv_rows(kQRows, kKRows);
+        Tensor v_view = qkv_rows(kQRows + kKRows, kVRows);
+        linear_part(0, kQRows, q_view);
+        linear_part(kQRows, kKRows, k_view);
+        linear_part(kQRows + kKRows, kVRows, v_view);
+        linear_part(kQkvRows, kZRows, z);
+        return;
+    }
+
     if (weight.qtype == QType::NVFP4) {
         constexpr std::int32_t kHidden  = 5120;
         constexpr std::int32_t kQkvRows = 10240;
@@ -414,6 +488,43 @@ void dispatch_single_parent_snapshot(const Tensor& x, const Weight& weight,
                                      Tensor& value, Tensor& z, LinearPolicy policy,
                                      WorkspaceArena& workspace, cudaStream_t stream) {
     validate_policy(policy);
+
+    if (weight.qtype == QType::EXL3) {
+        // The dense EXL3 route (SP-7): the snapshot always composes — the projection runs
+        // through the row-sliced decode or composed prefill route, and the projected
+        // plane feeds the registered projected-conv snapshot launch.
+        constexpr std::int32_t kHidden     = 5120;
+        constexpr std::int32_t kQueryRows  = 2048;
+        constexpr std::int32_t kKeyRows    = 2048;
+        constexpr std::int32_t kValueRows  = 6144;
+        constexpr std::int32_t kZRows      = 6144;
+        constexpr std::int32_t kChannels   = kQueryRows + kKeyRows + kValueRows;
+        constexpr std::int32_t kParentRows = kChannels + kZRows;
+        const ConvGeometry geometry        = require_snapshot_input(x, kHidden);
+        if (weight.n != kParentRows || weight.k != kHidden ||
+            weight.layout != QuantLayout::Exl3Dense) {
+            throw std::invalid_argument(
+                "exl3 gdn_input_proj_conv_snapshot: unsupported weight shape");
+        }
+        require_snapshot_operands(conv_weight, conv_states, valid_columns, initial_state_slots,
+                                  snapshot_base_slots, kChannels, geometry);
+        require_conv_tensor(query, kQueryRows, geometry.width, geometry.batch,
+                            "gdn_input_proj_conv_snapshot", "query");
+        require_conv_tensor(key, kKeyRows, geometry.width, geometry.batch,
+                            "gdn_input_proj_conv_snapshot", "key");
+        require_conv_tensor(value, kValueRows, geometry.width, geometry.batch,
+                            "gdn_input_proj_conv_snapshot", "value");
+        require_conv_tensor(z, kZRows, geometry.width, geometry.batch,
+                            "gdn_input_proj_conv_snapshot", "z");
+        compose_batched_snapshot(x, conv_weight, conv_states, valid_columns, initial_state_slots,
+                                 snapshot_base_slots, query, key, value, z, kQueryRows, kKeyRows,
+                                 kValueRows, geometry, workspace, stream,
+                                 [&](const Tensor& x_flat, Tensor& projected, Tensor& z_flat) {
+                                     gdn_input_proj(x_flat, weight, projected, z_flat, policy,
+                                                    workspace, stream);
+                                 });
+        return;
+    }
 
     if (weight.qtype == QType::NVFP4) {
         constexpr std::int32_t kHidden     = 5120;
@@ -560,6 +671,42 @@ void dispatch_single_parent_record(const Tensor& x, const Weight& weight, const 
                                    LinearPolicy policy, WorkspaceArena& workspace,
                                    cudaStream_t stream) {
     validate_policy(policy);
+
+    if (weight.qtype == QType::EXL3) {
+        // The dense EXL3 route (SP-7): the record always composes — the projection writes
+        // the q/k/v rows into the caller's conv_record and z separately, and the
+        // projected-conv record launch fills query/key/value from the record.
+        constexpr std::int32_t kHidden     = 5120;
+        constexpr std::int32_t kQueryRows  = 2048;
+        constexpr std::int32_t kKeyRows    = 2048;
+        constexpr std::int32_t kValueRows  = 6144;
+        constexpr std::int32_t kZRows      = 6144;
+        constexpr std::int32_t kChannels   = kQueryRows + kKeyRows + kValueRows;
+        constexpr std::int32_t kParentRows = kChannels + kZRows;
+        const ConvGeometry geometry        = require_record_input(x, kHidden);
+        if (weight.n != kParentRows || weight.k != kHidden ||
+            weight.layout != QuantLayout::Exl3Dense) {
+            throw std::invalid_argument(
+                "exl3 gdn_input_proj_conv_record: unsupported weight shape");
+        }
+        require_record_operands(conv_weight, conv_states, valid_columns, initial_state_slots,
+                                kChannels, geometry);
+        require_conv_tensor(query, kQueryRows, geometry.width, geometry.batch,
+                            "gdn_input_proj_conv_record", "query");
+        require_conv_tensor(key, kKeyRows, geometry.width, geometry.batch,
+                            "gdn_input_proj_conv_record", "key");
+        require_conv_tensor(value, kValueRows, geometry.width, geometry.batch,
+                            "gdn_input_proj_conv_record", "value");
+        require_conv_tensor(z, kZRows, geometry.width, geometry.batch,
+                            "gdn_input_proj_conv_record", "z");
+        compose_record(x, conv_weight, conv_states, valid_columns, initial_state_slots,
+                       conv_record, query, key, value, z, geometry, workspace, stream,
+                       [&](const Tensor& x_flat, Tensor& record_flat, Tensor& z_flat) {
+                           gdn_input_proj(x_flat, weight, record_flat, z_flat, policy, workspace,
+                                          stream);
+                       });
+        return;
+    }
 
     if (weight.qtype == QType::NVFP4) {
         constexpr std::int32_t kHidden     = 5120;
@@ -735,6 +882,18 @@ std::size_t gdn_input_proj_workspace_capacity_bytes(QType parent_qtype, std::int
         }
         return detail::fp8_gdn_input_workspace_capacity_bytes(policy, min_tokens, max_tokens);
     }
+    if (parent_qtype == QType::EXL3) {
+        if (parent_rows != 16384 || input_rows != 5120) {
+            throw std::invalid_argument("gdn_input_proj workspace: unsupported EXL3 profile");
+        }
+        // The dense EXL3 route (SP-7): decode dispatches use the row slices' capacity;
+        // the composed prefill route adds one decoded [16384, 5120] plane plus the
+        // transformed activation.
+        return std::max(detail::exl3_dense_workspace_bytes(6144, 5120, std::min(max_tokens, 8)),
+                        max_tokens > 8 ? detail::exl3_prefill_workspace_bytes(
+                                             parent_rows, input_rows, max_tokens)
+                                       : std::size_t{0});
+    }
     if (parent_qtype == QType::Q8_G32_FP16 && parent_rows == 12288 && input_rows == 2048) {
         (void)detail::q8_gdn_input_resolve_plan(
             {input_rows, 8192, 4096, parent_rows, input_rows, min_tokens});
@@ -808,6 +967,19 @@ std::size_t gdn_input_proj_conv_snapshot_workspace_capacity_bytes(
         return detail::fp8_gdn_snapshot_workspace_capacity_bytes(policy, batch_size, min_width,
                                                                  max_width);
     }
+    if (parent_qtype == QType::EXL3) {
+        if (parent_rows != 16384 || input_rows != 5120) {
+            throw std::invalid_argument(
+                "gdn_input_proj_conv_snapshot workspace: unsupported EXL3 profile");
+        }
+        // The dense EXL3 route (SP-7) is always composed here: the projected plane plus
+        // the projection's own capacity over the aggregate token interval.
+        const std::int32_t aggregate_columns = batch_size * max_width;
+        const std::size_t projection_workspace = gdn_input_proj_workspace_capacity_bytes(
+            parent_qtype, parent_rows, input_rows, policy, batch_size * min_width,
+            aggregate_columns);
+        return composed_snapshot_capacity(10240, aggregate_columns, projection_workspace);
+    }
     if (parent_qtype != QType::NVFP4 || parent_rows != detail::Nvfp4N16384K5120::kOutputRows ||
         input_rows != detail::Nvfp4N16384K5120::kInputRows) {
         throw std::invalid_argument(
@@ -856,6 +1028,18 @@ std::size_t gdn_input_proj_conv_record_workspace_capacity_bytes(
         input_rows == detail::Fp8N16384K5120::kInputRows) {
         return detail::fp8_gdn_record_workspace_capacity_bytes(policy, batch_size, min_width,
                                                                max_width);
+    }
+    if (parent_qtype == QType::EXL3) {
+        if (parent_rows != 16384 || input_rows != 5120) {
+            throw std::invalid_argument(
+                "gdn_input_proj_conv_record workspace: unsupported EXL3 profile");
+        }
+        // The dense EXL3 route (SP-7) is always composed here: the projected plane (the
+        // record path writes the projection into the caller's conv_record) plus the
+        // projection's own capacity over the aggregate token interval.
+        return gdn_input_proj_workspace_capacity_bytes(parent_qtype, parent_rows, input_rows,
+                                                       policy, batch_size * min_width,
+                                                       batch_size * max_width);
     }
     if (parent_qtype != QType::NVFP4 || parent_rows != detail::Nvfp4N16384K5120::kOutputRows ||
         input_rows != detail::Nvfp4N16384K5120::kInputRows) {

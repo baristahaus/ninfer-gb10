@@ -113,6 +113,98 @@ def convert_layer(reader: cal.ShardReader, config: dict, layer: int,
     return out
 
 
+def _fused_group(result: dict, name: str, weights: list[torch.Tensor], group: str,
+                 su_cache: dict, generator: torch.Generator, hessian_layer: dict | None,
+                 k2: int, codebook: str, device: torch.device) -> None:
+    """Quantize one fused group (one linear over the stacked binding-order rows)."""
+
+    weight = torch.cat(weights, dim=0).float()  # [out, in]
+    if group not in su_cache:
+        su_cache[group] = torch.sign(
+            torch.randn(weight.shape[1], device=device, generator=generator))
+    sv = torch.sign(torch.randn(weight.shape[0], device=device, generator=generator))
+    hessian = hessian_layer[group].to(device) if hessian_layer is not None else None
+    t0 = time.time()
+    out = q.quantize_linear(weight.T.contiguous(), k2, codebook, su_cache[group], sv,
+                            hessian=hessian)
+    out["weight_shape"] = tuple(weight.shape)  # [out, in] as stored
+    out["quantize_seconds"] = time.time() - t0
+    result[name] = out
+    print(f"  {name:16s} {tuple(weight.shape)}: nmse {out['nmse']:.4f}  "
+          f"{'hessian_err ' + format(out['hessian_err'], '.4f') if out['hessian_err'] is not None else 'fallback':>24s}  "
+          f"{time.time() - t0:.0f}s", flush=True)
+
+
+def convert_model_fused(checkpoint: Path, hessian_dir: Path | None, out_dir: Path,
+                        k2: int, codebook: str = "mcg", layers: list[int] | None = None,
+                        seed: int = 20261016, device: torch.device | None = None) -> dict:
+    """The fused-group EXL3 conversion for the dense route (SP-7).
+
+    Every mixer/FFN group quantizes as ONE linear in the binding row order — attention
+    (query, key, gate, value) with the interleaved q_proj rows split, GDN (query, key,
+    value, z), MLP (gate, up) — sharing the group's input-side transform; the output and
+    down projections stay their own linears. ``out_dir`` receives one ``layer_NN.pt`` per
+    layer with the keys ``attention_fused``/``gdn_fused``, ``gate_up``, ``down`` and
+    ``output``/``out``. Completed layer files are resumed as-is.
+    """
+
+    device = device or torch.device("cuda")
+    checkpoint = Path(checkpoint)
+    config = cal.load_text_config(checkpoint)
+    reader = cal.ShardReader(checkpoint)
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    layers = list(range(config["layers"])) if layers is None else list(layers)
+    generator = torch.Generator(device=device).manual_seed(seed)
+    heads, d = config["heads"], config["head_dim"]
+    kg = config["gdn_key_heads"] * config["gdn_head_dim"]
+    vg = config["gdn_value_heads"] * config["gdn_head_dim"]
+
+    for layer in layers:
+        target = out_dir / f"layer_{layer:02d}.pt"
+        if target.exists():
+            print(f"layer {layer}: already converted, resuming", flush=True)
+            continue
+        hessian_layer = None
+        if hessian_dir is not None:
+            hessian_layer = torch.load(Path(hessian_dir) / f"layer_{layer:02d}.pt")
+        t0 = time.time()
+        prefix = cal._layer_prefix(layer)
+        result: dict = {}
+        su_cache: dict[str, torch.Tensor] = {}
+        if config["layer_types"][layer] == "full_attention":
+            q_gate = reader.get(prefix + "self_attn.q_proj.weight", device)
+            q_rows, gate_rows = _split_q_gate(q_gate, config)
+            _fused_group(result, "attention_fused",
+                         [q_rows, reader.get(prefix + "self_attn.k_proj.weight", device),
+                          gate_rows, reader.get(prefix + "self_attn.v_proj.weight", device)],
+                         "mixer", su_cache, generator, hessian_layer, k2, codebook, device)
+            single = "output"
+        else:
+            qkv = reader.get(prefix + "linear_attn.in_proj_qkv.weight", device)
+            _fused_group(result, "gdn_fused",
+                         [qkv[0:kg], qkv[kg:2 * kg], qkv[2 * kg:2 * kg + vg],
+                          reader.get(prefix + "linear_attn.in_proj_z.weight", device)],
+                         "mixer", su_cache, generator, hessian_layer, k2, codebook, device)
+            single = "out"
+        _fused_group(result, "gate_up",
+                     [reader.get(prefix + "mlp.gate_proj.weight", device),
+                      reader.get(prefix + "mlp.up_proj.weight", device)],
+                     "mlp", su_cache, generator, hessian_layer, k2, codebook, device)
+        for name in ("down", single):
+            source, group, rows = next(
+                (entry[1], entry[2], entry[3] if len(entry) > 3 else None)
+                for entry in layer_tensor_inventory(config, layer) if entry[0] == name)
+            weight = reader.get(source, device).float()
+            if rows is not None:
+                weight = weight[rows[0]:rows[1]]
+            _fused_group(result, name, [weight], group, su_cache, generator, hessian_layer,
+                         k2, codebook, device)
+        torch.save(result, target)
+        print(f"layer {layer} complete in {time.time() - t0:.0f}s", flush=True)
+    return config
+
+
 def convert_model(checkpoint: Path, hessian_dir: Path | None, out_dir: Path,
                   k2: int, codebook: str = "mcg", layers: list[int] | None = None,
                   seed: int = 20261016, device: torch.device | None = None) -> dict:

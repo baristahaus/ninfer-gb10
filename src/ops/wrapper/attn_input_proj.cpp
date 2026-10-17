@@ -2,10 +2,13 @@
 #include "ninfer/ops/attn_input_proj.h"
 
 #include "ops/attn_input_proj/bf16/bf16_attn_input_plan.h"
+#include "ops/linear/bf16/bf16_dispatch.h"
 #include "ops/attn_input_proj/fp8/fp8_attn_input_plan.h"
 #include "ops/attn_input_proj/nvfp4/nvfp4_attn_input_plan.h"
 #include "ops/attn_input_proj/q4_q5/q4_q5_attn_input_plan.h"
 #include "ops/attn_input_proj/q8/q8_attn_input_plan.h"
+#include "ops/linear/exl3/exl3_dense_dispatch.h"
+#include "ops/linear/exl3/exl3_prefill.h"
 #include "ops/linear/fp8/fp8_geometry.h"
 #include "ops/linear/fp8/fp8_format.h"
 #include "ops/linear/nvfp4/nvfp4_layout.h"
@@ -145,6 +148,67 @@ void dispatch_single_parent(const Tensor& x, const Weight& weight, Tensor& q, Te
         return;
     }
 
+    if (weight.qtype == QType::EXL3) {
+        // The dense EXL3 route (SP-7): the fused [14336, 5120] parent's row groups
+        // (query, key, gate, value) dispatch as row-sliced dense linears at decode token
+        // shapes; larger token counts compose the decoded weight with BF16 linears.
+        constexpr std::int32_t kHidden = 5120;
+        constexpr std::int32_t kQRows  = 6144;
+        constexpr std::int32_t kKvRows = 1024;
+        constexpr std::int32_t kRows   = 14336;
+        const std::int32_t cols        = x.ne[1];
+        if (cols <= 0) { throw std::invalid_argument("attn_input_proj: T must be positive"); }
+        require_matrix(x, kHidden, cols, "x");
+        require_matrix(q, kQRows, cols, "q");
+        require_matrix(gate, kQRows, cols, "gate");
+        require_matrix(k, kKvRows, cols, "k");
+        require_matrix(v, kKvRows, cols, "v");
+        if (weight.n != kRows || weight.k != kHidden || weight.layout != QuantLayout::Exl3Dense) {
+            throw std::invalid_argument("exl3 attn_input_proj: unsupported weight shape");
+        }
+        if (workspace == nullptr) {
+            throw std::invalid_argument("exl3 attn_input_proj requires caller workspace");
+        }
+        const Weight query_w = detail::exl3_dense_slice(weight, 0, kQRows);
+        const Weight key_w = detail::exl3_dense_slice(weight, kQRows, kKvRows);
+        const Weight gate_w = detail::exl3_dense_slice(weight, kQRows + kKvRows, kQRows);
+        const Weight value_w =
+            detail::exl3_dense_slice(weight, kQRows + kKvRows + kQRows, kKvRows);
+        if (cols <= 8) {
+            auto scope = workspace->scope();
+            detail::exl3_dense_dispatch(x, query_w, q, workspace, stream);
+            detail::exl3_dense_dispatch(x, key_w, k, workspace, stream);
+            detail::exl3_dense_dispatch(x, gate_w, gate, workspace, stream);
+            detail::exl3_dense_dispatch(x, value_w, v, workspace, stream);
+            return;
+        }
+        auto scope = workspace->scope();
+        const auto prime_span = workspace->alloc_bytes(
+            static_cast<std::size_t>(kRows) * static_cast<std::size_t>(kHidden) * 2, 256);
+        const auto u_span = workspace->alloc_bytes(
+            static_cast<std::size_t>(kHidden) * static_cast<std::size_t>(cols) * 2, 256);
+        Tensor prime(prime_span.data, DType::BF16, {kRows, kHidden});
+        Tensor u(u_span.data, DType::BF16, {kHidden, cols});
+        detail::exl3_prefill_dequant(weight, prime, stream);
+        detail::exl3_prefill_transform(x, weight, u, stream);
+        const auto linear_part = [&](std::int32_t row_begin, std::int32_t rows, Tensor& out) {
+            Weight dense;
+            dense.qtype   = QType::BF16;
+            dense.layout  = QuantLayout::Contiguous;
+            dense.ndim    = 2;
+            dense.n = dense.shape[0] = dense.padded_shape[0] = rows;
+            dense.k = dense.shape[1] = dense.padded_shape[1] = kHidden;
+            dense.qdata = static_cast<const std::byte*>(prime.data) +
+                          static_cast<std::ptrdiff_t>(row_begin) * kHidden * 2;
+            detail::bf16_dispatch(u, dense, out, policy, stream);
+        };
+        linear_part(0, kQRows, q);
+        linear_part(kQRows, kKvRows, k);
+        linear_part(kQRows + kKvRows, kQRows, gate);
+        linear_part(2 * kQRows + kKvRows, kKvRows, v);
+        return;
+    }
+
     constexpr std::int32_t kHidden = 2048;
     constexpr std::int32_t kQRows  = 4096;
     constexpr std::int32_t kKvRows = 512;
@@ -198,6 +262,17 @@ std::size_t attn_input_proj_workspace_capacity_bytes(QType parent_qtype, std::in
         (void)detail::q8_attn_input_resolve_plan(
             {input_rows, 4096, 512, parent_rows, input_rows, max_tokens});
         return 0;
+    case QType::EXL3:
+        if (parent_rows != 14336 || input_rows != 5120) {
+            throw std::invalid_argument("attn_input_proj workspace: unsupported EXL3 profile");
+        }
+        // The dense EXL3 route (SP-7): decode-shape dispatches use the row slices'
+        // capacity; the composed prefill route adds one decoded [14336, 5120] plane and
+        // the transformed activation.
+        return std::max(detail::exl3_dense_workspace_bytes(6144, 5120, std::min(max_tokens, 8)),
+                        max_tokens > 8 ? detail::exl3_prefill_workspace_bytes(
+                                             parent_rows, input_rows, max_tokens)
+                                       : std::size_t{0});
     case QType::Q4_G64_FP16:
     case QType::Q5_G64_FP16:
     case QType::Q6_G64_FP16:

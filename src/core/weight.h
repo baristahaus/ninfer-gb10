@@ -66,6 +66,12 @@ struct Weight {
     std::uint32_t exl3_codebook        = 0;  // 0 = 3inst, 1 = mcg, 2 = mul1
     std::uint32_t exl3_experts         = 0;
     std::uint32_t exl3_rows_per_expert = 0;
+    // Row-sliced dense views (SP-7 fused mixers): `exl3_row_stride` is the parent's n
+    // (0 = this weight's own n, an unsliced complete object) and `exl3_k2` is the
+    // explicit bitrate (0 = resolve from the dense extent at launch; a slice's byte
+    // extent does not determine it). svh addresses shift by the slice's row begin.
+    std::uint32_t exl3_k2         = 0;
+    std::uint32_t exl3_row_stride = 0;
 };
 
 } // namespace ninfer

@@ -1,4 +1,6 @@
 #include "models/qwen3_5/execution/parameters.h"
+
+#include "ops/linear/exl3/exl3_dense_dispatch.h"
 #include "ops/sparse_moe/expert_cache_adapt.h"
 
 #include "core/device.h"
@@ -91,17 +93,6 @@ public:
     }
 
     DenseParameters dense(const DenseWeights& w) const {
-
-        auto format_of = [&](WeightId id) {
-            return model_.weight(id).view.parts.front().parent->geometry.format;
-        };
-        if (format_of(w.gate) == QType::EXL3) {
-            // The EXL3 dense route: gate and up are separate linears (SP-7).
-            if (format_of(w.up) != QType::EXL3) {
-                throw std::invalid_argument("EXL3 FFN requires EXL3 gate and up");
-            }
-            return {{}, linear(w.down), linear(w.gate), linear(w.up)};
-        }
         return {with_context(model_.weight(w.gate).name,
                              [&] {
                                  return ops::prepare_linear_swiglu_weight(model_.input(w.gate),
@@ -170,6 +161,16 @@ public:
         const auto row_bytes = geometry.layout == QuantLayout::Contiguous
                                    ? std::uint64_t(weight.k) * dtype_size(DType::BF16)
                                    : geometry.code_bytes_per_row;
+        if (weight.qtype == QType::EXL3) {
+            // A dense EXL3 weight has no qdata plane; the prefetch hint addresses the
+            // parent's trellis (row-sliced views band into the parent's tile grid).
+            const auto* trellis = static_cast<const std::byte*>(weight.payload) +
+                                  weight.exl3_trellis_offset;
+            const std::size_t band_bytes = static_cast<std::size_t>(
+                static_cast<std::uint64_t>(weight.n) * static_cast<std::uint64_t>(weight.k) *
+                ops::detail::exl3_dense_k2(weight) / 16);
+            return {trellis, band_bytes};
+        }
         return {weight.qdata, static_cast<std::size_t>(row_bytes * weight.n)};
     }
 

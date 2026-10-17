@@ -21,34 +21,6 @@ std::size_t ffn_workspace_bytes(const FfnParameters& parameters, std::int32_t fi
     const auto& p    = std::get<DenseParameters>(parameters);
     const auto& down = p.down.weight;
     WorkspaceLayoutBuilder layout;
-    if (p.exl3()) {
-        // The EXL3 route: separate gate/up linears, a silu_mul activation and a plain
-        // linear + residual add for down (the fused swiglu/add Ops have no EXL3 route).
-        const auto& gate  = p.exl3_gate->weight;
-        const auto& up    = p.exl3_up->weight;
-        const auto rows = gate.n;  // gate and up share [n, k]
-        (void)up;
-        (void)layout.alloc(DType::BF16, {rows, last});
-        {
-            auto scope = layout.scope();
-            (void)layout.alloc_bytes(ops::linear_workspace_capacity_bytes(
-                gate.qtype, gate.n, gate.k, p.exl3_gate->policy, first, last));
-        }
-        (void)layout.alloc(DType::BF16, {rows, last});
-        {
-            auto scope = layout.scope();
-            (void)layout.alloc_bytes(ops::linear_workspace_capacity_bytes(
-                up.qtype, up.n, up.k, p.exl3_up->policy, first, last));
-        }
-        (void)layout.alloc(DType::BF16, {rows, last});
-        (void)layout.alloc(DType::BF16, {down.n, last});
-        {
-            auto scope = layout.scope();
-            (void)layout.alloc_bytes(ops::linear_workspace_capacity_bytes(
-                down.qtype, down.n, down.k, p.down.policy, first, last));
-        }
-        return layout.peak_bytes(1);
-    }
     const auto& gu   = p.gate_up.weight;
     if (mtp) {
         (void)layout.alloc(DType::BF16, {gu.n, last});
@@ -93,29 +65,6 @@ void ffn(const Tensor& hidden, const FfnParameters& parameters, Tensor& residual
     const auto& p    = std::get<DenseParameters>(parameters);
     const auto& gu   = p.gate_up.weight;
     const auto& down = p.down.weight;
-    if (p.exl3()) {
-        const auto& gate = *p.exl3_gate;
-        const auto& up   = *p.exl3_up;
-        Tensor gate_out  = workspace.alloc(DType::BF16, {gate.weight.n, columns});
-        {
-            auto call = workspace.scope();
-            ops::linear(hidden, gate.weight, gate_out, gate.policy, workspace, stream);
-        }
-        Tensor up_out = workspace.alloc(DType::BF16, {up.weight.n, columns});
-        {
-            auto call = workspace.scope();
-            ops::linear(hidden, up.weight, up_out, up.policy, workspace, stream);
-        }
-        Tensor activation = workspace.alloc(DType::BF16, {gate.weight.n, columns});
-        ops::silu_mul(gate_out, up_out, activation, stream);
-        Tensor delta = workspace.alloc(DType::BF16, {down.n, columns});
-        {
-            auto call = workspace.scope();
-            ops::linear(activation, down, delta, p.down.policy, workspace, stream);
-        }
-        ops::residual_add(delta, residual, stream);
-        return;
-    }
     if (mtp) {
         Tensor gate_up = workspace.alloc(DType::BF16, {gu.n, columns});
         {

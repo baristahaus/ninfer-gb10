@@ -129,17 +129,17 @@ def test_dense_recipe_assembles_and_verifies(tmp_path):
         if (cached / "layer_01.pt").exists():
             converted = cached
     if not (converted / "layer_01.pt").exists():
-        conv.convert_model(base.path, None, converted, k2=K2, codebook="mcg",
-                           layers=[0, 1], device=torch.device("cpu"))
+        conv.convert_model_fused(base.path, None, converted, k2=K2, codebook="mcg",
+                                 layers=[0, 1], device=torch.device("cpu"))
 
     model = build_model(base)
     recipe = Recipe(model)
     qwen3_8_27b_exl3_dense(model, recipe, {"converted": converted})
     output = tmp_path / "dense.ninfer"
     report = convert(model, recipe, output, device="cpu", name="dense-exl3-test")
-    # Per layer: 5 mixer projections (GDN query/key/value/z/output or attention
-    # query/gate/key/value/output) + 3 MLP projections = 8, two layers = 16.
-    assert report["formats"]["exl3"] == 16
+    # Per layer the fused groups collapse into four objects: the mixer group, the output
+    # projection, the fused gate/up, and down - 4 x 2 layers = 8.
+    assert report["formats"]["exl3"] == 8
 
     with Artifact.open(output) as artifact:
         objects = {
@@ -157,17 +157,28 @@ def test_dense_recipe_assembles_and_verifies(tmp_path):
             or name.endswith(("/mlp/gate", "/mlp/up", "/mlp/down"))
         ]
         assert len(exl3_bindings) == 16
+        seen_objects = set()
         for name in exl3_bindings:
             binding = bindings[name]
-            parts = binding.get("parts") or [{"object": binding["object"]}]
-            assert len(parts) == 1
+            parts = binding.get("parts") or [{"object": binding["object"], "range": None}]
             obj = objects[parts[0]["object"]]
             assert obj.layout == "exl3_dense_v1"
+            seen_objects.add(obj.id)
             payload = artifact.read_object(obj.id)
             n, k = obj.shape
             geometry = exl3_dense_geometry(n, k, K2, "mcg")
             assert len(payload) == geometry.payload_bytes
             assert int.from_bytes(payload[-4:], "little") == EXL3_CODEBOOK_IDS["mcg"]
+            # A fused group's members bind consecutive row ranges of one parent.
+            if len(parts) > 1:
+                cursor = 0
+                for part in parts:
+                    begin, end = part["range"]
+                    assert begin == cursor
+                    cursor = end
+                assert cursor == n * k
+        # 2 layers x (mixer group + output + gate/up + down) = 8 objects.
+        assert len(seen_objects) == 8
 
         # Spot verification: the layer-1 attention output projection's composed weight
         # stays within the uncalibrated quantization error of the BF16 source.

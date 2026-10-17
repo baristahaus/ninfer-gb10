@@ -21,6 +21,8 @@
 
 #include <cuda_runtime.h>
 
+#include "ops/linear/exl3/exl3_dense_dispatch.h"
+
 #include <array>
 #include <cmath>
 #include <exception>
@@ -36,6 +38,8 @@ using namespace ninfer::test::linear;
 using quantized_weight::make_exl3_dense_weight;
 using Codebook = ninfer::test::exl3_ref::Codebook;
 
+int composed_route_check();
+
 int admission_refusals() {
     int failures = 0;
     // An unregistered problem is refused at capacity and admission alike.
@@ -46,13 +50,16 @@ int admission_refusals() {
         ++failures;
     } catch (const std::exception&) {
     }
-    // The token interval outside the registered decode shapes is refused.
-    try {
-        (void)ops::linear_workspace_capacity_bytes(QType::EXL3, 1024, 5120,
-                                                   ops::LinearPolicy::A16Only, 9, 9);
-        std::cerr << "exl3 dense: T = 9 accepted at capacity\n";
-        ++failures;
-    } catch (const std::exception&) {
+    // Token counts above the register route are served by the composed prefill route:
+    // the capacity covers the decoded [n, k] plane plus the transformed activation.
+    {
+        const auto capacity = ops::linear_workspace_capacity_bytes(
+            QType::EXL3, 1024, 5120, ops::LinearPolicy::A16Only, 9, 9);
+        const auto expected = sizeof(std::uint16_t) * (1024ULL * 5120ULL + 5120ULL * 9ULL);
+        if (capacity < expected) {
+            std::cerr << "exl3 dense: composed prefill capacity below its planes\n";
+            ++failures;
+        }
     }
     // A 3INST bank has no qualified route (contract section 7).
     {
@@ -140,9 +147,140 @@ int exl3_dense_a16_conformance() {
     failures += run_shape("EXL3_DENSE_A16", ActivationCompute::A16, mcg,
                           {5120, 17408, 701U, Comparison::Sampled, false, kSampled});
 
+    // The composed prefill route (token counts above the register route's domain): the
+    // decoded W' carries one extra BF16 rounding of the weight plane, so the criterion is
+    // the composed profile's output error against the same FP64 oracle.
+    constexpr std::array kComposed{
+        Invocation{9}, Invocation{16}, Invocation{33},
+    };
+    failures += run_shape("EXL3_DENSE_A16", ActivationCompute::A16, mcg,
+                          {1024, 5120, 211U, Comparison::Full, true, kComposed});
+
+    // The [2048, 5120] problem end to end through the harness (decode and composed).
+    constexpr std::array kHarness2048{
+        Invocation{8}, Invocation{12, CallForm::Policy, ops::LinearPolicy::A16Only, false},
+    };
+    failures += run_shape("EXL3_DENSE_A16", ActivationCompute::A16, mcg,
+                          {2048, 5120, 907U, Comparison::Full, true, kHarness2048});
+
+    failures += composed_route_check();
     // Capacity is monotone in the token interval and constant across the registered decode
     // shapes, so any declared interval inside 1..8 covers its points by construction; the
     // envelope helper applies only to formats registered at every token count.
+    return failures;
+}
+
+// The composed prefill route on a row-sliced parent: both slices' outputs against the
+// fixture's composed FP64 rows. The composed profile rounds W' to BF16 before the GEMM,
+// so the criterion is its own output tolerance, not the register route's.
+int composed_route_check() {
+    using quantized_weight::make_exl3_dense_weight;
+    constexpr std::int32_t n = 2048;
+    constexpr std::int32_t k = 5120;
+    constexpr std::int32_t t = 8;  // decode-route cross-check first
+    int failures = 0;
+    quantized_weight::PackedWeight host = make_exl3_dense_weight(n, k, 907U, 4, Codebook::Mcg);
+    DeviceBuffer device_weight(host.payload.size());
+    device_weight.copy_from_host(host.payload.data(), device_weight.bytes);
+    const Weight parent = host.device_weight(device_weight.p);
+
+    // Token-major [t, k] activation bits (the linear family's addressing convention).
+    std::vector<std::uint16_t> activation_bits(static_cast<std::size_t>(k) * t);
+    for (int token = 0; token < t; ++token) {
+        for (int column = 0; column < k; ++column) {
+            const std::uint64_t hash = quantized_weight::detail::mix64(
+                908U * 0x100000001b3ULL +
+                static_cast<std::uint64_t>(token) * k + column);
+            const float magnitude = std::ldexp(1.0F + static_cast<float>(hash & 0xffU) / 256.0F,
+                                               -static_cast<int>((hash >> 8) % 4));
+            activation_bits[static_cast<std::size_t>(token) * k + column] =
+                quantized_weight::detail::f32_to_f16(
+                    (hash & 0x8000000000000000ULL) != 0 ? -magnitude : magnitude) ^
+                0x8000;  // f16 sign to bf16 exponent alignment: see note below
+        }
+    }
+    DeviceBuffer device_activation(activation_bits.size() * sizeof(std::uint16_t));
+    device_activation.copy_from_host(activation_bits.data(), device_activation.bytes);
+    // The route's activations and outputs are BF16; decode the 16-bit patterns by
+    // widening to FP32, not as IEEE binary16.
+    const auto bf16_value = [](std::uint16_t bits) {
+        float value;
+        const std::uint32_t wide = static_cast<std::uint32_t>(bits) << 16;
+        std::memcpy(&value, &wide, sizeof(value));
+        return static_cast<double>(value);
+    };
+    const auto activation_float = [&](std::size_t index) {
+        return bf16_value(activation_bits[index]);
+    };
+
+    const double tolerance = 3e-2;
+    for (const auto [begin, rows] : {std::pair{0, 1024}, {1024, 1024}, std::pair{-1, 2048}}) {
+        const bool whole = begin < 0;
+        const Weight slice =
+            whole ? parent : ops::detail::exl3_dense_slice(parent, begin, rows);
+        const std::ptrdiff_t source_row_begin = whole ? 0 : begin;
+        const auto capacity = ops::linear_workspace_capacity_bytes(
+            QType::EXL3, rows, k, ops::LinearPolicy::A16Only, t, t);
+        DeviceArena workspace(std::max<std::size_t>(capacity, 256));
+        DeviceBuffer output(static_cast<std::size_t>(rows) * t * sizeof(std::uint16_t));
+        Tensor input(device_activation.p, DType::BF16, {k, t});
+        Tensor destination(output.p, DType::BF16, {rows, t});
+        ops::linear(input, slice, destination, ops::LinearPolicy::A16Only, workspace, nullptr);
+        cuda_check(cudaDeviceSynchronize(), "synchronize composed slice linear");
+
+        std::vector<std::uint16_t> out_bits(static_cast<std::size_t>(rows) * t);
+        output.copy_to_host(out_bits.data(), output.bytes);
+
+        std::vector<float> oracle_weight(static_cast<std::size_t>(rows) * k);
+        for (int r = 0; r < rows; ++r) {
+            for (int c = 0; c < k; ++c) {
+                oracle_weight[static_cast<std::size_t>(r) * k + c] = static_cast<float>(
+                    host.exl3_dense_composed[
+                        static_cast<std::size_t>(source_row_begin + r) * k + c]);
+            }
+        }
+        double worst = 0.0;
+        double scale = 0.0;
+        for (int r = 0; r < rows; ++r) {
+            for (int col = 0; col < t; ++col) {
+                double reference = 0.0;
+                for (int c = 0; c < k; ++c) {
+                    reference += static_cast<double>(oracle_weight[static_cast<std::size_t>(r) * k +
+                                                                       c]) *
+                                 activation_float(static_cast<std::size_t>(col) * k + c);
+                }
+                const std::size_t i = static_cast<std::size_t>(col) * rows + r;
+                const double produced = bf16_value(out_bits[i]);
+                worst = std::max(worst, std::abs(produced - reference));
+                scale = std::max(scale, std::abs(reference));
+            }
+        }
+        if (worst > tolerance * scale) {
+            std::cerr << "exl3 composed slice [" << source_row_begin << "," << rows
+                      << "): relative error "
+                      << worst / scale << " exceeds the composed profile\n";
+            for (int r = 0; r < 2; ++r) {
+                for (int col = 0; col < 2; ++col) {
+                    double expected = 0.0;
+                    for (int c = 0; c < k; ++c) {
+                        expected += quantized_weight::logical_weight_fp64(
+                            host, source_row_begin + r, c) *
+                                    bf16_value(activation_bits[static_cast<std::size_t>(c) * t + col]);
+                    }
+                    std::cerr << "  out[" << r << "," << col << "] produced "
+                              << bf16_value(out_bits[static_cast<std::size_t>(r) * t + col])
+                              << " expected " << expected << "\n";
+                }
+            }
+            std::cerr << "  composed[0][0..3]:";
+            for (int c = 0; c < 4; ++c) {
+                std::cerr << " " << host.exl3_dense_composed[
+                    static_cast<std::size_t>(begin) * k + c];
+            }
+            std::cerr << "\n";
+            ++failures;
+        }
+    }
     return failures;
 }
 

@@ -37,7 +37,8 @@ __global__ void linear_exl3_partial_kernel(const __nv_bfloat16* __restrict__ x,
                                            float* __restrict__ partial, int n, int k,
                                            int tokens, int k_blocks_total,
                                            std::uint32_t k2, std::uint32_t codebook,
-                                           std::size_t trellis_bytes) {
+                                           std::size_t suh_offset, int tiles_stride,
+                                           int n_tile_offset) {
     const int ob = static_cast<int>(blockIdx.x);
     const int chunk = static_cast<int>(blockIdx.y);
     const int first_k_block = chunk * kChunkKBlocks;
@@ -51,8 +52,8 @@ __global__ void linear_exl3_partial_kernel(const __nv_bfloat16* __restrict__ x,
     __shared__ std::uint32_t tile_ring[exl3::kMaxTileWords];
     const std::uint32_t words_per_tile = 4 * k2;
     const std::uint32_t* trellis = reinterpret_cast<const std::uint32_t*>(payload);
-    const __half* suh = reinterpret_cast<const __half*>(payload + trellis_bytes);
-    const int tiles_n = n / 16;
+    const __half* suh = reinterpret_cast<const __half*>(payload + suh_offset);
+    const int tiles_n = tiles_stride;
 
     for (int i = static_cast<int>(threadIdx.x); i < 128 * tokens; i += kThreads) {
         acc[i] = 0.0F;
@@ -92,7 +93,7 @@ __global__ void linear_exl3_partial_kernel(const __nv_bfloat16* __restrict__ x,
             for (int b4 = 0; b4 < 8; ++b4) {
                 const std::size_t tile = static_cast<std::size_t>(k_tile_base + kt) *
                                              static_cast<std::size_t>(tiles_n) +
-                                         static_cast<std::size_t>(ob * 8 + b4);
+                                         static_cast<std::size_t>(n_tile_offset + ob * 8 + b4);
                 // Stage the tile's ring words bit-reversed (the state reader's convention,
                 // as in the qualified MoE kernels), then decode: one sequence position per
                 // thread, scattered into the 16x16 tile.
@@ -202,39 +203,69 @@ void launch_exl3_dense(const Tensor& x, const Weight& w, Tensor& out, void* work
     if (n % 128 != 0 || k % 128 != 0) {
         throw std::invalid_argument("exl3 dense linear: dimensions must be multiples of 128");
     }
-    // Dense payload planes (contract section 4): the trellis at offset 0 with its aligned
-    // extent, then suh [k] and svh [n]. The aligned extent also determines the bitrate:
-    // admissible bitrates differ by k*n/16 bytes (at least 1024), far above the 256-byte
-    // alignment, so 16*extent/(k*n) is exact.
-    const std::size_t trellis_bytes = w.exl3_suh_offset;
-    if (w.exl3_trellis_offset != 0 || trellis_bytes == 0) {
-        throw std::invalid_argument("exl3 dense linear: payload planes are not dense layout");
-    }
-    const std::size_t extent_pair = trellis_bytes * 16;
-    if (extent_pair % (static_cast<std::size_t>(n) * static_cast<std::size_t>(k)) != 0) {
-        throw std::invalid_argument("exl3 dense linear: trellis extent matches no bitrate");
-    }
-    const std::uint32_t k2 = static_cast<std::uint32_t>(
-        extent_pair / (static_cast<std::size_t>(n) * static_cast<std::size_t>(k)));
+    // Dense payload planes (contract section 4): trellis, suh [k], svh [n], payload-relative.
+    // A complete object has its trellis at offset 0 and the aligned extent determines the
+    // bitrate (admissible bitrates differ by k*n/16 bytes, above the 256-byte alignment, so
+    // 16*extent/(k*n) is exact). A row-sliced view (fused mixers) addresses the parent's
+    // tile grid through exl3_row_stride and carries an explicit exl3_k2.
+    const std::size_t trellis_bytes = w.exl3_suh_offset - w.exl3_trellis_offset;
+    const std::uint32_t k2 =
+        w.exl3_k2 != 0
+            ? w.exl3_k2
+            : ([&] {
+                  if (w.exl3_trellis_offset != 0 || trellis_bytes == 0) {
+                      throw std::invalid_argument(
+                          "exl3 dense linear: payload planes are not dense layout");
+                  }
+                  const std::size_t extent_pair = trellis_bytes * 16;
+                  if (extent_pair % (static_cast<std::size_t>(n) * static_cast<std::size_t>(k)) !=
+                      0) {
+                      throw std::invalid_argument(
+                          "exl3 dense linear: trellis extent matches no bitrate");
+                  }
+                  const auto derived = extent_pair /
+                                       (static_cast<std::size_t>(n) * static_cast<std::size_t>(k));
+                  if (derived < 2 || derived > 16) {
+                      throw std::invalid_argument("exl3 dense linear: bitrate 2K = " +
+                                                  std::to_string(derived) +
+                                                  " outside the admitted range");
+                  }
+                  return static_cast<std::uint32_t>(derived);
+              })();
     if (k2 < 2 || k2 > 16) {
         throw std::invalid_argument("exl3 dense linear: bitrate 2K = " + std::to_string(k2) +
                                     " outside the admitted range");
+    }
+    const int row_stride = w.exl3_row_stride != 0 ? static_cast<int>(w.exl3_row_stride) : n;
+    if (row_stride < n || row_stride % 16 != 0) {
+        throw std::invalid_argument("exl3 dense linear: row stride below the slice width");
+    }
+    // The slice's row begin follows from its svh plane: suh [k] then the parent's svh rows.
+    const int row_begin =
+        static_cast<int>((w.exl3_svh_offset - (w.exl3_suh_offset + static_cast<std::size_t>(k) * 2)) /
+                         2);
+    if (row_begin < 0 || row_begin % 16 != 0 || row_begin + n > row_stride) {
+        throw std::invalid_argument("exl3 dense linear: slice rows outside the parent");
     }
 
     const auto* activation = static_cast<const __nv_bfloat16*>(x.data);
     auto* destination = static_cast<__nv_bfloat16*>(out.data);
     auto* partial = static_cast<float*>(workspace);
-    const auto* payload = static_cast<const std::uint8_t*>(w.payload);
+    const auto* payload =
+        static_cast<const std::uint8_t*>(w.payload) + w.exl3_trellis_offset;
 
     const int chunks = (k + kChunkKBlocks * 128 - 1) / (kChunkKBlocks * 128);
     const int k_blocks = k / 128;
     dim3 grid(static_cast<unsigned>(n / 128), static_cast<unsigned>(chunks));
+    // The payload pointer already sits at the slice's first trellis tile (its byte
+    // offset is row_begin * k2), so the tile index is slice-local and the tile offset
+    // within the parent's tile row is zero.
     linear_exl3_partial_kernel<<<grid, kThreads, 0, stream>>>(
-        activation, payload, partial, n, k, tokens,
-        k_blocks, k2, w.exl3_codebook, trellis_bytes);
+        activation, payload, partial, n, k, tokens, k_blocks, k2, w.exl3_codebook,
+        trellis_bytes, row_stride / 16, 0);
     linear_exl3_finish_kernel<<<static_cast<unsigned>(n / 128), kThreads, 0, stream>>>(
         partial, payload, destination, n, tokens, chunks,
-        trellis_bytes + static_cast<std::size_t>(k) * 2);
+        w.exl3_svh_offset - w.exl3_trellis_offset);
 }
 
 } // namespace ninfer::ops::detail

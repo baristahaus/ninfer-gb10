@@ -504,6 +504,69 @@ def pack_exl3_dense(request: PrepareRequest) -> PreparedMethod:
     return request.job(produce=produce, declared_bytes=geometry.payload_bytes)
 
 
+def pack_exl3_dense_group(request: PrepareRequest) -> PreparedMethod:
+    """Emit one fused dense EXL3 object from a group of logical parameters (SP-7).
+
+    The fused quantize campaign stores each mixer/FFN group as ONE exl3 linear in the
+    binding row order (attention: query, key, gate, value; GDN: query, key, value, z;
+    MLP: gate, up); the model's packing group binds each parameter to its row range of
+    this object. The method parameters carry `{"layer_file": path, "tensor": name}` of
+    the fused group tensor; the request's inputs are the group's logical sources in
+    order, and their stacked shape must match the stored [n, k]. Deep per-tensor
+    verification against the composed weight stays with the real-check tool.
+    """
+
+    if request.target.format != "exl3" or request.target.layout != "exl3_dense_v1":
+        raise ValueError("pack_exl3_dense_group requires the exl3_dense_v1 target")
+    layer_file = request.parameters.get("layer_file")
+    tensor = request.parameters.get("tensor")
+    if not isinstance(layer_file, str) or not isinstance(tensor, str):
+        raise ValueError("pack_exl3_dense_group requires layer_file and tensor parameters")
+    if not request.inputs:
+        raise ValueError("pack_exl3_dense_group requires the group's logical sources")
+    n = sum(prod(item.source.shape[:1]) for item in request.inputs)
+    k = prod(request.inputs[0].source.shape[1:2]) if request.inputs[0].source.shape else 0
+    for item in request.inputs:
+        shape = item.source.shape
+        if len(shape) != 2 or shape[1] != request.inputs[0].source.shape[1]:
+            raise ValueError("pack_exl3_dense_group: group members must share one [., k] shape")
+
+    result = _layer_file(torch.load, layer_file)[tensor]
+    stored_n, stored_k = result["weight_shape"]
+    if (stored_n, stored_k) != (n, k):
+        raise ValueError(
+            f"{layer_file}:{tensor}: converted shape {(stored_n, stored_k)} differs from "
+            f"the fused group {(n, k)}"
+        )
+    k2 = int(result["k2"])
+    codebook = "mcg"
+    geometry = exl3_dense_geometry(n, k, k2, codebook)
+
+    trellis = result["trellis"].detach().cpu().contiguous()
+    if trellis.dtype != torch.int16 or trellis.shape != (k // 16, n // 16, 8 * k2):
+        raise ValueError(f"{layer_file}:{tensor}: trellis shape disagrees with the fused group")
+    suh = result["suh"].detach().cpu().to(torch.float16).contiguous()
+    svh = result["svh"].detach().cpu().to(torch.float16).contiguous()
+    if tuple(suh.shape) != (k,) or tuple(svh.shape) != (n,):
+        raise ValueError(f"{layer_file}:{tensor}: suh/svh planes disagree with the fused group")
+
+    def produce(output):
+        trellis_bytes = trellis.numpy().tobytes()
+        if len(trellis_bytes) != geometry.trellis_bytes:
+            raise ValueError(f"{layer_file}:{tensor}: trellis bytes disagree with the bitrate")
+        output.write_bytes(0, trellis_bytes)
+        padded = geometry.suh_offset - len(trellis_bytes)
+        if padded:
+            output.write_bytes(len(trellis_bytes), bytes(padded))
+        output.write_bytes(geometry.suh_offset, suh.numpy().tobytes())
+        output.write_bytes(geometry.svh_offset, svh.numpy().tobytes())
+        output.write_bytes(
+            geometry.codebook_offset, EXL3_CODEBOOK_IDS[codebook].to_bytes(4, "little")
+        )
+
+    return request.job(produce=produce, declared_bytes=geometry.payload_bytes)
+
+
 METHODS: dict[str, Method] = {
     "cast_direct": cast_direct,
     "grouped_absmax": grouped_absmax,
@@ -511,4 +574,5 @@ METHODS: dict[str, Method] = {
     "import_encoded": import_encoded,
     "import_exl3_bank": import_exl3_bank,
     "pack_exl3_dense": pack_exl3_dense,
+    "pack_exl3_dense_group": pack_exl3_dense_group,
 }

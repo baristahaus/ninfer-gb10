@@ -28,6 +28,14 @@ namespace ninfer::ops::detail {
 void exl3_dense_dispatch(const Tensor& x, const Weight& w, Tensor& out, WorkspaceArena* workspace,
                          cudaStream_t stream);
 
+// The complete dense parent's bitrate (2K), explicit or resolved from its extent.
+[[nodiscard]] std::uint32_t exl3_dense_k2(const Weight& parent);
+
+// A row slice of a complete dense parent as an independent Weight: the slice addresses
+// the parent's tile grid through exl3_row_stride and shares the parent's suh plane.
+[[nodiscard]] Weight exl3_dense_slice(const Weight& parent, std::int32_t row_begin,
+                                      std::int32_t rows);
+
 // The kernel launcher (exl3_dense.cu). The dispatch has already validated every argument.
 void launch_exl3_dense(const Tensor& x, const Weight& w, Tensor& out, void* workspace,
                        cudaStream_t stream);

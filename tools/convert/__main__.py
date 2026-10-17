@@ -59,6 +59,9 @@ class SourceInputs(Mapping):
     def provenance(self):
         result = {}
         for name, source in self._sources.items():
+            if isinstance(source, Path):
+                result[name] = {"path": str(source)}
+                continue
             entry = {"path": str(source.path)}
             if name == "exl3":
                 quantization = source.config.get("quantization_config", {})

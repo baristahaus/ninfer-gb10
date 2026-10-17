@@ -218,3 +218,18 @@ def test_source_inputs_passes_campaign_dir_through(tmp_path):
         assert sources["base"] is None
         # A checkpoint-looking named source still opens as a SafetensorsSource.
         assert SourceInputs._campaign_dir(tmp_path) is False
+
+def test_source_inputs_provenance_covers_campaign_dir(tmp_path):
+    from tools.convert.__main__ import SourceInputs
+    from contextlib import ExitStack
+
+    (tmp_path / "layer_00.pt").write_bytes(b"x")
+
+    class FakeBase:
+        path = Path("/base/checkpoint")
+        config: dict = {}
+
+    with ExitStack() as stack:
+        sources = SourceInputs(base=FakeBase(), paths={"converted": tmp_path}, stack=stack)
+        assert sources["converted"] == tmp_path
+        assert sources.provenance()["converted"] == {"path": str(tmp_path)}

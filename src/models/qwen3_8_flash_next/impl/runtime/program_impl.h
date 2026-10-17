@@ -22,6 +22,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -12350,6 +12351,10 @@ runtime::BatchedGeneratedRound
 ProgramImplCore::decode_mtp_batch(std::span<const std::uint32_t> lanes,
                                   std::span<const runtime::RoundBudget> budgets,
                                   runtime::ExecutionTiming* failed_timing) {
+    // The NINFER_MTP_DUMP dump sites gate on this counter; raise it at the first MTP
+    // round so each dump site fires once on that round's tensors.
+    extern std::atomic<int> ninfer_mtp_phase;
+    ninfer_mtp_phase.store(1, std::memory_order_release);
     nvtx::ScopedRange round_range(nvtx::Name::DecodeMtpRound, nvtx::Category::Mtp,
                                   static_cast<std::uint64_t>(lanes.size()));
     runtime::ExecutionTimingRecorder timing(runtime::ExecutionTimingPhase::Submit, failed_timing);

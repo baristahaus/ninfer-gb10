@@ -22,8 +22,8 @@
 
 namespace ninfer::models::qwen3_8_flash_next::detail {
 
-inline constexpr char kMtpCaptureMagic[8] = {'N', 'M', 'T', 'P', 'C', 'A', 'P', 1};
-inline constexpr std::uint32_t kMtpCaptureVersion = 1;
+inline constexpr char kMtpCaptureMagic[8] = {'N', 'M', 'T', 'P', 'C', 'A', 'P', 2};
+inline constexpr std::uint32_t kMtpCaptureVersion = 2;
 inline constexpr std::uint32_t kMtpCaptureMaximumDrafts = 5;
 
 #pragma pack(push, 1)
@@ -34,7 +34,7 @@ struct MtpCaptureHeader {
     std::uint32_t draft_window = 0; // k, drafts per round
     std::uint32_t record_width = 0; // k + 1 committed columns
     std::uint32_t token_domain = 0; // target vocabulary size
-    std::uint32_t reserved     = 0;
+    std::uint32_t ranks        = 0; // reported top-R alternatives per column; 0 = no scores
 };
 
 // One row of one round. drafts[] holds the k proposed ids; entries at or past the
@@ -42,6 +42,12 @@ struct MtpCaptureHeader {
 // holds the verified published tokens (accepted drafts plus one target token); entries
 // at or past committed_count are zero. extent == 0 marks a fallback step: no draft was
 // proposed, committed[0] is the pure target step.
+//
+// When header.ranks > 0 the record continues with one score block per verify column
+// (record_width of them): the column's chosen-token logprob (meaningful only for the
+// first committed_count columns; zero past them), then ranks pairs of (top id, top
+// logprob) ordered by descending logprob — the target distribution's leading ranks at
+// that column, including rejected-draft positions.
 struct MtpCaptureRecord {
     std::uint64_t round_index     = 0;
     std::uint32_t lane            = 0;
@@ -52,10 +58,14 @@ struct MtpCaptureRecord {
 };
 #pragma pack(pop)
 
-// Per-row record payload after the fixed prefix: k draft ids, then k+1 committed ids.
-[[nodiscard]] inline constexpr std::uint32_t mtp_capture_record_bytes(std::uint32_t draft_window) {
+// Per-row record payload after the fixed prefix: k draft ids, k+1 committed ids, then
+// one score block per column when ranks > 0.
+[[nodiscard]] inline constexpr std::uint32_t
+mtp_capture_record_bytes(std::uint32_t draft_window, std::uint32_t ranks) {
+    const std::uint32_t columns = draft_window + 1;
     return static_cast<std::uint32_t>(sizeof(MtpCaptureRecord)) +
-           (draft_window + draft_window + 1) * sizeof(TokenId);
+           (draft_window + columns) * sizeof(TokenId) +
+           columns * (sizeof(float) + ranks * (sizeof(TokenId) + sizeof(float)));
 }
 
 class MtpCaptureSink {
@@ -64,17 +74,24 @@ public:
     // filesystem errors.
     [[nodiscard]] static std::unique_ptr<MtpCaptureSink> open(std::filesystem::path path,
                                                               std::uint32_t draft_window,
-                                                              std::uint32_t token_domain);
+                                                              std::uint32_t token_domain,
+                                                              std::uint32_t ranks = 0);
     ~MtpCaptureSink();
 
     MtpCaptureSink(const MtpCaptureSink&)            = delete;
     MtpCaptureSink& operator=(const MtpCaptureSink&) = delete;
 
     // Append one row's record. drafts points at draft_window ids, committed at up to
-    // draft_window+1 ids. Safe to call from the decode thread; never throws.
+    // draft_window+1 ids. With ranks > 0, chosen_logprobs points at draft_window+1
+    // column logprobs and top_ids/top_logprobs at (draft_window+1)*ranks column-major
+    // pairs; spans may be empty to store zeros. Safe to call from the decode thread;
+    // never throws.
     void record(std::uint64_t round_index, std::uint32_t lane, std::uint32_t base_frontier,
                 std::uint32_t extent, std::span<const TokenId> drafts,
-                std::span<const TokenId> committed) noexcept;
+                std::span<const TokenId> committed,
+                std::span<const float> chosen_logprobs   = {},
+                std::span<const TokenId> top_ids         = {},
+                std::span<const float> top_logprobs      = {}) noexcept;
 
     // True when the writer thread hit a write error and dropped later records.
     [[nodiscard]] bool failed() const noexcept { return failed_.load(std::memory_order_relaxed); }
@@ -85,6 +102,7 @@ private:
     void writer_loop();
 
     std::uint32_t draft_window_ = 0;
+    std::uint32_t ranks_        = 0;
     std::vector<std::byte> staging_;
     std::deque<std::vector<std::byte>> queue_;
     std::mutex mutex_;

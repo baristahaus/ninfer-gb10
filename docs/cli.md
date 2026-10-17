@@ -250,7 +250,10 @@ block length eight, while fifteen uses the maximum supported block length sixtee
 `--mtp-capture FILE` records every batched MTP decode round to a binary file for offline analysis
 (Flash-Next MTP only; requires `--spec mtp`). Each record holds one row's proposal ids, the
 verified committed tokens, the accept count, and the KV position, taken from data that is already
-host-resident at the round boundary, so capture adds no device work. `tools/mtp_capture_summary.py`
+host-resident at the round boundary, so capture adds no device work. Combined with
+`--token-logprobs`, each record also carries the target distribution's top-20 alternatives for
+every verify column, including rejected-draft positions — the near-miss signal an accept
+predictor trains on. `tools/mtp_capture_summary.py`
 summarizes a capture: acceptance by draft position and by context position, extent distribution,
 and — with `--artifact` and `--rows N` — how many rejected drafts fall outside the first N rows of
 the optimized proposal head, which is the signal that sizes `--proposal-head-rows`. A disk write

@@ -87,6 +87,7 @@ std::string usage_text(const char* argv0) {
            "       [--kv-dtype bf16|int8|fp8|nvfp4|k8v4] [--spec mtp|dflash|dflash2 --draft-tokens "
            "N]\n"
            "       [--lm-head-draft] [--proposal-head-rows N] [--mtp-capture FILE]\n"
+           "       [--token-logprobs]\n"
            "       [--temperature F] [--top-p F] [--top-k N] [--min-p F]\n"
            "       [--presence-penalty F] [--frequency-penalty F] [--seed N] [--greedy]\n"
            "       [--stop-token-id N]... [--stop <text>]... [--reasoning-stop <text>]...\n"
@@ -167,6 +168,8 @@ Options parse_options(int argc, char** argv) {
             options.speculative.proposal_head_rows = parse_u32(value(arg), "proposal-head-rows");
         } else if (arg == "--mtp-capture") {
             options.mtp_capture_path = value(arg);
+        } else if (arg == "--token-logprobs") {
+            options.token_logprobs = true;
         } else if (arg == "--raw-output") {
             options.raw_output = true;
         } else if (arg == "--print-token-ids") {

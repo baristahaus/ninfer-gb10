@@ -39,7 +39,8 @@ void write_all(int fd, const std::byte* data, std::size_t size) {
 
 std::unique_ptr<MtpCaptureSink> MtpCaptureSink::open(std::filesystem::path path,
                                                      std::uint32_t draft_window,
-                                                     std::uint32_t token_domain) {
+                                                     std::uint32_t token_domain,
+                                                     std::uint32_t ranks) {
     if (draft_window == 0 || draft_window > kMtpCaptureMaximumDrafts) {
         throw std::invalid_argument("MTP capture requires a draft window in [1,5]");
     }
@@ -51,12 +52,14 @@ std::unique_ptr<MtpCaptureSink> MtpCaptureSink::open(std::filesystem::path path,
     auto sink              = std::unique_ptr<MtpCaptureSink>(new MtpCaptureSink());
     sink->fd_              = fd;
     sink->draft_window_    = draft_window;
-    sink->staging_.reserve(kChunkBytes + mtp_capture_record_bytes(draft_window));
+    sink->ranks_           = ranks;
+    sink->staging_.reserve(kChunkBytes + mtp_capture_record_bytes(draft_window, ranks));
     MtpCaptureHeader header{};
     std::memcpy(header.magic, kMtpCaptureMagic, sizeof(header.magic));
     header.draft_window = draft_window;
     header.record_width = draft_window + 1;
     header.token_domain = token_domain;
+    header.ranks        = ranks;
     try {
         write_all(fd, reinterpret_cast<const std::byte*>(&header), sizeof(header));
     } catch (...) {
@@ -108,16 +111,20 @@ void MtpCaptureSink::writer_loop() {
 
 void MtpCaptureSink::record(std::uint64_t round_index, std::uint32_t lane,
                             std::uint32_t base_frontier, std::uint32_t extent,
-                            std::span<const TokenId> drafts,
-                            std::span<const TokenId> committed) noexcept {
+                            std::span<const TokenId> drafts, std::span<const TokenId> committed,
+                            std::span<const float> chosen_logprobs,
+                            std::span<const TokenId> top_ids,
+                            std::span<const float> top_logprobs) noexcept {
     if (failed_.load(std::memory_order_relaxed)) { return; }
     const std::uint32_t k = draft_window_;
+    const std::uint32_t r = ranks_;
+    const std::uint32_t columns = k + 1;
     const std::size_t draft_count = std::min(drafts.size(), static_cast<std::size_t>(k));
     const std::size_t committed_count =
         std::min(committed.size(), static_cast<std::size_t>(k) + 1);
-    std::array<std::byte, sizeof(MtpCaptureRecord) + (2 * kMtpCaptureMaximumDrafts + 1) *
-                                                              sizeof(TokenId)>
-        bytes{};
+    // Fixed upper bound: 24-byte prefix + (2k+1) ids + columns*(4 + r*12) with
+    // k <= 5, r <= 20 stays under 1.5 KiB.
+    std::array<std::byte, 2048> bytes{};
     auto* record = reinterpret_cast<MtpCaptureRecord*>(bytes.data());
     record->round_index     = round_index;
     record->lane            = lane;
@@ -131,7 +138,26 @@ void MtpCaptureSink::record(std::uint64_t round_index, std::uint32_t lane,
     const auto* committed_bytes = reinterpret_cast<const std::byte*>(committed.data());
     std::memcpy(bytes.data() + sizeof(MtpCaptureRecord) + k * sizeof(TokenId), committed_bytes,
                 committed_count * sizeof(TokenId));
-    const std::size_t record_bytes = mtp_capture_record_bytes(k);
+    std::size_t at = sizeof(MtpCaptureRecord) + (std::size_t{k} + columns) * sizeof(TokenId);
+    if (r > 0) {
+        for (std::uint32_t column = 0; column < columns; ++column) {
+            const float chosen =
+                column < chosen_logprobs.size() ? chosen_logprobs[column] : 0.0F;
+            std::memcpy(bytes.data() + at, &chosen, sizeof(chosen));
+            at += sizeof(chosen);
+            for (std::uint32_t rank = 0; rank < r; ++rank) {
+                const std::size_t index = std::size_t{column} * r + rank;
+                const TokenId id = index < top_ids.size() ? top_ids[index] : TokenId{0};
+                const float logprob =
+                    index < top_logprobs.size() ? top_logprobs[index] : 0.0F;
+                std::memcpy(bytes.data() + at, &id, sizeof(id));
+                at += sizeof(id);
+                std::memcpy(bytes.data() + at, &logprob, sizeof(logprob));
+                at += sizeof(logprob);
+            }
+        }
+    }
+    const std::size_t record_bytes = mtp_capture_record_bytes(k, r);
     {
         std::unique_lock lock(mutex_);
         if (staging_.size() + record_bytes > kChunkBytes) {

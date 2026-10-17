@@ -44,6 +44,22 @@ Weight bf16(const artifact::MaterializedArtifact& artifact,
     return native_weight(artifact::bind_view(handle, artifact));
 }
 
+/** Prefix row view: first `rows` rows of a row-major weight (Q4 row-split or BF16). */
+Weight truncate_rows(const Weight& parent, std::uint32_t rows) {
+    if (rows == 0 || static_cast<std::int32_t>(rows) >= parent.n) { return parent; }
+    if (parent.layout != QuantLayout::RowSplit && parent.layout != QuantLayout::Contiguous) {
+        throw std::logic_error("proposal head truncation requires row-split or contiguous layout");
+    }
+    Weight out             = parent;
+    const auto n           = static_cast<std::int32_t>(rows);
+    out.n                  = n;
+    out.shape[0]           = n;
+    out.padded_shape[0]    = n;
+    out.scale_ne[1]        = n;
+    out.scale_nb[2]        = out.scale_nb[3] = out.scale_nb[1] * n;
+    return out;
+}
+
 Weight row_view(const Weight& parent, int begin, int rows) {
     if (rows <= 0 || begin < 0 || begin + rows > parent.n) {
         throw std::logic_error("invalid Flash-Next row view");
@@ -316,7 +332,9 @@ LoadedModelData::LoadedModelData(BindingPlan plan, artifact::MaterializedArtifac
     if (plan.features.optimized_proposal()) {
         auto& proposal = runtime.optimized_proposal.emplace();
         proposal.head =
-            weight(backing, plan.optimized_proposal_head, QType::Q4_G64_FP16, 147456, 2560);
+            truncate_rows(weight(backing, plan.optimized_proposal_head, QType::Q4_G64_FP16,
+                                 147456, 2560),
+                          plan.features.proposal_head_rows);
         proposal.token_ids = tensor(backing, plan.optimized_proposal_token_ids, {147456});
     }
     if (plan.features.mtp()) {

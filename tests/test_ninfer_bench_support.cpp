@@ -165,6 +165,35 @@ int test_cli_contract() {
             (void)parse_for_test({"ninfer_bench", "--weights", "model.ninfer", "--lm-head-draft"});
         },
         "optimized head without a backend");
+    const auto truncated_rows =
+        parse_for_test({"ninfer_bench", "--weights", "model.ninfer", "--spec", "mtp",
+                        "--draft-tokens", "2", "--lm-head-draft", "--proposal-head-rows", "47104"});
+    failures += expect(truncated_rows.speculative.proposal_head_rows == 47104,
+                       "proposal head row truncation preserved");
+    const auto capture_path =
+        parse_for_test({"ninfer_bench", "--weights", "model.ninfer", "--spec", "mtp",
+                        "--draft-tokens", "2", "--mtp-capture", "/tmp/cap.bin"});
+    failures += expect(capture_path.mtp_capture_path == "/tmp/cap.bin",
+                       "MTP capture path preserved");
+    failures += expect_throws<std::invalid_argument>(
+        [] {
+            (void)parse_for_test({"ninfer_bench", "--weights", "model.ninfer",
+                                  "--mtp-capture", "/tmp/cap.bin"});
+        },
+        "MTP capture without a speculative backend");
+    failures += expect_throws<std::invalid_argument>(
+        [] {
+            (void)parse_for_test({"ninfer_bench", "--weights", "model.ninfer", "--spec", "mtp",
+                                  "--draft-tokens", "2", "--proposal-head-rows", "47104"});
+        },
+        "proposal head rows without the optimized head");
+    failures += expect_throws<std::invalid_argument>(
+        [] {
+            (void)parse_for_test({"ninfer_bench", "--weights", "model.ninfer", "--spec", "dflash",
+                                  "--draft-tokens", "7", "--lm-head-draft",
+                                  "--proposal-head-rows", "47104"});
+        },
+        "proposal head rows with DFlash");
     failures += expect_throws<std::invalid_argument>(
         [] {
             (void)parse_for_test({"ninfer_bench", "--weights", "model.ninfer", "--spec", "mtp",

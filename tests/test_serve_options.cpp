@@ -142,6 +142,48 @@ int main() {
     } catch (const std::invalid_argument&) { implicit_backend_rejected = true; }
     failures += check(implicit_backend_rejected, "--draft-tokens selected a backend implicitly");
 
+    const ServeOptions truncated = parse({"ninfer-serve", "model.ninfer", "--spec", "mtp",
+                                          "--draft-tokens", "2", "--lm-head-draft",
+                                          "--proposal-head-rows", "47104"});
+    failures += check(truncated.speculative.proposal_head_rows == 47104,
+                      "--proposal-head-rows did not preserve its value");
+
+    const ServeOptions capture = parse({"ninfer-serve", "model.ninfer", "--spec", "mtp",
+                                        "--draft-tokens", "2", "--mtp-capture", "/tmp/cap.bin"});
+    failures += check(capture.mtp_capture_path == "/tmp/cap.bin",
+                      "--mtp-capture did not preserve its path");
+
+    bool capture_without_mtp_rejected = false;
+    try {
+        (void)parse({"ninfer-serve", "model.ninfer", "--mtp-capture", "/tmp/cap.bin"});
+    } catch (const std::invalid_argument&) { capture_without_mtp_rejected = true; }
+    failures += check(capture_without_mtp_rejected,
+                      "--mtp-capture without --spec mtp was accepted");
+
+    bool rows_without_head_rejected = false;
+    try {
+        (void)parse({"ninfer-serve", "model.ninfer", "--spec", "mtp", "--draft-tokens", "2",
+                     "--proposal-head-rows", "47104"});
+    } catch (const std::invalid_argument&) { rows_without_head_rejected = true; }
+    failures += check(rows_without_head_rejected,
+                      "--proposal-head-rows without --lm-head-draft was accepted");
+
+    bool rows_with_dflash_rejected = false;
+    try {
+        (void)parse({"ninfer-serve", "model.ninfer", "--spec", "dflash", "--draft-tokens", "7",
+                     "--lm-head-draft", "--proposal-head-rows", "47104"});
+    } catch (const std::invalid_argument&) { rows_with_dflash_rejected = true; }
+    failures += check(rows_with_dflash_rejected,
+                      "--proposal-head-rows with DFlash was accepted");
+
+    bool tiny_rows_rejected = false;
+    try {
+        (void)parse({"ninfer-serve", "model.ninfer", "--spec", "mtp", "--draft-tokens", "2",
+                     "--lm-head-draft", "--proposal-head-rows", "512"});
+    } catch (const std::invalid_argument&) { tiny_rows_rejected = true; }
+    failures += check(tiny_rows_rejected, "a tiny --proposal-head-rows was accepted");
+
+
     const ServeOptions configured = parse({"ninfer-serve",
                                            "model.ninfer",
                                            "--no-prefix-reuse",

@@ -82,8 +82,8 @@ std::string serve_usage_text(const char* argv0) {
            "[--kv-dtype bf16|int8|fp8|nvfp4|k8v4] [--spec mtp|dflash|dflash2 --draft-tokens N] "
            "[--default-max-tokens N] [--default-thinking-budget N] "
            "[--vision] [--no-cuda-graph] [--no-prefix-reuse] "
-           "[--chat-template FILE] [--lm-head-draft] [--no-thinking] [--preserve-thinking] "
-           "[--token-logprobs] "
+           "[--chat-template FILE] [--lm-head-draft] [--proposal-head-rows N] [--no-thinking] [--preserve-thinking] "
+           "[--token-logprobs] [--mtp-capture FILE] "
            "[--cors] "
            "[--temperature F] [--top-p F] [--top-k N] [--min-p F] [--presence-penalty F] "
            "[--frequency-penalty F] [--seed N] [--greedy]\n"
@@ -303,10 +303,16 @@ ServeOptions parse_serve_options(int argc, char** argv) {
             options.use_cuda_graph = false;
         } else if (arg == "--token-logprobs") {
             options.token_logprobs = true;
+        } else if (arg == "--mtp-capture") {
+            options.mtp_capture_path = require_value("--mtp-capture");
         } else if (arg == "--no-prefix-reuse") {
             options.allow_prefix_reuse = false;
         } else if (arg == "--lm-head-draft") {
             options.speculative.proposal_head = ProposalHead::Optimized;
+        } else if (arg == "--proposal-head-rows") {
+            options.speculative.proposal_head_rows = static_cast<std::uint32_t>(
+                parse_nonnegative_int(require_value("--proposal-head-rows"),
+                                      "proposal-head-rows"));
         } else if (arg == "--chat-template") {
             options.chat_template_path = require_value("--chat-template");
         } else if (arg == "--no-thinking") {
@@ -387,6 +393,10 @@ ServeOptions parse_serve_options(int argc, char** argv) {
         throw std::invalid_argument("--prefill-decode-share must be at most 1000 (percent)");
     }
     product::validate_speculative_cli_options(options.speculative);
+    if (!options.mtp_capture_path.empty() &&
+        options.speculative.backend != SpeculativeBackend::Mtp) {
+        throw std::invalid_argument("--mtp-capture requires --spec mtp");
+    }
     if (default_max_tokens_explicit) {
         if (options.default_max_tokens <= 0) {
             throw std::invalid_argument("--default-max-tokens must be positive");

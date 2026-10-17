@@ -342,6 +342,10 @@ std::string usage_text(std::string_view program) {
         << "  --draft-tokens <n>         MTP 1..5; DFlash/DFlash2 1..15\n"
         << "  --lm-head-draft             use the optimized proposal head; requires a speculative "
            "backend\n"
+        << "  --proposal-head-rows <n>    truncate the proposal head to its first n frequency-\n"
+        << "                             ranked rows (Flash-Next MTP only; 0 = full)\n"
+        << "  --mtp-capture <file>        capture every MTP decode round to a binary file for\n"
+        << "                             offline analysis (requires --spec mtp)\n"
         << "  --sampling <greedy|model>   greedy argmax (default) or the model's registered "
            "sampling preset\n"
         << "  --temperature <t>           override the temperature, 0..2 (0 is greedy)\n"
@@ -424,6 +428,12 @@ BenchOptions parse_args(int argc, char** argv) {
             options.speculative.draft_tokens = parse_u32(value("--draft-tokens"), "draft-tokens");
         } else if (arg == "--lm-head-draft") {
             options.speculative.proposal_head = ProposalHead::Optimized;
+        } else if (arg == "--proposal-head-rows") {
+            options.speculative.proposal_head_rows = parse_u32(value("--proposal-head-rows"),
+                                                               "proposal-head-rows",
+                                                               /*allow_zero=*/true);
+        } else if (arg == "--mtp-capture") {
+            options.mtp_capture_path = value("--mtp-capture");
         } else if (arg == "--sampling") {
             const std::string selected = value("--sampling");
             const auto seed            = options.sampling.seed;
@@ -489,6 +499,10 @@ BenchOptions parse_args(int argc, char** argv) {
         throw std::invalid_argument("--prefill-chunk must be a multiple of 128");
     }
     product::validate_speculative_cli_options(options.speculative);
+    if (!options.mtp_capture_path.empty() &&
+        options.speculative.backend != SpeculativeBackend::Mtp) {
+        throw std::invalid_argument("--mtp-capture requires --spec mtp");
+    }
     return options;
 }
 
@@ -715,6 +729,9 @@ std::string format_table(const BenchEnvironment& env, const std::vector<TestResu
         << " spec=" << product::speculative_backend_name(env.speculative.backend)
         << " draft_tokens=" << env.speculative.draft_tokens
         << " proposal_head=" << proposal_head_name(env.speculative.proposal_head)
+        << (env.speculative.proposal_head_rows
+                ? " proposal_head_rows=" + std::to_string(env.speculative.proposal_head_rows)
+                : std::string())
         << " sampling=" << sampling_name(env.sampling)
         << " decode_path=" << decode_path_name(env.use_cuda_graph, env.speculative)
         << " graph_prime="
@@ -841,6 +858,7 @@ std::string format_json(const BenchEnvironment& env, const std::string& command,
         << "    \"speculative_backend\": \""
         << product::speculative_backend_name(env.speculative.backend) << "\",\n"
         << "    \"draft_tokens\": " << env.speculative.draft_tokens << ",\n"
+        << "    \"proposal_head_rows\": " << env.speculative.proposal_head_rows << ",\n"
         << "    \"proposal_head\": \"" << proposal_head_name(env.speculative.proposal_head)
         << "\",\n"
         << "    \"sampling\": \"" << sampling_name(env.sampling) << "\",\n"
@@ -940,7 +958,7 @@ std::string format_csv(const BenchEnvironment& env, const std::vector<TestResult
            "context,prefill_chunk,concurrency,constraint_type,constraint_file,constraint_source,"
            "constraint_choices,mixed_constraints,"
            "speculative_"
-           "backend,draft_tokens,"
+           "backend,draft_tokens,proposal_head_rows,"
            "proposal_head,sampling,decode_path,kv_cache,kv_payload_bytes,load_host_to_device_bytes,"
            "weights_capacity_bytes,sequence_capacity_bytes,workspace_capacity_bytes,"
            "workspace_general_capacity_bytes,vision_handoff_capacity_bytes,"
@@ -974,6 +992,7 @@ std::string format_csv(const BenchEnvironment& env, const std::vector<TestResult
             << (env.mixed_constraints ? "true" : "false") << ','
             << product::speculative_backend_name(env.speculative.backend) << ','
             << env.speculative.draft_tokens << ','
+            << env.speculative.proposal_head_rows << ','
             << proposal_head_name(env.speculative.proposal_head) << ','
             << sampling_name(env.sampling) << ','
             << decode_path_name(env.use_cuda_graph, env.speculative) << ','

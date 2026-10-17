@@ -18,12 +18,22 @@ from .sources.safetensors import SafetensorsSource
 
 
 class SourceInputs(Mapping):
-    """Named optional sources are opened only when a recipe or component requests one."""
+    """Named optional sources are opened only when a recipe or component requests one.
+
+    A named path that is a quantize-campaign output directory (its own `layer_NN.pt`
+    files, not a checkpoint) is passed through as a Path for recipes that consume the
+    campaign directly (`pack_exl3_dense`); it is not a SafetensorsSource and is not
+    opened here.
+    """
 
     def __init__(self, base, paths, stack):
         self._sources = {"base": base}
         self._paths = dict(paths)
         self._stack = stack
+
+    @staticmethod
+    def _campaign_dir(path) -> bool:
+        return Path(path).is_dir() and any(Path(path).glob("layer_[0-9][0-9].pt"))
 
     def __getitem__(self, name):
         if name not in self._sources:
@@ -31,9 +41,13 @@ class SourceInputs(Mapping):
                 raise ValueError(
                     f"selected recipe requires source {name!r}; provide --source {name}=PATH"
                 )
-            self._sources[name] = self._stack.enter_context(
-                SafetensorsSource(self._paths[name])
-            )
+            path = self._paths[name]
+            if self._campaign_dir(path):
+                self._sources[name] = Path(path)
+            else:
+                self._sources[name] = self._stack.enter_context(
+                    SafetensorsSource(self._paths[name])
+                )
         return self._sources[name]
 
     def __iter__(self):

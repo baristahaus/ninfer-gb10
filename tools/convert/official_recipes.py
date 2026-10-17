@@ -155,7 +155,7 @@ def qwen3_8_27b_exl3_dense(model, recipe, sources):
 
     if "num_experts" in model.config:
         raise ValueError("this official recipe requires Qwen3.5 Dense mathematics")
-    converted = sources["converted"]
+    converted = Path(getattr(sources["converted"], "path", sources["converted"]))
     _optional(model, recipe)
     _assign(recipe, "text/token_embedding", Q8)
     _assign(recipe, "text/output_head", Q6)

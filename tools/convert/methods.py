@@ -427,6 +427,18 @@ def import_exl3_bank(request: PrepareRequest) -> PreparedMethod:
     return request.job(produce=produce)
 
 
+_LAYER_CACHE: dict[str, dict] = {}
+
+
+def _layer_file(loader, path: str) -> dict:
+    """Layer files are immutable campaign outputs; one assembly reads each many times."""
+
+    cached = _LAYER_CACHE.get(path)
+    if cached is None:
+        cached = _LAYER_CACHE[path] = loader(path, map_location="cpu", weights_only=False)
+    return cached
+
+
 def pack_exl3_dense(request: PrepareRequest) -> PreparedMethod:
     """Emit one dense linear as an `exl3_dense_v1` object from a convert_model result.
 
@@ -449,7 +461,7 @@ def pack_exl3_dense(request: PrepareRequest) -> PreparedMethod:
         raise ValueError("pack_exl3_dense requires exactly one logical source")
     n, k = request.target.shape
 
-    result = torch.load(layer_file, map_location="cpu", weights_only=False)[tensor]
+    result = _layer_file(torch.load, layer_file)[tensor]
     stored_n, stored_k = result["weight_shape"]
     if (stored_n, stored_k) != (n, k):
         raise ValueError(

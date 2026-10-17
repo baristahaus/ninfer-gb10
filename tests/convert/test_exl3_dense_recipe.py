@@ -201,3 +201,20 @@ def test_dense_recipe_assembles_and_verifies(tmp_path):
             / torch.linalg.norm(source.reshape(-1))
         )
         assert relative < 0.45  # the uncalibrated k2 = 4 NMSE is ~0.08-0.12
+
+
+def test_source_inputs_passes_campaign_dir_through(tmp_path):
+    """The CLI's named-source map hands quantize-campaign directories to the recipe as a
+    Path instead of trying to open them as a checkpoint."""
+    from tools.convert.__main__ import SourceInputs
+    from contextlib import ExitStack
+
+    campaign = tmp_path / "campaign"
+    campaign.mkdir()
+    (campaign / "layer_00.pt").write_bytes(b"x")
+    with ExitStack() as stack:
+        sources = SourceInputs(base=None, paths={"converted": campaign}, stack=stack)
+        assert sources["converted"] == campaign
+        assert sources["base"] is None
+        # A checkpoint-looking named source still opens as a SafetensorsSource.
+        assert SourceInputs._campaign_dir(tmp_path) is False

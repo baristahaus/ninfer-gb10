@@ -1,4 +1,9 @@
 #include "ninfer/ops/flash_next_qsa.h"
+#include <atomic>
+
+extern std::atomic<int> ninfer_mtp_phase;
+#include <cstdio>
+#include <cstdlib>
 
 #include "ops/flash_next_work.h"
 
@@ -1728,6 +1733,40 @@ void flash_next_qsa(const Tensor& input, const Tensor& cache_positions,
     rmsnorm(query_heads, weights.query_norm, 1.0e-6F, true, normalized_query_heads, stream);
     rmsnorm(key_heads, weights.key_norm, 1.0e-6F, true, normalized_key_heads, stream);
     rope(rope_view, 64, kTheta, normalized_query_heads, normalized_key_heads, stream);
+    if (const char* dd = std::getenv("NINFER_MTP_DUMP")) {
+        static std::atomic<int> qsa_dump_n{0};
+        if (ninfer_mtp_phase && qsa_dump_n.fetch_add(1) == 0) {
+            auto qdump = [&](const char* nm, const void* p, std::size_t by) {
+                std::string path = std::string(dd) + "/" + nm + ".bin";
+                if (FILE* f = fopen(path.c_str(), "wb"); f != nullptr) {
+                    void* host = std::malloc(by);
+                    CUDA_CHECK(cudaMemcpyAsync(host, p, by, cudaMemcpyDeviceToHost, stream));
+                    CUDA_CHECK(cudaStreamSynchronize(stream));
+                    fwrite(host, 1, by, f);
+                    std::fclose(f);
+                    std::free(host);
+                }
+            };
+            qdump("q_nq", normalized_query.data, normalized_query.bytes());
+            qdump("q_nk", normalized_key.data, normalized_key.bytes());
+            qdump("q_gate", gate.data, gate.bytes());
+            qdump("q_value", value.data, value.bytes());
+            auto wdump = [&](const char* nm, const Weight& w) {
+                std::fprintf(stderr, "[qsadump] %s qtype=%d bytes=%zu n=%d k=%d\n",
+                             nm, static_cast<int>(w.qtype), w.payload_bytes, w.n, w.k);
+                const void* wptr = w.qdata != nullptr ? w.qdata : w.payload;
+                if (wptr != nullptr && w.payload_bytes > 0) {
+                    qdump(("w_" + std::string(nm) + "_q").c_str(), wptr, w.payload_bytes);
+                }
+            };
+            wdump("query_gate", weights.query_gate);
+            wdump("key", weights.key);
+            wdump("value", weights.value);
+            wdump("output", weights.output);
+            qdump("w_query_norm", weights.query_norm.data, weights.query_norm.bytes());
+            qdump("w_key_norm", weights.key_norm.data, weights.key_norm.bytes());
+        }
+    }
     if (fp8_cache) {
         hadamard_rows_kernel<<<tokens * kQueryHeads, 32, 0, stream>>>(
             static_cast<__nv_bfloat16*>(normalized_query.data), tokens * kQueryHeads);
@@ -1880,6 +1919,26 @@ void flash_next_qsa(const Tensor& input, const Tensor& cache_positions,
         dispatch_split(indices, static_cast<float*>(partial_maximum.data),
                        static_cast<float*>(partial_denominator.data),
                        static_cast<float*>(partial_numerator.data), num_splits);
+        if (const char* dd = std::getenv("NINFER_MTP_DUMP"); dd != nullptr && indices == nullptr) {
+            static std::atomic<int> split_dump{0};
+            if (ninfer_mtp_phase.load() != 0 && split_dump.fetch_add(1) == 0) {
+                auto sdump = [&](const char* nm, const void* p, std::size_t by) {
+                    std::string path = std::string(dd) + "/" + nm + ".bin";
+                    if (FILE* f = fopen(path.c_str(), "wb"); f != nullptr) {
+                        void* host = std::malloc(by);
+                        CUDA_CHECK(cudaMemcpyAsync(host, p, by, cudaMemcpyDeviceToHost, stream));
+                        CUDA_CHECK(cudaStreamSynchronize(stream));
+                        fwrite(host, 1, by, f);
+                        std::fclose(f);
+                        std::free(host);
+                    }
+                };
+                sdump("sp_max", partial_maximum.data, partial_maximum.bytes());
+                sdump("sp_den", partial_denominator.data, partial_denominator.bytes());
+                sdump("sp_num", partial_numerator.data, partial_numerator.bytes());
+                std::fprintf(stderr, "[qsa-split] num_splits=%d tokens=%d\n", num_splits, tokens);
+            }
+        }
         reduce_selected_attention_splits_kernel<<<dim3(kQueryHeads / kReduceHeadsPerBlock, tokens),
                                                   kReduceHeadsPerBlock * 32, 0, stream>>>(
             static_cast<const float*>(partial_maximum.data),
@@ -2070,6 +2129,26 @@ void flash_next_qsa(const Tensor& input, const Tensor& cache_positions,
     }
     Tensor attention_heads = attention.view({kHeadDim, kQueryHeads, tokens});
     Tensor gate_heads = gate.view({kHeadDim, kQueryHeads, tokens});
+    if (const char* dd = std::getenv("NINFER_MTP_DUMP")) {
+        if (ninfer_mtp_phase.load() != 0) {
+            static std::atomic<int> tail_dump{0};
+            if (tail_dump.fetch_add(1) == 0) {
+                auto tdump = [&](const char* nm, const void* p, std::size_t by) {
+                    std::string path = std::string(dd) + "/" + nm + ".bin";
+                    if (FILE* f = fopen(path.c_str(), "wb"); f != nullptr) {
+                        void* host = std::malloc(by);
+                        CUDA_CHECK(cudaMemcpyAsync(host, p, by, cudaMemcpyDeviceToHost, stream));
+                        CUDA_CHECK(cudaStreamSynchronize(stream));
+                        fwrite(host, 1, by, f);
+                        std::fclose(f);
+                        std::free(host);
+                    }
+                };
+                tdump("t_attention", attention.data, attention.bytes());
+                tdump("t_dest", destination.data, destination.bytes());
+            }
+        }
+    }
     sigmoid_mul(gate_heads, attention_heads, stream);
     linear(attention, weights.output, destination, stream, bf16_gemm);
     CUDA_CHECK(cudaGetLastError());

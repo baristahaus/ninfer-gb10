@@ -20,7 +20,12 @@
 
 #include <algorithm>
 #include <cmath>
+#include <atomic>
 #include <cstdint>
+
+extern std::atomic<int> ninfer_mtp_phase;
+#include <cstdio>
+#include <cstdlib>
 #include <limits>
 #include <stdexcept>
 #include <variant>
@@ -901,6 +906,84 @@ std::size_t flash_next_moe_workspace_capacity_bytes(std::int32_t tokens) {
 
 void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Tensor& destination,
                     WorkspaceArena& workspace, cudaStream_t stream, Bf16GemmContext* bf16_gemm) {
+    if (const char* dd = std::getenv("NINFER_MTP_DUMP")) {
+        static std::atomic<int> moe_dump_n{0};
+        if (ninfer_mtp_phase && moe_dump_n.fetch_add(1) == 0) {
+            auto mdump = [&](const char* nm, const void* p, std::size_t by) {
+                std::fprintf(stderr, "[moedump] try %s ptr=%p bytes=%zu\n", nm, p, by);
+                if (p == nullptr || by == 0) { std::fprintf(stderr, "[moedump] %s EMPTY\n", nm); return; }
+                std::string path = std::string(dd) + "/" + nm + ".bin";
+                if (FILE* f = fopen(path.c_str(), "wb"); f != nullptr) {
+                    void* host = std::malloc(by);
+                    CUDA_CHECK(cudaMemcpyAsync(host, p, by, cudaMemcpyDeviceToHost, stream));
+                    CUDA_CHECK(cudaStreamSynchronize(stream));
+                    fwrite(host, 1, by, f);
+                    std::fclose(f);
+                    std::free(host);
+                }
+            };
+            auto mwdump = [&](const char* nm, const Weight& w) {
+                std::fprintf(stderr, "[moedump] %s qtype=%d bytes=%zu n=%d k=%d group=%d layout=%d\n",
+                             nm, static_cast<int>(w.qtype), w.payload_bytes, w.n, w.k, w.group,
+                             static_cast<int>(w.layout));
+                const void* wp = w.qdata != nullptr ? w.qdata : w.payload;
+                mdump(("mw_" + std::string(nm) + "_q").c_str(), wp, w.payload_bytes);
+                const std::size_t sby = static_cast<std::size_t>(w.scale_nb[0]) * w.scale_nb[1] *
+                                        w.scale_nb[2] * w.scale_nb[3] *
+                                        (w.scale_dtype == DType::FP32 ? 4 : 2);
+                if (w.scales != nullptr && sby > 0 && sby <= w.payload_bytes + 1024) {
+                    mdump(("mw_" + std::string(nm) + "_s").c_str(), w.scales, sby);
+                }
+            };
+            mwdump("router", weights.router);
+            mwdump("shared_down", weights.shared_down);
+            mwdump("shared_scale", weights.shared_scale);
+            if (std::holds_alternative<Weight>(weights.shared_gate_up)) {
+                const Weight& sg = std::get<Weight>(weights.shared_gate_up);
+                std::fprintf(stderr, "[moedump] shared_gate_up packed qtype=%d bytes=%zu\n",
+                             static_cast<int>(sg.qtype), sg.payload_bytes);
+                mdump("m_shared_gate_up", sg.qdata != nullptr ? sg.qdata : sg.payload,
+                      sg.payload_bytes);
+            } else {
+                const auto& pair = std::get<FlashNextSharedGateUpPair>(weights.shared_gate_up);
+                std::fprintf(stderr, "[moedump] shared_gate pair qtypes %d/%d bytes %zu/%zu\n",
+                             static_cast<int>(pair.gate.qtype), static_cast<int>(pair.up.qtype),
+                             pair.gate.payload_bytes, pair.up.payload_bytes);
+                mdump("m_shared_gate", pair.gate.qdata != nullptr ? pair.gate.qdata : pair.gate.payload,
+                      pair.gate.payload_bytes);
+                mdump("m_shared_up", pair.up.qdata != nullptr ? pair.up.qdata : pair.up.payload,
+                      pair.up.payload_bytes);
+            }
+            const auto& rg = weights.routed_gate_up;
+            const auto& rd = weights.routed_down;
+            std::size_t rg_code_bytes = 0, rg_scale_bytes = 0;
+            std::size_t rd_code_bytes = 0, rd_scale_bytes = 0;
+            if (rg.qtype == QType::NVFP4) {
+                rg_code_bytes = static_cast<std::size_t>(rg.experts) * rg.rows * rg.columns / 2;
+                rg_scale_bytes = static_cast<std::size_t>(rg.experts) * rg.rows * rg.columns / 16;
+            } else if (rg.qtype == QType::BF16) {
+                rg_code_bytes = static_cast<std::size_t>(rg.experts) * rg.rows * rg.columns * 2;
+            }
+            if (rd.qtype == QType::NVFP4) {
+                rd_code_bytes = static_cast<std::size_t>(rd.experts) * rd.rows * rd.columns / 2;
+                rd_scale_bytes = static_cast<std::size_t>(rd.experts) * rd.rows * rd.columns / 16;
+            } else if (rd.qtype == QType::BF16) {
+                rd_code_bytes = static_cast<std::size_t>(rd.experts) * rd.rows * rd.columns * 2;
+            }
+            std::fprintf(stderr,
+                         "[moedump] routed gu qtype=%d experts=%d rows=%d cols=%d codebytes=%zu scalebytes=%zu\n",
+                         static_cast<int>(rg.qtype), rg.experts, rg.rows, rg.columns, rg_code_bytes,
+                         rg_scale_bytes);
+            mdump("m_routed_gu_codes", rg.codes, rg_code_bytes);
+            mdump("m_routed_gu_scales", rg.scales, rg_scale_bytes);
+            std::fprintf(stderr,
+                         "[moedump] routed down qtype=%d experts=%d rows=%d cols=%d codebytes=%zu scalebytes=%zu\n",
+                         static_cast<int>(rd.qtype), rd.experts, rd.rows, rd.columns, rd_code_bytes,
+                         rd_scale_bytes);
+            mdump("m_routed_down_codes", rd.codes, rd_code_bytes);
+            mdump("m_routed_down_scales", rd.scales, rd_scale_bytes);
+        }
+    }
     const auto* shared_pair   = std::get_if<FlashNextSharedGateUpPair>(&weights.shared_gate_up);
     const auto* shared_packed = std::get_if<Weight>(&weights.shared_gate_up);
     NINFER_PERF_SCOPE(

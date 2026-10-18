@@ -35,6 +35,10 @@
 #include <type_traits>
 #include <utility>
 
+// Defined at global scope in ops/launcher/hyperconnection.cu; gates the
+// NINFER_MTP_DUMP first-round dump sites.
+extern std::atomic<int> ninfer_mtp_phase;
+
 namespace ninfer::models::qwen3_8_flash_next::detail::NINFER_QWEN38_FLASH_NEXT_RUNTIME_NS {
 namespace {
 
@@ -12353,7 +12357,6 @@ ProgramImplCore::decode_mtp_batch(std::span<const std::uint32_t> lanes,
                                   runtime::ExecutionTiming* failed_timing) {
     // The NINFER_MTP_DUMP dump sites gate on this counter; raise it at the first MTP
     // round so each dump site fires once on that round's tensors.
-    extern std::atomic<int> ninfer_mtp_phase;
     ninfer_mtp_phase.store(1, std::memory_order_release);
     nvtx::ScopedRange round_range(nvtx::Name::DecodeMtpRound, nvtx::Category::Mtp,
                                   static_cast<std::uint64_t>(lanes.size()));

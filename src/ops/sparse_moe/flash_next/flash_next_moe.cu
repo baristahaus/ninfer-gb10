@@ -24,6 +24,9 @@
 #include <cstdint>
 
 extern std::atomic<int> ninfer_mtp_phase;
+// Set by the MTP schedule around the draft layer's MoE call; selects the
+// NINFER_MTP_DUMP target for this op's dump sites.
+std::atomic<int> ninfer_moe_dump_armed{0};
 #include <cstdio>
 #include <cstdlib>
 #include <limits>
@@ -908,7 +911,10 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
                     WorkspaceArena& workspace, cudaStream_t stream, Bf16GemmContext* bf16_gemm) {
     if (const char* dd = std::getenv("NINFER_MTP_DUMP")) {
         static std::atomic<int> moe_dump_n{0};
-        if (ninfer_mtp_phase && moe_dump_n.fetch_add(1) == 0) {
+        const bool weight_dump_ready =
+            ninfer_moe_dump_armed.load(std::memory_order_relaxed) != 0;
+        const int moe_dump_call = weight_dump_ready ? moe_dump_n.fetch_add(1) : 0;
+        if (weight_dump_ready && moe_dump_call < 2) {
             auto mdump = [&](const char* nm, const void* p, std::size_t by) {
                 std::fprintf(stderr, "[moedump] try %s ptr=%p bytes=%zu\n", nm, p, by);
                 if (p == nullptr || by == 0) { std::fprintf(stderr, "[moedump] %s EMPTY\n", nm); return; }
@@ -976,6 +982,17 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
                          rg_scale_bytes);
             mdump("m_routed_gu_codes", rg.codes, rg_code_bytes);
             mdump("m_routed_gu_scales", rg.scales, rg_scale_bytes);
+            mdump("m_routed_gu_div", rg.weight_scale_divisors, 4);
+            mdump("m_routed_down_div", rd.weight_scale_divisors, 4);
+            std::fprintf(stderr, "[moedump] gu input_divisors=%p down input_divisors=%p\n",
+                         (const void*)rg.input_scale_divisors,
+                         (const void*)rd.input_scale_divisors);
+            if (rg.input_scale_divisors != nullptr) {
+                mdump("m_routed_gu_input_div", rg.input_scale_divisors, 4 * rg.experts);
+            }
+            if (rd.input_scale_divisors != nullptr) {
+                mdump("m_routed_down_input_div", rd.input_scale_divisors, 4 * rd.experts);
+            }
             std::fprintf(stderr,
                          "[moedump] routed down qtype=%d experts=%d rows=%d cols=%d codebytes=%zu scalebytes=%zu\n",
                          static_cast<int>(rd.qtype), rd.experts, rd.rows, rd.columns, rd_code_bytes,
@@ -1068,6 +1085,7 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
     }
     const auto i32 = [](Tensor& tensor) { return static_cast<int*>(tensor.data); };
     route_kernel<<<(tokens + kRouteWarps - 1) / kRouteWarps, kRouteWarps * 32, 0, stream>>>(
+        // (dump added after this launch below)
         static_cast<const __nv_bfloat16*>(scores.data),
         static_cast<const __nv_bfloat16*>(input.data),
         static_cast<const __nv_bfloat16*>(weights.shared_scale.qdata),
@@ -1078,6 +1096,38 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
             fused_grouping ? i32(job_experts) : nullptr,
             fused_grouping ? i32(job_columns) : nullptr, fused_grouping ? i32(job_count) : nullptr},
         tokens);
+    {
+        static std::atomic<int> route_dump_n{0};
+        cudaStreamCaptureStatus capture = cudaStreamCaptureStatusNone;
+        cudaStreamIsCapturing(stream, &capture);
+        const bool dump_ready = std::getenv("NINFER_MTP_DUMP") != nullptr &&
+                                capture == cudaStreamCaptureStatusNone &&
+                                ninfer_moe_dump_armed.load(std::memory_order_relaxed) != 0;
+        const int n = dump_ready ? route_dump_n.fetch_add(1) : 0;
+        if (dump_ready && n < 2) {
+            auto rdump = [&](const char* nm, const void* p, std::size_t by) {
+                if (p == nullptr || by == 0) { return; }
+                std::string path = std::string(std::getenv("NINFER_MTP_DUMP")) + "/" + nm + ".bin";
+                if (FILE* f = fopen(path.c_str(), "wb"); f != nullptr) {
+                    void* host = std::malloc(by);
+                    CUDA_CHECK(cudaMemcpyAsync(host, p, by, cudaMemcpyDeviceToHost, stream));
+                    CUDA_CHECK(cudaStreamSynchronize(stream));
+                    fwrite(host, 1, by, f);
+                    std::fclose(f);
+                    std::free(host);
+                }
+            };
+            char tag[16];
+            std::snprintf(tag, sizeof(tag), "%d", n);
+            std::fprintf(stderr, "[routedump] call %d tokens %d\n", n, tokens);
+            rdump((std::string("r") + tag + "_input").c_str(), input.data, input.bytes());
+            rdump((std::string("r") + tag + "_scores").c_str(), scores.data, scores.bytes());
+            rdump((std::string("r") + tag + "_ids").c_str(), ids.data, ids.bytes());
+            rdump((std::string("r") + tag + "_alpha").c_str(), alpha.data, alpha.bytes());
+            rdump((std::string("r") + tag + "_shared_alpha").c_str(), shared_alpha.data,
+                  shared_alpha.bytes());
+        }
+    }
     Tensor shared_activation = workspace.alloc(DType::BF16, {kIntermediate, tokens});
     if (shared_packed != nullptr) {
         linear_swiglu(input, *shared_packed, shared_activation, workspace, stream);

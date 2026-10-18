@@ -53,6 +53,7 @@
 #include <cstdlib>
 
 extern std::atomic<int> ninfer_mtp_phase;
+extern std::atomic<int> ninfer_moe_dump_armed;
 
 #include "models/qwen3_8_flash_next/impl/ple_table.h"
 
@@ -561,6 +562,30 @@ void TextContext::mtp_forward_flash_next(const Tensor& ids, const Tensor& hidden
         };
         wdump("embedding_projection", mtp_.payload->embedding_projection);
         wdump("hidden_projection", mtp_.payload->hidden_projection);
+        wdump("attn_hc_down", mtp_.payload->attention_hc.down);
+        wdump("attn_hc_up", mtp_.payload->attention_hc.up);
+        wdump("attn_hc_inject", mtp_.payload->attention_hc.injection);
+        mtp_dump("attn_hc_norm", mtp_.payload->attention_hc.norm.data,
+                 mtp_.payload->attention_hc.norm.bytes());
+        wdump("mlp_hc_down", mtp_.payload->mlp_hc.down);
+        wdump("mlp_hc_up", mtp_.payload->mlp_hc.up);
+        wdump("mlp_hc_inject", mtp_.payload->mlp_hc.injection);
+        mtp_dump("mlp_hc_norm", mtp_.payload->mlp_hc.norm.data,
+                 mtp_.payload->mlp_hc.norm.bytes());
+        wdump("final_hc_down", mtp_.payload->final_hc.down);
+        wdump("final_hc_up", mtp_.payload->final_hc.up);
+        mtp_dump("final_hc_norm", mtp_.payload->final_hc.norm.data,
+                 mtp_.payload->final_hc.norm.bytes());
+        wdump("moe_router", mtp_.payload->post_mixer.router);
+        if (auto* pair = std::get_if<ops::FlashNextSharedGateUpPair>(
+                &mtp_.payload->post_mixer.shared_gate_up)) {
+            wdump("moe_shared_gate", pair->gate);
+            wdump("moe_shared_up", pair->up);
+        } else if (auto* packed = std::get_if<Weight>(&mtp_.payload->post_mixer.shared_gate_up)) {
+            wdump("moe_shared_packed", *packed);
+        }
+        wdump("moe_shared_down", mtp_.payload->post_mixer.shared_down);
+        wdump("moe_shared_scale", mtp_.payload->post_mixer.shared_scale);
         if (embed_ != nullptr) {
             std::fprintf(stderr, "[fcump] embed qtype=%d bytes=%zu n=%d k=%d\n",
                          static_cast<int>(embed_->qtype), embed_->payload_bytes, embed_->n,
@@ -622,8 +647,10 @@ void TextContext::mtp_forward_flash_next(const Tensor& ids, const Tensor& hidden
         block_input, cache_positions, mrope_positions, valid, rows, mtp_.payload->attention, cache,
         envelope, block_output, work_, stream, bf16_gemm_,
         {.selected_indices = selected_qsa_indices, .reused_indices = reused_qsa_indices});
+    ninfer_moe_dump_armed.store(1, std::memory_order_release);
     ops::flash_next_moe(block_input, mtp_.payload->post_mixer, block_output, work_, stream,
                         bf16_gemm_);
+    ninfer_moe_dump_armed.store(0, std::memory_order_release);
     if (mtp_dump_on) {
         mtp_dump("s2_block1", block_input.data, block_input.bytes());
         mtp_dump("s2_inj1", injection.data, injection.bytes());

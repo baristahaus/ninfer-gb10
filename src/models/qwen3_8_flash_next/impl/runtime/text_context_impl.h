@@ -501,7 +501,7 @@ void TextContext::mtp_forward_flash_next(const Tensor& ids, const Tensor& hidden
     cudaStream_t stream = ctx_.stream;
     ninfer_mtp_phase.store(1);
     static std::atomic<int> parity_call_n{0};
-    {
+    if (const char* cc = std::getenv("NINFER_MTP_DUMP")) {
         static std::atomic<int> core_call_log{0};
         int ci = core_call_log.fetch_add(1);
         if (ci < 6) {

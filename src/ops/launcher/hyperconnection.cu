@@ -353,10 +353,39 @@ void validate_combine_inputs(const Tensor& hyper, const Tensor& block_output,
 // fuse the gate mix and the injection finish into the up projection's epilogue; every other route
 // materializes the gate logits and mixes in a separate launch with the same per-element
 // mathematics. The injection is always finished from the normalization's partials.
+
+void dump_bytes(const char* dir, const std::string& name, const void* device_ptr,
+                std::size_t bytes, cudaStream_t stream) {
+    if (device_ptr == nullptr || bytes == 0) { return; }
+    const std::string path = std::string(dir) + "/" + name + ".bin";
+    FILE* file = fopen(path.c_str(), "wb");
+    if (file == nullptr) { return; }
+    void* host = std::malloc(bytes);
+    CUDA_CHECK(cudaMemcpyAsync(host, device_ptr, bytes, cudaMemcpyDeviceToHost, stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+    fwrite(host, 1, bytes, file);
+    fclose(file);
+    std::free(host);
+}
+
 void finish_mix(const Tensor& normalized, const Tensor* partials,
                 const HyperConnectionWeights& weights, Tensor& block_input, Tensor* injection,
                 WorkspaceArena& workspace, cudaStream_t stream, Bf16GemmContext* bf16_gemm) {
     const int tokens = normalized.ne[1];
+    {
+        static std::atomic<int> mix_dump_n{0};
+        cudaStreamCaptureStatus capture = cudaStreamCaptureStatusNone;
+        cudaStreamIsCapturing(stream, &capture);
+        if (const char* dd = std::getenv("NINFER_MTP_DUMP");
+            dd != nullptr && capture == cudaStreamCaptureStatusNone &&
+            ninfer_mtp_phase.load(std::memory_order_relaxed) != 0) {
+            const int n = mix_dump_n.fetch_add(1);
+            if (n < 2) {
+                dump_bytes(dd, "p" + std::to_string(n) + "_norm", normalized.data,
+                           normalized.bytes(), stream);
+            }
+        }
+    }
     Tensor low_rank = workspace.alloc(DType::BF16, {kRank, tokens});
     // FP8 runs the fused down+SiLU at every width; BF16 fuses through its small-T family.
     // MXFP8 uses the generic linear route at every width.
@@ -377,6 +406,20 @@ void finish_mix(const Tensor& normalized, const Tensor* partials,
         scaled_silu_kernel<<<grid_for(low_rank.numel()), block, 0, stream>>>(
             static_cast<__nv_bfloat16*>(low_rank.data), low_rank.numel());
     }
+    {
+        static std::atomic<int> low_dump_n{0};
+        cudaStreamCaptureStatus capture = cudaStreamCaptureStatusNone;
+        cudaStreamIsCapturing(stream, &capture);
+        if (const char* dd = std::getenv("NINFER_MTP_DUMP");
+            dd != nullptr && capture == cudaStreamCaptureStatusNone &&
+            ninfer_mtp_phase.load(std::memory_order_relaxed) != 0) {
+            const int n = low_dump_n.fetch_add(1);
+            if (n < 2) {
+                dump_bytes(dd, "p" + std::to_string(n) + "_low", low_rank.data,
+                           low_rank.bytes(), stream);
+            }
+        }
+    }
     if (weights.up.qtype == QType::FP8_E4M3FN_ROW_BF16 && tokens >= 2 && tokens <= 64) {
         detail::flash_next::launch_fp8_hc_up_mix(low_rank, weights.up, normalized, partials,
                                                  block_input, injection, stream);
@@ -384,6 +427,20 @@ void finish_mix(const Tensor& normalized, const Tensor* partials,
     }
     Tensor gate = workspace.alloc(DType::BF16, {kHyper, tokens});
     linear(low_rank, weights.up, gate, stream, bf16_gemm);
+    {
+        static std::atomic<int> gate_dump_n{0};
+        cudaStreamCaptureStatus capture = cudaStreamCaptureStatusNone;
+        cudaStreamIsCapturing(stream, &capture);
+        if (const char* dd = std::getenv("NINFER_MTP_DUMP");
+            dd != nullptr && capture == cudaStreamCaptureStatusNone &&
+            ninfer_mtp_phase.load(std::memory_order_relaxed) != 0) {
+            const int n = gate_dump_n.fetch_add(1);
+            if (n < 2) {
+                dump_bytes(dd, "p" + std::to_string(n) + "_gate", gate.data,
+                           gate.bytes(), stream);
+            }
+        }
+    }
     if (injection != nullptr) {
         if (tokens > 16) {
             gate_mix_injection_kernel<<<tokens, block, 0, stream>>>(

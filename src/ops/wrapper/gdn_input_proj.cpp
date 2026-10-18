@@ -1,6 +1,7 @@
 #include "core/weight.h"
 #include "ninfer/ops/gdn_input_proj.h"
 
+#include "core/device.h"
 #include "core/layout.h"
 #include "ops/gdn_input_proj/fp8/fp8_gdn_conv_plan.h"
 #include "ops/linear/bf16/bf16_dispatch.h"
@@ -321,49 +322,58 @@ void dispatch_single_parent(const Tensor& x, const Weight& weight, Tensor& qkv, 
         const Weight key_w = detail::exl3_dense_slice(weight, kQRows, kKRows);
         const Weight value_w = detail::exl3_dense_slice(weight, kQRows + kKRows, kVRows);
         const Weight z_w = detail::exl3_dense_slice(weight, kQkvRows, kZRows);
-        const auto qkv_rows = [&](std::int32_t row_begin, std::int32_t rows) {
-            return Tensor(static_cast<std::byte*>(qkv.data) +
-                              static_cast<std::ptrdiff_t>(row_begin) * cols * 2,
-                          DType::BF16, {rows, cols});
+        // The linear routes write token-major [T, rows] outputs, while the caller's qkv
+        // is the token-major [T, 10240] fused buffer: each row group projects into its
+        // own contiguous staging plane and a 2D copy places it at the group's column
+        // range of every token.
+        auto scope = workspace->scope();
+        const auto staging = [&](std::int32_t rows) {
+            const auto span = workspace->alloc_bytes(
+                static_cast<std::size_t>(rows) * static_cast<std::size_t>(cols) * 2, 256);
+            return Tensor(span.data, DType::BF16, {rows, cols});
+        };
+        Tensor q_stage = staging(kQRows);
+        Tensor k_stage = staging(kKRows);
+        Tensor v_stage = staging(kVRows);
+        const auto place = [&](const Tensor& stage, std::int32_t row_begin, std::int32_t rows) {
+            CUDA_CHECK(cudaMemcpy2DAsync(
+                static_cast<std::byte*>(qkv.data) + row_begin * 2,
+                kQkvRows * 2, stage.data, rows * 2, rows * 2, cols,
+                cudaMemcpyDeviceToDevice, stream));
         };
         if (cols <= 8) {
-            auto scope = workspace->scope();
-            Tensor q_view = qkv_rows(0, kQRows);
-            Tensor k_view = qkv_rows(kQRows, kKRows);
-            Tensor v_view = qkv_rows(kQRows + kKRows, kVRows);
-            detail::exl3_dense_dispatch(x, query_w, q_view, workspace, stream);
-            detail::exl3_dense_dispatch(x, key_w, k_view, workspace, stream);
-            detail::exl3_dense_dispatch(x, value_w, v_view, workspace, stream);
+            detail::exl3_dense_dispatch(x, query_w, q_stage, workspace, stream);
+            detail::exl3_dense_dispatch(x, key_w, k_stage, workspace, stream);
+            detail::exl3_dense_dispatch(x, value_w, v_stage, workspace, stream);
             detail::exl3_dense_dispatch(x, z_w, z, workspace, stream);
-            return;
+        } else {
+            const auto prime_span = workspace->alloc_bytes(
+                static_cast<std::size_t>(kRows) * static_cast<std::size_t>(kHidden) * 2, 256);
+            const auto u_span = workspace->alloc_bytes(
+                static_cast<std::size_t>(kHidden) * static_cast<std::size_t>(cols) * 2, 256);
+            Tensor prime(prime_span.data, DType::BF16, {kRows, kHidden});
+            Tensor u(u_span.data, DType::BF16, {kHidden, cols});
+            detail::exl3_prefill_dequant(weight, prime, stream);
+            detail::exl3_prefill_transform(x, weight, u, stream);
+            const auto linear_part = [&](std::int32_t row_begin, std::int32_t rows, Tensor& out) {
+                Weight dense;
+                dense.qtype   = QType::BF16;
+                dense.layout  = QuantLayout::Contiguous;
+                dense.ndim    = 2;
+                dense.n = dense.shape[0] = dense.padded_shape[0] = rows;
+                dense.k = dense.shape[1] = dense.padded_shape[1] = kHidden;
+                dense.qdata = static_cast<const std::byte*>(prime.data) +
+                              static_cast<std::ptrdiff_t>(row_begin) * kHidden * 2;
+                detail::bf16_dispatch(u, dense, out, policy, stream);
+            };
+            linear_part(0, kQRows, q_stage);
+            linear_part(kQRows, kKRows, k_stage);
+            linear_part(kQRows + kKRows, kVRows, v_stage);
+            linear_part(kQkvRows, kZRows, z);
         }
-        auto scope = workspace->scope();
-        const auto prime_span = workspace->alloc_bytes(
-            static_cast<std::size_t>(kRows) * static_cast<std::size_t>(kHidden) * 2, 256);
-        const auto u_span = workspace->alloc_bytes(
-            static_cast<std::size_t>(kHidden) * static_cast<std::size_t>(cols) * 2, 256);
-        Tensor prime(prime_span.data, DType::BF16, {kRows, kHidden});
-        Tensor u(u_span.data, DType::BF16, {kHidden, cols});
-        detail::exl3_prefill_dequant(weight, prime, stream);
-        detail::exl3_prefill_transform(x, weight, u, stream);
-        const auto linear_part = [&](std::int32_t row_begin, std::int32_t rows, Tensor& out) {
-            Weight dense;
-            dense.qtype   = QType::BF16;
-            dense.layout  = QuantLayout::Contiguous;
-            dense.ndim    = 2;
-            dense.n = dense.shape[0] = dense.padded_shape[0] = rows;
-            dense.k = dense.shape[1] = dense.padded_shape[1] = kHidden;
-            dense.qdata = static_cast<const std::byte*>(prime.data) +
-                          static_cast<std::ptrdiff_t>(row_begin) * kHidden * 2;
-            detail::bf16_dispatch(u, dense, out, policy, stream);
-        };
-        Tensor q_view = qkv_rows(0, kQRows);
-        Tensor k_view = qkv_rows(kQRows, kKRows);
-        Tensor v_view = qkv_rows(kQRows + kKRows, kVRows);
-        linear_part(0, kQRows, q_view);
-        linear_part(kQRows, kKRows, k_view);
-        linear_part(kQRows + kKRows, kVRows, v_view);
-        linear_part(kQkvRows, kZRows, z);
+        place(q_stage, 0, kQRows);
+        place(k_stage, kQRows, kKRows);
+        place(v_stage, kQRows + kKRows, kVRows);
         return;
     }
 
@@ -888,10 +898,15 @@ std::size_t gdn_input_proj_workspace_capacity_bytes(QType parent_qtype, std::int
         }
         // The dense EXL3 route (SP-7): decode dispatches use the row slices' capacity;
         // the composed prefill route adds one decoded [16384, 5120] plane plus the
-        // transformed activation.
-        return std::max(detail::exl3_dense_workspace_bytes(6144, 5120, std::min(max_tokens, 8)),
+        // transformed activation. Both routes stage the three qkv row groups (the
+        // token-major fused buffer receives 2D copies), adding one qkv-sized plane.
+        const std::size_t staging =
+            static_cast<std::size_t>(10240) * static_cast<std::size_t>(max_tokens) * 2;
+        return std::max(detail::exl3_dense_workspace_bytes(6144, 5120, std::min(max_tokens, 8)) +
+                            staging,
                         max_tokens > 8 ? detail::exl3_prefill_workspace_bytes(
-                                             parent_rows, input_rows, max_tokens)
+                                             parent_rows, input_rows, max_tokens) +
+                                             staging
                                        : std::size_t{0});
     }
     if (parent_qtype == QType::Q8_G32_FP16 && parent_rows == 12288 && input_rows == 2048) {
@@ -973,7 +988,8 @@ std::size_t gdn_input_proj_conv_snapshot_workspace_capacity_bytes(
                 "gdn_input_proj_conv_snapshot workspace: unsupported EXL3 profile");
         }
         // The dense EXL3 route (SP-7) is always composed here: the projected plane plus
-        // the projection's own capacity over the aggregate token interval.
+        // the projection's own capacity over the aggregate token interval (which now
+        // carries the three qkv staging planes).
         const std::int32_t aggregate_columns = batch_size * max_width;
         const std::size_t projection_workspace = gdn_input_proj_workspace_capacity_bytes(
             parent_qtype, parent_rows, input_rows, policy, batch_size * min_width,

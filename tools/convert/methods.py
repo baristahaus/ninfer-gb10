@@ -430,6 +430,113 @@ def import_exl3_bank(request: PrepareRequest) -> PreparedMethod:
 _LAYER_CACHE: dict[str, dict] = {}
 
 
+def pack_exl3_bank_quantized(request: PrepareRequest) -> PreparedMethod:
+    """Emit one (layer, projection) EXL3 expert bank from the bank quantize campaign.
+
+    Every input is one expert's logical source in expert-id order (all sharing one
+    [n, k]); the method parameters carry `{"layer_file": path, "projection": name,
+    "k2": rate}` pointing at the `convert_model_banks` layer file. The bank planes
+    re-verify sampled tiles against the campaign trellis before writing (the import
+    route's exact-oracle discipline); deep verification against the BF16 source is
+    the real-check tool's job.
+    """
+
+    if request.target.format != "exl3" or request.target.layout != "exl3_expert_bank":
+        raise ValueError("pack_exl3_bank_quantized requires the EXL3 expert bank target")
+    layer_file = request.parameters.get("layer_file")
+    projection = request.parameters.get("projection")
+    k2 = request.parameters.get("k2")
+    if not isinstance(layer_file, str) or not isinstance(projection, str) or k2 is None:
+        raise ValueError(
+            "pack_exl3_bank_quantized requires layer_file, projection and k2 parameters")
+    k2 = int(k2)
+    if not request.inputs:
+        raise ValueError("an EXL3 bank requires at least one expert")
+    shapes = [item.source.shape for item in request.inputs]
+    if any(len(shape) != 2 or shape != shapes[0] for shape in shapes):
+        raise ValueError("a bank's experts must share one [n, k] logical shape")
+    n, k = shapes[0]
+    experts = len(request.inputs)
+    if (geometry_experts := prod(request.target.shape) // (n * k)) != experts:
+        raise ValueError("bank parent and logical expert shapes disagree")
+    codebook = "mcg"
+    validate_exl3_rate(k2, codebook)
+    geometry = exl3_bank_geometry(n, k, [k2] * experts, codebook)
+    if (geometry.experts * n, k) != tuple(request.target.shape):
+        raise ValueError("bank parent shape is not the stacked expert rows [E*n, k]")
+
+    results = _layer_file(torch.load, layer_file)[projection]
+    if not isinstance(results, list) or len(results) != experts:
+        raise ValueError(f"{layer_file}:{projection}: expert count disagrees with the group")
+    trellis_planes = []
+    suh = torch.empty((experts, k), dtype=torch.float16)
+    svh = torch.empty((experts, n), dtype=torch.float16)
+    for expert, result in enumerate(results):
+        stored_n, stored_k = result["weight_shape"]
+        if (stored_n, stored_k) != (n, k):
+            raise ValueError(
+                f"{layer_file}:{projection}: expert {expert} shape "
+                f"{(stored_n, stored_k)} differs from the logical {(n, k)}")
+        trellis = result["trellis"].detach().cpu().contiguous()
+        if trellis.dtype != torch.int16 or trellis.shape != (k // 16, n // 16, 8 * k2):
+            raise ValueError(
+                f"{layer_file}:{projection}: expert {expert} trellis shape disagrees "
+                f"with the rate")
+        trellis_planes.append(trellis)
+        suh[expert] = result["suh"].detach().cpu().to(torch.float16)
+        svh[expert] = result["svh"].detach().cpu().to(torch.float16)
+
+    def verify_expert(expert: int, extent: memoryview) -> None:
+        tiles_n, tiles_k = k // EXL3_TILE, n // EXL3_TILE
+        positions = [(0, 0), (tiles_n - 1, tiles_k - 1)]
+        generator = torch.Generator().manual_seed(
+            20261014 + 7919 * expert + 104729 * tiles_n * tiles_k)
+        picks = torch.randint(0, tiles_n * tiles_k, (14,), generator=generator)
+        positions += [(int(pick) // tiles_k, int(pick) % tiles_k) for pick in picks.tolist()]
+        words = k2 * 8
+        emitted = torch.frombuffer(
+            bytearray(extent[: tiles_n * tiles_k * words * 2]), dtype=torch.int16
+        ).reshape(tiles_n, tiles_k, words)
+        emitted_tiles = decode_tiles(emitted, k2, codebook)
+        source_tiles = decode_tiles(trellis_planes[expert], k2, codebook)
+        for tile_n, tile_k in positions:
+            if not np.array_equal(emitted_tiles[tile_n, tile_k], source_tiles[tile_n, tile_k]):
+                raise ValueError(
+                    f"expert {expert} tile ({tile_n},{tile_k}) differs from its source")
+
+    def produce(output):
+        directory = bytearray(geometry.directory_bytes)
+        for expert, (offset, extent, rate) in enumerate(geometry.directory_entries()):
+            struct.pack_into("<QIBBBB", directory, expert * 16, offset, extent, rate, 0, 0, 0)
+        output.write_bytes(geometry.directory_offset, bytes(directory))
+        if geometry.trellis_offset > geometry.directory_bytes:
+            output.write_bytes(
+                geometry.directory_bytes,
+                bytes(geometry.trellis_offset - geometry.directory_bytes),
+            )
+        for expert, (offset, extent, _rate) in enumerate(geometry.directory_entries()):
+            data = trellis_planes[expert].numpy().tobytes()
+            if len(data) != n * k * k2 // 16:
+                raise ValueError(f"expert {expert}: trellis bytes disagree with the rate")
+            packed = data + bytes(extent - len(data))
+            verify_expert(expert, memoryview(packed))
+            output.write_bytes(offset, packed)
+        output.write_bytes(geometry.suh_offset, suh.numpy().tobytes())
+        suh_end = geometry.suh_offset + geometry.suh_bytes
+        if geometry.svh_offset > suh_end:
+            output.write_bytes(suh_end, bytes(geometry.svh_offset - suh_end))
+        output.write_bytes(geometry.svh_offset, svh.numpy().tobytes())
+        output.write_bytes(
+            geometry.codebook_offset,
+            EXL3_CODEBOOK_IDS[codebook].to_bytes(4, "little"),
+        )
+
+    return request.job(produce=produce, declared_bytes=geometry.payload_bytes)
+
+
+pack_exl3_bank_quantized.quantized_bank = True
+
+
 def _layer_file(loader, path: str) -> dict:
     """Layer files are immutable campaign outputs; one assembly reads each many times."""
 
@@ -575,4 +682,5 @@ METHODS: dict[str, Method] = {
     "import_exl3_bank": import_exl3_bank,
     "pack_exl3_dense": pack_exl3_dense,
     "pack_exl3_dense_group": pack_exl3_dense_group,
+    "pack_exl3_bank_quantized": pack_exl3_bank_quantized,
 }

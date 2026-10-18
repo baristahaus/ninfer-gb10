@@ -205,6 +205,70 @@ def convert_model_fused(checkpoint: Path, hessian_dir: Path | None, out_dir: Pat
     return config
 
 
+def convert_model_banks(checkpoint: Path, out_dir: Path, k2: int, codebook: str = "mcg",
+                        layers: list[int] | None = None, seed: int = 20261016,
+                        device: torch.device | None = None) -> dict:
+    """The routed-bank EXL3 conversion (SP-7 contract 6.2): every routed expert's gate, up
+    and down linear quantizes uncalibrated (per-expert calibration data is too sparse to
+    inform a Hessian), with one su per (layer, projection) group and per-expert sv.
+
+    ``out_dir`` receives one ``layer_NN.pt`` per MoE layer with keys ``routed_gate``,
+    ``routed_up`` and ``routed_down``, each a list of per-expert ``quantize_linear``
+    results in expert-id order. Completed layer files are resumed as-is.
+    """
+
+    device = device or torch.device("cuda")
+    checkpoint = Path(checkpoint)
+    config = cal.load_text_config(checkpoint)
+    reader = cal.ShardReader(checkpoint)
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    layers = list(range(config["layers"])) if layers is None else list(layers)
+    generator = torch.Generator(device=device).manual_seed(seed)
+    experts = config["num_experts"]
+    intermediate = config["moe_intermediate"]
+    hidden = config["hidden"]
+
+    for layer in layers:
+        target = out_dir / f"layer_{layer:02d}.pt"
+        if target.exists():
+            print(f"layer {layer}: already converted, resuming", flush=True)
+            continue
+        t0 = time.time()
+        prefix = cal._layer_prefix(layer)
+        result: dict = {}
+        # The experts' gate and up rows pack one interleaved gate_up tensor in the
+        # checkpoint; the model binds them as interleaved row selections of it.
+        gate_up = reader.get(prefix + "mlp.experts.gate_up_proj", device).float()
+        down_source = prefix + "mlp.experts.down_proj"
+        for role, rates in (("routed_gate", (hidden, intermediate)),
+                            ("routed_up", (hidden, intermediate)),
+                            ("routed_down", (intermediate, hidden))):
+            su = torch.sign(
+                torch.randn(rates[0], device=device, generator=generator))
+            per_expert = []
+            for expert in range(experts):
+                # The checkpoint stores the routed tensors batched [E, ...].
+                if role == "routed_gate":
+                    weight = gate_up[expert][0:intermediate]
+                elif role == "routed_up":
+                    weight = gate_up[expert][intermediate:2 * intermediate]
+                else:
+                    weight = reader.get(down_source, device).float()[expert]
+                sv = torch.sign(
+                    torch.randn(weight.shape[0], device=device, generator=generator))
+                out = q.quantize_linear(weight.T.contiguous(), k2, codebook, su, sv,
+                                        hessian=None)
+                out["weight_shape"] = tuple(weight.shape)
+                per_expert.append(out)
+            result[role] = per_expert
+            print(f"  layer {layer:2d} {role:12s} {experts} experts "
+                  f"[{rates[1]},{rates[0]}]: done {time.time() - t0:.0f}s", flush=True)
+        torch.save(result, target)
+        print(f"layer {layer} complete in {time.time() - t0:.0f}s", flush=True)
+    return config
+
+
 def convert_model(checkpoint: Path, hessian_dir: Path | None, out_dir: Path,
                   k2: int, codebook: str = "mcg", layers: list[int] | None = None,
                   seed: int = 20261016, device: torch.device | None = None) -> dict:

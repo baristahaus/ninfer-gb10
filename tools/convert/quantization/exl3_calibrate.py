@@ -65,7 +65,7 @@ def load_text_config(checkpoint: Path) -> dict:
         "heads": text["num_attention_heads"],
         "kv_heads": text["num_key_value_heads"],
         "head_dim": text["head_dim"],
-        "intermediate": text["intermediate_size"],
+        "intermediate": text.get("intermediate_size") or text["moe_intermediate_size"],
         "gdn_key_heads": text["linear_num_key_heads"],
         "gdn_value_heads": text["linear_num_value_heads"],
         "gdn_head_dim": text["linear_value_head_dim"],
@@ -74,6 +74,8 @@ def load_text_config(checkpoint: Path) -> dict:
         "rope_theta": text["rope_parameters"]["rope_theta"],
         "partial_rotary_factor": text["partial_rotary_factor"],
         "vocab": text["vocab_size"],
+        "num_experts": text.get("num_experts"),
+        "moe_intermediate": text.get("moe_intermediate_size"),
     }
 
 

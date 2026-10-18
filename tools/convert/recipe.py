@@ -328,35 +328,61 @@ class Recipe:
                     raise ValueError(
                         "the EXL3 format exists only as the expert bank or the dense linear"
                     )
+                quantized_bank = getattr(selection.method, "quantized_bank", False)
                 experts = []
                 for _, value in items:
                     source = value.source
                     if not isinstance(source, Exl3ExpertSource):
-                        raise ValueError(
-                            "EXL3 banks pack whole experts from EXL3 expert sources"
-                        )
+                        if not quantized_bank:
+                            raise ValueError(
+                                "EXL3 banks pack whole experts from EXL3 expert sources"
+                            )
+                        continue
                     if value.begin != 0 or value.end != prod(source.shape):
                         raise ValueError(
                             "EXL3 banks pack whole experts; partial selections are invalid"
                         )
                     experts.append(source)
-                codebooks = {source.linear.codebook for source in experts}
-                if len(codebooks) != 1:
-                    raise ValueError(
-                        f"a bank's codebook must be uniform; got {sorted(codebooks)}"
+                if not experts:
+                    # The quantized-bank route: the emit validates the stacked parent and
+                    # the uniform rate; the method re-verifies the campaign planes.
+                    k2 = selection.parameters.get("k2")
+                    if not isinstance(k2, int):
+                        raise ValueError(
+                            "a quantized EXL3 bank requires an integer k2 method parameter"
+                        )
+                    if not all(len(item.source.shape) == 2 and
+                               item.source.shape == items[0][1].source.shape
+                               for _, item in items):
+                        raise ValueError("a bank's experts must share one [n, k] shape")
+                    n, k = items[0][1].source.shape
+                    if len(items) * n * k != prod(dims):
+                        raise ValueError("bank parent shape is not the stacked expert rows")
+                    geometry = exl3_bank_geometry(n, k, [k2] * len(items), "mcg")
+                    if (geometry.experts * n, k) != tuple(dims):
+                        raise ValueError("bank parent shape is not the stacked expert rows")
+                    declared_bytes = geometry.payload_bytes
+                    encoded_size(
+                        layout, selection.format, dims, payload_bytes=declared_bytes
                     )
-                n, k = experts[0].shape
-                if any(source.shape != (n, k) for source in experts):
-                    raise ValueError("a bank's experts must share one [n, k] shape")
-                geometry = exl3_bank_geometry(
-                    n, k, [source.linear.k2 for source in experts], next(iter(codebooks))
-                )
-                if tuple(dims) != (geometry.experts * n, k):
-                    raise ValueError("bank parent shape is not the stacked expert rows")
-                declared_bytes = geometry.payload_bytes
-                encoded_size(
-                    layout, selection.format, dims, payload_bytes=declared_bytes
-                )
+                else:
+                    codebooks = {source.linear.codebook for source in experts}
+                    if len(codebooks) != 1:
+                        raise ValueError(
+                            f"a bank's codebook must be uniform; got {sorted(codebooks)}"
+                        )
+                    n, k = experts[0].shape
+                    if any(source.shape != (n, k) for source in experts):
+                        raise ValueError("a bank's experts must share one [n, k] shape")
+                    geometry = exl3_bank_geometry(
+                        n, k, [source.linear.k2 for source in experts], next(iter(codebooks))
+                    )
+                    if tuple(dims) != (geometry.experts * n, k):
+                        raise ValueError("bank parent shape is not the stacked expert rows")
+                    declared_bytes = geometry.payload_bytes
+                    encoded_size(
+                        layout, selection.format, dims, payload_bytes=declared_bytes
+                    )
             elif not dense_exl3:
                 encoded_size(layout, selection.format, dims)
             spec = TensorSpec(

@@ -278,6 +278,62 @@ def qwen3_6_35b_a3b_exl3(model, recipe, sources):
             recipe.group(names)
 
 
+def qwen3_6_35b_a3b_exl3_banks(model, recipe, sources):
+    """Quantize the routed experts as EXL3 banks from the BF16 source (SP-7 contract 6.2).
+
+    `sources["converted"]` names the bank campaign's output directory (its `layer_NN.pt`
+    files carry `routed_gate`/`routed_up`/`routed_down`, one uncalibrated quantize per
+    expert); every expert parameter binds its bank through the model's expert packing
+    groups, and every non-routed tensor keeps the groupwise recipe's formats from the
+    BF16 source, so artifacts differ from `qwen3_6_35b_a3b` only in the routed banks.
+    The campaign fixes one rate for every bank (BANK_K2 below); a different rate is a
+    new campaign, and the recipe passes it to the emit for the bank geometry.
+    """
+    bank_k2 = 6
+
+    if "num_experts" not in model.config:
+        raise ValueError("this official recipe requires Qwen3.5 MoE mathematics")
+    converted = Path(sources["converted"])
+    experts = model.config["num_experts"]
+    layers = model.config["num_hidden_layers"]
+    _optional(model, recipe)
+    _assign(recipe, "text/token_embedding", Q8)
+    _assign(recipe, "text/output_head", Q6)
+    for name, parameter in model.parameters.items():
+        if not name.startswith("text/layers/") or not parameter.projection:
+            continue
+        if name.endswith(
+            (
+                "/gdn/a_projection",
+                "/gdn/b_projection",
+                "/moe/router",
+                "/moe/shared_score",
+            )
+        ):
+            continue
+        if "/moe/experts/" in name:
+            continue
+        _assign(recipe, name, Q8)
+    for layer in range(layers):
+        for role in ("gate", "up", "down"):
+            names = []
+            for expert in range(experts):
+                name = f"text/layers/{layer}/moe/experts/{expert}/{role}"
+                recipe.assign(
+                    name,
+                    format="exl3",
+                    layout="exl3_expert_bank",
+                    method="pack_exl3_bank_quantized",
+                    parameters={
+                        "layer_file": str(converted / f"layer_{layer:02d}.pt"),
+                        "projection": f"routed_{role}",
+                        "k2": bank_k2,
+                    },
+                )
+                names.append(name)
+            recipe.group(names)
+
+
 def qwen3_6_27b_nvfp4(model, recipe, sources):
     if "num_experts" in model.config:
         raise ValueError("this official recipe requires Qwen3.5 Dense mathematics")
@@ -341,5 +397,6 @@ RECIPES = {
     "qwen3_8_27b_nvfp4": qwen3_8_27b_nvfp4,
     "qwen3_6_35b_a3b": qwen3_6_35b_a3b,
     "qwen3_6_35b_a3b_exl3": qwen3_6_35b_a3b_exl3,
+    "qwen3_6_35b_a3b_exl3_banks": qwen3_6_35b_a3b_exl3_banks,
     "qwen3_8_27b_exl3_dense": qwen3_8_27b_exl3_dense,
 }

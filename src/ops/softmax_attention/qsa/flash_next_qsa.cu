@@ -2,6 +2,7 @@
 #include <atomic>
 
 extern std::atomic<int> ninfer_mtp_phase;
+extern std::atomic<int> ninfer_moe_parity_window;
 #include <cstdio>
 #include <cstdlib>
 
@@ -1735,7 +1736,8 @@ void flash_next_qsa(const Tensor& input, const Tensor& cache_positions,
     rope(rope_view, 64, kTheta, normalized_query_heads, normalized_key_heads, stream);
     if (const char* dd = std::getenv("NINFER_MTP_DUMP")) {
         static std::atomic<int> qsa_dump_n{0};
-        if (ninfer_mtp_phase && qsa_dump_n.fetch_add(1) == 0) {
+        if (ninfer_moe_parity_window.load(std::memory_order_relaxed) != 0 &&
+                qsa_dump_n.fetch_add(1) == 0) {
             auto qdump = [&](const char* nm, const void* p, std::size_t by) {
                 std::string path = std::string(dd) + "/" + nm + ".bin";
                 if (FILE* f = fopen(path.c_str(), "wb"); f != nullptr) {
@@ -1770,6 +1772,22 @@ void flash_next_qsa(const Tensor& input, const Tensor& cache_positions,
     if (fp8_cache) {
         hadamard_rows_kernel<<<tokens * kQueryHeads, 32, 0, stream>>>(
             static_cast<__nv_bfloat16*>(normalized_query.data), tokens * kQueryHeads);
+        if (const char* hd = std::getenv("NINFER_MTP_DUMP")) {
+            static std::atomic<int> had_dump{0};
+            if (ninfer_moe_parity_window.load(std::memory_order_relaxed) != 0 &&
+                had_dump.fetch_add(1) == 0) {
+                std::string path = std::string(hd) + "/q_hq.bin";
+                if (FILE* f = fopen(path.c_str(), "wb"); f != nullptr) {
+                    void* host = std::malloc(normalized_query.bytes());
+                    CUDA_CHECK(cudaMemcpyAsync(host, normalized_query.data, normalized_query.bytes(),
+                                               cudaMemcpyDeviceToHost, stream));
+                    CUDA_CHECK(cudaStreamSynchronize(stream));
+                    fwrite(host, 1, normalized_query.bytes(), f);
+                    std::fclose(f);
+                    std::free(host);
+                }
+            }
+        }
     }
     Tensor index_key = workspace.alloc(DType::BF16, {128, tokens});
     linear(input, weights.index_key, index_key, stream, bf16_gemm);
@@ -1921,7 +1939,8 @@ void flash_next_qsa(const Tensor& input, const Tensor& cache_positions,
                        static_cast<float*>(partial_numerator.data), num_splits);
         if (const char* dd = std::getenv("NINFER_MTP_DUMP"); dd != nullptr && indices == nullptr) {
             static std::atomic<int> split_dump{0};
-            if (ninfer_mtp_phase.load() != 0 && split_dump.fetch_add(1) == 0) {
+            if (ninfer_moe_parity_window.load(std::memory_order_relaxed) != 0 &&
+                    split_dump.fetch_add(1) == 0) {
                 auto sdump = [&](const char* nm, const void* p, std::size_t by) {
                     std::string path = std::string(dd) + "/" + nm + ".bin";
                     if (FILE* f = fopen(path.c_str(), "wb"); f != nullptr) {
@@ -2130,7 +2149,7 @@ void flash_next_qsa(const Tensor& input, const Tensor& cache_positions,
     Tensor attention_heads = attention.view({kHeadDim, kQueryHeads, tokens});
     Tensor gate_heads = gate.view({kHeadDim, kQueryHeads, tokens});
     if (const char* dd = std::getenv("NINFER_MTP_DUMP")) {
-        if (ninfer_mtp_phase.load() != 0) {
+        if (ninfer_moe_parity_window.load(std::memory_order_relaxed) != 0) {
             static std::atomic<int> tail_dump{0};
             if (tail_dump.fetch_add(1) == 0) {
                 auto tdump = [&](const char* nm, const void* p, std::size_t by) {
@@ -2145,12 +2164,44 @@ void flash_next_qsa(const Tensor& input, const Tensor& cache_positions,
                     }
                 };
                 tdump("t_attention", attention.data, attention.bytes());
-                tdump("t_dest", destination.data, destination.bytes());
+                tdump("t_gate", gate.data, gate.bytes());
             }
         }
     }
     sigmoid_mul(gate_heads, attention_heads, stream);
+    if (const char* gd = std::getenv("NINFER_MTP_DUMP")) {
+        static std::atomic<int> gated_dump{0};
+        if (ninfer_moe_parity_window.load(std::memory_order_relaxed) != 0 &&
+            gated_dump.fetch_add(1) == 0) {
+            std::string path = std::string(gd) + "/t_gated.bin";
+            if (FILE* f = fopen(path.c_str(), "wb"); f != nullptr) {
+                void* host = std::malloc(attention.bytes());
+                CUDA_CHECK(cudaMemcpyAsync(host, attention.data, attention.bytes(),
+                                           cudaMemcpyDeviceToHost, stream));
+                CUDA_CHECK(cudaStreamSynchronize(stream));
+                fwrite(host, 1, attention.bytes(), f);
+                std::fclose(f);
+                std::free(host);
+            }
+        }
+    }
     linear(attention, weights.output, destination, stream, bf16_gemm);
+    if (const char* gd = std::getenv("NINFER_MTP_DUMP")) {
+        static std::atomic<int> dest_dump{0};
+        if (ninfer_moe_parity_window.load(std::memory_order_relaxed) != 0 &&
+            dest_dump.fetch_add(1) == 0) {
+            std::string path = std::string(gd) + "/t_dest.bin";
+            if (FILE* f = fopen(path.c_str(), "wb"); f != nullptr) {
+                void* host = std::malloc(destination.bytes());
+                CUDA_CHECK(cudaMemcpyAsync(host, destination.data, destination.bytes(),
+                                           cudaMemcpyDeviceToHost, stream));
+                CUDA_CHECK(cudaStreamSynchronize(stream));
+                fwrite(host, 1, destination.bytes(), f);
+                std::fclose(f);
+                std::free(host);
+            }
+        }
+    }
     CUDA_CHECK(cudaGetLastError());
 }
 

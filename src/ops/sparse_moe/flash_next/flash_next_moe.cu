@@ -27,6 +27,9 @@ extern std::atomic<int> ninfer_mtp_phase;
 // Set by the MTP schedule around the draft layer's MoE call; selects the
 // NINFER_MTP_DUMP target for this op's dump sites.
 std::atomic<int> ninfer_moe_dump_armed{0};
+// Set by the MTP forward for its first call only; ties the MoE routing dump to the
+// same engine call the stage activation dumps captured.
+std::atomic<int> ninfer_moe_parity_window{0};
 #include <cstdio>
 #include <cstdlib>
 #include <limits>
@@ -1102,7 +1105,7 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
         cudaStreamIsCapturing(stream, &capture);
         const bool dump_ready = std::getenv("NINFER_MTP_DUMP") != nullptr &&
                                 capture == cudaStreamCaptureStatusNone &&
-                                ninfer_moe_dump_armed.load(std::memory_order_relaxed) != 0;
+                                ninfer_moe_parity_window.load(std::memory_order_relaxed) != 0;
         const int n = dump_ready ? route_dump_n.fetch_add(1) : 0;
         if (dump_ready && n < 2) {
             auto rdump = [&](const char* nm, const void* p, std::size_t by) {
@@ -1241,6 +1244,34 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
             detail::flash_next::Nvfp4W4a4MaterializedActivation gate_input{
                 static_cast<const std::uint8_t*>(gate_codes.data),
                 static_cast<const std::uint8_t*>(gate_scales.data)};
+            {
+                cudaStreamCaptureStatus gcapture = cudaStreamCaptureStatusNone;
+                cudaStreamIsCapturing(stream, &gcapture);
+                const bool gdump = std::getenv("NINFER_MTP_DUMP") != nullptr &&
+                                   gcapture == cudaStreamCaptureStatusNone &&
+                                   ninfer_moe_parity_window.load(std::memory_order_relaxed) != 0;
+                if (gdump) {
+                    auto gdump = [&](const char* nm, const void* p, std::size_t by) {
+                        if (p == nullptr || by == 0) { return; }
+                        std::string path =
+                            std::string(std::getenv("NINFER_MTP_DUMP")) + "/" + nm + ".bin";
+                        if (FILE* f = fopen(path.c_str(), "wb"); f != nullptr) {
+                            void* host = std::malloc(by);
+                            CUDA_CHECK(cudaMemcpyAsync(host, p, by, cudaMemcpyDeviceToHost, stream));
+                            CUDA_CHECK(cudaStreamSynchronize(stream));
+                            fwrite(host, 1, by, f);
+                            std::fclose(f);
+                            std::free(host);
+                        }
+                    };
+                    gdump("g_x_codes", gate_codes.data, gate_codes.bytes());
+                    gdump("g_x_scales", gate_scales.data, gate_scales.bytes());
+                    gdump("gu_weight_divs", weights.routed_gate_up.weight_scale_divisors,
+                          kExperts * sizeof(float));
+                    gdump("down_weight_divs", weights.routed_down.weight_scale_divisors,
+                          kExperts * sizeof(float));
+                }
+            }
             const GroupedWork<GroupedGateRows> gate_work{static_cast<const int*>(job_count.data),
                                                          static_cast<const int*>(job_experts.data),
                                                          static_cast<const int*>(job_columns.data),
@@ -1290,6 +1321,33 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
                 static_cast<const int*>(packed_expert.data), weights.routed_down.input_scale_divisors,
                 static_cast<std::uint8_t*>(down_codes.data),
                 static_cast<std::uint8_t*>(down_scales.data), assignments, kIntermediate);
+            {
+                cudaStreamCaptureStatus qcapture = cudaStreamCaptureStatusNone;
+                cudaStreamIsCapturing(stream, &qcapture);
+                const bool qdump = std::getenv("NINFER_MTP_DUMP") != nullptr &&
+                                   qcapture == cudaStreamCaptureStatusNone &&
+                                   ninfer_moe_parity_window.load(std::memory_order_relaxed) != 0;
+                if (qdump) {
+                    auto qdump = [&](const char* nm, const void* p, std::size_t by) {
+                        if (p == nullptr || by == 0) { return; }
+                        std::string path =
+                            std::string(std::getenv("NINFER_MTP_DUMP")) + "/" + nm + ".bin";
+                        if (FILE* f = fopen(path.c_str(), "wb"); f != nullptr) {
+                            void* host = std::malloc(by);
+                            CUDA_CHECK(cudaMemcpyAsync(host, p, by, cudaMemcpyDeviceToHost, stream));
+                            CUDA_CHECK(cudaStreamSynchronize(stream));
+                            fwrite(host, 1, by, f);
+                            std::fclose(f);
+                            std::free(host);
+                        }
+                    };
+                    qdump("q_h_bf16", routed_activation.data, routed_activation.bytes());
+                    qdump("q_h_codes", down_codes.data, down_codes.bytes());
+                    qdump("q_h_scales", down_scales.data, down_scales.bytes());
+                    qdump("q_packed_expert", packed_expert.data, packed_expert.bytes());
+                    std::fprintf(stderr, "[qdump] assignments %zu\n", assignments);
+                }
+            }
             grouped_output = workspace.alloc(DType::BF16, {kHidden, assignments});
             detail::flash_next::Nvfp4W4a4MaterializedActivation down_input{
                 static_cast<const std::uint8_t*>(down_codes.data),

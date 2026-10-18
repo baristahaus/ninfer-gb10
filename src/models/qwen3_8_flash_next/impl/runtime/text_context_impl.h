@@ -54,6 +54,7 @@
 
 extern std::atomic<int> ninfer_mtp_phase;
 extern std::atomic<int> ninfer_moe_dump_armed;
+extern std::atomic<int> ninfer_moe_parity_window;
 
 #include "models/qwen3_8_flash_next/impl/ple_table.h"
 
@@ -499,6 +500,43 @@ void TextContext::mtp_forward_flash_next(const Tensor& ids, const Tensor& hidden
 #else
     cudaStream_t stream = ctx_.stream;
     ninfer_mtp_phase.store(1);
+    static std::atomic<int> parity_call_n{0};
+    {
+        static std::atomic<int> core_call_log{0};
+        int ci = core_call_log.fetch_add(1);
+        if (ci < 6) {
+            std::fprintf(stderr, "[core-call] %d tokens=%d\n", ci, static_cast<int>(hidden.ne[1]));
+        }
+    }
+    static int parity_call_target = -1;
+    if (const char* pc = std::getenv("NINFER_MTP_PARITY_CALL")) {
+        parity_call_target = atoi(pc);
+    }
+    const int parity_index = parity_call_n.fetch_add(1);
+    const bool parity_call =
+        parity_call_target >= 0 ? parity_index == parity_call_target : parity_index == 0;
+    if (parity_call) {
+        ninfer_moe_parity_window.store(1, std::memory_order_release);
+        if (const char* pd = std::getenv("NINFER_MTP_DUMP")) {
+            auto pdump = [&](const char* nm, const void* ptr, std::size_t by) {
+                if (ptr == nullptr || by == 0) { return; }
+                std::string path = std::string(pd) + "/" + nm + ".bin";
+                if (FILE* f = fopen(path.c_str(), "wb"); f != nullptr) {
+                    void* host = std::malloc(by);
+                    CUDA_CHECK(cudaMemcpyAsync(host, ptr, by, cudaMemcpyDeviceToHost, stream));
+                    CUDA_CHECK(cudaStreamSynchronize(stream));
+                    fwrite(host, 1, by, f);
+                    std::fclose(f);
+                    std::free(host);
+                }
+            };
+            pdump("core_hidden", hidden.data, hidden.bytes());
+            pdump("core_ids", ids.data, ids.bytes());
+            if (input_embeddings != nullptr) {
+                pdump("core_embeddings", input_embeddings->data, input_embeddings->bytes());
+            }
+        }
+    }
     const int tokens    = static_cast<int>(ids.numel());
     const int batch     = active_sequence_batch_ == 0 ? 1 : active_sequence_batch_;
     const int width     = tokens / batch;
@@ -549,7 +587,18 @@ void TextContext::mtp_forward_flash_next(const Tensor& ids, const Tensor& hidden
         }
     };
     static std::atomic<int> mtp_dump_count{0};
-    const bool mtp_dump_on = mtp_dump_count.fetch_add(1) == 0;
+    static std::atomic<bool> mtp_dump_done{false};
+    bool mtp_dump_expected = false;
+    if (!mtp_dump_done.load(std::memory_order_relaxed) &&
+        ninfer_moe_parity_window.load(std::memory_order_relaxed) != 0) {
+        mtp_dump_expected = true;
+        mtp_dump_done.store(true, std::memory_order_relaxed);
+    }
+    const bool mtp_dump_on = mtp_dump_expected;
+    (void)mtp_dump_count;
+    if (parity_call) {
+        mtp_dump("s1_parity", hyper.data, hyper.bytes());
+    }
     if (mtp_dump_on) {
         mtp_dump("s1_hyper_in", hyper.data, hyper.bytes());
         auto wdump = [&](const char* nm, const Weight& w) {
@@ -647,6 +696,71 @@ void TextContext::mtp_forward_flash_next(const Tensor& ids, const Tensor& hidden
         block_input, cache_positions, mrope_positions, valid, rows, mtp_.payload->attention, cache,
         envelope, block_output, work_, stream, bf16_gemm_,
         {.selected_indices = selected_qsa_indices, .reused_indices = reused_qsa_indices});
+    if (mtp_dump_on) {
+        mtp_dump("qs_cache_pos", cache_positions.data, cache_positions.bytes());
+        mtp_dump("qs_mrope", mrope_positions.data, mrope_positions.bytes());
+        mtp_dump("qs_valid", valid.data, valid.bytes());
+        mtp_dump("qs_rows", rows.data, rows.bytes());
+        if (cache.block_tables.data != nullptr) {
+            mtp_dump("qs_block_tables", cache.block_tables.data, cache.block_tables.bytes());
+            const int logical_pages = static_cast<int>(cache.block_tables.ne[0]);
+            const int table_rows = static_cast<int>(cache.block_tables.ne[1]);
+            std::vector<int> host_rows(static_cast<size_t>(rows.ne[0]));
+            CUDA_CHECK(cudaMemcpy(host_rows.data(), rows.data, rows.bytes(),
+                                  cudaMemcpyDeviceToHost));
+            std::vector<int> host_tables(static_cast<size_t>(logical_pages) *
+                                         static_cast<size_t>(table_rows));
+            CUDA_CHECK(cudaMemcpy(host_tables.data(), cache.block_tables.data,
+                                  cache.block_tables.bytes(), cudaMemcpyDeviceToHost));
+            std::vector<int> host_pos(static_cast<size_t>(cache_positions.ne[0]) *
+                                      static_cast<size_t>(cache_positions.ne[1]));
+            CUDA_CHECK(cudaMemcpy(host_pos.data(), cache_positions.data, cache_positions.bytes(),
+                                  cudaMemcpyDeviceToHost));
+            int sequence_length = 0;
+            for (int v : host_pos) { sequence_length = std::max(sequence_length, v + 1); }
+            const int pages_needed =
+                (sequence_length + static_cast<int>(cache.k_pages.ne[1]) - 1) /
+                static_cast<int>(cache.k_pages.ne[1]);
+            std::vector<int> used;
+            for (int b = 0; b < static_cast<int>(host_rows.size()); ++b) {
+                const int r = host_rows[static_cast<size_t>(b)];
+                for (int p = 0; p < pages_needed && p < logical_pages; ++p) {
+                    const int id = host_tables[static_cast<size_t>(p) +
+                                               static_cast<size_t>(logical_pages) * r];
+                    if (id >= 0 && std::find(used.begin(), used.end(), id) == used.end()) {
+                        used.push_back(id);
+                    }
+                }
+            }
+            auto dump_pages = [&](const char* nm, const Tensor& pool, std::size_t page_bytes) {
+                for (int id : used) {
+                    const auto offset = static_cast<std::size_t>(id) * page_bytes;
+                    const std::string name = std::string(nm) + "_" + std::to_string(id);
+                    mtp_dump(name.c_str(), static_cast<const std::uint8_t*>(pool.data) + offset,
+                             page_bytes);
+                }
+            };
+            const std::size_t tokens_per_page = static_cast<std::size_t>(cache.k_pages.ne[1]);
+            const std::size_t heads = static_cast<std::size_t>(cache.k_pages.ne[2]);
+            dump_pages("qs_k", cache.k_pages, 256 * tokens_per_page * heads);
+            dump_pages("qs_v", cache.v_pages, 256 * tokens_per_page * heads);
+            if (cache.k_scale_pages.data != nullptr) {
+                dump_pages("qs_ks", cache.k_scale_pages,
+                           static_cast<std::size_t>(cache.k_scale_pages.ne[0]) * tokens_per_page *
+                               heads * 2);
+                dump_pages("qs_vs", cache.v_scale_pages,
+                           static_cast<std::size_t>(cache.v_scale_pages.ne[0]) * tokens_per_page *
+                               heads * 2);
+            }
+            for (std::size_t a = 0; a < cache.auxiliary_pages.size(); ++a) {
+                const Tensor& aux = cache.auxiliary_pages[a];
+                dump_pages(a == 0 ? "qs_aux0" : "qs_aux1", aux,
+                           static_cast<std::size_t>(aux.ne[0]) * tokens_per_page * heads *
+                               (aux.dtype == DType::BF16 ? 2 : 4));
+            }
+        }
+    }
+
     ninfer_moe_dump_armed.store(1, std::memory_order_release);
     ops::flash_next_moe(block_input, mtp_.payload->post_mixer, block_output, work_, stream,
                         bf16_gemm_);
@@ -679,6 +793,7 @@ void TextContext::mtp_forward_flash_next(const Tensor& ids, const Tensor& hidden
         mtp_dump("s4_sample", sample_hidden.data, sample_hidden.bytes());
         std::fprintf(stderr, "[mtp-dump] tokens=%d\n", tokens);
     }
+    if (parity_call) { ninfer_moe_parity_window.store(0, std::memory_order_release); }
     (void)envelope;
 #endif
 }
@@ -731,6 +846,21 @@ void TextContext::mtp_prefill_chunk(const Tensor& ids, const Tensor& hidden,
         CUDA_CHECK(cudaMemcpyAsync(final_hidden->data, last_predictor.data, last_predictor.bytes(),
                                    cudaMemcpyDeviceToDevice, ctx_.stream));
         Tensor last_sample = sample.slice(1, T - 1, 1);
+        if (const char* pd = std::getenv("NINFER_MTP_DUMP")) {
+            static std::atomic<int> prefill_sample_dump{0};
+            if (prefill_sample_dump.fetch_add(1) == 0) {
+                std::string path = std::string(pd) + "/pf_sample_last.bin";
+                if (FILE* f = fopen(path.c_str(), "wb"); f != nullptr) {
+                    void* host = std::malloc(last_sample.bytes());
+                    CUDA_CHECK(cudaMemcpyAsync(host, last_sample.data, last_sample.bytes(),
+                                               cudaMemcpyDeviceToHost, ctx_.stream));
+                    CUDA_CHECK(cudaStreamSynchronize(ctx_.stream));
+                    fwrite(host, 1, last_sample.bytes(), f);
+                    std::fclose(f);
+                    std::free(host);
+                }
+            }
+        }
         proposal_argmax(last_sample, *logits, *draft_token);
     }
     return;
@@ -840,7 +970,49 @@ void TextContext::proposal_argmax(const Tensor& hidden, Tensor& logits, Tensor& 
                                      static_cast<std::uint64_t>(T));
     if (proposal_head_ != nullptr) {
         Tensor proposal_logits = work_.alloc(DType::BF16, {proposal_head_n_, T});
+        if (const char* pd = std::getenv("NINFER_MTP_DUMP")) {
+            static std::atomic<int> prop_dump{0};
+            if (prop_dump.fetch_add(1) < 4) {
+                auto pdump = [&](const char* nm, const void* ptr, std::size_t by) {
+                    std::string path = std::string(pd) + "/" + nm + ".bin";
+                    if (FILE* f = fopen(path.c_str(), "wb"); f != nullptr) {
+                        void* host = std::malloc(by);
+                        CUDA_CHECK(cudaMemcpyAsync(host, ptr, by, cudaMemcpyDeviceToHost,
+                                                   ctx_.stream));
+                        CUDA_CHECK(cudaStreamSynchronize(ctx_.stream));
+                        fwrite(host, 1, by, f);
+                        std::fclose(f);
+                        std::free(host);
+                    }
+                };
+                static std::atomic<int> pr_call_n{0};
+                const int pr_call = pr_call_n.fetch_add(1);
+                char prtag[16];
+                std::snprintf(prtag, sizeof(prtag), "%d", pr_call);
+                std::string prname = std::string("pr_hidden_") + prtag;
+                pdump(prname.c_str(), hidden.data, hidden.bytes());
+                pdump("pr_ids", proposal_head_ids_, sizeof(std::int32_t) * proposal_head_n_);
+                std::fprintf(stderr, "[proposedump-call] %d\n", pr_call);
+            }
+            std::fprintf(stderr, "[proposedump] head_n=%d valid=%d T=%d\n", proposal_head_n_,
+                         static_cast<int>(Variant::draft_head_valid_rows), T);
+        }
         ops::linear(hidden, *proposal_head_, proposal_logits, ctx_.stream, bf16_gemm_);
+        if (const char* pd = std::getenv("NINFER_MTP_DUMP")) {
+            static std::atomic<int> prop_logits_dump{0};
+            if (prop_logits_dump.fetch_add(1) == 0) {
+                std::string path = std::string(pd) + "/pr_logits.bin";
+                if (FILE* f = fopen(path.c_str(), "wb"); f != nullptr) {
+                    void* host = std::malloc(proposal_logits.bytes());
+                    CUDA_CHECK(cudaMemcpyAsync(host, proposal_logits.data, proposal_logits.bytes(),
+                                               cudaMemcpyDeviceToHost, ctx_.stream));
+                    CUDA_CHECK(cudaStreamSynchronize(ctx_.stream));
+                    fwrite(host, 1, proposal_logits.bytes(), f);
+                    std::fclose(f);
+                    std::free(host);
+                }
+            }
+        }
         if constexpr (Variant::flash_next) {
             constexpr int kRerankTile        = 512;
             constexpr int kCandidatesPerTile = 2;
@@ -853,6 +1025,27 @@ void TextContext::proposal_argmax(const Tensor& hidden, Tensor& logits, Tensor& 
             ops::shortlist_exact_argmax(hidden, proposal_logits, shortlist_rows,
                                         *lm_head_, proposal_head_ids_, candidate_ids,
                                         candidate_scores, proposal_tokens, ctx_.stream);
+            if (const char* pd = std::getenv("NINFER_MTP_DUMP")) {
+                static std::atomic<int> cand_dump{0};
+                if (cand_dump.fetch_add(1) == 0) {
+                    auto cdump = [&](const char* nm, const void* ptr, std::size_t by) {
+                        std::string path = std::string(pd) + "/" + nm + ".bin";
+                        if (FILE* f = fopen(path.c_str(), "wb"); f != nullptr) {
+                            void* host = std::malloc(by);
+                            CUDA_CHECK(cudaMemcpyAsync(host, ptr, by, cudaMemcpyDeviceToHost,
+                                                       ctx_.stream));
+                            CUDA_CHECK(cudaStreamSynchronize(ctx_.stream));
+                            fwrite(host, 1, by, f);
+                            std::fclose(f);
+                            std::free(host);
+                        }
+                    };
+                    cdump("pr_cand_ids", candidate_ids.data, candidate_ids.bytes());
+                    cdump("pr_cand_scores", candidate_scores.data, candidate_scores.bytes());
+                    cdump("pr_out", proposal_tokens.data, proposal_tokens.bytes());
+                    cdump("pr_head_q", proposal_head_->qdata, proposal_head_->payload_bytes);
+                }
+            }
         } else {
             ops::argmax(proposal_logits, proposal_tokens, proposal_head_n_, ctx_.stream);
             ops::proposal_remap_token_ids(proposal_tokens, proposal_head_ids_, proposal_head_n_,

@@ -5,6 +5,7 @@
 #include "ops/linear/exl3/exl3_dense_dispatch.h"
 #include "ops/linear/exl3/exl3_prefill.h"
 #include "ops/linear/fp8/fp8_dispatch.h"
+#include "ops/linear/mxfp8/mxfp8_dispatch.h"
 #include "ops/linear/nvfp4/nvfp4_dispatch.h"
 #include "ops/linear/q4/q4_dispatch.h"
 #include "ops/linear/q5/q5_dispatch.h"
@@ -134,6 +135,9 @@ void dispatch_linear(const Tensor& x, const Weight& w, Tensor& out, LinearPolicy
             detail::bf16_dispatch(u, dense, out, policy, stream);
             return;
         }
+    case QType::MXFP8:
+        detail::mxfp8_dispatch(x, w, out, policy, workspace, stream);
+        return;
     case QType::FP32:
     case QType::INT32:
         break;
@@ -197,6 +201,9 @@ std::size_t linear_workspace_capacity_bytes(QType qtype, std::int32_t output_row
         }
         return bytes;
     }
+    case QType::MXFP8:
+        return detail::mxfp8_linear_workspace_capacity_bytes(output_rows, input_rows, policy,
+                                                             min_tokens, max_tokens);
     case QType::FP32:
     case QType::INT32:
         break;

@@ -32,6 +32,8 @@ struct Options {
 
     KvCacheStorage kv_cache = KvCacheStorage::BFloat16;
     SpeculativeOptions speculative;
+    std::filesystem::path mtp_capture_path;
+    bool token_logprobs = false;
     bool enable_vision  = false;
     bool use_cuda_graph = true;
 

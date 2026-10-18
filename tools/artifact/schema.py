@@ -11,7 +11,7 @@ from .layouts import EXL3_DENSE_V1, EXL3_EXPERT_BANK_V1, align_up, encoded_size,
 
 U64_MAX = (1 << 64) - 1
 RAW_BYTES_V1 = "raw_bytes_v1"
-ACTIVATION_POLICIES = frozenset(("A16Only", "AllowA8", "AllowA4"))
+ACTIVATION_POLICIES = frozenset(("A16Only", "AllowA8", "AllowA4", "AllowA16"))
 
 
 class ArtifactError(ValueError):

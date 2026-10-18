@@ -208,7 +208,11 @@ long-decode, and long-context inputs.
 Speculative decoding is disabled by default. Select MTP with one to five draft positions, or the
 35B-A3B DFlash or Qwen3.8-27B DFlash2 backend with one to fifteen. Both masked-draft backends
 may be combined with `--vision`.
-`--lm-head-draft` selects the optimized proposal head and requires a selected backend:
+`--lm-head-draft` selects the optimized proposal head and requires a selected backend.
+`--proposal-head-rows N` truncates the optimized proposal head to its first N frequency-ranked
+rows (0, the default, uses the artifact's full head). N must be a multiple of 128 of at least
+1024. This trades draft quality for a cheaper draft pass and is supported for Flash-Next MTP
+only; it requires `--spec mtp --lm-head-draft`:
 
 ```bash
 ./build/apps/ninfer models/qwen3_6_35b_a3b.ninfer \
@@ -242,6 +246,20 @@ Only one speculative backend can be enabled per Engine. The published [performan
 use MTP with three draft tokens and DFlash with seven draft tokens (block length eight), both with
 the optimized proposal head. DFlash accepts one to fifteen draft tokens; seven forms the measured
 block length eight, while fifteen uses the maximum supported block length sixteen.
+
+`--mtp-capture FILE` records every batched MTP decode round to a binary file for offline analysis
+(Flash-Next MTP only; requires `--spec mtp`). Each record holds one row's proposal ids, the
+verified committed tokens, the accept count, and the KV position, taken from data that is already
+host-resident at the round boundary, so capture adds no device work. Combined with
+`--token-logprobs`, each record also carries the target distribution's top-20 alternatives for
+every verify column, including rejected-draft positions — the near-miss signal an accept
+predictor trains on. `tools/mtp_capture_summary.py`
+summarizes a capture: acceptance by draft position and by context position, extent distribution,
+and — with `--artifact` and `--rows N` — how many rejected drafts fall outside the first N rows of
+the optimized proposal head, which is the signal that sizes `--proposal-head-rows`. A disk write
+failure stops capture and drops later records rather than stopping inference.
+`tools/gb10/tune_proposal_rows.sh` wraps the full loop: one full-head bench pass with capture,
+then the acceptance-loss table over candidate prefix sizes to pick `--proposal-head-rows`.
 
 ## Common options
 

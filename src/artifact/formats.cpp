@@ -17,6 +17,7 @@ constexpr std::array kFormats = {
     std::pair{QType::Q6_G64_FP16, std::string_view{"q6_g64_fp16"}},
     std::pair{QType::Q8_G32_FP16, std::string_view{"q8_g32_fp16"}},
     std::pair{QType::NVFP4, std::string_view{"nvfp4"}},
+    std::pair{QType::MXFP8, std::string_view{"mxfp8"}},
     std::pair{QType::FP8_E4M3FN_ROW_BF16, std::string_view{"fp8_e4m3fn_row_bf16"}},
     std::pair{QType::EXL3, std::string_view{"exl3"}},
 };
@@ -25,6 +26,8 @@ constexpr std::array kLayouts = {
     std::pair{QuantLayout::Contiguous, std::string_view{"contiguous_le_v1"}},
     std::pair{QuantLayout::RowSplit, std::string_view{"row_split_k128_v1"}},
     std::pair{QuantLayout::RowScale, std::string_view{"row_scale_v1"}},
+    std::pair{QuantLayout::DenseBlockScaleK32Mxfp8, std::string_view{"dense_block_scale_k32_mxfp8_v1"}},
+    std::pair{QuantLayout::BlockScaleK16, std::string_view{"block_scale_k16_v1"}},
     std::pair{QuantLayout::BlockScaleK16M128x4, std::string_view{"block_scale_k16_m128x4_v1"}},
     std::pair{QuantLayout::Exl3ExpertBank, std::string_view{"exl3_expert_bank"}},
     std::pair{QuantLayout::Exl3Dense, std::string_view{"exl3_dense_v1"}},

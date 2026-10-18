@@ -1,4 +1,5 @@
 #include "models/qwen3_8_flash_next/impl/runtime/instance.h"
+#include "models/qwen3_8_flash_next/impl/runtime/mtp_capture.h"
 #include "models/qwen3_8_flash_next/impl/runtime/program.h"
 #include "models/qwen3_8_flash_next/impl/runtime/rebuild_work.h"
 
@@ -21,6 +22,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -32,6 +34,10 @@
 #include <string>
 #include <type_traits>
 #include <utility>
+
+// Defined at global scope in ops/launcher/hyperconnection.cu; gates the
+// NINFER_MTP_DUMP first-round dump sites.
+extern std::atomic<int> ninfer_mtp_phase;
 
 namespace ninfer::models::qwen3_8_flash_next::detail::NINFER_QWEN38_FLASH_NEXT_RUNTIME_NS {
 namespace {
@@ -991,6 +997,14 @@ ProgramImplCore::ProgramImplCore(const LoadedModelData& model_in, const Sequence
 
     io = qwen3_8_flash_next::RoundState(backing, plan.persistent.round);
     io.report_token_logprobs = plan.token_logprobs;
+    if (!plan.mtp_capture_path.empty()) {
+        if (speculative_backend != SpeculativeBackend::Mtp) {
+            throw std::invalid_argument("--mtp-capture requires --spec mtp");
+        }
+        mtp_capture = qwen3_8_flash_next::detail::MtpCaptureSink::open(
+            plan.mtp_capture_path, plan.draft_window, TextConfig::token_domain,
+            plan.token_logprobs ? ops::kMaxReportedLogprobRanks : 0);
+    }
     if (io.report_token_logprobs && speculative_backend == SpeculativeBackend::DFlash) {
         // The DFlash verify schedule publishes tokens this report does not cover, so one report per
         // generated token could not hold. The 125B-A6B instance selects no DFlash companion; rejecting
@@ -1025,7 +1039,7 @@ ProgramImplCore::ProgramImplCore(const LoadedModelData& model_in, const Sequence
         if (model.ple_table == nullptr) {
             throw std::logic_error("Flash-Next MTP rounds require the PLE table");
         }
-        ple_gather_stage.emplace(*model.ple_table);
+        ple_gather_stage.emplace(*model.ple_table, model.ple_nvfp4);
     }
 #endif
     if (plan.persistent.flash_ple_records) {
@@ -12240,18 +12254,21 @@ ProgramImplCore::decode_ordinary_batch(std::span<const std::uint32_t> lanes,
                       sequence.ledger.end(), suffix.begin());
             std::vector<qwen3_8_flash_next::PleIds> ids(suffix_size);
             qwen3_8_flash_next::compute_ple_ids(suffix, ids);
-            auto* ple_bytes = static_cast<std::byte*>(flash_ple_host->data()) + row * 2560U;
-            qwen3_8_flash_next::gather_ple_fp8(
+            auto* ple_bytes = static_cast<std::byte*>(flash_ple_host->data()) +
+                row * static_cast<std::size_t>(kPleStageBytesPerToken);
+            qwen3_8_flash_next::gather_ple_rows(
                 *model.ple_table,
+                model.ple_nvfp4,
                 std::span<const qwen3_8_flash_next::PleIds>(ids).subspan(suffix_size - 1U, 1U),
-                std::span<std::byte>(ple_bytes, 2560U));
+                std::span<std::byte>(ple_bytes, static_cast<std::size_t>(kPleStageBytesPerToken)));
 #endif
             materialize_sequence_kv(sequence, frontier + 1, 0);
         }
 
 #ifdef NINFER_QWEN38_FLASH_NEXT
         CUDA_CHECK(cudaMemcpyAsync(flash_decode_ple->data, flash_ple_host->data(),
-                                   lanes.size() * 2560U, cudaMemcpyHostToDevice, device.stream));
+                                   static_cast<std::size_t>(lanes.size()) * static_cast<std::size_t>(kPleStageBytesPerToken),
+                                   cudaMemcpyHostToDevice, device.stream));
 #endif
 
         schedule::OrdinaryBatchContext schedule_state{
@@ -12338,6 +12355,9 @@ runtime::BatchedGeneratedRound
 ProgramImplCore::decode_mtp_batch(std::span<const std::uint32_t> lanes,
                                   std::span<const runtime::RoundBudget> budgets,
                                   runtime::ExecutionTiming* failed_timing) {
+    // The NINFER_MTP_DUMP dump sites gate on this counter; raise it at the first MTP
+    // round so each dump site fires once on that round's tensors.
+    ninfer_mtp_phase.store(1, std::memory_order_release);
     nvtx::ScopedRange round_range(nvtx::Name::DecodeMtpRound, nvtx::Category::Mtp,
                                   static_cast<std::uint64_t>(lanes.size()));
     runtime::ExecutionTimingRecorder timing(runtime::ExecutionTimingPhase::Submit, failed_timing);
@@ -12527,6 +12547,8 @@ ProgramImplCore::decode_mtp_batch(std::span<const std::uint32_t> lanes,
         egress_range.emplace(nvtx::Name::DecodeMtpEgress, nvtx::Category::Mtp,
                              static_cast<std::uint64_t>(lanes.size()));
         const double seconds = std::chrono::duration<double>(Clock::now() - started).count();
+        const std::uint64_t capture_round =
+            mtp_capture != nullptr ? ++mtp_capture_round : 0;
         for (std::size_t row = 0; row < lanes.size(); ++row) {
             SequenceState& sequence       = active_sequence(lanes[row]);
             RequestControl& request       = requests[lanes[row]];
@@ -12549,6 +12571,32 @@ ProgramImplCore::decode_mtp_batch(std::span<const std::uint32_t> lanes,
             validate_licensed_tokens(row_tokens);
             const std::uint32_t pcur =
                 static_cast<std::uint32_t>(mtp_host_ingress->current_extents[row]);
+            if (mtp_capture != nullptr) {
+                const std::size_t report_base = static_cast<std::size_t>(row) * width;
+                mtp_capture->record(
+                    capture_round, lanes[row], base_E, pcur,
+                    std::span<const TokenId>(mtp_host_ingress->current_drafts.data() +
+                                                 static_cast<std::ptrdiff_t>(row) * draft_window,
+                                             draft_window),
+                    row_tokens,
+                    io.report_token_logprobs
+                        ? std::span<const float>(mtp_host_egress->token_logprobs.data() +
+                                                     report_base,
+                                                 width)
+                        : std::span<const float>{},
+                    io.report_token_logprobs
+                        ? std::span<const TokenId>(
+                              mtp_host_egress->top_ids.data() +
+                                  report_base * ops::kMaxReportedLogprobRanks,
+                              width * ops::kMaxReportedLogprobRanks)
+                        : std::span<const TokenId>{},
+                    io.report_token_logprobs
+                        ? std::span<const float>(
+                              mtp_host_egress->top_logprobs.data() +
+                                  report_base * ops::kMaxReportedLogprobRanks,
+                              width * ops::kMaxReportedLogprobRanks)
+                        : std::span<const float>{});
+            }
             if (pcur == 0) {
                 request.speculative_stats.fallback_steps += 1;
             } else {

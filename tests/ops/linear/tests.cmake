@@ -32,6 +32,10 @@ ninfer_add_op_test(ninfer_linear_fp8_a16_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/test_fp8_a16.cpp"
   LIBRARIES ninfer_linear_test_support)
 
+ninfer_add_op_test(ninfer_linear_mxfp8_a16_test
+  SOURCES "${CMAKE_CURRENT_LIST_DIR}/test_mxfp8_a16.cpp"
+  LIBRARIES ninfer_linear_test_support)
+
 ninfer_add_op_test(ninfer_linear_fp8_a8_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/test_fp8_a8.cpp"
   LIBRARIES ninfer_linear_test_support)

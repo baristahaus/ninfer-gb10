@@ -86,7 +86,8 @@ std::string usage_text(const char* argv0) {
            "       [--device N]\n"
            "       [--kv-dtype bf16|int8|fp8|nvfp4|k8v4] [--spec mtp|dflash|dflash2 --draft-tokens "
            "N]\n"
-           "       [--lm-head-draft]\n"
+           "       [--lm-head-draft] [--proposal-head-rows N] [--mtp-capture FILE]\n"
+           "       [--token-logprobs]\n"
            "       [--temperature F] [--top-p F] [--top-k N] [--min-p F]\n"
            "       [--presence-penalty F] [--frequency-penalty F] [--seed N] [--greedy]\n"
            "       [--stop-token-id N]... [--stop <text>]... [--reasoning-stop <text>]...\n"
@@ -163,6 +164,12 @@ Options parse_options(int argc, char** argv) {
             options.speculative.draft_tokens = parse_u32(value(arg), "draft-tokens");
         } else if (arg == "--lm-head-draft") {
             options.speculative.proposal_head = ProposalHead::Optimized;
+        } else if (arg == "--proposal-head-rows") {
+            options.speculative.proposal_head_rows = parse_u32(value(arg), "proposal-head-rows");
+        } else if (arg == "--mtp-capture") {
+            options.mtp_capture_path = value(arg);
+        } else if (arg == "--token-logprobs") {
+            options.token_logprobs = true;
         } else if (arg == "--raw-output") {
             options.raw_output = true;
         } else if (arg == "--print-token-ids") {
@@ -242,6 +249,10 @@ Options parse_options(int argc, char** argv) {
         throw std::invalid_argument("--kv-capacity must be at least --max-context");
     }
     product::validate_speculative_cli_options(options.speculative);
+    if (!options.mtp_capture_path.empty() &&
+        options.speculative.backend != SpeculativeBackend::Mtp) {
+        throw std::invalid_argument("--mtp-capture requires --spec mtp");
+    }
     if (options.enable_thinking == false && options.reasoning_effort &&
         *options.reasoning_effort != ReasoningEffort::None) {
         throw std::invalid_argument("--reasoning-effort cannot be combined with --no-thinking");

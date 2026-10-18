@@ -10,6 +10,11 @@ ninfer_add_test(ninfer_pretty_logging_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_pretty_logging.cpp"
   LIBRARIES ninfer_product_logging)
 
+ninfer_add_test(ninfer_mtp_capture_test
+  SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_mtp_capture.cpp"
+          ${PROJECT_SOURCE_DIR}/src/models/qwen3_8_flash_next/impl/runtime/mtp_capture.cpp
+  LIBRARIES ninfer_core)
+
 ninfer_add_test(ninfer_perplexity_evaluation_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_perplexity_evaluation.cpp"
           ${PROJECT_SOURCE_DIR}/apps/perplexity/evaluation.cpp

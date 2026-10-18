@@ -284,9 +284,11 @@ Frontend 和 Parameters，最后释放 Model backing。Reader 与上传 staging 
 | 一个 Q4 parent 保存 Q/K，另一个 Q5 parent 保存 gate/V | 准备两个权重参数，使用双权重投影入口 |
 | 一个完整 FP8 或 NVFP4 parent 按顺序保存 Q/K/gate/V | 准备一个权重参数，使用单权重投影入口 |
 
-View 保留完整 parent 的几何、planes 和元素范围；原生准备按入口要求解释这些引用。
-共享对象只驻留一次，各使用位置保留独立的 Use。激活许可为 `A16Only={A16}`、
-`AllowA8={A16,A8}`、`AllowA4={A16,A8,A4}`；融合调用取相关 Use 的许可交集并处理所需辅助值。
+Views retain the full parent geometry, planes, and element ranges; native preparation interprets
+those references as each entry requires. Shared objects are resident once, and each use site keeps
+its own Use. Activation policies are `A16Only={A16}`, `AllowA8={A16,A8}`, `AllowA4={A16,A8,A4}`,
+and `AllowA16={A16}` (BF16 activations only, for W4A16 expert banks); a fused call takes the
+permission intersection of the relevant Uses and handles the required auxiliary values.
 
 模型代码直接维护有限调用写法、跨 Op 融合和阶段关系；闭合计算及其 shape/格式分派属于 Op。
 Reader、binder、原生参数准备、容量查询、warmup 和实际执行各自检查所消费的合同。

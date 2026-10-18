@@ -15,6 +15,8 @@ The storage registry contains exactly these identities:
 | `row_split_k128_v1` | tensor layout | `q4_g64_fp16`, `q5_g64_fp16`, `q6_g64_fp16`, `q8_g32_fp16` | rank 2 `[N,K]` | 256 bytes |
 | `block_scale_k16_m128x4_v1` | tensor layout | `nvfp4` | rank 2 `[N,K]`, `N % 128 == 0`, `K % 64 == 0` | 256 bytes |
 | `row_scale_v1` | tensor layout | `fp8_e4m3fn_row_bf16` | rank 2 `[N,K]` | 256 bytes |
+| `dense_block_scale_k32_mxfp8_v1` | tensor layout | `mxfp8` | rank 2 `[N,K]`, `K % 32 == 0` | 256 bytes |
+| `block_scale_k16_v1` | tensor layout | `nvfp4` | rank 2 `[N,K]`, `K % 16 == 0` | 256 bytes |
 | `expert_block_scale_k16_m128x4_v1` | tensor layout | `nvfp4` | rank 3 `[E,N,K]`, `N % 128 == 0`, `K % 64 == 0` | 256 bytes |
 | `exl3_expert_bank` | tensor layout | `exl3` | rank 2 `[E*N,K]`, `K % 128 == 0`, `N % 128 == 0`, byte size data-dependent | 256 bytes |
 | `exl3_dense_v1` | tensor layout | `exl3` | rank 2 `[N,K]`, `K % 128 == 0`, `N % 128 == 0`, byte size data-dependent | 256 bytes |
@@ -393,7 +395,69 @@ encoded by concatenating the selected code rows, recomputing the scale-plane ali
 row count, and appending the selected scale words in the same row order. It does not decode or
 requantize either plane.
 
-## 8. `raw_bytes_v1`
+## 8. `dense_block_scale_k32_mxfp8_v1`
+
+`dense_block_scale_k32_mxfp8_v1` stores only rank-two `mxfp8` matrices `[N,K]` with positive
+dimensions and `K % 32 == 0`. It adds no logical or physical matrix padding. Let:
+
+```text
+code_plane_bytes   = N * K
+scale_plane_offset = align_up(code_plane_bytes, 256)
+scale_plane_bytes  = N * K / 32
+payload_bytes      = scale_plane_offset + scale_plane_bytes
+```
+
+The payload begins with one row-major E4M3FN code byte per logical weight; coordinate `[n,k]` is
+stored at code-plane offset `n * K + k`. Zero bytes fill the interval from `code_plane_bytes` to
+`scale_plane_offset`. The scale plane contains one unsigned 8-bit UE8M0 exponent word per K-axis
+group of 32, in row-major `[N, K/32]` order; the word for row `n`, group `g = floor(k/32)` begins
+at `scale_plane_offset + n * (K/32) + g`. There is no global scale word: a UE8M0 exponent carries
+its own power-of-two scale (`2^(word - 127)`), so no separate multiplier is required.
+
+The layout stores the source words verbatim; it performs no numerical conversion in either
+direction. Code and scale validity and the represented-weight reconstruction `E4M3(code) * 2^(e-127)`
+are defined by `mxfp8` in `tensor-formats.md`.
+
+A logical row view consists of its `K` consecutive code bytes and its `K/32` consecutive scale
+words; those two spans are not one contiguous payload range. A standalone consecutive slice is
+encoded by concatenating the selected code rows, recomputing the scale-plane alignment for the new
+row count, and appending the selected scale words in the same row order.
+
+## 9. `block_scale_k16_v1`
+
+`block_scale_k16_v1` is the natural (unswizzled) `nvfp4` layout: rank-two matrices `[N,K]` with
+positive dimensions and `K % 16 == 0`. It adds no logical or physical matrix padding. Let:
+
+```text
+code_plane_bytes   = N * K / 2
+scale_plane_offset = align_up(code_plane_bytes, 256)
+scale_plane_bytes  = N * K / 16
+scale2_offset      = scale_plane_offset + scale_plane_bytes
+payload_bytes      = scale2_offset + 4
+```
+
+The payload begins with the row-major packed E2M1 code plane; within each packed code byte, the
+low nibble is the smaller K coordinate and the high nibble is the next coordinate. Row `n`'s
+`K/2` code bytes begin at code-plane offset `n * K / 2`. Zero bytes fill the interval from
+`code_plane_bytes` to `scale_plane_offset`. The scale plane is the natural row-major `[N, K/16]`
+E4M3FN group-scale word matrix; scale word `[n,g]` begins at `scale_plane_offset + n * (K/16) + g`.
+Unlike `block_scale_k16_m128x4_v1`, no scale swizzling is applied.
+
+The final four bytes are one little-endian FP32 `scale_2` word. It must be finite and strictly
+positive. It is a multiplier, not a weight divisor: the represented weight is
+`E2M1(code) * E4M3(scale) * scale_2`. The word exists because the packed-row source this layout
+ingests carries a global activation-free scale for its E2M1 magnitude range; the swizzled bank
+layout instead stores a per-matrix positive weight divisor with the opposite role.
+
+The layout stores the source words verbatim without swizzling, requantizing, or rescaling.
+Code and scale validity follow `nvfp4` in `tensor-formats.md`.
+
+A logical row view consists of its `K/2` code bytes and its `K/16` scale words; those two spans
+are not one contiguous payload range. A standalone consecutive slice is encoded by concatenating
+the selected code rows, recomputing the scale-plane alignment for the new row count, appending
+the selected scale words in the same row order, and copying the `scale_2` word.
+
+## 10. `raw_bytes_v1`
 
 `raw_bytes_v1` is a resource encoding, not a tensor layout. Its enclosing object payload is
 the resource byte string itself:
@@ -408,7 +472,7 @@ trailing padding. The resource object's JSON `bytes` is its exact nonzero length
 returns the complete span unchanged. A model contract assigns a resource name and interprets those
 bytes; the common encoding does not infer that meaning from the name.
 
-## 9. Decode boundary
+## 11. Decode boundary
 
 Layout decoding yields only persistent logical words:
 
@@ -419,13 +483,17 @@ Layout decoding yields only persistent logical words:
   matrix-level FP32 weight divisor;
 - `row_scale_v1` yields the natural row-major E4M3FN code words and one BF16 multiplier per logical
   row;
+- `dense_block_scale_k32_mxfp8_v1` yields the natural row-major E4M3FN code words and one UE8M0
+  exponent word per K-axis group of 32;
+- `block_scale_k16_v1` yields the natural row-major packed E2M1 words, the natural E4M3FN
+  group-scale words, and the FP32 `scale_2` word;
 - `raw_bytes_v1` yields the enclosing resource bytes.
 
 Dequantized values follow the reconstruction rule in `tensor-formats.md`. This document does
 not select a quantization encoder, output dtype, accumulation dtype, kernel, runtime device layout,
 or model consumer.
 
-## 10. Logical views and native operands
+## 12. Logical views and native operands
 
 Bindings address C-order logical element ranges of a parent object. The parent retains its full
 geometry and backing allocation, so a view can locate code and scale planes using the original

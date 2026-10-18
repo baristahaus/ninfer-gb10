@@ -193,6 +193,7 @@ Activation permissions are independent of the stored weight format:
 | `A16Only` | A16 |
 | `AllowA8` | A16, A8 |
 | `AllowA4` | A16, A8, A4 |
+| `AllowA16` | A16 |
 
 They permit choices; they do not force a kernel to use the lowest precision. A fused operation that
 shares one activation across several projections must respect the intersection of their

@@ -3,10 +3,10 @@
 Scope: one MTP-layer call (first mtp_forward_flash_next, T=18) starting from the
 layer input s1_hyper_in. Every stage is the verified implementation:
 
-  1. attention HC mix           (parity_full, verified)
+  1. attention HC mix           (verified in the consolidated draft_forward)
   2. QSA and MoE in parallel    (parity_qsa / parity_moe_w4a4, verified)
-  3. MLP HC mix + combine folds (parity_full, verified)
-  4. final HC mix -> sample     (parity_full, verified)
+  3. MLP HC mix + combine folds (verified in the consolidated draft_forward)
+  4. final HC mix -> sample     (verified in the consolidated draft_forward)
   5. proposal head (Q4_G64) -> per-512-tile top-2 -> id map -> fp8 lm_head exact
      rescore -> argmax          (parity_proposal, verified)
 

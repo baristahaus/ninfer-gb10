@@ -659,8 +659,6 @@ void TextContext::mtp_forward_flash_next(const Tensor& ids, const Tensor& hidden
     Tensor injection    = work_.alloc(DType::BF16, {4, tokens});
     ops::hyperconnection_mix(hyper, mtp_.payload->attention_hc, block_input, &injection, work_,
                              stream);
-    ops::hyperconnection_mix(hyper, mtp_.payload->attention_hc, block_input, &injection, work_,
-                             stream);
 
     Tensor cache_positions = positions.view({width, batch});
     // Three-axis MRoPE positions hold three values per token ([T,3] or [width,batch,3]); text

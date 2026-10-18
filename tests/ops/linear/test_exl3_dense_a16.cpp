@@ -22,6 +22,7 @@
 #include <cuda_runtime.h>
 
 #include "ops/linear/exl3/exl3_dense_dispatch.h"
+#include "core/decode_graph.h"
 
 #include <array>
 #include <cmath>
@@ -162,6 +163,72 @@ int exl3_dense_a16_conformance() {
     };
     failures += run_shape("EXL3_DENSE_A16", ActivationCompute::A16, mcg,
                           {2048, 5120, 907U, Comparison::Full, true, kHarness2048});
+
+    // The graph-replayed decode route on a row-sliced parent (the engine's captured
+    // mixer shape): the slice's baked scratch must be replay-stable.
+    {
+        quantized_weight::PackedWeight host = make_exl3_dense_weight(2048, 5120, 907U, 4, Codebook::Mcg);
+        DeviceBuffer device_weight(host.payload.size());
+        device_weight.copy_from_host(host.payload.data(), device_weight.bytes);
+        const Weight parent = host.device_weight(device_weight.p);
+        std::vector<std::uint16_t> activation_bits(static_cast<std::size_t>(5120) * 8);
+        for (std::size_t i = 0; i < activation_bits.size(); ++i) {
+            const std::uint64_t hash = quantized_weight::detail::mix64(908U * 0x100000001b3ULL + i);
+            const float magnitude = std::ldexp(1.0F + static_cast<float>(hash & 0xffU) / 256.0F,
+                                               -static_cast<int>((hash >> 8) % 4));
+            activation_bits[i] = test::f32_to_bf16(
+                (hash & 0x8000000000000000ULL) != 0 ? -magnitude : magnitude);
+        }
+        DeviceBuffer device_activation(activation_bits.size() * sizeof(std::uint16_t));
+        device_activation.copy_from_host(activation_bits.data(), device_activation.bytes);
+        for (const auto [begin, rows] : {std::pair{0, 1024}, {1024, 1024}}) {
+            const Weight slice = ops::detail::exl3_dense_slice(parent, begin, rows);
+            const auto capacity = ops::linear_workspace_capacity_bytes(
+                QType::EXL3, rows, 5120, ops::LinearPolicy::A16Only, 8, 8);
+            DeviceArena workspace(std::max<std::size_t>(capacity, 256));
+            DeviceBuffer output(static_cast<std::size_t>(rows) * 8 * sizeof(std::uint16_t));
+            Tensor input(device_activation.p, DType::BF16, {5120, 8});
+            Tensor destination(output.p, DType::BF16, {rows, 8});
+            DecodeGraphDefinition definition;
+            DecodeGraphExecutable graph;
+            DeviceContext context;
+            const auto launch = [&] {
+                ops::linear(input, slice, destination, ops::LinearPolicy::A16Only, workspace,
+                            context.stream);
+            };
+            cuda_check(cudaDeviceSynchronize(), "before slice graph capture");
+            definition.capture(context.stream, launch);
+            graph.instantiate(definition);
+            for (int replay = 0; replay < 2; ++replay) {
+                graph.launch(context.stream);
+            }
+            cuda_check(cudaDeviceSynchronize(), "synchronize slice graph replays");
+            std::vector<std::uint16_t> out_bits(static_cast<std::size_t>(rows) * 8);
+            output.copy_to_host(out_bits.data(), output.bytes);
+            double worst = 0.0;
+            double scale = 0.0;
+            for (int r = 0; r < rows; ++r) {
+                for (int col = 0; col < 8; ++col) {
+                    double reference = 0.0;
+                    for (int c = 0; c < 5120; ++c) {
+                        reference += quantized_weight::logical_weight_fp64(host, begin + r, c) *
+                                     static_cast<double>(test::bf16_to_f32(
+                                         activation_bits[static_cast<std::size_t>(col) * 5120 + c]));
+                    }
+                    const double produced =
+                        static_cast<double>(test::bf16_to_f32(
+                            out_bits[static_cast<std::size_t>(col) * rows + r]));
+                    worst = std::max(worst, std::abs(produced - reference));
+                    scale = std::max(scale, std::abs(reference));
+                }
+            }
+            if (worst > 0.05 * scale) {
+                std::cerr << "exl3 graph slice [" << begin << "," << rows
+                          << "): relative error " << worst / scale << "\n";
+                ++failures;
+            }
+        }
+    }
 
     failures += composed_route_check();
     // Capacity is monotone in the token interval and constant across the registered decode

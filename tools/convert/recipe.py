@@ -345,20 +345,27 @@ class Recipe:
                     experts.append(source)
                 if not experts:
                     # The quantized-bank route: the emit validates the stacked parent and
-                    # the uniform rate; the method re-verifies the campaign planes.
+                    # the uniform rate; the method re-verifies the campaign planes. The
+                    # packed gate_up convention binds two logical parameters (gate, up)
+                    # per bank expert, so `experts` declares the packed count and the
+                    # per-expert rows are the stacked total over it.
                     k2 = selection.parameters.get("k2")
-                    if not isinstance(k2, int):
+                    packed_experts = selection.parameters.get("experts")
+                    if not isinstance(k2, int) or not isinstance(packed_experts, int):
                         raise ValueError(
-                            "a quantized EXL3 bank requires an integer k2 method parameter"
+                            "a quantized EXL3 bank requires integer k2 and experts "
+                            "method parameters"
                         )
                     if not all(len(item.source.shape) == 2 and
                                item.source.shape == items[0][1].source.shape
                                for _, item in items):
                         raise ValueError("a bank's experts must share one [n, k] shape")
-                    n, k = items[0][1].source.shape
-                    if len(items) * n * k != prod(dims):
+                    in_n, k = items[0][1].source.shape
+                    if packed_experts <= 0 or len(items) % packed_experts or \
+                            prod(dims) != len(items) * in_n * k:
                         raise ValueError("bank parent shape is not the stacked expert rows")
-                    geometry = exl3_bank_geometry(n, k, [k2] * len(items), "mcg")
+                    n = in_n * (len(items) // packed_experts)
+                    geometry = exl3_bank_geometry(n, k, [k2] * packed_experts, "mcg")
                     if (geometry.experts * n, k) != tuple(dims):
                         raise ValueError("bank parent shape is not the stacked expert rows")
                     declared_bytes = geometry.payload_bytes

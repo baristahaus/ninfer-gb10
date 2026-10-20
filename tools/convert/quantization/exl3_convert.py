@@ -207,14 +207,18 @@ def convert_model_fused(checkpoint: Path, hessian_dir: Path | None, out_dir: Pat
 
 def convert_model_banks(checkpoint: Path, out_dir: Path, k2: int, codebook: str = "mcg",
                         layers: list[int] | None = None, seed: int = 20261016,
-                        device: torch.device | None = None) -> dict:
+                        device: torch.device | None = None,
+                        roles: tuple[str, ...] = ("routed_gate_up", "routed_down")) -> dict:
     """The routed-bank EXL3 conversion (SP-7 contract 6.2): every routed expert's gate, up
     and down linear quantizes uncalibrated (per-expert calibration data is too sparse to
     inform a Hessian), with one su per (layer, projection) group and per-expert sv.
 
-    ``out_dir`` receives one ``layer_NN.pt`` per MoE layer with keys ``routed_gate``,
-    ``routed_up`` and ``routed_down``, each a list of per-expert ``quantize_linear``
-    results in expert-id order. Completed layer files are resumed as-is.
+    ``out_dir`` receives one ``layer_NN.pt`` per MoE layer with keys ``routed_gate_up``
+    (one packed linear per expert over the checkpoint's [2*intermediate, hidden] block,
+    the engine's gate/up bank convention) and ``routed_down``, each a list of
+    per-expert ``quantize_linear`` results in expert-id order. Completed layer files
+    are resumed as-is. ``roles`` selects which projections run (the packed gate_up and
+    the down are independent; a pass may fill either).
     """
 
     device = device or torch.device("cuda")
@@ -237,24 +241,19 @@ def convert_model_banks(checkpoint: Path, out_dir: Path, k2: int, codebook: str 
         t0 = time.time()
         prefix = cal._layer_prefix(layer)
         result: dict = {}
-        # The experts' gate and up rows pack one interleaved gate_up tensor in the
-        # checkpoint; the model binds them as interleaved row selections of it.
+        # The checkpoint stores the routed tensors batched [E, ...]; the packed
+        # gate_up block per expert is one linear over [2*intermediate, hidden].
         gate_up = reader.get(prefix + "mlp.experts.gate_up_proj", device).float()
         down_source = prefix + "mlp.experts.down_proj"
-        for role, rates in (("routed_gate", (hidden, intermediate)),
-                            ("routed_up", (hidden, intermediate)),
-                            ("routed_down", (intermediate, hidden))):
-            su = torch.sign(
-                torch.randn(rates[0], device=device, generator=generator))
+        shapes = {"routed_gate_up": (2 * intermediate, hidden),
+                  "routed_down": (hidden, intermediate)}
+        for role in roles:
+            out_n, out_k = shapes[role]
+            su = torch.sign(torch.randn(out_k, device=device, generator=generator))
             per_expert = []
             for expert in range(experts):
-                # The checkpoint stores the routed tensors batched [E, ...].
-                if role == "routed_gate":
-                    weight = gate_up[expert][0:intermediate]
-                elif role == "routed_up":
-                    weight = gate_up[expert][intermediate:2 * intermediate]
-                else:
-                    weight = reader.get(down_source, device).float()[expert]
+                weight = (gate_up[expert] if role == "routed_gate_up"
+                          else reader.get(down_source, device).float()[expert])
                 sv = torch.sign(
                     torch.randn(weight.shape[0], device=device, generator=generator))
                 out = q.quantize_linear(weight.T.contiguous(), k2, codebook, su, sv,
@@ -262,8 +261,8 @@ def convert_model_banks(checkpoint: Path, out_dir: Path, k2: int, codebook: str 
                 out["weight_shape"] = tuple(weight.shape)
                 per_expert.append(out)
             result[role] = per_expert
-            print(f"  layer {layer:2d} {role:12s} {experts} experts "
-                  f"[{rates[1]},{rates[0]}]: done {time.time() - t0:.0f}s", flush=True)
+            print(f"  layer {layer:2d} {role:14s} {experts} experts "
+                  f"[{out_n},{out_k}]: done {time.time() - t0:.0f}s", flush=True)
         torch.save(result, target)
         print(f"layer {layer} complete in {time.time() - t0:.0f}s", flush=True)
     return config

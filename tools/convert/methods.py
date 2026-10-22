@@ -446,40 +446,37 @@ def pack_exl3_bank_quantized(request: PrepareRequest) -> PreparedMethod:
     layer_file = request.parameters.get("layer_file")
     projection = request.parameters.get("projection")
     k2 = request.parameters.get("k2")
-    packed_experts = request.parameters.get("experts")
-    if not isinstance(layer_file, str) or not isinstance(projection, str) or \
-            not isinstance(k2, int) or not isinstance(packed_experts, int):
+    if not isinstance(layer_file, str) or not isinstance(projection, str) or k2 is None:
         raise ValueError(
-            "pack_exl3_bank_quantized requires layer_file, projection, k2 and experts "
-            "parameters")
-    if not request.inputs or len(request.inputs) % packed_experts:
-        raise ValueError("the logical inputs must group into whole packed experts")
+            "pack_exl3_bank_quantized requires layer_file, projection and k2 parameters")
+    k2 = int(k2)
+    if not request.inputs:
+        raise ValueError("an EXL3 bank requires at least one expert")
     shapes = [item.source.shape for item in request.inputs]
     if any(len(shape) != 2 or shape != shapes[0] for shape in shapes):
         raise ValueError("a bank's experts must share one [n, k] logical shape")
-    in_n, k = shapes[0]
-    per_expert_inputs = len(request.inputs) // packed_experts
-    n = in_n * per_expert_inputs  # the packed linear's rows (gate_up: gate+up rows)
+    n, k = shapes[0]
+    experts = len(request.inputs)
+    if (geometry_experts := prod(request.target.shape) // (n * k)) != experts:
+        raise ValueError("bank parent and logical expert shapes disagree")
     codebook = "mcg"
     validate_exl3_rate(k2, codebook)
-    geometry = exl3_bank_geometry(n, k, [k2] * packed_experts, codebook)
+    geometry = exl3_bank_geometry(n, k, [k2] * experts, codebook)
     if (geometry.experts * n, k) != tuple(request.target.shape):
         raise ValueError("bank parent shape is not the stacked expert rows [E*n, k]")
 
     results = _layer_file(torch.load, layer_file)[projection]
-    # The packed gate_up convention pairs each expert's gate and up parameters with one
-    # packed linear: inputs arrive as (gate_e, up_e) pairs in expert order.
-    if not isinstance(results, list) or len(results) != packed_experts:
+    if not isinstance(results, list) or len(results) != experts:
         raise ValueError(f"{layer_file}:{projection}: expert count disagrees with the group")
     trellis_planes = []
-    suh = torch.empty((packed_experts, k), dtype=torch.float16)
-    svh = torch.empty((packed_experts, n), dtype=torch.float16)
+    suh = torch.empty((experts, k), dtype=torch.float16)
+    svh = torch.empty((experts, n), dtype=torch.float16)
     for expert, result in enumerate(results):
         stored_n, stored_k = result["weight_shape"]
         if (stored_n, stored_k) != (n, k):
             raise ValueError(
                 f"{layer_file}:{projection}: expert {expert} shape "
-                f"{(stored_n, stored_k)} differs from the packed {(n, k)}")
+                f"{(stored_n, stored_k)} differs from the logical {(n, k)}")
         trellis = result["trellis"].detach().cpu().contiguous()
         if trellis.dtype != torch.int16 or trellis.shape != (k // 16, n // 16, 8 * k2):
             raise ValueError(

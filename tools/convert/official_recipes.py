@@ -315,12 +315,9 @@ def qwen3_6_35b_a3b_exl3_banks(model, recipe, sources):
             continue
         _assign(recipe, name, Q8)
     for layer in range(layers):
-        # The packed gate_up bank: every expert's gate and up parameter binds its
-        # interleaved row range of one [E*2*intermediate, hidden] bank, matching the
-        # engine's routed gate_up convention; down stays its own bank.
-        gate_up_names, down_names = [], []
-        for expert in range(experts):
-            for role in ("gate", "up"):
+        for role in ("gate", "up", "down"):
+            names = []
+            for expert in range(experts):
                 name = f"text/layers/{layer}/moe/experts/{expert}/{role}"
                 recipe.assign(
                     name,
@@ -329,28 +326,12 @@ def qwen3_6_35b_a3b_exl3_banks(model, recipe, sources):
                     method="pack_exl3_bank_quantized",
                     parameters={
                         "layer_file": str(converted / f"layer_{layer:02d}.pt"),
-                        "projection": "routed_gate_up",
+                        "projection": f"routed_{role}",
                         "k2": bank_k2,
-                        "experts": experts,
                     },
                 )
-                gate_up_names.append(name)
-            down_name = f"text/layers/{layer}/moe/experts/{expert}/down"
-            recipe.assign(
-                down_name,
-                format="exl3",
-                layout="exl3_expert_bank",
-                method="pack_exl3_bank_quantized",
-                parameters={
-                    "layer_file": str(converted / f"layer_{layer:02d}.pt"),
-                    "projection": "routed_down",
-                    "k2": bank_k2,
-                    "experts": experts,
-                },
-            )
-            down_names.append(down_name)
-        recipe.group(gate_up_names)
-        recipe.group(down_names)
+                names.append(name)
+            recipe.group(names)
 
 
 def qwen3_6_27b_nvfp4(model, recipe, sources):

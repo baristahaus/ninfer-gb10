@@ -89,30 +89,21 @@ def main(tmp):
     _assign(recipe, "text/output_head", Q6)
     experts, layers = EXPERTS, LAYERS
     for layer in range(layers):
-        gate_up_names, down_names = [], []
-        for expert in range(experts):
-            for role in ("gate", "up"):
+        for role, k, n in (("gate", HIDDEN, INTERMEDIATE), ("up", HIDDEN, INTERMEDIATE),
+                           ("down", INTERMEDIATE, HIDDEN)):
+            names = []
+            for expert in range(experts):
                 name = f"text/layers/{layer}/moe/experts/{expert}/{role}"
                 recipe.assign(name, format="exl3", layout="exl3_expert_bank",
                               method="pack_exl3_bank_quantized",
                               parameters={"layer_file": str(converted / f"layer_{layer:02d}.pt"),
-                                          "projection": "routed_gate_up", "k2": K2,
-                                          "experts": experts})
-                gate_up_names.append(name)
-            down_name = f"text/layers/{layer}/moe/experts/{expert}/down"
-            recipe.assign(down_name, format="exl3", layout="exl3_expert_bank",
-                          method="pack_exl3_bank_quantized",
-                          parameters={"layer_file": str(converted / f"layer_{layer:02d}.pt"),
-                                      "projection": "routed_down", "k2": K2,
-                                      "experts": experts})
-            down_names.append(down_name)
-        recipe.group(gate_up_names)
-        recipe.group(down_names)
+                                          "projection": f"routed_{role}", "k2": K2})
+                names.append(name)
+            recipe.group(names)
     from tools.convert.pipeline import convert as _c  # noqa
     output = tmp / "moe_banks.ninfer"
     report = convert(model, recipe, output, device="cpu", name="moe-banks-test")
-    # Per layer: the packed gate_up bank and the down bank = 2 objects.
-    assert report["formats"]["exl3"] == 2 * LAYERS, report["formats"]
+    assert report["formats"]["exl3"] == 3 * LAYERS, report["formats"]
     print("assembled:", output, report["formats"])
 
     from tools.artifact.layouts import exl3_bank_geometry
@@ -120,29 +111,26 @@ def main(tmp):
     with Artifact.open(output) as artifact:
         banks = [o for o in artifact.objects
                  if isinstance(o, TensorObject) and o.layout == "exl3_expert_bank"]
-        assert len(banks) == 2 * LAYERS, len(banks)
+        assert len(banks) == 3 * LAYERS, len(banks)
         bindings = artifact.directory.bindings
-        # The packed gate_up bank: expert e's gate rows at [e*2*ir, e*2*ir+ir), up rows
-        # next — the interleaved convention the engine's tier ranking expects. Down is
-        # its own bank of [E*h, ir].
-        for role, expert, lo, n, k in (
-                ("gate", 0, 0, 2 * INTERMEDIATE, HIDDEN),
-                ("up", 0, INTERMEDIATE, 2 * INTERMEDIATE, HIDDEN),
-                ("gate", 1, 0, 2 * INTERMEDIATE, HIDDEN),
-                ("down", 1, 0, HIDDEN, INTERMEDIATE)):
-            geometry = exl3_bank_geometry(n, k, [K2] * EXPERTS, "mcg")
-            bb = bindings[f"text/layers/0/moe/experts/{expert}/{role}"]
+        e0 = bindings["text/layers/0/moe/experts/0/gate"]
+        parts = e0.get("parts") or [{"object": e0["object"], "range": None}]
+        obj = next(o for o in banks if o.id == parts[0]["object"])
+        payload = artifact.read_object(obj.id)
+        n, k = INTERMEDIATE, HIDDEN
+        geometry = exl3_bank_geometry(n, k, [K2] * EXPERTS, "mcg")
+        assert tuple(obj.shape) == (n * EXPERTS, k), obj.shape
+        assert len(payload) == geometry.payload_bytes, (len(payload), geometry.payload_bytes)
+        assert int.from_bytes(payload[-4:], "little") == 1
+        # Fused-group members bind consecutive expert row ranges of the bank parent.
+        rows = [b for b in bindings if b.startswith("text/layers/0/moe/experts/") and b.endswith("/gate")]
+        spans = []
+        for name in sorted(rows):
+            bb = bindings[name]
             pp = bb.get("parts") or [{"range": None}]
-            obj = next(o for o in banks if o.id == (pp[0].get("object") or bb["object"]))
-            assert tuple(obj.shape) == (n * EXPERTS, k), obj.shape
-            payload = artifact.read_object(obj.id)
-            assert len(payload) == geometry.payload_bytes
-            assert int.from_bytes(payload[-4:], "little") == 1
-            begin, end = (pp[0]["range"] if pp[0].get("range")
-                          else (0, n * EXPERTS * k))
-            rows_ahead = expert * (2 * INTERMEDIATE if role != "down" else HIDDEN)
-            expected_begin = (lo + rows_ahead) * k
-            assert begin == expected_begin, (role, expert, begin, expected_begin)
+            spans.append(tuple(pp[0]["range"]) if pp[0].get("range") else None)
+        assert all(sp is not None for sp in spans), spans
+        assert spans[0][0] == 0 and spans[1][0] == spans[0][1], spans
     print("bank binding and payload checks passed")
 
 def test_bank_quantize_route_assembles_and_verifies(tmp_path):

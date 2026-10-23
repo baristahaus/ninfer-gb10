@@ -4,6 +4,7 @@
 #include "models/qwen3_8_flash_next/impl/runtime/workspace_recipe.h"
 #include "ninfer/ops/flash_next_gdn.h"
 #include "ninfer/ops/flash_next_moe.h"
+#include "ninfer/ops/sparse_moe.h"
 #include "ninfer/ops/flash_next_ple.h"
 #include "ninfer/ops/flash_next_qsa.h"
 #include "ninfer/ops/hyperconnection.h"
@@ -444,7 +445,10 @@ WorkspacePlan build_workspace_plan(const SequencePlanImpl& plan) {
             }
             {
                 auto nested = layout.scope();
-                scratch(layout, ops::flash_next_moe_workspace_capacity_bytes(tokens));
+                scratch(layout, plan.weights_profile == WeightsProfile::Exl3
+                                    ? ops::sparse_moe_workspace_capacity_bytes(
+                                          QType::EXL3, QType::EXL3, 1, tokens, ops::kSparseMoe125B)
+                                    : ops::flash_next_moe_workspace_capacity_bytes(tokens));
             }
             return;
         }

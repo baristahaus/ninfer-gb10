@@ -61,14 +61,31 @@ struct SparseMoeHints {
 };
 
 /**
+ * The admitted sparse-MoE bank geometries. The EXL3 route resolves one of these from the
+ * banks' directory geometry; the native Q4/Q5/Q6/Q8 routes keep the 35B contract shape.
+ */
+struct SparseMoeShape {
+    int hidden;
+    int experts;
+    int top_k;
+    int intermediate;
+};
+
+// Qwen3.6 35B-A3B: the original contract geometry.
+inline constexpr SparseMoeShape kSparseMoe35B{2048, 256, 8, 512};
+// Qwen3.8 Flash-Next 125B-A6B: 512 routed experts, top-10 selection.
+inline constexpr SparseMoeShape kSparseMoe125B{2560, 512, 10, 640};
+
+/**
  * Returns the transient capacity required by SparseMoe for every T in the inclusive
  * [min_tokens,max_tokens] interval. The routed QTypes are the fixed implementation profile.
- * Invalid profiles or intervals throw.
+ * Invalid profiles or intervals throw. The EXL3 profile sizes for `shape`; the native
+ * profiles ignore it and keep the 35B contract geometry.
  */
-[[nodiscard]] std::size_t sparse_moe_workspace_capacity_bytes(QType routed_gate_up,
-                                                              QType routed_down,
-                                                              std::int32_t min_tokens,
-                                                              std::int32_t max_tokens);
+[[nodiscard]] std::size_t
+sparse_moe_workspace_capacity_bytes(QType routed_gate_up, QType routed_down, std::int32_t min_tokens,
+                                    std::int32_t max_tokens,
+                                    const SparseMoeShape& shape = kSparseMoe35B);
 
 /**
  * Closed sparse-MoE Op for the exact future 35B-A3B geometry.

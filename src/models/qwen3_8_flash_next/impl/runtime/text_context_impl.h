@@ -19,6 +19,7 @@
 #include "ninfer/ops/gdn_input_proj.h"
 #include "ninfer/ops/flash_next_gdn.h"
 #include "ninfer/ops/flash_next_moe.h"
+#include "ninfer/ops/sparse_moe.h"
 #include "ninfer/ops/flash_next_ple.h"
 #include "ninfer/ops/flash_next_qsa.h"
 #include "ninfer/ops/hyperconnection.h"
@@ -66,6 +67,23 @@ void copy_i32(const std::int32_t* source, Tensor& destination, cudaStream_t stre
     }
     CUDA_CHECK(cudaMemcpyAsync(destination.data, source, destination.bytes(),
                                cudaMemcpyHostToDevice, stream));
+}
+
+// The Flash-Next MoE overwrites its destination. The EXL3 sparse-MoE route adds the
+// destination's incoming value as the AddResidual residual, so the zeroed destination keeps
+// the same overwrite contract.
+void post_mixer_moe(const Tensor& input, const MlpWeights& weights, Tensor& destination,
+                    MemoryArena& workspace, CudaExecutionView execution) {
+    if (const auto* sparse = std::get_if<ops::SparseMoeWeights>(&weights)) {
+        // sparse_moe's AddResidual epilogue adds the destination's incoming value, so the
+        // zeroed destination keeps flash_next_moe's plain-overwrite contract.
+        CUDA_CHECK(cudaMemsetAsync(destination.data, 0, destination.bytes(), execution.stream()));
+        ops::sparse_moe(input, *sparse, ops::SparseMoeEpilogue::AddResidual, destination, workspace,
+                        execution.stream());
+        return;
+    }
+    ops::flash_next_moe(input, std::get<ops::FlashNextMoeWeights>(weights), destination, workspace,
+                        execution);
 }
 
 void require_tensor_shape(const Tensor& t, DType dtype, std::initializer_list<std::int32_t> shape,
@@ -572,7 +590,7 @@ void TextContext::mtp_forward_flash_next(const Tensor& ids, const Tensor& hidden
         {.selected_indices = selected_qsa_indices, .reused_indices = reused_qsa_indices});
     ops::hyperconnection_combine_mix(hyper, block_output, injection, mtp_.payload->mlp_hc,
                                      block_input, &injection, work_, stream);
-    ops::flash_next_moe(block_input, mtp_.payload->post_mixer, block_output, work_, execution);
+    post_mixer_moe(block_input, mtp_.payload->post_mixer, block_output, work_, execution);
 
     ops::hyperconnection_combine(hyper, block_output, injection, stream);
     CUDA_CHECK(cudaMemcpyAsync(predictor_hidden.data, hyper.data, hyper.bytes(),
@@ -1473,7 +1491,7 @@ void TextContext::run_flash_next_layers(Tensor& x, Phase ph) {
 
         ops::hyperconnection_combine_mix(hyper, block_output, injection, source.mlp_hc, block_input,
                                          &injection, work_, stream);
-        ops::flash_next_moe(block_input, source.post_mixer, block_output, work_, execution);
+        post_mixer_moe(block_input, source.post_mixer, block_output, work_, execution);
 
         pending = true;
     };

@@ -383,7 +383,12 @@ Parameters::Parameters(const Model& source) : model(source) {
             for (std::size_t e = 0; e < routed[i].weights->experts.size(); ++e) {
                 const auto& gate = model.input(routed[i].weights->experts[e].gate).weight;
                 const auto& part = gate.parts.front();
-                const std::uint64_t gate_rows = 2 * gate.shape[0];
+                // The packed native route interleaves each expert's gate and up rows in one
+                // bank (2*rows per expert stride); the EXL3 route keeps separate complete
+                // gate and up banks with contiguous expert rows.
+                const std::uint64_t gate_rows =
+                    part.parent->geometry.format == QType::EXL3 ? gate.shape[0]
+                                                                : 2 * gate.shape[0];
                 const auto rank = static_cast<std::uint32_t>(
                     part.begin / (gate_rows * gate.shape[1]));
                 const bool warm = part.parent->host;
@@ -428,7 +433,9 @@ Parameters::Parameters(const Model& source) : model(source) {
             for (std::size_t e = 0; e < experts.size(); ++e) {
                 const auto& gate = model.input(experts[e].gate).weight;
                 const auto& part = gate.parts.front();
-                gate_rows_per_expert = 2 * gate.shape[0];
+                gate_rows_per_expert = part.parent->geometry.format == QType::EXL3
+                                           ? gate.shape[0]
+                                           : 2 * gate.shape[0];
                 if (part.parent->host) {
                     gate_host = part.parent;
                     ++warm;

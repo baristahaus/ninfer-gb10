@@ -240,11 +240,8 @@ std::size_t sparse_moe_workspace_capacity_bytes(QType routed_gate_up, QType rout
         if (routed_gate_up != QType::EXL3 || routed_down != QType::EXL3) {
             throw std::invalid_argument("sparse_moe workspace: EXL3 banks must pair");
         }
-        if (min_tokens != 1 || max_tokens != 1) {
-            throw std::invalid_argument(
-                "sparse_moe: the EXL3 route supports the single-token decode path only "
-                "until the batched routes land");
-        }
+        // The wrapper loops the single-token decode per prefill column; the decode
+        // workspace is reused per token, so the capacity is interval-independent.
         return detail::resolve_sparse_moe_decode_plan(routed_gate_up, routed_down).workspace_bytes;
     }
     (void)detail::resolve_sparse_moe_decode_plan(routed_gate_up, routed_down);
@@ -295,12 +292,10 @@ void sparse_moe(const Tensor& x, const SparseMoeWeights& weights, SparseMoeEpilo
     ranges.push_back(address_range(destination.data, destination.bytes(), "destination"));
     validate_weights(weights, ranges);
 
+    // The EXL3 route has no batched kernels yet; the shared token loop below runs the
+    // single-token decode per column, which is numerically identical (routing is
+    // per-token independent).
     const bool exl3_route = weights.exl3_routed_gate.payload != nullptr;
-    if (exl3_route && tokens != 1) {
-        throw std::invalid_argument(
-            "sparse_moe: the EXL3 route supports the single-token decode path only "
-            "until the batched routes land");
-    }
     const bool use_small_t = !exl3_route && detail::sparse_moe_uses_small_t(tokens);
     const bool use_prefill =
         !exl3_route && detail::sparse_moe_uses_prefill(tokens, weights.routed_gate_up.qtype,

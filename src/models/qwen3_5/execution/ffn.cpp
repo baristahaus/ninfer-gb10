@@ -15,8 +15,12 @@ std::size_t ffn_workspace_bytes(const FfnParameters& parameters, std::int32_t fi
                                 std::int32_t last, bool mtp) {
     if (first <= 0 || last < first) { throw std::invalid_argument("FFN: invalid column interval"); }
     if (const auto* moe = std::get_if<ops::SparseMoeWeights>(&parameters)) {
-        return ops::sparse_moe_workspace_capacity_bytes(moe->routed_gate_up.qtype,
-                                                        moe->routed_down.qtype, first, last);
+        // The SP-7 EXL3 route carries separate gate/up bank weights and leaves the fused
+        // routed_gate_up empty; the workspace sizes for the EXL3 decode plan.
+        const bool exl3 = moe->exl3_routed_gate.payload != nullptr;
+        return ops::sparse_moe_workspace_capacity_bytes(
+            exl3 ? QType::EXL3 : moe->routed_gate_up.qtype,
+            exl3 ? QType::EXL3 : moe->routed_down.qtype, first, last);
     }
     const auto& p    = std::get<DenseParameters>(parameters);
     const auto& down = p.down.weight;

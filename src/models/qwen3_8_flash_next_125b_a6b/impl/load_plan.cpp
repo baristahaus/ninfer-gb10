@@ -82,6 +82,18 @@ Reference expert_bank(artifact::Binder& binder, std::string_view name,
     return reference;
 }
 
+Reference exl3_bank(artifact::Binder& binder, std::string_view name,
+                    std::initializer_list<std::uint64_t> shape) {
+    auto reference = device(binder, name, QType::EXL3, shape);
+    if (!reference.binding.whole_object || reference.binding.parts.size() != 1 ||
+        binder.reader().directory().tensor(reference.binding.parts.front().object).layout !=
+            "exl3_expert_bank") {
+        throw artifact::ArtifactError(std::string(name) +
+                                      ": unsupported EXL3 expert-bank representation");
+    }
+    return reference;
+}
+
 Reference expert_input_divisors(artifact::Binder& binder, const std::string& parameter) {
     const auto& use = binder.use(parameter, parameter + "/input");
     const std::string auxiliary =
@@ -113,6 +125,28 @@ FinalHyperConnectionPlan bind_final_hc(artifact::Binder& binder, const std::stri
 }
 
 MoePlan bind_main_moe(artifact::Binder& binder, const std::string& prefix) {
+    // The EXL3 recipe binds three separate trellis banks (`experts.gate`/`experts.up`/
+    // `experts.down`, logical shape [E*n, k]) and emits the router and the shared expert's
+    // gate row as one grouped BF16 object: `gate.weight` is [experts+1, hidden] with the
+    // router in rows [0, experts) and the shared-gate row in row `experts`.
+    if (binder.reader().directory().bindings.contains(prefix + "experts.gate")) {
+        if (binder.reader().directory().bindings.contains(prefix + "experts.gate_up")) {
+            throw artifact::ArtifactError(
+                prefix + "experts: the NVFP4 and EXL3 bank routes are mutually exclusive");
+        }
+        return {
+            .router      = device(binder, prefix + "gate.weight", QType::BF16, {513, 2560}),
+            .shared_gate =
+                projection(binder, prefix + "shared_expert.gate_proj.weight", {640, 2560}),
+            .shared_up = projection(binder, prefix + "shared_expert.up_proj.weight", {640, 2560}),
+            .shared_down =
+                projection(binder, prefix + "shared_expert.down_proj.weight", {2560, 640}),
+            .routed_down = exl3_bank(binder, prefix + "experts.down", {512 * 2560, 640}),
+            .exl3_gate   = exl3_bank(binder, prefix + "experts.gate", {512 * 640, 2560}),
+            .exl3_up     = exl3_bank(binder, prefix + "experts.up", {512 * 640, 2560}),
+            .exl3        = true,
+        };
+    }
     return {
         .router      = device(binder, prefix + "gate.weight", QType::BF16, {512, 2560}),
         .shared_gate = projection(binder, prefix + "shared_expert.gate_proj.weight", {640, 2560}),
@@ -127,11 +161,16 @@ MoePlan bind_main_moe(artifact::Binder& binder, const std::string& prefix) {
     };
 }
 
-// The MTP layer's routed experts are either the checkpoint's BF16 banks
-// (`experts.gate_up_proj`/`.down_proj`) or NVFP4 banks in the main layers' representation
-// (`experts.gate_up`/`.down` with activation divisors). The artifact's recorded parameter selects
-// the route; the flash_next_moe Op dispatches on the bank's format.
+// The MTP layer's routed experts are the checkpoint's BF16 banks (`experts.gate_up_proj`/
+// `.down_proj`), NVFP4 banks in the main layers' representation (`experts.gate_up`/`.down`
+// with activation divisors), or EXL3 trellis banks (`experts.gate`/`experts.up`/`experts.down`).
+// The artifact's recorded parameter selects the route; the plan's `exl3` flag and the bank's
+// format select the consuming Op route.
 MoePlan bind_mtp_moe(artifact::Binder& binder, const std::string& prefix, Placement placement) {
+    const auto& bindings = binder.reader().directory().bindings;
+    const bool exl3      = bindings.contains(prefix + "experts.gate");
+    const bool nvfp4     = bindings.contains(prefix + "experts.gate_up");
+    const bool bf16      = bindings.contains(prefix + "experts.gate_up_proj");
     MoePlan out{
         .router = device(binder, prefix + "gate.weight", QType::BF16, {512, 2560}, placement),
         .shared_gate =
@@ -144,15 +183,25 @@ MoePlan bind_mtp_moe(artifact::Binder& binder, const std::string& prefix, Placem
             device(binder, prefix + "shared_expert_gate.weight", QType::BF16, {1, 2560}, placement),
     };
     if (placement == Placement::Disabled) { return out; }
-    const auto& bindings = binder.reader().directory().bindings;
-    const bool nvfp4     = bindings.contains(prefix + "experts.gate_up");
-    if (nvfp4 == bindings.contains(prefix + "experts.gate_up_proj") ||
-        nvfp4 != bindings.contains(prefix + "experts.down") ||
-        nvfp4 == bindings.contains(prefix + "experts.down_proj")) {
+    const int routes = (exl3 ? 1 : 0) + (nvfp4 ? 1 : 0) + (bf16 ? 1 : 0);
+    if (routes != 1) {
         throw artifact::ArtifactError(
-            "MTP experts must be one BF16 or one NVFP4 gate/up and down bank pair");
+            "MTP experts must be exactly one BF16, NVFP4, or EXL3 gate/up and down bank pair");
     }
-    if (nvfp4) {
+    if (exl3) {
+        // The EXL3 recipe's grouped `gate.weight` carries the router and the shared-gate
+        // row as one BF16 [513, 2560] object (see bind_main_moe).
+        out.router      = device(binder, prefix + "gate.weight", QType::BF16, {513, 2560}, placement);
+        out.exl3_gate   = exl3_bank(binder, prefix + "experts.gate", {512 * 640, 2560});
+        out.exl3_up     = exl3_bank(binder, prefix + "experts.up", {512 * 640, 2560});
+        out.routed_down = exl3_bank(binder, prefix + "experts.down", {512 * 2560, 640});
+        out.exl3        = true;
+    } else if (nvfp4) {
+        if (!bindings.contains(prefix + "experts.down") ||
+            bindings.contains(prefix + "experts.down_proj")) {
+            throw artifact::ArtifactError(
+                "MTP experts must be one BF16, NVFP4, or EXL3 gate/up and down bank pair");
+        }
         out.routed_gate_up = expert_bank(binder, prefix + "experts.gate_up", {512, 1280, 2560});
         out.routed_gate_up_input_divisors = expert_input_divisors(binder, prefix + "experts.gate_up");
         out.routed_down = expert_bank(binder, prefix + "experts.down", {512, 2560, 640});

@@ -19,6 +19,7 @@
 #include "ninfer/ops/gdn_input_proj.h"
 #include "ninfer/ops/flash_next_gdn.h"
 #include "ninfer/ops/flash_next_moe.h"
+#include "ninfer/ops/sparse_moe.h"
 #include "ninfer/ops/flash_next_ple.h"
 #include "ninfer/ops/flash_next_qsa.h"
 #include "ninfer/ops/hyperconnection.h"
@@ -74,6 +75,22 @@ void copy_i32(const std::int32_t* source, Tensor& destination, cudaStream_t stre
     }
     CUDA_CHECK(cudaMemcpyAsync(destination.data, source, destination.bytes(),
                                cudaMemcpyHostToDevice, stream));
+}
+
+// The Flash-Next MoE overwrites its destination. The EXL3 sparse-MoE route adds the
+// destination's incoming value as the AddResidual residual, so the zeroed destination keeps
+// the same overwrite contract.
+void post_mixer_moe(const Tensor& input, const MlpWeights& weights, Tensor& destination,
+                    WorkspaceArena& workspace, cudaStream_t stream,
+                    ops::Bf16GemmContext* bf16_gemm) {
+    if (const auto* sparse = std::get_if<ops::SparseMoeWeights>(&weights)) {
+        CUDA_CHECK(cudaMemsetAsync(destination.data, 0, destination.bytes(), stream));
+        ops::sparse_moe(input, *sparse, ops::SparseMoeEpilogue::AddResidual, destination,
+                        ops::SparseMoeHints{}, workspace, stream);
+        return;
+    }
+    ops::flash_next_moe(input, std::get<ops::FlashNextMoeWeights>(weights), destination, workspace,
+                        stream, bf16_gemm);
 }
 
 void require_tensor_shape(const Tensor& t, DType dtype, std::initializer_list<std::int32_t> shape,
@@ -625,16 +642,17 @@ void TextContext::mtp_forward_flash_next(const Tensor& ids, const Tensor& hidden
         wdump("final_hc_up", mtp_.payload->final_hc.up);
         mtp_dump("final_hc_norm", mtp_.payload->final_hc.norm.data,
                  mtp_.payload->final_hc.norm.bytes());
-        wdump("moe_router", mtp_.payload->post_mixer.router);
-        if (auto* pair = std::get_if<ops::FlashNextSharedGateUpPair>(
-                &mtp_.payload->post_mixer.shared_gate_up)) {
-            wdump("moe_shared_gate", pair->gate);
-            wdump("moe_shared_up", pair->up);
-        } else if (auto* packed = std::get_if<Weight>(&mtp_.payload->post_mixer.shared_gate_up)) {
-            wdump("moe_shared_packed", *packed);
+        if (const auto* flash = std::get_if<ops::FlashNextMoeWeights>(&mtp_.payload->post_mixer)) {
+            wdump("moe_router", flash->router);
+            if (auto* pair = std::get_if<ops::FlashNextSharedGateUpPair>(&flash->shared_gate_up)) {
+                wdump("moe_shared_gate", pair->gate);
+                wdump("moe_shared_up", pair->up);
+            } else if (auto* packed = std::get_if<Weight>(&flash->shared_gate_up)) {
+                wdump("moe_shared_packed", *packed);
+            }
+            wdump("moe_shared_down", flash->shared_down);
+            wdump("moe_shared_scale", flash->shared_scale);
         }
-        wdump("moe_shared_down", mtp_.payload->post_mixer.shared_down);
-        wdump("moe_shared_scale", mtp_.payload->post_mixer.shared_scale);
         if (embed_ != nullptr) {
             std::fprintf(stderr, "[fcump] embed qtype=%d bytes=%zu n=%d k=%d\n",
                          static_cast<int>(embed_->qtype), embed_->payload_bytes, embed_->n,
@@ -760,8 +778,7 @@ void TextContext::mtp_forward_flash_next(const Tensor& ids, const Tensor& hidden
     }
 
     ninfer_moe_dump_armed.store(1, std::memory_order_release);
-    ops::flash_next_moe(block_input, mtp_.payload->post_mixer, block_output, work_, stream,
-                        bf16_gemm_);
+    post_mixer_moe(block_input, mtp_.payload->post_mixer, block_output, work_, stream, bf16_gemm_);
     ninfer_moe_dump_armed.store(0, std::memory_order_release);
     if (mtp_dump_on) {
         mtp_dump("s2_block1", block_input.data, block_input.bytes());
@@ -1753,8 +1770,7 @@ void TextContext::run_flash_next_layers(Tensor& x, Phase ph) {
 
         ops::hyperconnection_combine_mix(hyper, block_output, injection, source.mlp_hc, block_input,
                                          &injection, work_, stream);
-        ops::flash_next_moe(block_input, source.post_mixer, block_output, work_, stream,
-                            bf16_gemm_);
+        post_mixer_moe(block_input, source.post_mixer, block_output, work_, stream, bf16_gemm_);
         pending = true;
     };
     for (int layer = 0; layer < TextConfig::layers; ++layer) {

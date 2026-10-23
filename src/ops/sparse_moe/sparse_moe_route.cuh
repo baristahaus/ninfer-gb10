@@ -117,4 +117,87 @@ __device__ __forceinline__ void sparse_moe_select_top8_warp(const float* scores,
     if (lane == 0) { *shared_scale = sigmoid(scores[kSparseMoeExperts]); }
 }
 
+// The general-N top-k selection: identical epilogue, generalized to any (Experts, TopK) pair
+// admitted by the sparse-MoE bank shapes. Per-lane items = Experts/32 feed the same register
+// insertion sort; the run is truncated to TopK and merged in five xor-partner rounds, each
+// keeping the better TopK of the two sorted runs through a full register-local insertion sort.
+// Ranking is a total order over distinct expert ids, so the selected set and its order are the
+// same as the ones any other correct selection produces.
+template <int Experts, int TopK>
+__device__ __forceinline__ void sparse_moe_select_topk_warp(const float* scores, int* ids,
+                                                            float* alpha, float* shared_scale,
+                                                            float* selected_logits,
+                                                            std::uint32_t* expert_activations) {
+    constexpr int kPerLane = Experts / 32;
+    static_assert(kPerLane >= TopK, "top-k selection needs Experts/32 >= TopK");
+    const int lane = static_cast<int>(threadIdx.x) & 31;
+    SparseMoeRankedValue local[kPerLane];
+#pragma unroll
+    for (int item = 0; item < kPerLane; ++item) {
+        const int id = lane + item * 32;
+        local[item]  = {scores[id], id};
+    }
+#pragma unroll
+    for (int i = 1; i < kPerLane; ++i) {
+        const SparseMoeRankedValue value = local[i];
+        int position                     = i;
+        while (position > 0 && sparse_moe_ranked_better(value, local[position - 1])) {
+            local[position] = local[position - 1];
+            --position;
+        }
+        local[position] = value;
+    }
+    SparseMoeRankedValue run[TopK];
+#pragma unroll
+    for (int rank = 0; rank < TopK; ++rank) { run[rank] = local[rank]; }
+#pragma unroll
+    for (int partner = 1; partner < 32; partner <<= 1) {
+        SparseMoeRankedValue other[TopK];
+#pragma unroll
+        for (int rank = 0; rank < TopK; ++rank) {
+            other[rank].value = __shfl_xor_sync(kFullWarpMask, run[rank].value, partner);
+            other[rank].id    = __shfl_xor_sync(kFullWarpMask, run[rank].id, partner);
+        }
+        SparseMoeRankedValue merged[2 * TopK];
+#pragma unroll
+        for (int rank = 0; rank < TopK; ++rank) {
+            merged[rank]         = run[rank];
+            merged[TopK + rank]  = other[rank];
+        }
+        // Full register-local insertion sort over the two runs' union; the better TopK stay.
+#pragma unroll
+        for (int i = 1; i < 2 * TopK; ++i) {
+            const SparseMoeRankedValue value = merged[i];
+            int position                     = i;
+            while (position > 0 && sparse_moe_ranked_better(value, merged[position - 1])) {
+                merged[position] = merged[position - 1];
+                --position;
+            }
+            merged[position] = value;
+        }
+#pragma unroll
+        for (int rank = 0; rank < TopK; ++rank) { run[rank] = merged[rank]; }
+    }
+
+    if (lane == 0) {
+#pragma unroll
+        for (int rank = 0; rank < TopK; ++rank) {
+            ids[rank]             = run[rank].id;
+            selected_logits[rank] = run[rank].value;
+        }
+    }
+    __syncwarp();
+
+    if (expert_activations != nullptr && lane < TopK) {
+        atomicAdd(expert_activations + ids[lane], 1u);
+    }
+
+    float exponential = 0.0f;
+    if (lane < TopK) { exponential = expf(selected_logits[lane] - selected_logits[0]); }
+    float denominator = warp_reduce_sum(exponential);
+    denominator       = __shfl_sync(kFullWarpMask, denominator, 0);
+    if (lane < TopK) { alpha[lane] = exponential / denominator; }
+    if (lane == 0) { *shared_scale = sigmoid(scores[Experts]); }
+}
+
 } // namespace ninfer::ops::detail

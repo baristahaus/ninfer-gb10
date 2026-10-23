@@ -51,7 +51,9 @@ ModelSamplingDefaults Package::sampling_defaults(std::string_view model) {
 
 Package::LoadPlan Package::plan_load(artifact::Binder& binder, const EngineOptions& options,
                                      WeightsProfile profile) {
-    if (profile != WeightsProfile::Nvfp4) { throw std::logic_error("invalid Flash-Next profile"); }
+    if (profile != WeightsProfile::Nvfp4 && profile != WeightsProfile::Exl3) {
+        throw std::logic_error("invalid Flash-Next profile");
+    }
     return LoadPlan(std::make_unique<LoadPlan::Impl>(
         profile, plan_artifact(binder, qwen3_8_flash_next::startup_features(options))));
 }

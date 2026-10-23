@@ -18,14 +18,15 @@ std::size_t sparse_moe_decode_workspace_bytes() {
     return layout.peak_bytes(1);
 }
 
-std::size_t sparse_moe_exl3_decode_workspace_bytes() {
+std::size_t sparse_moe_exl3_decode_workspace_bytes(const SparseMoeShape& shape) {
     WorkspaceLayoutBuilder layout;
-    (void)allocate_sparse_moe_decode_workspace(layout, true);
+    (void)allocate_sparse_moe_decode_workspace(layout, true, shape);
     return layout.peak_bytes(1);
 }
 
 SparseMoeDecodePlan resolve_sparse_moe_decode_plan(QType routed_gate_up, QType routed_down,
-                                                   const SparseMoeHints& hints) {
+                                                   const SparseMoeHints& hints,
+                                                   const SparseMoeShape& shape) {
     const bool exl3_profile = routed_gate_up == QType::EXL3 && routed_down == QType::EXL3;
     const bool main_profile =
         routed_gate_up == QType::Q4_G64_FP16 &&
@@ -37,7 +38,7 @@ SparseMoeDecodePlan resolve_sparse_moe_decode_plan(QType routed_gate_up, QType r
     }
 
     SparseMoeDecodePlan plan;
-    plan.workspace_bytes = exl3_profile ? sparse_moe_exl3_decode_workspace_bytes()
+    plan.workspace_bytes = exl3_profile ? sparse_moe_exl3_decode_workspace_bytes(shape)
                                        : sparse_moe_decode_workspace_bytes();
     if (hints.next_weight_prefetch != nullptr) {
         plan.next_weight_prefetch = hints.next_weight_prefetch;

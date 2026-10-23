@@ -193,8 +193,37 @@ ops::FlashNextExpertBank bank(const artifact::MaterializedArtifact& artifact,
                : bf16_bank(artifact, handle, rows, columns);
 }
 
-ops::FlashNextMoeWeights moe(const MoePlan& plan, const artifact::MaterializedArtifact& artifact) {
-    return {
+// The EXL3 route's shared expert must be the Flash-Next row-scaled FP8 pair: shared_gate_up
+// as the packed [2*intermediate, hidden] parent and shared_down as the row-scaled FP8
+// [hidden, intermediate] projection. MXFP8 and BF16-pair shared experts are not admitted.
+MoeWeights exl3_moe(const MoePlan& plan, const artifact::MaterializedArtifact& artifact) {
+    auto shared = shared_gate_up(plan, artifact);
+    const auto* packed = std::get_if<Weight>(&shared);
+    if (packed == nullptr) {
+        throw artifact::ArtifactError(
+            "EXL3 experts require the row-scaled FP8 shared gate/up parent; a BF16 pair or "
+            "MXFP8 shared expert is not admitted on the EXL3 route");
+    }
+    const Weight down = native_weight(artifact::bind_view(plan.shared_down, artifact));
+    if (down.qtype != QType::FP8_E4M3FN_ROW_BF16) {
+        throw artifact::ArtifactError(
+            "EXL3 experts require the row-scaled FP8 shared down projection");
+    }
+    return ops::SparseMoeWeights{
+        // The grouped `gate.weight` object carries the router in rows [0, 512) and the
+        // shared expert's gate row in row 512 ([513, 2560] BF16).
+        .router_shared_gate = native_weight(artifact::bind_view(plan.router, artifact)),
+        .routed_down        = native_weight(artifact::bind_view(plan.routed_down, artifact)),
+        .shared_gate_up     = *packed,
+        .shared_down        = down,
+        .exl3_routed_gate   = native_weight(artifact::bind_view(plan.exl3_gate, artifact)),
+        .exl3_routed_up     = native_weight(artifact::bind_view(plan.exl3_up, artifact)),
+    };
+}
+
+MoeWeights moe(const MoePlan& plan, const artifact::MaterializedArtifact& artifact) {
+    if (plan.exl3) { return exl3_moe(plan, artifact); }
+    return ops::FlashNextMoeWeights{
         .router         = bf16(artifact, plan.router, 512, 2560),
         .shared_gate_up = shared_gate_up(plan, artifact),
         .shared_down    = bf16(artifact, plan.shared_down, 2560, 640),

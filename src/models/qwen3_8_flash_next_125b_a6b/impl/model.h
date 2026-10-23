@@ -3,6 +3,8 @@
 #include "artifact/materializer.h"
 #include "core/arena.h"
 #include "ninfer/ops/flash_next_moe.h"
+#include "ninfer/ops/sparse_moe.h"
+#include <variant>
 #include "ninfer/ops/flash_next_gdn.h"
 #include "ninfer/ops/flash_next_ple.h"
 #include "ninfer/ops/flash_next_qsa.h"
@@ -23,6 +25,10 @@ namespace ninfer::models::qwen3_8_flash_next_125b_a6b {
 
 using GdnWeights = ops::FlashNextGdnWeights;
 
+// The post-mixer MoE: the native NVFP4/BF16 route (flash_next_moe) or the EXL3 trellis route
+// (sparse_moe, marked by a non-null exl3_routed_gate payload).
+using MoeWeights = std::variant<ops::FlashNextMoeWeights, ops::SparseMoeWeights>;
+
 struct FullLayerWeights {
     Tensor input_norm;
     ops::HyperConnectionWeights attention_hc;
@@ -34,7 +40,7 @@ struct FullLayerWeights {
     bool has_ple = false;
     ops::FlashNextPleWeights ple{};
     ops::HyperConnectionWeights mlp_hc;
-    ops::FlashNextMoeWeights post_mixer;
+    MoeWeights post_mixer;
 };
 
 struct GdnLayerWeights {
@@ -48,7 +54,7 @@ struct GdnLayerWeights {
     bool has_ple = false;
     ops::FlashNextPleWeights ple{};
     ops::HyperConnectionWeights mlp_hc;
-    ops::FlashNextMoeWeights post_mixer;
+    MoeWeights post_mixer;
 };
 
 struct FinalHyperConnectionWeights {
@@ -71,8 +77,8 @@ struct MtpWeights {
     Weight output;
     Tensor post_attention_norm;
     ops::HyperConnectionWeights mlp_hc;
-    ops::FlashNextMoeWeights moe;
-    ops::FlashNextMoeWeights post_mixer;
+    MoeWeights moe;
+    MoeWeights post_mixer;
     FinalHyperConnectionWeights final_hc;
     Tensor final_norm;
 };

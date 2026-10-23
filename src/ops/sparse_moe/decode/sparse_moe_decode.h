@@ -35,27 +35,36 @@ struct SparseMoeDecodeWorkspace {
 };
 
 template <class Arena>
-SparseMoeDecodeWorkspace allocate_sparse_moe_decode_workspace(Arena& arena, bool exl3 = false) {
+SparseMoeDecodeWorkspace allocate_sparse_moe_decode_workspace(Arena& arena, bool exl3 = false,
+                                                              const SparseMoeShape& shape =
+                                                                  kSparseMoe35B) {
+    const int top_k        = shape.top_k;
+    const int hidden       = shape.hidden;
+    const int intermediate = shape.intermediate;
     SparseMoeDecodeWorkspace out;
-    out.ids          = arena.alloc(DType::I32, {8}, 16);
-    out.alpha        = arena.alloc(DType::FP32, {8}, 16);
+    out.ids          = arena.alloc(DType::I32, {top_k}, 16);
+    out.alpha        = arena.alloc(DType::FP32, {top_k}, 16);
     out.shared_scale = arena.alloc(DType::FP32, {1}, 4);
-    // D1 uses the first 257 values as scores. D3 then reuses the same lifetime for [9,512]
-    // natural FP32 SwiGLU results consumed by D4. On the EXL3 route only the shared expert
-    // writes its activation slot here; the routed experts transform inside D4a.
-    out.scratch = arena.alloc(DType::FP32, {9, 512}, 256);
+    // D1 uses the first experts+1 values as scores. D3 then reuses the same lifetime for the
+    // SwiGLU results consumed by D4. On the EXL3 route only the shared expert writes its
+    // activation slot here; the routed experts transform inside D4a. The score row stays
+    // inside the intermediate-sized row 0: 35B needs 257 <= 512 and 125B needs 513 <= 640.
+    out.scratch = arena.alloc(DType::FP32, {top_k + 1, intermediate}, 256);
     if (exl3) {
-        out.exl3_z    = arena.alloc(DType::FP32, {8, 2, 512}, 256);
-        out.exl3_down = arena.alloc(DType::FP32, {9, 2048}, 256);
+        out.exl3_z    = arena.alloc(DType::FP32, {top_k, 2, intermediate}, 256);
+        out.exl3_down = arena.alloc(DType::FP32, {top_k + 1, hidden}, 256);
     }
     return out;
 }
 
 [[nodiscard]] std::size_t sparse_moe_decode_workspace_bytes();
-[[nodiscard]] std::size_t sparse_moe_exl3_decode_workspace_bytes();
+[[nodiscard]] std::size_t
+sparse_moe_exl3_decode_workspace_bytes(const SparseMoeShape& shape = kSparseMoe35B);
 [[nodiscard]] SparseMoeDecodePlan resolve_sparse_moe_decode_plan(QType routed_gate_up,
                                                                  QType routed_down,
-                                                                 const SparseMoeHints& hints = {});
+                                                                 const SparseMoeHints& hints = {},
+                                                                 const SparseMoeShape& shape =
+                                                                     kSparseMoe35B);
 
 void sparse_moe_decode_launch_d3_small_t(const Tensor& x, const SparseMoeWeights& weights,
                                          const int* token_ids, float* token_activations,
@@ -70,6 +79,7 @@ void sparse_moe_decode_launch_d4_small_t(const SparseMoeWeights& weights, Tensor
                                          const int* adaptive_route_jobs = nullptr);
 void sparse_moe_decode_launch(const Tensor& x, const SparseMoeWeights& weights, Tensor& destination,
                               const SparseMoeDecodePlan& plan,
-                              const SparseMoeDecodeWorkspace& workspace, cudaStream_t stream);
+                              const SparseMoeDecodeWorkspace& workspace,
+                              const SparseMoeShape& shape, cudaStream_t stream);
 
 } // namespace ninfer::ops::detail

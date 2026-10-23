@@ -34,7 +34,8 @@ fused decode kernels for the 27B dense-route problems at the decode token shapes
 against the FP64 oracle of §3.2's composition — are executed. The remaining dense consumers (the
 shared expert inside SparseMoe, the embedding and lm_head) and the prefill token route follow in
 later steps under this same contract. The 125B Flash-Next banks (512-way MoE) are
-a later step that adds shapes, not semantics.
+a later step that adds shapes, not semantics; its execution planning lives in the dated campaign
+plan (docs/maintainer/2026-10-21-q38fn-exl3-campaign-plan.md).
 
 Out of scope, and rejected at import: exllamav3's n-gram embedding codec (160-element tiles),
 quantized dimensions padded to a multiple of 128 (`trim_padded_out`), linear biases, the obsolete
@@ -285,6 +286,40 @@ The fork's converter emits the same format by EXL3's method. The steps:
    half-integer (half-integer only with MUL1).
 5. **Verification**: the same exact-oracle check as §6.1 step 4. The output must also pass the
    import route's validation unchanged.
+
+#### 6.2.1 Executed bring-up: the uncalibrated streaming quantize route (2026-10-16..21)
+
+The route's first executed campaign dropped the Hessian requirement to establish the container,
+binder and kernel route end to end. The method is the §6.2 pipeline without step 1: per MoE layer,
+the converter streams one layer's routed tensors from the BF16 source shard (~5 GB resident),
+derives `suh`/`svh` from random signs (EXL3's incoherence derivation without the scale search),
+runs LDLQ–Viterbi at one bank-wide rate, writes `layer_NN.pt`, and discards the shard. Completed
+layer files are resumed as-is, and a later campaign may reuse a finished projection's layer file
+when its rate is unchanged (the down banks carried over between the 35B campaigns). Measured on
+the RTX 5090 box: ~2800 s per 35B layer with gate and up quantized as separate linears, ~2230 s
+per layer for the packed-gate_up variant. Two layout lessons are now contract:
+
+- **Gate and up are separate complete banks** (per §2.2 and the kernel route): the routed experts'
+  gate and up projections are quantized as separate linears and emitted as separate banks. A packed
+  gate_up campaign (one linear per expert over the checkpoint's [2·intermediate, hidden] block) was
+  executed and reverted: it cannot feed the `exl3_routed_gate`/`exl3_routed_up` kernel route.
+- **The tier rank stride is layout-aware**: the SP-4 rank check assumes the packed native route's
+  2·intermediate row stride for Q4/Q8 banks and one row block per expert for EXL3 banks; the
+  initial implementation assumed the packed stride for all banks and rejected every separate-bank
+  artifact at startup.
+
+The engine reconciliation that made banks artifacts serve (2026-10-21): the layout-aware tier
+stride, the FFN workspace sizing for the EXL3 decode plan (the fused `routed_gate_up` qtype is
+empty on the EXL3 route), and the removal of the wrapper's artificial single-token restriction —
+the decode loop covers arbitrary token counts, so prefill runs as per-token decode, numerically
+identical because routing is per-token independent. A batched EXL3 MoE prefill kernel remains
+future work under §7.
+
+Acceptance status: the 27B dense route (`exl3_dense_v1`) is accepted — 7.92 GiB artifact, full-
+corpus perplexity 5.18 against the FP8 control's 4.55 at 26.5 GiB (both `qwen3_8_27b` family).
+The 35B bank route assembles, smoke-serves, and was verified only to that level: the
+full-corpus acceptance run was stopped at 19/496 windows (early windows ~5.9 overall) by user
+decision before any quality verdict. No quality claims exist for the uncalibrated banks route.
 
 ## 7. Kernel contracts (`src/ops`)
 

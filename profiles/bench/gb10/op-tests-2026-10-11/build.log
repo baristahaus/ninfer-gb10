@@ -1,4 +1,0 @@
-[1/4] Building CXX object tests/CMakeFiles/ninfer_hyperconnection_test.dir/ops/test_hyperconnection.cpp.o
-[2/4] Building CXX object tests/CMakeFiles/ninfer_flash_next_moe_test.dir/ops/test_flash_next_moe.cpp.o
-[3/4] Linking CXX executable tests/ninfer_hyperconnection_test
-[4/4] Linking CXX executable tests/ninfer_flash_next_moe_test

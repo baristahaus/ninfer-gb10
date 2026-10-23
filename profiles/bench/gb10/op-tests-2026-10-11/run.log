@@ -1,7 +1,0 @@
-[op-tests 2026-10-11T13:36:58Z] start; HEAD 28320a48
-[op-tests 2026-10-11T13:36:58Z] free memory 114G available
-[op-tests 2026-10-11T13:36:58Z] building (incremental)
-[op-tests 2026-10-11T13:37:00Z] build OK
-[op-tests 2026-10-11T13:37:04Z] moe test rc=0
-[op-tests 2026-10-11T13:37:07Z] hyperconnection test rc=0
-[op-tests 2026-10-11T13:37:07Z] done: moe rc=0 hc rc=0

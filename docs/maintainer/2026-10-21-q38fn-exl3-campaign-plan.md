@@ -1,9 +1,14 @@
 # Plan: the q38fn (Qwen3.8 Flash-Next 125B-A6B) EXL3 banks campaign (twoFour)
 
-Status: planning. This document is the execution plan for the 125B Flash-Next banks campaign
-under the EXL3 Trellis contract (`exl3-trellis-contract.md`, SP-7). It records what the 35B
-bring-up established, the exact code changes the 125B shapes require, the measured cost basis,
-and the acceptance criteria. Nothing here runs before the code-readiness items land.
+Status: closed by decision (2026-10-23). The 125B will be served directly from the
+existing FP8 MTP artifact — no re-encode. Rationale: the model's quality is the original
+authors' guarantee when its bytes are loaded faithfully; the engine's obligation is loading
+fidelity (validated by the existing oracles and serving battery), not the quality of a lossy
+repack we would then have to validate ourselves. The EXL3 banks route remains the documented
+option if a denser resident posture is ever needed (the 27B dense route stays accepted; the
+35B bank route stays smoke-verified). The shape-readiness sweep below was completed and
+verified by twoFour (commit e9e35a67, q38fn-bank-shapes) and is retained as the standing
+preparation for any future banks campaign.
 
 ## 0. Decision context
 

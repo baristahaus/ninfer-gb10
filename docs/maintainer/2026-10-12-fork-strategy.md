@@ -145,6 +145,37 @@ trigger for the io_uring path is measured, not speculative: adopt it only when p
 page-fault costs dominating the disk-tier read path. Multi-node cache machinery (shared cache
 clusters, cross-machine hits, disaggregated storage) remains out of the product contract.
 
+**External validation of the tiering design (added 2026-10-24).** llama.cpp's GPU expert cache
+(PR #29887 merged 2026-10-07, shipped v0.7.0; verified) implements this section's warm-host /
+hot-device expert cache for the same 125B model family — per-layer LRU pools of hot experts in
+spare VRAM, misses copied over PCIe, host experts otherwise. Reported 27→50.8 t/s (RTX 5090,
+61k ctx) with ~89% hit rate. Four findings carry into this fork's design decisions:
+
+- *Break-even is high*: ~85% hit rate (community rule of thumb) and ~¼ of expert bytes as cache
+  below that, enabling it hurts — small-VRAM cards lose 1.2–2.7× with the cache enabled. Our
+  adaptive hot-set cache seeds from ranked profiles and sizes from free VRAM after the baseline
+  reservation, which is the same discipline; the finding reinforces that the cache must never
+  take VRAM the KV or graphs need.
+- *Decode-only boundaries are a defect, not a design*: their cache is active for batches ≤32
+  tokens; long prompts bypass it while its VRAM is still taken from prompt processing, so
+  agentic/long-context traffic can be net slower. Under this fork's cache-economics frame,
+  tiering must hold through prefill: a tiered expert path whose prefill falls back to a
+  non-tiered route (the EXL3 banks route's looped decode is exactly this failure) is
+  disqualified for agent-class serving.
+- *MTP bursts change the hit-rate math*: each draft token picks its own experts, so hit rates
+  measured at one token per step do not transfer; their measured cache was 27% slower with MTP
+  on, and the unmerged graph-safe branch (LRU decisions and copies inside the compute graph,
+  `LRU_DECIDE`/`LRU_FILL`, no host readback of expert ids) is the reference for making tiered
+  decode CUDA-graph-replay-safe. Our design keeps residency decisions at resource boundaries
+  with a single residency-table upload per boundary — replay-safe by construction, and the
+  chart to beat if per-round adaptation is ever wanted.
+- *The PCIe budget is arithmetic, not tuning*: at 90% hit rate ~137 MB crosses the bus per
+  token; chipset-attached x4 links cap throughput regardless of cache quality. The 5090 lane's
+  streaming path sizes against the link, not the SSD or the GPU.
+
+This is single-run community reporting without error bars on heterogeneous harnesses — used
+here as design-direction evidence, not as acceptance numbers.
+
 **Ranked profiles.** The converter already owns a frequency-corpus ranking discipline (the 35B
 artifact carries `tools/freq_corpus` ranking provenance). The same discipline produces per-
 `(layer, expert)` activation profiles at conversion time; the artifact carries them as component

@@ -106,6 +106,45 @@ KV extension is **tail streaming**: for long contexts, the most-read KV pages st
 the rest restores/streams from host on demand — an extension of the existing host-KV-spill
 machinery from batch-restore-at-reuse to demand reads.
 
+**The cache-economics frame (added 2026-10-23).** External evidence (DeepSeek's DeepInfer
+deployment and 3FS; validated brief 2026-10-24) shows the serving economics of an agent-class
+workload are dominated by KV hit rate, not engine speed: ~96% of served input tokens are cache
+reads loaded from disk rather than recomputed, and the unit cost of serving varies ~7× on hit
+rate alone. Three consequences carry into this fork's design, all within the single-box
+contract:
+
+- *Retention is an economics variable.* The context-cache's retention classes (including
+  `LongAnchor`) decide value, not just memory pressure. A longer effective retention window is
+  bought two ways: host/disk tiering of cold KV pages, and KV density — every halving of
+  bytes/token (fp8 → k8v4-class formats) doubles the window within the same host budget. Format
+  decisions should weigh retention capacity, not only bandwidth.
+- *Partial misses are already O(tail), keep them that way.* Prefix reuse selects the longest
+  cached prefix, so a partial miss recomputes only the uncached suffix. The design invariant to
+  protect: never let an admission path fall back to full-prefix recomputation when any valid
+  prefix checkpoint exists. The disk tier below raises the stakes — a miss against a
+  disk-resident page must page it in, never silently recompute it.
+- *Long-horizon context flagging and shared session cache.* Agent workloads are
+  input-dominated and long-horizon: one agent session (and its subagents) produces many requests
+  that share a large common prefix — system prompt, tool definitions, accumulated scratch state.
+  The context-cache already keys shared prefixes engine-wide; the extension is **session-scoped
+  flagging**: admission accepts a session key so related requests' prefixes are cataloged under
+  one root; retention weights anchor prefixes of *ongoing* sessions over closed ones (the
+  existing `LongAnchor` class becomes the target of an explicit promote on session activity and
+  demote on session close); and cold anchor pages spill to the disk tier rather than evicting.
+  This is what makes a long-horizon session survive an idle gap: the expensive shared prefix is
+  still there — on disk if not in RAM — and a resumed request pays only the O(tail) recomputation.
+
+**Disk tier for state (long-horizon storage caching).** The same evidence validates NVMe as a
+real tier for inference state, not only weights: DeepSeek serves KV cache reads from 3FS-backed
+SSD at 40 GiB/s peaks. The single-box analog extends the existing cold tier (the artifact file,
+read through the OS page cache — the PLE pattern) to **context state**: page-cached spill first
+(mmap-backed, zero new machinery, already how PLE reads), and — if a future workload shows
+page-fault overhead dominating at expert/page granularity — explicit queued reads via Linux
+`io_uring` with registered buffers (the local-node version of 3FS's USRBIO API shape). The
+trigger for the io_uring path is measured, not speculative: adopt it only when profiles show
+page-fault costs dominating the disk-tier read path. Multi-node cache machinery (shared cache
+clusters, cross-machine hits, disaggregated storage) remains out of the product contract.
+
 **Ranked profiles.** The converter already owns a frequency-corpus ranking discipline (the 35B
 artifact carries `tools/freq_corpus` ranking provenance). The same discipline produces per-
 `(layer, expert)` activation profiles at conversion time; the artifact carries them as component

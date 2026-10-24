@@ -329,6 +329,18 @@ what "correct" means.
   design must account for (the MTP draft layer reads hot dense weights and must stay viable
   alongside tiered experts). RAM economics gate tiering (96 GB DDR5 ≈ $1,899): the strategy
   deliberately targets the RAM users already have.
+- **The Harness² finding** (Google Cloud AI Research, arXiv 2610.14224, ingested 2026-10-24 via a
+  verified brief): recursive harness self-improvement with frozen weights buys real points
+  (+11.5 on an empty base harness), but the durable takeaways for the local agent fleet are
+  cheaper than the loop. Probe-before-keep: every harness/skill edit earns its place by a
+  same-task A/B against observed behavior, never by plausibility. The durable artifact is a
+  lessons-with-evidence library (the existing skill library already is one — keep evidence
+  attached); always-on prompt prose is paid per run and belongs in triggered skills. Plumbing
+  rules rot with each model swap; expect to rewrite them per model generation. When any
+  agent-facing work touches evaluation or rubrics, firewall the eval sources from the agent
+  under test (the paper's own contamination incident). Do not run the reference
+  `google-research/harness2` as-is (3 commits, 106 open PRs, no budget cap); the hand-rolled
+  loop over a repetitive task class is the sane form if ever wanted.
 
 ## 14. Provenance of the numbers
 

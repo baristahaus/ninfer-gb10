@@ -13,6 +13,7 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <sys/mman.h>
 
 namespace ninfer::io {
 namespace {
@@ -144,4 +145,21 @@ DirectReadWindow direct_read_window(FileView file, std::uint64_t offset, std::si
     return {offset - prefix, count, prefix, required};
 }
 
+
+std::shared_ptr<const std::byte> ReadOnlyFile::map(std::uint64_t offset,
+                                                   std::uint64_t bytes) const {
+    if (bytes == 0 || offset > view_.bytes || bytes > view_.bytes - offset) {
+        throw std::invalid_argument("mapped range exceeds input file");
+    }
+    const auto page   = static_cast<std::uint64_t>(::sysconf(_SC_PAGESIZE));
+    const auto start  = offset / page * page;
+    const auto delta  = offset - start;
+    const auto length = bytes + delta;
+    void* ptr         = ::mmap(nullptr, length, PROT_READ, MAP_PRIVATE, view_.descriptor, static_cast<off_t>(start));
+    if (ptr == MAP_FAILED) {
+        throw std::system_error(errno, std::generic_category(), "map artifact range");
+    }
+    return {static_cast<const std::byte*>(ptr) + delta,
+            [ptr, length](const std::byte*) { ::munmap(ptr, length); }};
+}
 } // namespace ninfer::io

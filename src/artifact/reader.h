@@ -18,6 +18,28 @@ struct ReadSegment {
     std::uint64_t bytes              = 0;
 };
 
+struct MappedSegment {
+    std::shared_ptr<const std::byte> storage;
+    std::uint64_t begin = 0;
+    std::uint64_t bytes = 0;
+};
+
+// Owns mappings independently of Reader; no payload is copied or pinned in host RAM.
+class MappedRange {
+public:
+    std::vector<MappedSegment> segments;
+    [[nodiscard]] std::uint64_t size() const noexcept {
+        return segments.empty() ? 0 : segments.back().begin + segments.back().bytes;
+    }
+    void copy(std::uint64_t offset, std::span<std::byte> destination) const;
+    // Page-cache advice for the mapped file pages; both are best effort and never change
+    // contents. advise_random() stops fault readahead around scattered reads. prefetch() starts
+    // asynchronous reads of the pages covering [offset, offset + bytes) without waiting, so a
+    // caller that prefetches many scattered rows before copying them overlaps their I/O.
+    void advise_random() const;
+    void prefetch(std::uint64_t offset, std::uint64_t bytes) const;
+};
+
 // Owns the cold directory and lazily opened files. Runtime views borrow materialized storage,
 // never this Reader. Encodings are interpreted only for requested objects.
 class Reader {
@@ -42,6 +64,9 @@ public:
     [[nodiscard]] std::vector<std::byte> read_range(std::uint64_t offset,
                                                     std::uint64_t bytes) const;
     [[nodiscard]] std::vector<std::byte> read_object(ObjectHandle handle) const;
+    // Maps [offset, offset+bytes) across the artifact's volumes without copying. The PLE disk
+    // tier hashes the mapped pages in place.
+    [[nodiscard]] MappedRange map_range(std::uint64_t offset, std::uint64_t bytes) const;
     // Opens an independently owned file and checks its framing/length against this directory.
     [[nodiscard]] io::ReadOnlyFile open_file(std::size_t file_index, io::ReadMode mode) const;
 

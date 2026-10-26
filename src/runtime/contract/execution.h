@@ -1,7 +1,9 @@
 #pragma once
 
 #include "runtime/contract/request.h"
+#include "runtime/contract/timing.h"
 #include <array>
+#include <span>
 #include <compare>
 
 namespace ninfer::runtime {
@@ -50,6 +52,50 @@ struct BeginSummary {
 
 struct RoundBudget {
     std::uint32_t generated_tokens_remaining = 0;
+};
+
+
+// Master-generation round-report contract: token-logprob egress views and the commit
+// observation switch the Flash-Next instance and serving adapters consume. Additive.
+// The product Engine only needs statistics for rows whose sequence is released by commit.
+// Direct diagnostic callers may temporarily request cumulative snapshots for every row.
+enum class CommitObservation : std::uint8_t {
+    ReleasedRowsOnly,
+    AllRows,
+};
+
+// Target-model probability reports for one round's published tokens, laid out exactly like the
+// token span they describe: element i belongs to token i, and the alternative ranks for token i
+// occupy [i*ranks, (i+1)*ranks). Non-owning views into the Program's pinned egress buffer, valid
+// only between that round's decode and commit, like the token span itself. Every span is empty when
+// the engine was loaded without EngineOptions::token_logprobs.
+struct RoundTokenScores {
+    std::span<const float> chosen;
+    std::span<const std::int32_t> top_ids;
+    std::span<const float> top_logprobs;
+    std::int32_t ranks                   = 0;
+    [[nodiscard]] bool empty() const noexcept { return chosen.empty(); }
+};
+
+struct GeneratedRound {
+    std::span<const TokenId> tokens;
+    RoundTokenScores scores;
+};
+
+struct BatchedGeneratedRound {
+    std::span<const TokenId> tokens;
+    std::span<const std::int32_t> row_counts;
+    std::uint32_t row_stride = 1;
+    RoundTokenScores scores;
+    ExecutionTiming timing;
+};
+
+struct PrefillStepResult {
+    BeginSummary summary;
+    GeneratedRound round;
+    std::uint32_t processed_prompt_tokens = 0;
+    bool complete                         = false;
+    ExecutionTiming timing;
 };
 
 } // namespace ninfer::runtime

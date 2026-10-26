@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <filesystem>
 #include <span>
 
@@ -36,6 +37,10 @@ public:
     // One aligned direct read, including a possible short final block.
     [[nodiscard]] std::size_t read_direct(std::uint64_t offset,
                                           std::span<std::byte> destination) const;
+    // Shared read-only mapping of [offset, offset+bytes). No payload is copied or pinned in
+    // host RAM; the mapping dies with the last holder of the returned owner.
+    [[nodiscard]] std::shared_ptr<const std::byte> map(std::uint64_t offset,
+                                                       std::uint64_t bytes) const;
 
 private:
     std::filesystem::path path_;

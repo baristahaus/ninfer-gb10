@@ -353,8 +353,10 @@ struct GeneratedToolCall {
 enum class ToolCallParseFallbackReason : std::uint8_t {
     None,
     MalformedStructure,
+    DuplicateParameter,
     InvalidToolName,
     UndeclaredTool,
+    TrailingContent,
 };
 
 [[nodiscard]] inline constexpr const char*
@@ -364,19 +366,25 @@ tool_call_parse_fallback_reason_name(ToolCallParseFallbackReason reason) noexcep
         return "none";
     case ToolCallParseFallbackReason::MalformedStructure:
         return "malformed_structure";
+    case ToolCallParseFallbackReason::DuplicateParameter:
+        return "duplicate_parameter";
     case ToolCallParseFallbackReason::InvalidToolName:
         return "invalid_tool_name";
     case ToolCallParseFallbackReason::UndeclaredTool:
         return "undeclared_tool";
+    case ToolCallParseFallbackReason::TrailingContent:
+        return "trailing_content";
     }
     return "malformed_structure";
 }
 
 struct ToolCallParseDiagnostics {
-    bool marker_seen                            = false;
-    std::uint32_t structured_call_count         = 0;
-    std::uint32_t schema_mismatch_arguments     = 0;
-    ToolCallParseFallbackReason fallback_reason = ToolCallParseFallbackReason::None;
+    bool marker_seen                              = false;
+    std::uint32_t structured_call_count           = 0;
+    std::uint32_t empty_arguments_omitted         = 0;
+    std::uint32_t schema_mismatch_arguments       = 0;
+    std::uint32_t duplicate_parameters_repaired   = 0;
+    ToolCallParseFallbackReason fallback_reason   = ToolCallParseFallbackReason::None;
 
     [[nodiscard]] friend constexpr bool
     operator==(const ToolCallParseDiagnostics&, const ToolCallParseDiagnostics&) noexcept = default;
@@ -462,12 +470,22 @@ enum class PromptCacheMarkerKind : std::uint8_t {
     PrivateLongAnchor,
 };
 
+// Retention intent a protocol may declare for its private record. Default lets the cache decide
+// from demand evidence; LiveSession asks for lineage retention; Disposable marks single-use
+// content the cache may drop first.
+enum class CacheRetentionHint : std::uint8_t {
+    Default,
+    LiveSession,
+    Disposable,
+};
+
 enum class SharedCandidateEvidence : std::uint8_t {
     None               = 0,
     ExplicitBoundary   = 1U << 0U,
     RequestedAutomatic = 1U << 1U,
     DefaultAutomatic   = 1U << 2U,
     EngineStructural   = 1U << 3U,
+    EngineObserved     = 1U << 4U,
 };
 
 [[nodiscard]] constexpr SharedCandidateEvidence operator|(SharedCandidateEvidence left,
@@ -512,6 +530,9 @@ struct PromptCacheMarker {
 
 struct ContextCacheHints {
     std::optional<std::string> session_key;
+    // Coarse retention intent for the request's private record. The restructured cache derives
+    // fine-grained priority from demand evidence; the hint survives as the public contract.
+    CacheRetentionHint retention = CacheRetentionHint::Default;
     std::vector<PromptCacheMarker> markers;
     // Protocols with their own automatic/explicit write policy disable the Engine's structural
     // candidates. Exact reads from already-published shared prefixes remain enabled.
@@ -601,6 +622,9 @@ enum class FinishReason : std::uint8_t {
 };
 
 struct OutputDelta {
+    // Bytes of tool-call argument text the frontend consumed for the in-flight call. Streaming
+    // protocols use it to report decode progress while parameters are still private.
+    std::size_t tool_call_progress_bytes = 0;
     OutputChannel channel = OutputChannel::Content;
     std::string text;
 };

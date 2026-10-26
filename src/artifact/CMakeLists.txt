@@ -3,6 +3,7 @@ add_library(ninfer_artifact STATIC
   formats.cpp
   layouts.cpp
   reader.cpp
+  mapped_range.cpp
   backing.cpp
   binder.cpp
   placement.cpp

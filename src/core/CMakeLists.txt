@@ -28,6 +28,7 @@ add_library(ninfer_core SHARED
   cyclic_kv_cache.cpp
   paged_kv_cache.cpp
   paged_kv_geometry.cpp
+  host_worker_pool.cpp
   linear_attention_state.cpp
   state_image.cpp
   layout.cpp

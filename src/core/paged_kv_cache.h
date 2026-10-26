@@ -22,6 +22,8 @@ struct PagedKVLayerView {
     std::int32_t head_dim     = 0;
     std::int32_t num_kv_heads = 0;
     KvCacheStorage storage    = KvCacheStorage::BFloat16;
+    // Master-generation extra per-layer planes (PLE staging); restructured consumers ignore it.
+    std::vector<Tensor> auxiliary_pages;
 };
 
 /** Non-owning multi-sequence view consumed by batched growing-cache Ops. */
@@ -34,8 +36,9 @@ struct PagedKVBatchLayerView {
     std::int32_t head_dim     = 0;
     std::int32_t num_kv_heads = 0;
     KvCacheStorage storage    = KvCacheStorage::BFloat16;
-
-    [[nodiscard]] Device device() const;
+    // Master-generation extra per-layer planes (PLE staging); restructured consumers ignore it.
+    std::vector<Tensor> auxiliary_pages;
+     [[nodiscard]] Device device() const;
 };
 
 /** Rebinds one checked single-sequence table row as a one-row batched view. */

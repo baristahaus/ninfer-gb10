@@ -24,7 +24,7 @@ DFlashFeatureSink make_dflash_prefill_sink(PrefillContext& state) {
             Tensor count = frame.append_counts.slice(0, 0, 1);
             Tensor lane  = frame.state_destination_slots.slice(0, 0, 1);
             Tensor row   = frame.dflash_kv_table_rows.slice(0, 0, 1);
-            ops::set_i32_scalar(count, features.ne[1], state.execution.device.stream());
+            ops::set_i32_scalar(count, features.ne[1], state.execution.device.execution_view());
             const auto exact = static_cast<std::uint32_t>(features.ne[1]);
             dflash_append_context(state, features, positions, count, lane, row, {exact, exact});
             (void)rewrite_checkpoint;
@@ -109,7 +109,7 @@ void mtp_bridge_multimodal(PrefillContext& state, const PreparedPromptData& prom
     Tensor bridge_token = state.execution.io.mtp->target_input_ids.slice(0, 0, 1);
     const TokenId token = prompt.token_ids[state.text_kv_base];
     CUDA_CHECK(cudaMemcpyAsync(bridge_token.data, &token, sizeof(token), cudaMemcpyHostToDevice,
-                               state.execution.device.stream()));
+                               state.execution.device.execution_view()));
 
     Tensor visual_embedding;
     const Tensor* composed_embedding = nullptr;
@@ -143,13 +143,13 @@ void sample_from_hidden(PrefillContext& state, const Tensor& hidden, std::int32_
     }
     state.execution.work.reset();
     Tensor logits = state.execution.io.logits.slice(1, 0, 1);
-    ops::linear(hidden, state.execution.model.output_head, logits, state.execution.device.stream());
+    ops::linear(hidden, state.execution.model.output_head, logits, state.execution.device.execution_view());
     CUDA_CHECK(cudaMemcpyAsync(state.execution.io.pos.data, &absolute_position,
                                sizeof(absolute_position), cudaMemcpyHostToDevice,
-                               state.execution.device.stream()));
+                               state.execution.device.execution_view()));
     ops::sample(logits, state.execution.io.token, TextConfig::token_domain, state.sampling,
                 state.execution.io.pos, purpose, state.execution.work,
-                state.execution.device.stream());
+                state.execution.device.execution_view());
     if (state.execution.io.report_token_logprobs) {
         // One column: the position that produced this token. The reported distribution is the raw
         // model distribution, so nothing about the sampling policy enters it.
@@ -157,7 +157,7 @@ void sample_from_hidden(PrefillContext& state, const Tensor& hidden, std::int32_
         Tensor reported_logprobs = state.execution.io.report_top_logprobs;
         ops::target_logprobs(logits, state.execution.io.token, TextConfig::token_domain,
                              state.execution.io.report_logprob, &reported_ids, &reported_logprobs,
-                             state.execution.device.stream());
+                             state.execution.device.execution_view());
     }
     state.execution.work.reset();
 }

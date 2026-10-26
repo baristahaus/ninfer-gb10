@@ -36,7 +36,7 @@ PleGatherStage::~PleGatherStage() {
 }
 
 ops::FlashNextPleStageMailbox* PleGatherStage::mailbox() const noexcept {
-    return static_cast<ops::FlashNextPleStageMailbox*>(mailbox_.data());
+    return static_cast<ops::FlashNextPleStageMailbox*>(const_cast<void*>(mailbox_.data()));
 }
 
 void PleGatherStage::begin_round() {

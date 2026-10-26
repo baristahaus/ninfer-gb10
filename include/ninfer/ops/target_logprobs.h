@@ -11,6 +11,8 @@ namespace ninfer::ops {
 // Upper bound on reported alternative ranks per token. The Flash-Next egress layout and the
 // serving adapters size their pinned buffers with this bound.
 inline constexpr std::int32_t kMaxReportedLogprobRanks = 20;
+// Sentinel rank id for columns beyond the reported count.
+inline constexpr std::int32_t kNoReportedLogprobRank = -1;
 
 /**
  * Op: Target token log-probabilities

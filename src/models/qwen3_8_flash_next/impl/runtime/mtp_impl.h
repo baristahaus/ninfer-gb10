@@ -34,14 +34,14 @@ void mtp_bridge_and_propose(PrefillContext& state, const Tensor& next_token,
                         state.state_destination_slot, state.mtp_proposal_extent);
 
     Tensor position_view = state.execution.io.mtp->target_positions.slice(0, 0, 1);
-    ops::set_i32_scalar(position_view, position, state.execution.device.stream());
+    ops::set_i32_scalar(position_view, position, state.execution.device.execution_view());
     Tensor mtp_hidden         = state.execution.io.mtp->ar_hidden;
     Tensor logits             = state.execution.io.logits.slice(1, 0, 1);
     Tensor draft0             = state.execution.io.mtp->draft_tokens.slice(0, 0, 1);
     Tensor rope_position_view = state.execution.work.alloc(DType::I32, {1, 3});
     CUDA_CHECK(cudaMemcpyAsync(rope_position_view.data, rope_position.data(),
                                rope_position.size_bytes(), cudaMemcpyHostToDevice,
-                               state.execution.device.stream()));
+                               state.execution.device.execution_view()));
     const auto bridge_visible = static_cast<std::uint32_t>(position + 1);
     const ops::CausalAttentionExecutionEnvelope bridge_envelope{bridge_visible, bridge_visible};
     if constexpr (Variant::flash_next) {
@@ -65,7 +65,7 @@ void mtp_bridge_and_propose(PrefillContext& state, const Tensor& next_token,
     }
 
     Tensor ar_position = state.execution.io.mtp->position.slice(0, 0, 1);
-    ops::set_i32_scalar(ar_position, position + 1, state.execution.device.stream());
+    ops::set_i32_scalar(ar_position, position + 1, state.execution.device.execution_view());
     for (int i = 1; i < static_cast<int>(state.mtp_proposal_extent); ++i) {
         Tensor previous_token = state.execution.io.mtp->draft_tokens.slice(0, i - 1, 1);
         Tensor next_draft     = state.execution.io.mtp->draft_tokens.slice(0, i, 1);
@@ -81,7 +81,7 @@ void mtp_bridge_and_propose(PrefillContext& state, const Tensor& next_token,
                                      envelope, next_hidden, logits, next_draft, &next_predictor);
             CUDA_CHECK(cudaMemcpyAsync(state.execution.io.mtp->ar_hidden.data, next_predictor.data,
                                        next_predictor.bytes(), cudaMemcpyDeviceToDevice,
-                                       state.execution.device.stream()));
+                                       state.execution.device.execution_view()));
         } else {
             card.mtp_forward_ar_step(previous_token, state.execution.io.mtp->ar_hidden, ar_position,
                                      envelope, next_hidden, logits, next_draft);
@@ -89,7 +89,7 @@ void mtp_bridge_and_propose(PrefillContext& state, const Tensor& next_token,
                                        state.execution.io.mtp->ar_hidden.bytes(),
                                        cudaMemcpyDeviceToDevice, state.execution.device.stream()));
         }
-        ops::increment_i32_scalar(ar_position, state.execution.device.stream());
+        ops::increment_i32_scalar(ar_position, state.execution.device.execution_view());
     }
 }
 
@@ -112,7 +112,7 @@ auto mtp_decode_batch_body(MtpBatchContext& state, std::int32_t batch_size, std:
                 throw std::logic_error("MTP deferred GDN fold storage is unavailable");
             }
             copy_gdn_replay_record_rows(*state.execution.replay_records, *state.pending_snapshot,
-                                        state.pending_fold_rows, state.execution.device.stream());
+                                        state.pending_fold_rows, state.execution.device.execution_view());
             if constexpr (Variant::flash_next) {
                 if (state.execution.ple_records == nullptr ||
                     state.execution.ple_state == nullptr) {
@@ -188,7 +188,7 @@ auto mtp_decode_batch_body(MtpBatchContext& state, std::int32_t batch_size, std:
 
         ops::speculative_prepare_verify_inputs(anchors, current_drafts, frontiers, current_extents,
                                                verify_ids, target_positions,
-                                               state.execution.device.stream());
+                                               state.execution.device.execution_view());
         Tensor ple_history = frame.ple_history.slice(1, 0, batch_size);
         if (state.ple_stage_mailbox != nullptr) {
             // Publish the verify columns' PLE row IDs now; the host gathers them while the layers
@@ -247,7 +247,7 @@ auto mtp_decode_batch_body(MtpBatchContext& state, std::int32_t batch_size, std:
 
             ops::target_logprobs(verify_logits, published, TextConfig::token_domain, chosen,
                                  &reported_ids, &reported_logprobs,
-                                 state.execution.device.stream());
+                                 state.execution.device.execution_view());
         }
 
         {
@@ -311,11 +311,11 @@ auto mtp_decode_batch_body(MtpBatchContext& state, std::int32_t batch_size, std:
                 card.mtp_propose_batch(next_hidden, proposal_logits, next);
                 CUDA_CHECK(cudaMemcpyAsync(ar_hidden.data, next_hidden.data, ar_hidden.bytes(),
                                            cudaMemcpyDeviceToDevice,
-                                           state.execution.device.stream()));
+                                           state.execution.device.execution_view()));
                 if constexpr (Variant::flash_next) {
                     CUDA_CHECK(cudaMemcpyAsync(ar_mtp_hidden.data, next_mtp_hidden.data,
                                                ar_mtp_hidden.bytes(), cudaMemcpyDeviceToDevice,
-                                               state.execution.device.stream()));
+                                               state.execution.device.execution_view()));
                 }
             }
         }

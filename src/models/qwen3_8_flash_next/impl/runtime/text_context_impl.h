@@ -406,7 +406,7 @@ void TextContext::mtp_forward_tail(Tensor& x, const Tensor& ah, const Tensor& po
     ops::rmsnorm(q, *mtp_.q_norm, kCfg.rms_eps, true, qn, execution);
     ops::rmsnorm(k, *mtp_.k_norm, kCfg.rms_eps, true, kn, execution);
     Tensor rope_for_op = active_sequence_batch_ != 0 ? rope_positions.view({T}) : rope_positions;
-    ops::rope(rope_for_op, kCfg.rotary_dim, kCfg.rope_theta, qn, kn, s);
+    ops::rope(rope_for_op, kCfg.rotary_dim, kCfg.rope_theta, qn, kn, state.execution.device.execution_view());
 
     Tensor a = results.attention.view({kCfg.head_dim, kCfg.n_q, T});
     if (active_sequence_batch_ != 0) {
@@ -571,8 +571,8 @@ void TextContext::mtp_forward_flash_next(const Tensor& ids, const Tensor& hidden
         {.selected_indices = selected_qsa_indices, .reused_indices = reused_qsa_indices});
     ops::hyperconnection_combine_mix(hyper, block_output, injection, mtp_.payload->mlp_hc,
                                      block_input, &injection, work_, stream);
-    ops::flash_next_moe(block_input, mtp_.payload->post_mixer, block_output, work_, execution,
-                        bf16_gemm_);
+    ops::flash_next_moe(block_input, mtp_.payload->post_mixer, block_output, work_, execution);
+
     ops::hyperconnection_combine(hyper, block_output, injection, stream);
     CUDA_CHECK(cudaMemcpyAsync(predictor_hidden.data, hyper.data, hyper.bytes(),
                                cudaMemcpyDeviceToDevice, stream));
@@ -1090,7 +1090,7 @@ void TextContext::attn_mix(const FullLayerW& w, Tensor& x, int fidx, Phase ph) {
     const Tensor& rope_positions =
         active_rope_positions_ != nullptr ? *active_rope_positions_ : io_.rope_pos;
     Tensor rope_for_op = active_sequence_batch_ != 0 ? rope_positions.view({T}) : rope_positions;
-    ops::rope(rope_for_op, kCfg.rotary_dim, kCfg.rope_theta, qn, kn, s);
+    ops::rope(rope_for_op, kCfg.rotary_dim, kCfg.rope_theta, qn, kn, state.execution.device.execution_view());
 
     Tensor a = results.attention.view({kCfg.head_dim, kCfg.n_q, T});
     const Tensor& kv_table_rows =
@@ -1471,8 +1471,8 @@ void TextContext::run_flash_next_layers(Tensor& x, Phase ph) {
 
         ops::hyperconnection_combine_mix(hyper, block_output, injection, source.mlp_hc, block_input,
                                          &injection, work_, stream);
-        ops::flash_next_moe(block_input, source.post_mixer, block_output, work_, execution,
-                            bf16_gemm_);
+        ops::flash_next_moe(block_input, source.post_mixer, block_output, work_, execution);
+
         pending = true;
     };
     for (int layer = 0; layer < TextConfig::layers; ++layer) {

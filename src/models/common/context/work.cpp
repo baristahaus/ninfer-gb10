@@ -32,11 +32,11 @@ std::uint32_t kv_pages_for_frontier(std::uint32_t frontier) noexcept {
 runtime::ContextTransferRequirement
 state_transfer_requirement(TransferWork work, runtime::ContextTransferDirection direction) {
     return runtime::ContextTransferRequirement{
-        .resource    = {},
-        .direction   = direction,
-        .image_count = 1,
-        .page_groups = 0,
-        .work        = work,
+        .resource   = runtime::ContextResourceClass::State,
+        .direction  = direction,
+        .units      = 1,
+        .page_count = 0,
+        .work       = work,
     };
 }
 
@@ -44,11 +44,13 @@ runtime::ContextTransferRequirement
 kv_transfer_requirement(runtime::ContextTransferResource resource,
                         runtime::ContextTransferDirection direction, std::uint32_t pages,
                         TransferWork work) {
+    // The master-generation requirement vocabulary carries the page count; the restructured
+    // pool id stays with the caller's allocation policy.
+    (void)resource;
     return runtime::ContextTransferRequirement{
-        .resource    = resource,
-        .direction   = direction,
-        .page_groups = pages,
-        .work        = work,
+        .direction = direction,
+        .page_count = pages,
+        .work       = work,
     };
 }
 

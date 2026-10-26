@@ -101,13 +101,13 @@ RequestBasePlan Session::plan_request(qwen::PreparedPrompt&& prompt,
         r && (!r->recovery_frontier || r->recovery_frontier > r->frontier || r->frontier > count))
         throw std::invalid_argument("invalid input recovery point");
     plan->reuse    = options.allow_prefix_reuse && input.identity.reusable && p.shape.context_cache;
-    plan->summary  = {static_cast<std::uint32_t>(count), options.requested_output_tokens,
+    plan->summary  = {static_cast<std::uint32_t>(count), 0, options.requested_output_tokens,
                       std::min(options.requested_output_tokens,
                                p.shape.max_context - static_cast<std::uint32_t>(count) + 1),
                      options.requested_output_tokens <= p.shape.max_context - count + 1
                           ? FinishReason::OutputLimit
                           : FinishReason::ContextCapacity,
-                      plan->reuse};
+                      PrefixReusePath::Root, 0, plan->reuse};
     plan->sampling = options.sampling;
     auto identity  = std::make_shared<detail::Identity>();
     identity->tokens = input.token_ids;

@@ -141,11 +141,17 @@ struct ContextTransferObservation {
     std::uint64_t elapsed_ns = 0;
 };
 
+enum class ContextResourceClass : std::uint8_t {
+    State,
+    MainKV,
+    BackendKV,
+};
+
 struct ContextTransferRequirement {
-    ContextTransferResource resource;
+    ContextResourceClass resource      = ContextResourceClass::State;
     ContextTransferDirection direction = ContextTransferDirection::DeviceToHost;
-    std::uint32_t image_count          = 0;
-    std::uint32_t page_groups          = 0;
+    std::uint64_t units                = 0;
+    std::uint32_t page_count           = 0;
     TransferWork work;
 
     [[nodiscard]] friend constexpr bool operator==(ContextTransferRequirement,
@@ -192,12 +198,6 @@ using CoalescedTransferWork = std::array<TransferWork, kContextTransferDirection
 // Master-generation contract vocabulary: the pressure, materialization, checkpoint and
 // retention planning types the Flash-Next family programs against. Additive to the
 // restructured pool-descriptor contract above.
-enum class ContextResourceClass : std::uint8_t {
-    State,
-    MainKV,
-    BackendKV,
-};
-
 enum class Readiness : std::uint8_t {
     Ready,
     NeedsTransfer,

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "core/device.h"
+
 #include "models/qwen3_8_flash_next_125b_a6b/impl/config.h"
 #include "models/qwen3_8_flash_next_125b_a6b/impl/model.h"
 #include <ninfer/models/qwen3_8_flash_next_125b_a6b/package.h>
@@ -40,38 +42,38 @@ struct Variant {
 
     static void attention_projection(const Tensor&, const FullAttentionProjectionWeights&, Tensor&,
                                      Tensor&, Tensor&, Tensor&, qwen3_8_flash_next::TextPhase,
-                                     MemoryArena&, cudaStream_t);
+                                     MemoryArena&, CudaExecutionView execution);
     static void attention_output_projection(const Tensor&, const Weight&, Tensor&,
                                             qwen3_8_flash_next::TextPhase, MemoryArena&,
-                                            cudaStream_t);
+                                            CudaExecutionView execution);
     static void mtp_attention_projection(const Tensor&, const MtpAttentionProjectionWeights&,
                                          Tensor&, Tensor&, Tensor&, Tensor&, MemoryArena&,
-                                         cudaStream_t);
+                                         CudaExecutionView execution);
     static void mtp_kv_projection(const Tensor&, const MtpAttentionProjectionWeights&, Tensor&,
-                                  Tensor&, MemoryArena&, cudaStream_t);
+                                  Tensor&, MemoryArena&, CudaExecutionView execution);
     static void mtp_q_gate_projection(const Tensor&, const MtpAttentionProjectionWeights&, Tensor&,
-                                      Tensor&, MemoryArena&, cudaStream_t);
+                                      Tensor&, MemoryArena&, CudaExecutionView execution);
     static void gdn_input_projection(const Tensor&, const GdnProjectionWeights&, Tensor&, Tensor&,
-                                     qwen3_8_flash_next::TextPhase, MemoryArena&, cudaStream_t);
+                                     qwen3_8_flash_next::TextPhase, MemoryArena&, CudaExecutionView execution);
     static void gdn_input_projection_snapshot(const Tensor&, const GdnProjectionWeights&,
                                               const Tensor&, Tensor&, const Tensor&, const Tensor&,
                                               const Tensor&, Tensor&, Tensor&, Tensor&, Tensor&,
                                               qwen3_8_flash_next::TextPhase, MemoryArena&,
-                                              cudaStream_t);
+                                              CudaExecutionView execution);
     static void gdn_input_projection_record(const Tensor&, const GdnProjectionWeights&,
                                             const Tensor&, const Tensor&, const Tensor&,
                                             const Tensor&, Tensor&, Tensor&, Tensor&, Tensor&,
                                             Tensor&, qwen3_8_flash_next::TextPhase, MemoryArena&,
-                                            cudaStream_t);
+                                            CudaExecutionView execution);
     static void gdn_output_projection(const Tensor&, const Weight&, Tensor&,
-                                      qwen3_8_flash_next::TextPhase, MemoryArena&, cudaStream_t);
+                                      qwen3_8_flash_next::TextPhase, MemoryArena&, CudaExecutionView execution);
     static void gdn_norm_control_projection(const Tensor&, const Tensor&, float,
                                             const GdnProjectionWeights&, Tensor&, Tensor&, Tensor&,
                                             MemoryArena&, CudaExecutionView);
     static void post_mixer(const Tensor&, const PostMixerWeights&, Tensor&,
-                           qwen3_8_flash_next::TextPhase, MemoryArena&, cudaStream_t);
+                           qwen3_8_flash_next::TextPhase, MemoryArena&, CudaExecutionView execution);
     static void mtp_post_mixer(const Tensor&, const MtpPostMixerWeights&, Tensor&, MemoryArena&,
-                               cudaStream_t);
+                               CudaExecutionView execution);
 
     static std::size_t mtp_attention_projection_workspace_capacity_bytes(std::int32_t,
                                                                          std::int32_t);

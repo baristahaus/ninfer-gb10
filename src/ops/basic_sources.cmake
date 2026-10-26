@@ -23,6 +23,13 @@ foreach(_f IN ITEMS
   endif()
 endforeach()
 
+# Master-generation target-logprobs overload (top-rank egress for the Flash-Next MTP parity
+# reports) beside the restructured reduction route.
+target_sources(ninfer_ops PRIVATE
+  "${NINFER_OPS_DIR}/wrapper/target_logprobs.cpp"
+  "${NINFER_OPS_DIR}/launcher/target_logprobs.cu"
+  "${NINFER_OPS_DIR}/kernel/target_logprobs.cuh")
+
 # Public wrappers for the same no-counterpart ops.
 foreach(_f IN ITEMS
     prepare_ragged_prefix.cpp prepare_masked_block.cpp vision_pos_embed.cpp)

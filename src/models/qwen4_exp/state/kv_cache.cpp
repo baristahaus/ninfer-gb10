@@ -37,10 +37,16 @@ ops::QsaCacheView QsaCache::layer(std::uint32_t layer) const {
     const auto& s     = layout_.storage;
     const auto base   = layer * (s.planes_per_layer() + 1);
     const auto tables = tables_.matrix();
-    return {{pages_.plane(base), pages_.plane(base + 1),
-             s.key.has_scale() ? pages_.plane(base + 2) : Tensor{},
-             s.value.has_scale() ? pages_.plane(base + 2 + s.key.has_scale()) : Tensor{}, tables,
-             layout_.head_dim, layout_.kv_heads, s.storage},
+    return {{.k_pages       = pages_.plane(base),
+             .v_pages       = pages_.plane(base + 1),
+             .k_scale_pages = s.key.has_scale() ? pages_.plane(base + 2) : Tensor{},
+             .v_scale_pages = s.value.has_scale() ? pages_.plane(base + 2 + s.key.has_scale())
+                                                  : Tensor{},
+             .block_tables  = tables,
+             .head_dim        = layout_.head_dim,
+             .num_kv_heads    = layout_.kv_heads,
+             .storage         = s.storage,
+             .auxiliary_pages = {pages_.plane(base + s.planes_per_layer())}},
             {pages_.plane(base + s.planes_per_layer()), tables}};
 }
 } // namespace ninfer::models::qwen4_exp

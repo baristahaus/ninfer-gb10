@@ -1,8 +1,10 @@
 #include "serve/http_transport.h"
+#include "serve/request.h"
 
 #include <atomic>
 #include <chrono>
 #include <iostream>
+#include <future>
 #include <string>
 #include <vector>
 
@@ -23,6 +25,27 @@ int check(bool condition, const char* message) {
     if (condition) { return 0; }
     std::cerr << message << '\n';
     return 1;
+}
+
+int test_task_queue() {
+    std::atomic<unsigned> executed{0};
+    auto queue = ninfer::serve::make_http_task_queue(1, 1);
+    std::promise<void> started, release;
+    const auto gate = release.get_future().share();
+    int failures    = check(queue->enqueue([&, gate] {
+        started.set_value();
+        gate.wait();
+        ++executed;
+    }),
+                            "HTTP queue rejected first request");
+    started.get_future().get();
+    failures += check(queue->enqueue([&] { ++executed; }), "HTTP queue rejected pending request");
+    failures += check(!queue->enqueue([&] { ++executed; }), "HTTP queue failed to reject overflow");
+    release.set_value();
+    queue->shutdown();
+    failures += check(executed == 2, "HTTP shutdown did not drain accepted requests");
+    failures += check(!queue->enqueue([] {}), "HTTP queue accepted after shutdown");
+    return failures;
 }
 
 int test_sse_transport() {
@@ -123,6 +146,42 @@ int test_prompt_json_member_order() {
         "HTTP request JSON changed prompt-bearing object member order");
 }
 
+int test_schema_number_precision() {
+    int failures = 0;
+    const std::vector<std::pair<std::string, std::string>> cases{
+        {R"({"response_format":{"type":"json_schema","json_schema":{"name":"x","schema":{"type":"number","minimum":0.10000000000000001}}}})",
+         "response_format.json_schema.schema/minimum"},
+        {R"({"text":{"format":{"type":"json_schema","name":"x","schema":{"type":"number","minimum":1e-400}}}})",
+         "text.format.schema/minimum"},
+        {R"({"output_config":{"format":{"type":"json_schema","schema":{"type":"number","maximum":0.10000000000000001}}}})",
+         "output_config.format.schema/maximum"},
+        {R"({"tools":[{"type":"function","function":{"name":"x","strict":true,"parameters":{"type":"object","properties":{"x":{"minimum":0.10000000000000001}}}}}]})",
+         "tools/0/function/parameters/properties/x/minimum"},
+        {R"({"tools":[{"type":"namespace","name":"n","tools":[{"type":"function","name":"x","strict":true,"parameters":{"type":"object","properties":{"x":{"minimum":0.10000000000000001}}}}]}]})",
+         "tools/0/tools/0/parameters/properties/x/minimum"},
+        {R"({"tools":[{"name":"x","strict":true,"input_schema":{"type":"object","properties":{"x":{"minimum":0.10000000000000001}}}}]})",
+         "tools/0/input_schema/properties/x/minimum"},
+        {R"({"temperature":0.10000000000000001,"tools":[{"name":"x","strict":false,"input_schema":{"minimum":0.10000000000000001}}]})",
+         ""},
+        {R"({"response_format":{"json_schema":{"schema":{"type":"number","default":0.10000000000000001,"minimum":0.1}}}})",
+         ""},
+    };
+    for (const auto& [body, expected] : cases) {
+        httplib::Request request;
+        request.body = body;
+        try {
+            (void)ninfer::serve::parse_json_body(request);
+            failures += check(expected.empty(), "HTTP rounded a schema number before validation");
+        } catch (const ninfer::serve::ApiException& error) {
+            failures +=
+                check(!expected.empty() && error.error().code == "unsupported_json_schema" &&
+                          error.error().param == expected,
+                      "schema precision error lost its protocol location");
+        }
+    }
+    return failures;
+}
+
 #if defined(__linux__)
 class Socket final {
 public:
@@ -194,8 +253,9 @@ int test_inherited_socket_liveness() {
 } // namespace
 
 int main() {
-    int failures =
-        test_sse_transport() + test_sse_response_headers() + test_prompt_json_member_order();
+    int failures = test_sse_transport() + test_sse_response_headers() +
+                   test_prompt_json_member_order() + test_schema_number_precision() +
+                   test_task_queue();
 #if defined(__linux__)
     failures += test_inherited_socket_liveness();
 #endif

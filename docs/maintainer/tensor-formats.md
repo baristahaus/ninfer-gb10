@@ -8,14 +8,13 @@ separately.
 
 ## 1. Registered formats
 
-NInfer has exactly ten persistent numeric tensor formats in four categories.
+NInfer has ten persistent numeric tensor formats in five categories.
 
 Direct scalar formats preserve one logical scalar word per tensor element:
 
 | Canonical name | Category | Logical width | Logical meaning |
 |---|---|---:|---|
 | `bf16` | direct floating point | 16 | bfloat16 bit encoding |
-| `fp8_e4m3fn` | direct floating point | 8 | finite E4M3 encoding; no implicit scale |
 | `fp32` | direct floating point | 32 | IEEE-754 binary32 |
 | `int32` | direct signed integer | 32 | 32-bit two's-complement integer |
 
@@ -32,13 +31,20 @@ The block-scaled floating-point weight format is:
 
 | Canonical name | Code | K group | Block scale | Global field |
 |---|---|---:|---|---|
-| `nvfp4` | E2M1, 4 bits/weight | 16 | one E4M3FN word/group | one positive FP32 weight divisor |
+| `nvfp4` | E2M1, 4 bits/weight | 16 | one E4M3FN word/group | one positive FP32 divisor per matrix |
 
-The row-scaled floating-point weight format is:
+The FP8 weight formats are:
 
 | Canonical name | Code | Scale granularity | Scale |
 |---|---|---|---|
 | `fp8_e4m3fn_row_bf16` | E4M3FN, 8 bits/weight | one multiplier per logical row | BF16 |
+| `fp8_e4m3fn_block128x128_bf16` | E4M3FN, 8 bits/weight | one multiplier per 128×128 block | BF16 |
+
+The codebook weight format is:
+
+| Canonical name | Code | K group | Block scale | Global field |
+|---|---|---:|---|---|
+| `nf4_g16_e4m3fn` | fixed NF4 index, 4 bits/weight | 16 | one E4M3FN word/group | one positive FP32 weight divisor |
 
 Each name fixes a code and scale contract. The format registry is implemented in
 [`tools/artifact/formats.py`](../../tools/artifact/formats.py) and
@@ -54,14 +60,15 @@ The registry keeps the following concerns separate.
 
 A **persistent numeric format** defines the logical words needed to recover a numeric tensor from
 an artifact. The closed registry contains direct scalar formats, grouped signed-integer formats,
-the block-scaled `nvfp4` format, and the row-scaled `fp8_e4m3fn_row_bf16` format. It does not
+the block-scaled `nvfp4` format, row-scaled and block-scaled FP8 formats, and the codebook
+`nf4_g16_e4m3fn` format. It does not
 identify a tensor's model role, physical byte layout, or supported consumer.
 
 ### 2.2 Direct scalar format
 
 A **direct scalar format** assigns one fixed-width logical word to every logical tensor coordinate.
 It defines the value of that word without a group, scale, zero point, or reconstruction step. `bf16`,
-`fp32`, `fp8_e4m3fn`, and `int32` are direct scalar formats.
+`fp32`, and `int32` are direct scalar formats.
 
 The adjective “direct” does not require a particular physical layout or prohibit a registered
 lossless storage transformation. It means only that layout decoding recovers the original logical
@@ -77,7 +84,7 @@ A **quantization scheme** defines only the persistent logical representation of 
 - the validity rules for codes and scales;
 - the mathematical reconstruction of each represented weight.
 
-The six quantized names above identify schemes in this sense. Their meanings are immutable: a
+The seven quantized names above identify schemes in this sense. Their meanings are immutable: a
 consumer must not infer a different zero point, scale geometry, code range, or reconstruction rule
 from context.
 
@@ -90,11 +97,8 @@ may preserve an already encoded source or quantize floating-point values.
 The built-in `grouped_absmax` method implements the reference encoder in Section 7 for all four
 grouped integer formats. `fp8_row_maxabs` rounds source values to BF16 and quantizes each row to
 E4M3FN codes with a BF16 multiplier. `import_encoded` preserves compatible FP8 or NVFP4 codes,
-scales, and, for NVFP4, the matrix weight divisor. `nvfp4_maxabs`
-(`tools/convert/quantization/nvfp4.py`) quantizes BF16 values to `nvfp4`: the FP32 divisor
-`d_w = RN_fp32(2688 / max|W|)` maps the matrix maximum to the top of both grids, each group takes
-the E4M3FN scale nearest `RN_fp32(max|group| * d_w / 6)` and each value the E2M1 word nearest
-`W * d_w / scale`, ties to even, saturating at 6; a zero matrix takes `d_w = 1` and zero words.
+scales, and, for NVFP4, the matrix weight divisor. `stored_scale_mse` converts floating-point
+weights to NF4 or NVFP4 using an object-wide FP32 divisor and G16 MSE search (Section 3.6).
 
 A recipe can supply a Python callable as its method. Different methods can produce different
 valid codes and scales for the same format; they share the format's decoding contract. Method
@@ -123,9 +127,11 @@ among other things:
 One format may have more than one deliberately supported layout, but every layout must decode to
 exactly the same direct words or logical codes and scales. The currently registered layouts are
 `contiguous_le_v1` for direct words, `row_split_k128_v1` for grouped signed-integer formats, and
-`block_scale_k16_m128x4_v1` for `nvfp4`, and `row_scale_v1` for
-`fp8_e4m3fn_row_bf16`. Their byte order, plane packing, padding, swizzle, divisor placement, and
-alignment rules belong to the layout registry, not to these nine numeric formats.
+`block_scale_k16_m128x4_v1` and `batched_block_scale_k16_m128x4_v1` for `nvfp4`,
+`row_scale_v1` for `fp8_e4m3fn_row_bf16`, `block_scale_m128_k128_v1` for
+`fp8_e4m3fn_block128x128_bf16`, and `row_paged_g16_4k_v1` for `nf4_g16_e4m3fn`.
+Their byte order, plane packing, padding, swizzle, divisor placement, and alignment rules belong
+to the layout registry, not to the numeric formats.
 
 ### 2.7 Compute profile and kernel support
 
@@ -231,7 +237,9 @@ abbreviations; artifacts store the complete canonical names.
 `nvfp4` is a block-scaled floating-point weight representation, not a signed-integer
 `QuantFormat`. For a logical matrix `[N,K]`, every K-axis group contains 16 E2M1 code words and one
 E4M3FN scale word. The representation also contains one FP32 serialized weight divisor `d_w` for
-the complete matrix.
+the complete matrix. A bank `[E,N,K]` contains E independent matrices, each with its own
+`d_w[e]`; the leading axis never changes the K16 grouping. In a bank, the formula below applies
+to each matrix separately with that matrix's divisor.
 
 An E2M1 word has sign bit 3, exponent bits 2:1, and mantissa bit 0. Positive code words `0..7`
 decode to:
@@ -301,6 +309,61 @@ The format does not define how a floating-point source is assigned a scale or ro
 A recipe either preserves already selected code and scale words exactly or names its
 conversion method. Activation quantization and activation scales are separate compute or runtime-state
 concerns and are not persistent fields of this format.
+
+### 3.4.1 `fp8_e4m3fn_block128x128_bf16`
+
+This format stores `[N,K]` or a bank `[E,N,K]`, with N and K positive multiples of 128.
+It uses the same finite E4M3FN code words and nonnegative finite BF16 scale words as the row
+format. Each scale owns one 128×128 block; a zero scale requires signed-zero codes throughout
+its block. No matrix divisor is present.
+
+```text
+w_hat[e,n,k] = binary32(exact_e4m3fn_to_binary32(c[e,n,k])
+                       * exact_bfloat16_to_binary32(s[e,n/128,k/128]))
+```
+
+The e coordinate is omitted for rank two; division in the scale index is integer division.
+Published `weight_scale_inv` words imported by the block-FP8 source adapter are these multipliers,
+not their reciprocals. Codes and scales are imported bit-exactly. Activation precision is a
+separate Use permission. This representation does not imply support in an FP8 row-scale Op.
+
+### 3.5 `nf4_g16_e4m3fn`
+
+A positive rank-two matrix `[N,K]` has one 4-bit code per value, one nonnegative finite E4M3FN
+scale per K16 group, and one positive finite FP32 divisor `d` per object. Groups never cross rows;
+the current format/layout pair requires `K % 16 == 0`. Scale words are `0x00..0x7e`, as in NVFP4.
+
+The fixed codebook contains these exact binary32 words in code order `0..15`:
+
+```text
+bf800000 bf3239b1 bf066b30 beca32a0
+be91a24d be3d353f bdba7871 00000000
+3da2faff 3e24cae3 3e7c04dd 3ead033a
+3ee1a4b8 3f1007ab 3f3913b3 3f800000
+```
+
+The exact represented value is `codebook[code[n,k]] * decode_e4m3fn(scale[n,k//16]) / d`.
+Every code is valid; code 7 is +0. A zero scale preserves the codebook value's sign, including
+negative zero for negative codebook entries. Output dtype and rounding belong to the consumer.
+The codebook is fixed by the format and is not stored with each object.
+
+### 3.6 `stored_scale_mse` conversion method
+
+Read the entire physical parent in bounded chunks to obtain `amax`. Store
+`d=RN_FP32(448/amax)` for NF4 or `RN_FP32(2688/amax)` for NVFP4; an all-zero parent uses `d=1`.
+The source is read as FP32 values. Reject nonfinite values or a nonpositive/nonfinite stored divisor.
+
+For each G16 group, search all 126 positive finite E4M3FN scale words. At each stored scale,
+choose nearest codebook values and minimize `sum((w*d-code_value*scale)^2)` in FP64.
+NF4 code-distance ties choose the lower index; E2M1 ties choose the even magnitude code.
+Equal group errors choose the smaller scale word. An all-zero group uses scale zero and
+code 7 for NF4 or code 0 for NVFP4. The divisor remains fixed across every encoding chunk.
+
+The CUDA encoder may prune a candidate when even its maximum-element clipping error exceeds
+the current complete group error. This bound does not restrict the search grid. Independent
+Decimal search checks code selection and scale selection; CPU and CUDA routes also cover
+zero groups, scale underflow, sign handling and chunk boundaries. This method supplies no
+activation calibration or activation-precision permission.
 
 ## 4. Grouped signed-integer tensor model
 
@@ -557,9 +620,11 @@ A conforming producer must:
 - for a grouped signed-integer format, emit one valid binary16 scale per logical group and only
   legal signed codes, including never emitting Q8 `-128`;
 - for `nvfp4`, emit only valid E2M1 code words, nonnegative finite E4M3FN scale words, and one finite
-  positive FP32 weight divisor under Section 3.3;
+  positive FP32 weight divisor per matrix under Section 3.3;
 - for `fp8_e4m3fn_row_bf16`, emit only finite E4M3FN code words and valid BF16 row multipliers,
   with signed-zero codes as the only legal codes in a positive-zero-scale row under Section 3.4;
+- for `fp8_e4m3fn_block128x128_bf16`, preserve the same code/scale validity over each 128×128
+  block under Section 3.4.1;
 - record enough conversion provenance for the artifact producer to identify how the values
   were derived;
 - when an encoder converts floating-point source values, fail rather than silently quantize
@@ -588,6 +653,8 @@ The `.ninfer` container and each registered storage layout must:
   divisor under Section 3.3;
 - for `fp8_e4m3fn_row_bf16`, reconstruct every E4M3FN code word and its owning BF16 row multiplier
   under Section 3.4;
+- for `fp8_e4m3fn_block128x128_bf16`, reconstruct each code and its owning two-dimensional block
+  multiplier under Section 3.4.1;
 - define its canonical physical-padding contents and producer responsibilities, if it materializes
   padding;
 - reject unknown formats and unsupported format/layout combinations;
@@ -617,8 +684,8 @@ producer contract and the represented values.
 
 A consuming kernel or model component must interpret direct logical words according to Section 3.1,
 grouped signed-integer identities, codes, and scales according to Section 3.2 and Sections 5 and 6,
-`nvfp4` words and divisor according to Section 3.3, and row-scaled FP8 words according to Section
-3.4. It may choose its private fusion, reduction, staging, and intermediate precision; the
+`nvfp4` words and matrix divisors according to Section 3.3, FP8 words according to Sections
+3.4 and 3.4.1, and NF4 words according to Section 3.5. It may choose its private fusion, reduction, staging, and intermediate precision; the
 observable Op result is qualified against the independent oracle with the Op's named criterion for
 that implementation profile. Kernel implementation details do not alter the persistent format and
 must not be needed to decode an artifact independently.
@@ -637,21 +704,26 @@ enum spellings or private kernel layout. The retained codec and encoder evidence
   padding, consecutive row views, and arbitrary row gathers;
 - all 16 E2M1 words, all 256 E4M3FN words, NVFP4 scale/divisor validity, the exact divisor-based
   reconstruction equation, and known block-scale swizzle offsets;
+- NVFP4 bank matrix boundaries, independent divisor domains, and tile-aligned native views;
 - finite E4M3FN weight-code validity, BF16 row-scale validity, signed-zero rows, exact code/scale
   plane round trips, and the row-multiplier reconstruction equation for
   `fp8_e4m3fn_row_bf16`;
+- exact block-FP8 words, two-dimensional scale ownership, gate/up block concatenation and
+  streamed bank import;
 - canonical binary16 scale rounding, reciprocal-multiply rather than direct division, positive and
   negative ties-to-even, minimum-subnormal rescue, and rejection of non-finite or overflowing source
   groups;
-- canonical quantization followed by exact stored code/scale decode for a partially populated group.
+- canonical quantization followed by exact stored code/scale decode for a partially populated group;
+- NF4 endpoint/codebook interpretation, G16 scale validity, 4 KiB page boundaries, padding and
+  divisor placement, streamed chunk equivalence and independent stored-scale MSE search.
 
 For direct formats, the independent decode oracle is the abstract logical word in Section 3.1. For
 grouped signed-integer formats, it is the binary32 reconstruction in Section 6.2. Their canonical
 encode oracle is a bit-level host/software implementation of the ordered algorithm in Section 7;
 production converters claiming that profile require parity against it rather than defining the
 oracle through their own arithmetic. The `nvfp4` decode oracle is the E2M1/E4M3FN/FP32 divisor
-reconstruction in Section 3.3; its current producer is protected by exact source-word comparison
-rather than Section 7. An NVFP4 Op oracle starts from the represented public activation and this
+reconstruction in Section 3.3; encoded import is protected by exact source-word comparison and
+self-quantization by Section 3.6. An NVFP4 Op oracle starts from the represented public activation and this
 exact-decoded persistent weight. A site-level activation divisor and any private activation
 quantization do not alter the ideal Op formula; their numerical effects are covered by the
 production route's output criterion rather than reproduced inside the oracle. Numerical operator
@@ -661,11 +733,3 @@ input/output formats, output tolerance, and real target shapes. The
 3.4; a producer that copies an upstream quantized tensor is protected by exact source-word
 comparison, while any source-to-FP8 encoder is protected under its own named profile. Private
 activation quantization, staging, and accumulation remain implementation choices.
-
-## Raw E4M3FN
-
-`fp8_e4m3fn` preserves one byte per element: sign bit 7, four exponent bits, three fraction bits,
-exponent bias 7. Exponent zero uses subnormal value `(-1)^s * fraction * 2^-9`; other finite words
-use `(-1)^s * (1 + fraction/8) * 2^(exponent-7)`. Exponent 15 and fraction 7 is NaN; there is no
-infinity. Signed zeros and all words, including NaN payload/sign, are preserved by the codec.
-A model-level multiplier, such as Flash-Next PLE's BF16 scale, is a separate logical parameter.

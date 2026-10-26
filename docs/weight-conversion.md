@@ -44,8 +44,9 @@ python3 -m tools.convert \
 ```
 
 `--components` defaults to `text`. Include only the optional components you want to distribute.
-`--proposal` adds the indexed proposal head used by speculative decoding; it uses the repository's
-token ranking and defaults to 131,072 rows. The ordinary full-vocabulary output head is retained.
+`--proposal` adds the architecture's optimized proposal head. Qwen3.5-based models use the
+repository's token ranking and default to a 131,072-row shortlist; Qwen4Exp keeps the complete
+vocabulary and quantizes an additional head. The ordinary target output head is retained.
 
 The built-in recipes are ordinary Python functions in
 [`official_recipes.py`](../tools/convert/official_recipes.py):
@@ -57,6 +58,7 @@ The built-in recipes are ordinary Python functions in
 | `qwen3_6_35b_a3b` | Q4 experts, Q5/Q6 expert down, Q8 shared/projection weights | None |
 | `qwen3_6_27b_nvfp4` | Imported NVFP4, selected BF16 projections, Q8 vocabulary weights | `quantized` |
 | `qwen3_8_27b_nvfp4` | Imported NVFP4/FP8, FP8 embedding generated from BF16 | `quantized` |
+| `qwen3_8_flash_next` | Q8 main projections, NVIDIA NVFP4 expert banks, NVIDIA block-FP8 MTP experts, paged NF4 PLE, BF16 auxiliary projections/Vision | `nvidia` |
 
 These names select conversion choices. Runtime execution is selected from the architecture,
 configuration and actual bindings stored in the artifact. `--name` sets the public model name;
@@ -81,6 +83,59 @@ MTP and Vision use the main source. DFlash and DFlash2 use the corresponding nam
 as `--source dflash=PATH` or `--source dflash2=PATH`. An artifact may contain several optional
 components; the Engine loads only the ones selected at startup, including at most one speculative
 backend. Component availability and startup selection are independent.
+
+For Qwen3.8-Flash-Next, select the complete NVIDIA checkpoint for Main experts and MTP:
+
+```bash
+python3 -m tools.convert \
+  --model /path/to/Qwen3.8-Flash-Next/base-hf-bf16 \
+  --recipe qwen3_8_flash_next \
+  --source nvidia=/path/to/Qwen3.8-Flash-Next/nvidia-nvfp4 \
+  --components text,vision,mtp \
+  --proposal \
+  --name qwen3.8-flash-next \
+  --out out/qwen3_8_flash_next.ninfer
+```
+
+The Qwen4Exp adapter selects the dedicated
+[`qwen3_8_flash_next.jinja`](../tools/chat_templates/qwen3_8_flash_next.jinja) by default;
+`--resource chat_template.jinja=PATH` explicitly replaces it. The 27B template is independent.
+
+The Qwen4Exp adapter and Engine support Text, Vision and native MTP. For this architecture,
+`--proposal` converts an additional full-vocabulary Q4 head from the BF16 main head, with
+`A16Only` activation policy. It does not read the ranking or use `--proposal-rows`.
+Select it at startup with `--spec mtp --draft-tokens 3 --proposal-head optimized`.
+The default `--proposal-head full` shares the main BF16 head and leaves the Q4 object unloaded.
+DFlash/DFlash2 and indexed proposal execution are unsupported for Qwen4Exp.
+
+CUDA self-quantization compiles the encoder for the selected CUDA build architecture on first use
+and requires a CUDA toolkit, C++ compiler and Ninja. PLE uses two passes per shard, with a bounded
+source cache and no full-table materialization. The complete recipe including the optimized head
+contains about 100.98 GiB of weight/control payload, split by the V3 writer.
+Main experts use two NVFP4 banks per layer with independent matrix divisors. MTP uses two
+128×128 block-FP8 banks, preserving NVIDIA E4M3FN codes and BF16 multipliers; its other private
+parameters also come from the NVIDIA source. PLE alone uses the BF16-to-NF4 stored-scale method.
+See the [model and weight contract](maintainer/qwen4_exp-model.md) for layouts and precision, and
+the [execution reference](maintainer/qwen4_exp-execution.md) for runtime support and memory use.
+
+### Conversion resources
+
+Built-in methods size batches by row width to target about 16 MiB of working input or output,
+with alignment where the encoding requires it. One reader prefetches the next source batch while
+the current batch is converted and written. CUDA conversion performs grouped-integer and
+row-FP8 quantization on the GPU; encoded NVFP4/block-FP8 imports retain their original codes/scales.
+
+| Option | Default | Behavior |
+|---|---:|---|
+| `--rows-per-chunk` | Automatic | Override row batching; methods align rows to their encoding boundaries. |
+| `--cpu-threads` | `1` | Set PyTorch CPU intra-op threads; the source reader is a separate worker. |
+| `--source-cache-mib` | `2048` | Maximum FP32 source size retained on the conversion device for one multi-pass object. Larger objects stream both passes; `0` disables this cache. |
+
+`stored_scale_mse` first finds the whole object's maximum, then selects stored scales/codes.
+Its cache avoids rereading eligible objects between these passes. CUDA candidate pruning uses
+conservative error bounds and retains the FP64 selection and tie rules defined in the
+[numeric contract](maintainer/tensor-formats.md#36-stored_scale_mse-conversion-method).
+The conversion report records resource settings and per-object conversion times.
 
 ## Change part of a recipe
 
@@ -154,12 +209,21 @@ The converter currently writes these formats:
 | `bf16`, `fp32`, `int32` | `cast_direct` | Direct words through the source reader |
 | `q4_g64_fp16`, `q5_g64_fp16`, `q6_g64_fp16`, `q8_g32_fp16` | `grouped_absmax` | Supply a custom method/source if needed |
 | `fp8_e4m3fn_row_bf16` | `fp8_row_maxabs` | `import_encoded` |
-| `nvfp4` | Supply a custom quantizer | `import_encoded` |
+| `fp8_e4m3fn_block128x128_bf16` | None | `import_encoded` |
+| `nvfp4` | `stored_scale_mse` | `import_encoded` |
+| `nf4_g16_e4m3fn` | `stored_scale_mse` | Supply encoded words through `TensorOutput` |
 
 `grouped_absmax` stores one FP16 scale per group and signed integer codes. `fp8_row_maxabs` first
 rounds input values to BF16, then produces E4M3FN codes and one BF16 multiplier per row.
 `import_encoded` preserves compatible code and scale words, including NVFP4's matrix weight divisor.
 It does not dequantize and requantize them.
+Rank-three NVFP4 targets select `batched_block_scale_k16_m128x4_v1` explicitly; each matrix owns
+its divisor. Block-FP8 uses `block_scale_m128_k128_v1` for matrices and banks.
+
+`stored_scale_mse` computes one FP32 divisor from the complete parent amax, then searches stored
+E4M3FN scales per G16 group using FP64 reconstruction error. NF4 uses the fixed codebook;
+NVFP4 uses E2M1. The method provides no activation calibration. ModelOpt import preserves
+packed codes and scale bytes while converting FP32 global multipliers to stored reciprocals.
 
 The exact numeric and packing rules are in [numeric formats](maintainer/tensor-formats.md) and
 [storage layouts](maintainer/storage-layouts.md). Source format names alone do not establish
@@ -274,9 +338,22 @@ def configure(model, recipe, sources):
 
 Use this as an override. The NumPy file must already follow the logical row/column order. For an
 unfamiliar quantized source, its reader performs the corresponding decoding before returning
-values. To preserve existing compatible encoded words, also provide `read_encoded` returning
-`EncodedRows`, and the format's required divisor accessors. Their definitions are in
+values. To preserve existing compatible encoded words, also provide `encoded_format` (a format
+name or metadata-only resolver), `read_encoded` returning `EncodedRows`, and the format's required
+divisor accessors. Their definitions are in
 [`sources/logical.py`](../tools/convert/sources/logical.py).
+
+For a logical bank spread across several physical parents, `recipe.parent(parts, shape=...,
+format=..., method=..., order=...)` accepts `(parameter, begin, end, source)` fragments.
+`begin/end` are C-order logical element bounds; the supplied `LogicalSource` covers that fragment.
+Explicit parents must cover every affected parameter completely without overlap. This permits
+one gate/up matrix per expert while retaining separate logical gate and up banks.
+
+`recipe.place(selectors, order)` controls the physical ordering of ordinary parents; an explicit
+parent's `order` takes precedence. Binding parts remain in logical order. Shared calibration uses
+`recipe.auxiliary_tensor(name, AuxiliaryValue(...))` and an `AuxiliaryReference(name, element)`
+passed to `recipe.use(..., auxiliaries=...)`, so several Uses can reference one FP32 element.
+These functions are used directly by the Flash-Next recipe.
 
 ## Write a conversion method
 
@@ -300,14 +377,14 @@ def clipped_grouped(request):
     ):
         raise ValueError("clipped_grouped requires a grouped-integer matrix")
     limit = float(request.parameters["clip"])
-    if not math.isfinite(limit) or limit <= 0 or request.rows_per_chunk <= 0:
-        raise ValueError("clip and rows_per_chunk must be positive")
+    if not math.isfinite(limit) or limit <= 0:
+        raise ValueError("clip must be positive and finite")
     n, k = request.target.shape
+    chunk = request.chunk_rows(k * 4)
 
     def produce(output):
-        for begin in range(0, n, request.rows_per_chunk):
-            end = min(n, begin + request.rows_per_chunk)
-            values = request.values(begin * k, end * k).reshape(end - begin, k)
+        for begin, end, values in request.read_chunks(request.values, n * k, chunk * k):
+            values = values.reshape((end - begin) // k, k)
             if not bool(torch.isfinite(values).all()):
                 raise ValueError("source contains non-finite values")
             encoded = quantize_matrix(
@@ -315,7 +392,7 @@ def clipped_grouped(request):
                 request.target.format,
                 device=request.device,
             )
-            output.write_codes(begin, encoded.codes, encoded.scales)
+            output.write_codes(begin // k, encoded.codes, encoded.scales)
 
     return request.job(produce=produce)
 
@@ -334,12 +411,15 @@ including explicit groups. `output.write_codes` performs the registered packing 
 codes/scales; the method should not duplicate that byte-layout logic. Direct output uses
 `output.write_values`. Keep source blocks and temporary device tensors bounded to the method's
 working set. `--rows-per-chunk` defaults to 512; custom methods own how they use it.
+For an encoded bank, `output.write_codes(..., matrix=e)` writes rows within matrix e. NVFP4
+checks divisor consistency within that matrix; block-FP8 writes complete 128-row scale blocks.
 
 ## Resources, files and inspection
 
 Text includes `tokenizer.json`, `tokenizer_config.json`, `chat_template.jinja` and
 `generation_config.json`. Vision adds its image and video processor configs. Resources come from
-`--model`; `--resource ROLE=PATH` replaces a selected resource:
+`--model`, except that Qwen4Exp defaults to the maintained Flash Next chat template.
+`--resource ROLE=PATH` replaces a selected resource:
 
 ```text
 --resource chat_template.jinja=/path/to/chat_template.jinja
@@ -350,7 +430,11 @@ The official conversion examples select these maintained templates:
 | Model | Template | Defaults |
 |---|---|---|
 | Qwen3.6 Dense/MoE | [qwen3_6.jinja](../tools/chat_templates/qwen3_6.jinja) | thinking on; closed-turn reasoning omitted |
-| Qwen3.8 | [qwen3_8.jinja](../tools/chat_templates/qwen3_8.jinja) | thinking on; effort `medium`; closed-turn reasoning retained |
+| Qwen3.8 27B | [qwen3_8.jinja](../tools/chat_templates/qwen3_8.jinja) | thinking on; effort `xhigh`; closed-turn reasoning retained |
+| Qwen3.8 Flash Next | [qwen3_8_flash_next.jinja](../tools/chat_templates/qwen3_8_flash_next.jinja) | thinking on; effort `xhigh`; closed-turn reasoning retained |
+
+The Flash Next template maps `minimal` to `low`, `high`/`max` to `xhigh`, and `none` to disabled
+thinking. Final-assistant continuation preserves its content, including trailing whitespace.
 
 Use your own Jinja file to change the artifact's default template. A startup
 [`--chat-template FILE`](cli.md#text-input) overrides the stored template.
@@ -377,9 +461,3 @@ support is checked by consumers during preparation, resource queries, warmup or 
 valid file may need additional Op support before its chosen combination can run. Exercise the
 phases and optional components you intend to use through the normal [CLI](cli.md) or
 [serving](serving.md) route.
-
-## Flash-Next
-
-The [Flash-Next artifact reference](maintainer/qwen3.8-flash-next-125b-a6b-artifact.md) gives its
-fixed NVFP4 source recipe and v2 upgrade command. Its file-backed raw FP8 PLE table may span v3
-shards. Both conversion paths emit the same component, binding and Use contracts.

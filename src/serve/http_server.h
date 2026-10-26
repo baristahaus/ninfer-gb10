@@ -1,10 +1,11 @@
 #pragma once
 
 #include "serve/generation_service.h"
+#include "serve/metrics.h"
 #include "serve/operational_log.h"
 #include "serve/openai_responses_store.h"
 #include "serve/request_log.h"
-#include "serve/serve_options.h"
+#include "product/config/options.h"
 
 #include <httplib.h>
 
@@ -27,7 +28,7 @@ void write_anthropic_error(httplib::Response& response, const ApiError& error,
 // cpp-httplib invokes the error handler for every application response with status >= 400. Only
 // an empty 413 is its own pre-routing payload-limit rejection; application-authored errors must be
 // left untouched.
-httplib::Server::HandlerResponse handle_unrendered_http_error(const ServeOptions& options,
+httplib::Server::HandlerResponse handle_unrendered_http_error(const product::ServeOptions& options,
                                                               const httplib::Request& request,
                                                               httplib::Response& response);
 
@@ -36,7 +37,7 @@ httplib::Server::HandlerResponse handle_unrendered_http_error(const ServeOptions
 
 class HttpServer {
 public:
-    HttpServer(ServeOptions options, std::shared_ptr<spdlog::logger> logger);
+    HttpServer(product::ServeOptions options, std::shared_ptr<spdlog::logger> logger);
 
     // Reserves the configured address before model loading. The service is attached only after its
     // Engine is ready, then listen() enters the blocking accept loop on the already-bound socket.
@@ -45,26 +46,12 @@ public:
     bool listen();
     void stop();
 
-    // Shutdown drain: /health reports "draining" and every new POST is answered 503 while the
-    // requests already admitted run to completion. wait_for_idle returns the requests still in
-    // flight when `deadline` passes (0 when idle).
-    void begin_drain() noexcept;
-
-    [[nodiscard]] std::uint32_t in_flight() const noexcept {
-        return in_flight_.load(std::memory_order_acquire);
-    }
-
-    [[nodiscard]] std::uint32_t wait_for_idle(std::chrono::steady_clock::time_point deadline);
-
     [[nodiscard]] const std::string& public_model_id() const noexcept { return public_model_id_; }
 
 private:
     class RequestLifecycle {
     public:
         RequestLifecycle(HttpServer& owner, RequestLogContext context);
-        ~RequestLifecycle();
-        RequestLifecycle(const RequestLifecycle&)            = delete;
-        RequestLifecycle& operator=(const RequestLifecycle&) = delete;
 
         void done(const GenerationOutcome& outcome);
         void failure(const RequestFailure& failure);
@@ -103,6 +90,9 @@ private:
     void handle_model(const httplib::Request& req, httplib::Response& res) const;
 
     void record_request_start(const RequestLogContext& context);
+    [[nodiscard]] ninfer::GenerationSchedulingObserver
+    scheduling_observer(std::uint64_t request_id, std::string http_request_id);
+    [[nodiscard]] ninfer::GenerationFirstTokenObserver first_token_observer();
     void record_request_rejected(const RequestRejectionLogContext& context);
     void record_request_done(const RequestLogContext& context, const GenerationOutcome& outcome);
     void record_request_failure(const RequestLogContext& context, const RequestFailure& failure);
@@ -112,22 +102,18 @@ private:
     void stop_stats_reporter();
 
     GenerationService* service_ = nullptr;
-    ServeOptions options_;
+    product::ServeOptions options_;
     std::string public_model_id_;
     OpenAIResponsesStore openai_responses_store_;
     OperationalLog operational_log_;
     JsonlRequestLog request_jsonl_;
+    Metrics metrics_;
     httplib::Server server_;
     std::atomic<std::uint64_t> request_seq_{0};
     std::mutex stats_mutex_;
     std::condition_variable stats_cv_;
     std::thread stats_thread_;
     bool stats_stopping_ = false;
-    // Live request lifecycles: a lifecycle ends when its response, streamed or not, is finished.
-    std::atomic<bool> draining_{false};
-    std::atomic<std::uint32_t> in_flight_{0};
-    std::mutex idle_mutex_;
-    std::condition_variable idle_cv_;
 };
 
 } // namespace ninfer::serve

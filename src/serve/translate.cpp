@@ -6,7 +6,6 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
-#include <random>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -14,11 +13,6 @@
 
 namespace ninfer::serve {
 namespace {
-
-std::uint64_t random_seed() {
-    static thread_local std::mt19937_64 rng(std::random_device{}());
-    return rng();
-}
 
 [[noreturn]] void invalid_sampling(std::string message, std::string param) {
     ApiError error;
@@ -36,8 +30,8 @@ std::uint64_t random_seed() {
 }
 
 ninfer::SamplingOverrides resolve_sampling_overrides(const SamplingParams& request,
-                                                     const ServeOptions& server) {
-    ninfer::SamplingOverrides sampling = server.sampling_overrides;
+                                                     const product::ServeOptions& server) {
+    ninfer::SamplingOverrides sampling = server.launch.generation.sampling;
     if (request.temperature) { sampling.temperature = static_cast<float>(*request.temperature); }
     if (request.top_p) { sampling.top_p = static_cast<float>(*request.top_p); }
     if (request.min_p) { sampling.min_p = static_cast<float>(*request.min_p); }
@@ -50,10 +44,10 @@ ninfer::SamplingOverrides resolve_sampling_overrides(const SamplingParams& reque
     }
     if (request.seed) {
         sampling.seed = *request.seed;
-    } else if (server.sampling_overrides.seed) {
-        sampling.seed = *server.sampling_overrides.seed;
+    } else if (server.launch.generation.sampling.seed) {
+        sampling.seed = *server.launch.generation.sampling.seed;
     } else {
-        sampling.seed = random_seed();
+        sampling.seed = product::random_sampling_seed();
     }
 
     const auto finite = [](const std::optional<float>& value) {
@@ -83,22 +77,13 @@ ninfer::SamplingOverrides resolve_sampling_overrides(const SamplingParams& reque
         (*sampling.frequency_penalty < -2.0F || *sampling.frequency_penalty > 2.0F)) {
         invalid_sampling("frequency_penalty must be in [-2,2]", "frequency_penalty");
     }
-    if (server.greedy) { sampling.temperature = 0.0F; }
     return sampling;
-}
-
-std::vector<const ToolDefinition*> effective_tools(const GenerationRequest& request) {
-    std::vector<const ToolDefinition*> tools;
-    if (!request.uses_tools()) { return tools; }
-    tools.reserve(request.tools.size());
-    for (const ToolDefinition& tool : request.tools) { tools.push_back(&tool); }
-    return tools;
 }
 
 std::string render_tool_definition(const ToolDefinition& tool) {
     using Json  = RequestJson;
     Json schema = Json::parse(tool.input_schema_json);
-    Json function{{"name", tool.name}, {"parameters", std::move(schema)}, {"strict", false}};
+    Json function{{"name", tool.name}, {"parameters", std::move(schema)}, {"strict", tool.strict}};
     if (!tool.description.empty()) { function["description"] = tool.description; }
     if (tool.input_examples_json) {
         function["input_examples"] = Json::parse(*tool.input_examples_json);
@@ -109,7 +94,7 @@ std::string render_tool_definition(const ToolDefinition& tool) {
 } // namespace
 
 ResolvedPromptSemantics resolve_prompt_semantics(const GenerationRequest& request,
-                                                 const ServeOptions& server) {
+                                                 const product::ServeOptions& server) {
     using Json  = RequestJson;
     Json kwargs = request.chat_template_kwargs_json.empty()
                       ? Json::object()
@@ -151,8 +136,8 @@ ResolvedPromptSemantics resolve_prompt_semantics(const GenerationRequest& reques
     }
     kwargs.erase("reasoning_effort");
     ResolvedPromptSemantics result{
-        .enable_thinking           = thinking ? thinking : server.enable_thinking,
-        .preserve_thinking         = preserve ? preserve : server.preserve_thinking,
+        .enable_thinking   = thinking ? thinking : server.launch.generation.enable_thinking,
+        .preserve_thinking = preserve ? preserve : server.launch.generation.preserve_thinking,
         .chat_template_kwargs_json = kwargs.dump(),
     };
     if (effort) {
@@ -198,38 +183,6 @@ ninfer::PromptInput to_prompt_input(const GenerationRequest& request,
                                     const ResolvedPromptSemantics& semantics,
                                     const MediaAcquirer& acquire_media) {
     ninfer::PromptInput input;
-
-    // Prompt-level output directives. NInfer has no constrained decoding, so a JSON
-    // response_format and tool_choice "required" are enforced with a directive text
-    // appended as a trailing part of the final turn (the last user message, or the
-    // trailing tool result of an agentic loop), after the main loop below. The JSON
-    // instruction comes first and the tool-call directive last, so it takes precedence
-    // over conflicting guidance. The prefix up to the final turn stays byte-stable
-    // between turns, so a directive change re-prefills only the tail, and the client's
-    // system/developer turns keep their position and cache markers.
-    std::string directive;
-    const bool json_format = request.response_format.kind == ResponseFormatKind::JsonObject ||
-                             request.response_format.kind == ResponseFormatKind::JsonSchema;
-    const bool tool_directive =
-        request.tool_choice.mode == ToolChoiceMode::Required && !request.tools.empty();
-    if (json_format) {
-        directive =
-            "You must respond with a single valid JSON object. Do not include any text "
-            "outside the JSON object. Do not wrap it in markdown code fences.";
-        if (request.response_format.kind == ResponseFormatKind::JsonSchema) {
-            directive += "\n\nThe JSON object must conform to this JSON Schema:\n" +
-                         request.response_format.schema_json;
-        }
-    }
-    // The tool-call directive goes last: after the JSON instruction, so it takes
-    // precedence over conflicting "answer directly" guidance. Prompt-level
-    // enforcement only; NInfer has no constrained decoding.
-    if (tool_directive) {
-        if (!directive.empty()) { directive += "\n\n"; }
-        directive += "IMPORTANT: You MUST call a tool in your reply. Never answer the "
-                    "user directly with plain text; produce your answer through a tool "
-                    "call. This overrides any earlier instruction to answer directly.";
-    }
     input.messages.reserve(request.messages.size());
     for (std::size_t turn_index = 0; turn_index < request.messages.size(); ++turn_index) {
         const ChatTurn& turn = request.messages[turn_index];
@@ -275,8 +228,7 @@ ninfer::PromptInput to_prompt_input(const GenerationRequest& request,
                 throw ApiException(std::move(error));
             }
             if (part.cache_boundary_after) {
-                const std::size_t message_position = input.messages.size() + 1U;
-                if (message_position > std::numeric_limits<std::uint32_t>::max() ||
+                if (turn_index >= std::numeric_limits<std::uint32_t>::max() ||
                     part_index >= std::numeric_limits<std::uint32_t>::max()) {
                     throw std::overflow_error("conversation cache boundary exceeds uint32");
                 }
@@ -293,7 +245,7 @@ ninfer::PromptInput to_prompt_input(const GenerationRequest& request,
                     });
                 } else {
                     input.context_cache.markers.push_back(ninfer::PromptCacheMarker{
-                        .after_message_count = static_cast<std::uint32_t>(message_position),
+                        .after_message_count = static_cast<std::uint32_t>(turn_index + 1U),
                         .kind                = part.cache_boundary_after->kind,
                         .evidence            = part.cache_boundary_after->evidence,
                         .location = ninfer::PromptCacheMarkerLocation::MessagePartBoundary,
@@ -317,45 +269,20 @@ ninfer::PromptInput to_prompt_input(const GenerationRequest& request,
         }
     }
 
-    if (!directive.empty()) {
-        if (request.messages.empty()) {
-            // No turn to anchor the directive to (the API parsers reject such
-            // requests): keep it visible as a synthetic leading system block.
-            ninfer::ChatMessage instruction;
-            instruction.role = ChatRole::System;
-            ninfer::MessagePart part;
-            part.text = std::move(directive);
-            instruction.parts.push_back(std::move(part));
-            input.messages.push_back(std::move(instruction));
-        } else {
-            std::size_t anchor = request.messages.size() - 1U;
-            for (std::size_t turn_index = request.messages.size(); turn_index-- > 0;) {
-                const ChatRole role = request.messages[turn_index].role;
-                if (role == ChatRole::User || role == ChatRole::Tool) {
-                    anchor = turn_index;
-                    break;
-                }
-            }
-            ninfer::MessagePart tail;
-            tail.text = std::move(directive);
-            input.messages[anchor].parts.push_back(std::move(tail));
-        }
-    }
-
-    input.options.continuation                     = request.continuation;
-    input.options.enable_thinking                  = semantics.enable_thinking;
-    input.options.reasoning_effort                 = semantics.reasoning_effort;
-    input.options.preserve_thinking                = semantics.preserve_thinking;
-    input.options.chat_template_kwargs_json        = semantics.chat_template_kwargs_json;
-    input.options.add_vision_id                    = false;
-    const std::vector<const ToolDefinition*> tools = effective_tools(request);
+    input.options.continuation              = request.continuation;
+    input.options.enable_thinking           = semantics.enable_thinking;
+    input.options.reasoning_effort          = semantics.reasoning_effort;
+    input.options.preserve_thinking         = semantics.preserve_thinking;
+    input.options.chat_template_kwargs_json = semantics.chat_template_kwargs_json;
+    input.options.add_vision_id             = false;
+    const auto& tools                       = request.tools;
     input.options.tool_jsons.reserve(tools.size());
     for (std::size_t index = 0; index < tools.size(); ++index) {
-        input.options.tool_jsons.push_back(render_tool_definition(*tools[index]));
-        if (tools[index]->cache_boundary_after) {
+        input.options.tool_jsons.push_back(render_tool_definition(tools[index]));
+        if (tools[index].cache_boundary_after) {
             input.context_cache.markers.push_back(ninfer::PromptCacheMarker{
-                .kind             = tools[index]->cache_boundary_after->kind,
-                .evidence         = tools[index]->cache_boundary_after->evidence,
+                .kind             = tools[index].cache_boundary_after->kind,
+                .evidence         = tools[index].cache_boundary_after->evidence,
                 .location         = ninfer::PromptCacheMarkerLocation::ToolBoundary,
                 .after_tool_count = static_cast<std::uint32_t>(index + 1U),
             });
@@ -367,21 +294,24 @@ ninfer::PromptInput to_prompt_input(const GenerationRequest& request,
 }
 
 ninfer::RequestOptions to_request_options(const GenerationRequest& request,
-                                          const ServeOptions& server,
+                                          const product::ServeOptions& server,
                                           const ResolvedPromptSemantics& semantics,
                                           bool allow_prefix_reuse) {
     ninfer::RequestOptions options;
+    options.constraint                        = request.constraint;
+    options.tool_choice                       = request.tool_choice;
     options.execution.requested_output_tokens = static_cast<std::uint32_t>(request.max_tokens);
     options.execution.allow_prefix_reuse      = allow_prefix_reuse;
     if (semantics.enable_thinking != false) {
-        options.execution.thinking.budget =
-            request.thinking_budget ? request.thinking_budget : server.default_thinking_budget;
+        options.execution.thinking.budget = request.thinking_budget
+                                                ? request.thinking_budget
+                                                : server.launch.generation.thinking_budget;
     }
     options.execution.sampling             = resolve_sampling_overrides(request.sampling, server);
     options.output.raw                     = false;
-    options.output.preserve_special_tokens = request.uses_tools() || request.has_tool_history();
+    options.output.preserve_special_tokens = !request.constraint && !request.constrains_tools() &&
+                                             (request.uses_tools() || request.has_tool_history());
     options.output.tool_name_max_length = static_cast<std::uint32_t>(request.tool_name_max_length);
-    options.stop.include_model_defaults = !request.ignore_eos;
     options.stop.strings.reserve(request.stop_strings.size() *
                                  (request.stop_strings_apply_to_reasoning ? 2U : 1U));
     for (const std::string& stop : request.stop_strings) {

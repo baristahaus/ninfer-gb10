@@ -17,6 +17,8 @@ struct ResolvedExecutionOptions {
 };
 
 struct ResolvedRequestOptions {
+    std::optional<OutputConstraint> constraint;
+    ToolChoice tool_choice;
     ResolvedExecutionOptions execution;
     StopPolicy stop;
     OutputOptions output;
@@ -51,12 +53,9 @@ struct CancellationFlagView {
 
 struct RequestPlanSummary {
     std::uint32_t prompt_tokens           = 0;
-    std::uint32_t reusable_prompt_tokens  = 0;
     std::uint32_t requested_output_tokens = 0;
     std::uint32_t effective_output_tokens = 0;
     FinishReason effective_limit_reason   = FinishReason::None;
-    PrefixReusePath prefix_reuse_path     = PrefixReusePath::Root;
-    std::uint64_t service_work_quanta     = 0;
     bool publish_continuation             = true;
 };
 

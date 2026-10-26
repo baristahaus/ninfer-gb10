@@ -77,12 +77,6 @@ public:
     // Artifact-tokenizer raw-text encoding. No chat template or implicit special token is added.
     [[nodiscard]] std::vector<TokenId> tokenize_text(std::string_view text) const;
 
-    // The text each token id contributes, in order: the artifact tokenizer's raw bytes for one
-    // token. Concatenating the pieces reproduces the sequence's text, but one piece can begin or end
-    // inside a multi-byte character, which is why a per-token probability report pairs with its own
-    // piece rather than with the cleaned assistant text.
-    [[nodiscard]] std::vector<std::string> token_pieces(std::span<const TokenId> tokens) const;
-
     // Returns log p(tokens[i] | tokens[0..i)) for i in [first_target,tokens.size()).
     [[nodiscard]] std::vector<float> score_tokens(std::vector<TokenId> tokens,
                                                   std::uint32_t first_target);
@@ -108,25 +102,12 @@ public:
                               const CancellationView& cancellation = {});
 
     [[nodiscard]] const EngineOptions& options() const;
-    [[nodiscard]] LoadSummary load_summary() const;
-    [[nodiscard]] MemorySummary memory_summary() const;
-    [[nodiscard]] RuntimeStats runtime_stats() const;
-    [[nodiscard]] MediaCacheSummary media_cache_summary() const;
+    [[nodiscard]] const EngineDescription& description() const;
+    [[nodiscard]] const StartupReport& startup_report() const;
+    [[nodiscard]] EngineSnapshot snapshot() const;
     [[nodiscard]] bool is_available() const;
 
-    void reset_memory_peaks() noexcept;
-
-#if defined(NINFER_ENGINE_FAULT_INJECTION)
-    // Test-only fault injection: the next worker unit rethrows the armed exception before
-    // doing any work. Oom models a transient allocation failure (recoverable: the admitted
-    // request ends with a retryable Overloaded error, the pending FIFO retries);
-    // InvariantError models an invariant violation (the whole Engine fails).
-    enum class WorkerFault : std::uint8_t {
-        Oom,
-        InvariantError,
-    };
-    void arm_next_worker_fault(WorkerFault fault) noexcept;
-#endif
+    void reset_measurement_peaks();
 
 private:
     class Impl;

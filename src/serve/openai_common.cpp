@@ -142,7 +142,9 @@ void apply_openai_prompt_cache_policy(GenerationRequest& request, OpenAIPromptCa
     }
 
     const bool automatic_enabled =
-        policy.automatic != OpenAIPromptCacheAutomatic::Disabled && automatic_target != nullptr;
+        policy.automatic != OpenAIPromptCacheAutomatic::Disabled && automatic_target != nullptr &&
+        (automatic_target->has_value() ||
+         explicit_boundaries.size() < kMaximumExplicitPromptCacheMarkers);
     const bool automatic_merges_explicit   = automatic_enabled && automatic_target->has_value();
     const std::size_t explicit_write_slots = !automatic_enabled || automatic_merges_explicit
                                                  ? kMaximumExplicitPromptCacheMarkers
@@ -172,13 +174,9 @@ void apply_openai_prompt_cache_policy(GenerationRequest& request, OpenAIPromptCa
             *automatic_target = CacheBoundary{.evidence = evidence};
         }
     }
-    // The automatic target is the end of the prompt, which a new conversation never repeats. Engine
-    // candidates add the stable layers in front of it - after the tools and after the leading
-    // instructions - so agents that open many conversations over one system prompt reuse it. They
-    // only take spare capacity. mode:"explicit" asks for the client's own boundaries alone. Existing
+    // OpenAI already defines the automatic/explicit write policy for every request. Existing
     // exact shared residents are still considered by the Engine independently of this switch.
-    request.allow_engine_automatic_shared_prefixes =
-        policy.automatic != OpenAIPromptCacheAutomatic::Disabled;
+    request.allow_engine_automatic_shared_prefixes = false;
 }
 
 std::string make_models_list(const std::string& model_id, std::int64_t created,

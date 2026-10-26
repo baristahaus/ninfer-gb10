@@ -3,6 +3,7 @@
 #include "artifact/framing.h"
 #include "artifact/schema.h"
 #include "core/weight_view.h"
+#include "core/io/file.h"
 
 #include <filesystem>
 #include <memory>
@@ -10,30 +11,8 @@
 
 namespace ninfer::artifact {
 
-struct MappedSegment {
-    std::shared_ptr<const std::byte> storage;
-    std::uint64_t begin = 0;
-    std::uint64_t bytes = 0;
-};
-
-// Owns mappings independently of Reader; no payload is copied or pinned in host RAM.
-class MappedRange {
-public:
-    std::vector<MappedSegment> segments;
-    [[nodiscard]] std::uint64_t size() const noexcept {
-        return segments.empty() ? 0 : segments.back().begin + segments.back().bytes;
-    }
-    void copy(std::uint64_t offset, std::span<std::byte> destination) const;
-    // Page-cache advice for the mapped file pages; both are best effort and never change
-    // contents. advise_random() stops fault readahead around scattered reads. prefetch() starts
-    // asynchronous reads of the pages covering [offset, offset + bytes) without waiting, so a
-    // caller that prefetches many scattered rows before copying them overlaps their I/O.
-    void advise_random() const;
-    void prefetch(std::uint64_t offset, std::uint64_t bytes) const;
-};
-
 struct ReadSegment {
-    std::size_t file_index           = 0;
+    std::size_t file_index           = 0; // Index into the producing owner's file set.
     std::uint64_t file_offset        = 0;
     std::uint64_t destination_offset = 0;
     std::uint64_t bytes              = 0;
@@ -57,16 +36,14 @@ public:
     [[nodiscard]] const WeightGeometry& geometry(ObjectHandle handle) const;
     void validate_object(ObjectHandle handle) const;
 
-    [[nodiscard]] MappedRange map_range(std::uint64_t offset, std::uint64_t bytes) const;
-
     [[nodiscard]] std::vector<ReadSegment> segments(std::uint64_t offset,
                                                     std::uint64_t bytes) const;
     void read_into(std::uint64_t offset, std::span<std::byte> destination) const;
     [[nodiscard]] std::vector<std::byte> read_range(std::uint64_t offset,
                                                     std::uint64_t bytes) const;
     [[nodiscard]] std::vector<std::byte> read_object(ObjectHandle handle) const;
-    [[nodiscard]] std::size_t read_direct(std::size_t file_index, std::uint64_t file_offset,
-                                          std::span<std::byte> destination) const;
+    // Opens an independently owned file and checks its framing/length against this directory.
+    [[nodiscard]] io::ReadOnlyFile open_file(std::size_t file_index, io::ReadMode mode) const;
 
 private:
     struct Impl;

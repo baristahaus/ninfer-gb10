@@ -1,7 +1,8 @@
 #pragma once
 
+#include "ops/kv_cache/kernels/write.h"
 #include "ninfer/ops/softmax_attention.h"
-#include "ops/softmax_attention/dense/causal_cache/nvfp4/split_policy.h"
+#include "ops/softmax_attention/kernels/causal/partition.h"
 
 namespace ninfer::ops::detail {
 
@@ -12,12 +13,16 @@ struct Nvfp4KvCausalPlan {
     Nvfp4KvFamily family;
     int query_heads, width, batch, query_tile;
     CausalAttentionExecutionEnvelope envelope;
-    Nvfp4KvPartition partition;
+    CausalKvPartition partition;
 };
 
-Nvfp4KvCausalPlan make_nvfp4_kv_causal_plan(int heads, int width, int batch,
-                                            CausalAttentionExecutionEnvelope envelope);
+Nvfp4KvCausalPlan select_nvfp4_kv_causal_plan(int heads, int width, int batch,
+                                              CausalAttentionExecutionEnvelope envelope,
+                                              int multiprocessor_count);
 std::size_t nvfp4_kv_workspace_bytes(int heads, int batch, int min_width, int max_width,
-                                     CausalAttentionExecutionEnvelope envelope);
+                                     CausalAttentionExecutionEnvelope envelope,
+                                     int multiprocessor_count);
+
+kv::PagedWriteInstance select_nvfp4_kv_write(int heads, int width, int batch);
 
 } // namespace ninfer::ops::detail

@@ -12,7 +12,7 @@ import struct
 
 import torch
 
-from tools.artifact.file_io import IO_CHUNK_BYTES, discard_cached_pages
+from tools.artifact.file_io import discard_cached_pages
 from .logical import LogicalSource
 
 _DTYPES = {
@@ -67,21 +67,8 @@ class SafetensorsSource:
                 }
             else:
                 file = self.root / "model.safetensors"
-                shards = sorted(self.root.glob("*.safetensors"))
                 if file.is_file():
                     self.weight_map = {name: file for name in self._header(file)}
-                elif shards:
-                    # A sharded checkpoint without its index (an incomplete download): the shard
-                    # headers name every tensor, so read them instead.
-                    self.weight_map = {}
-                    for shard in shards:
-                        for name in self._header(shard):
-                            if name in self.weight_map:
-                                raise ValueError(
-                                    f"{self.root}: tensor {name!r} appears in "
-                                    f"{self.weight_map[name].name} and {shard.name}"
-                                )
-                            self.weight_map[name] = shard
                 elif self.path.is_dir():
                     # A custom recipe may supply every logical value from another source.
                     self.weight_map = {}
@@ -159,17 +146,12 @@ class SafetensorsSource:
         count = (end - begin) * word_bytes
         fd = self._file(info.file)
         offset = info.offset + begin * word_bytes
-        # Chunked reads: Linux caps one read()/pread() at MAX_RW_COUNT
-        # (INT_MAX & PAGE_MASK, just under 2 GiB) on every distribution, so one
-        # unbounded pread short-reads any tensor larger than that.
-        raw = bytearray()
-        for pos in range(0, count, IO_CHUNK_BYTES):
-            raw += os.pread(fd, min(IO_CHUNK_BYTES, count - pos), offset + pos)
-        if len(raw) != count:
+        raw = bytearray(count)
+        if os.preadv(fd, [raw], offset) != count:
             raise ValueError(f"{name}: short source read")
         self.bytes_read += count
         discard_cached_pages(fd, offset, count)
-        return torch.frombuffer(bytearray(raw), dtype=dtype)
+        return torch.frombuffer(raw, dtype=dtype)
 
     def close(self) -> None:
         while self._fds:

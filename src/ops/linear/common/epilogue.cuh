@@ -39,4 +39,18 @@ linear_finish_row(const Output& output, const Epilogue& epilogue, int row, int t
     }
 }
 
+template <class Schedule, class Epilogue>
+inline constexpr int linear_epilogue_bytes = [] {
+    if constexpr (requires { Epilogue::template kSharedBytes<Schedule>; })
+        return static_cast<int>(Epilogue::template kSharedBytes<Schedule>);
+    else
+        return 0;
+}();
+
+template <class Schedule, class Epilogue>
+inline constexpr int linear_mma_shared_bytes =
+    Schedule::kSharedBytes > linear_epilogue_bytes<Schedule, Epilogue>
+        ? Schedule::kSharedBytes
+        : linear_epilogue_bytes<Schedule, Epilogue>;
+
 } // namespace ninfer::ops::detail

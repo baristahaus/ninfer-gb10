@@ -3,14 +3,12 @@
 #include "core/gdn_replay_records.h"
 #include "core/linear_attention_state.h"
 
-#include <cuda_runtime.h>
+#include "core/device.h"
 
 #include <cstdint>
 #include <span>
 
 namespace ninfer::ops {
-
-inline constexpr std::int32_t kGdnReplayFoldDeviceRowWords = 4;
 
 struct GdnReplayFoldRow {
     std::int32_t source_state_slot;
@@ -26,7 +24,9 @@ struct GdnReplayFoldRow {
  * to physical record row b; rows are not filtered, compressed, or reordered. The active row count
  * is rows.size() and must be in [1,records.spec.record_capacity].
  *
- * source_state_slot and destination_state_slot are in [0,states.spec.slot_count). A row may be
+ * Each layer has dense inner state; its Tensor carries the slot stride and the view carries
+ * independent layer strides. Distinct fields/layers must not overlap their actual data blocks.
+ * source_state_slot and destination_state_slot are in [0,states.conv_layer0.ne[2]). A row may be
  * in-place. Destinations are distinct and cannot overwrite another active row's source.
  * source_state_slot is the absolute slot used to produce that row's records. commit_columns is in
  * [0,T]. Zero is a
@@ -43,7 +43,8 @@ struct GdnReplayFoldRow {
  * copies row descriptors by value; replay consumes record/state contents at the bound addresses,
  * while changing host row descriptors requires a new capture.
  *
- * The Op admits the two registered all-layer geometries only, owns no workspace or device
+ * Registered (layers, Q/K heads, V heads, conv channels) geometries are (48,16,48,10240),
+ * (30,16,32,8192), (36,16,48,10240), and (36,8,24,5120). The Op owns no workspace or device
  * allocation, and does not read query or generate token output. The four record planes are
  * read-only, disjoint, and do not overlap either state region.
  */
@@ -51,15 +52,14 @@ class GdnReplayFoldPlan {
 public:
     GdnReplayFoldPlan(const GdnReplayRecords& records, LinearAttentionStateAllLayersView states);
 
-    void execute(std::span<const GdnReplayFoldRow> rows, cudaStream_t stream) const;
+    void execute(std::span<const GdnReplayFoldRow> rows, CudaExecutionView execution) const;
 
-    // The same fold with each row's descriptor read from device memory when the work runs, for
-    // CUDA Graph nodes whose rows change per replay. device_rows is I32, 16-byte aligned, with
-    // kGdnReplayFoldDeviceRowWords words per row b in [0,row_count):
-    // {source_state_slot, destination_state_slot, commit_columns, 0}. A zero commit_columns
-    // row is a no-op. The caller guarantees the per-row conditions execute() validates.
-    void execute_device(const Tensor& device_rows, std::int32_t row_count,
-                        cudaStream_t stream) const;
+    // Device I32 [B] metadata, 1<=B<=record_capacity. Selectors and commit lengths obey
+    // the same row semantics as the Host overload, including strict zero-row no-op.
+    // Metadata is contiguous, disjoint from record/state storage, and preserved. Replay
+    // consumes its current values; the caller guarantees valid selectors and write separation.
+    void execute(const Tensor& source_slots, const Tensor& destination_slots,
+                 const Tensor& commit_columns, CudaExecutionView execution) const;
 
 private:
     GdnReplayRecords records_;

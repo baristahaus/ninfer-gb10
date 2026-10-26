@@ -228,17 +228,13 @@ def parse_ids_text(text: str) -> list[int]:
 
 
 def build_manifest(
-    ids: Sequence[int],
-    ids_text: str,
-    tokens: int,
-    source_provenance: list[dict[str, str]],
-    tokenizer_model_id: str,
+    ids: Sequence[int], ids_text: str, tokens: int, source_provenance: list[dict[str, str]]
 ) -> dict[str, Any]:
     return {
         "artifact_type": "ninfer_bench_corpus",
         "schema_version": 1,
         "tokenizer_source": "local_hf",
-        "tokenizer_model_id": tokenizer_model_id,
+        "tokenizer_model_id": TOKENIZER_MODEL_ID,
         "add_special_tokens": False,
         "chat_template": False,
         "tokens": tokens,
@@ -255,10 +251,10 @@ def build_manifest(
 
 def write_outputs(
     out_path: Path, manifest_path: Path, ids: Sequence[int], tokens: int,
-    source_provenance: list[dict[str, str]], tokenizer_model_id: str,
+    source_provenance: list[dict[str, str]]
 ) -> None:
     ids_text = format_ids(ids)
-    manifest = build_manifest(ids, ids_text, tokens, source_provenance, tokenizer_model_id)
+    manifest = build_manifest(ids, ids_text, tokens, source_provenance)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(ids_text, encoding="utf-8")
     manifest_path.write_text(
@@ -305,7 +301,6 @@ def check_outputs(out_path: Path, manifest_path: Path) -> int:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tokenizer-path", default=None)
-    parser.add_argument("--tokenizer-model-id", default=TOKENIZER_MODEL_ID)
     repo_root = Path(__file__).resolve().parents[2]
     parser.add_argument("--out", type=Path, default=repo_root / "bench/fixtures/bench_corpus.ids")
     parser.add_argument("--manifest", type=Path, default=None)
@@ -333,14 +328,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         paragraphs, source_provenance = list(PARAGRAPHS), []
     ids = bake_ids(tokenizer, paragraphs, args.tokens)
 
-    write_outputs(
-        args.out,
-        manifest_path,
-        ids,
-        args.tokens,
-        source_provenance,
-        args.tokenizer_model_id,
-    )
+    write_outputs(args.out, manifest_path, ids, args.tokens, source_provenance)
     print(f"wrote {args.out} ({len(ids)} tokens) and {manifest_path}")
     return 0
 

@@ -1,26 +1,75 @@
 # NInfer CLI
 
-`build/apps/ninfer` runs one request against one v3 `.ninfer` artifact. Build NInfer and
+`build/rtx5090-release/apps/ninfer` runs one request against one v3 `.ninfer` artifact. Build NInfer and
 download an artifact using the [project README](../README.md) before following this guide.
 
 The examples use Qwen3.8-27B NVFP4 with FP8 KV storage.
 
+For Qwen3.6-35B-A3B, `NINFER_VRAM_BUDGET_MIB` caps the Engine's GPU allocation budget. If the
+model cannot remain fully on GPU, Main MoE experts use CPU/GPU execution with segmented CUDA
+Graph decode:
+
+```bash
+NINFER_VRAM_BUDGET_MIB=16384 ./build/rtx5090-release/apps/ninfer out/qwen3_6_35b_a3b.ninfer \
+  --prompt "Explain how a compiler works." --max-context 8192 --max-tokens 128
+```
+
+`--prefill-chunk N` sets a fixed positive multiple of 128. When omitted, the default is 4096 for
+Qwen4Exp or CPU expert offload, and 1024 otherwise. Serving and offline scoring use the same Engine
+defaults. See [expert execution](maintainer/expert-weight-cache.md) for ownership and scheduling.
+
+Qwen3.8-Flash-Next uses Qwen4Exp Text/Vision/MTP. CUDA Graph decode is enabled by default:
+
+```bash
+./build/rtx5090-release/apps/ninfer out/qwen3_8_flash_next.ninfer \
+  --max-context 32768 --prefill-chunk 4096 --kv-dtype fp8 \
+  --prompt "Explain how sparse attention works." --max-tokens 256
+```
+
+On RTX 5090, this recipe uses registered Host experts with GPU caching and streaming, requiring
+about 63.3 GiB of Host expert backing plus runtime and system memory. On DGX Spark, use
+`build/dgx-spark-release/apps/ninfer`; selected weights reside on the GPU without a Host expert copy. PLE reads its
+NF4 rows from the artifact on disk. Add `--vision` for image/video messages. Native MTP supports
+`--spec mtp --draft-tokens 1..5` with either Text or Vision. The default shares the main BF16 head;
+`--proposal-head optimized` selects the additional full-vocabulary Q4 head when included during
+[conversion](weight-conversion.md). MTP's own experts remain on GPU. Serving uses the same execution path;
+offline causal scoring remains text-only without speculative decoding. Use `--no-cuda-graph`
+to select eager decode; prefill and Vision encode use the same eager path in both modes.
+The [Qwen4Exp execution reference](maintainer/qwen4_exp-execution.md) records the complete support
+scope, state handling and resource limits.
+
+```bash
+./build/rtx5090-release/apps/ninfer out/qwen3_8_flash_next.ninfer \
+  --spec mtp --draft-tokens 3 --proposal-head optimized \
+  --max-context 32768 --prefill-chunk 4096 --kv-dtype fp8 \
+  --prompt "Explain how sparse attention works." --max-tokens 256
+```
+
+```bash
+./build/rtx5090-release/apps/ninfer out/qwen3_8_flash_next.ninfer \
+  --vision --max-context 32768 --prefill-chunk 4096 --kv-dtype fp8 \
+  --messages examples/cli/messages/image_chart.json --no-thinking --temperature 0 --max-tokens 64
+```
+
 ## Text input
 
 ```bash
-./build/apps/ninfer models/qwen3_8_27b_nvfp4.ninfer \
+./build/rtx5090-release/apps/ninfer models/qwen3_8_27b_nvfp4.ninfer \
   --prompt "Summarize the difference between prefill and decode." \
   --max-context 32768 \
-  --max-new 8192 \
+  --max-tokens 8192 \
   --kv-dtype fp8 \
   --spec mtp --draft-tokens 3 \
-  --lm-head-draft
+  --proposal-head optimized
 ```
 
 Exactly one of `--prompt` and `--messages` is required. The CLI normally omits `--kv-capacity`, so
 the shared Main Text KV pool follows the example's 32,768-token `--max-context`.
 
-Answer content is streamed to stdout. Human-readable startup milestones and runtime errors are
+Answer content is streamed to stdout. Tool calls supplied through `--messages` also stream to stdout
+as `{"name":"...","arguments":...}` records, with argument bytes appearing as they are generated.
+An interrupted record retains its partial JSON and reports the interruption on stderr; it is not
+repaired into a complete call. Human-readable startup milestones and runtime errors are
 written to stderr without service timestamps. Reasoning and the CLI result report (timings,
 throughput, GPU memory, token IDs when requested, and speculative-decoding statistics) also use
 stderr as unprefixed product output, so stdout can be redirected independently. On a terminal,
@@ -30,10 +79,10 @@ ANSI escapes. `--log-level debug` exposes every startup phase. Option and local 
 failures remain direct command diagnostics:
 
 ```bash
-./build/apps/ninfer models/qwen3_8_27b_nvfp4.ninfer \
+./build/rtx5090-release/apps/ninfer models/qwen3_8_27b_nvfp4.ninfer \
   --prompt "Return one sentence." \
   --max-context 4096 \
-  --max-new 64 \
+  --max-tokens 64 \
   --kv-dtype fp8 \
   > answer.txt 2> run.log
 ```
@@ -42,13 +91,55 @@ failures remain direct command diagnostics:
 Changes to the file take effect after restarting NInfer:
 
 ```bash
-./build/apps/ninfer models/qwen3_8_27b.ninfer \
+./build/rtx5090-release/apps/ninfer models/qwen3_8_27b.ninfer \
   --chat-template tools/chat_templates/qwen3_8.jinja --prompt "Hello"
 ```
 
+`--grammar-file FILE` constrains the answer with a GBNF grammar whose entry rule is `root`:
+
+```bash
+printf 'root ::= "yes" | "no"\n' > answer.gbnf
+./build/rtx5090-release/apps/ninfer models/qwen3_8_27b_nvfp4.ninfer \
+  --prompt "Is 17 prime?" --no-thinking --grammar-file answer.gbnf --max-tokens 64
+```
+
+`--choice TEXT` selects a literal candidate; repeat the flag to supply the candidate set.
+`--regex PATTERN` constrains the complete answer to a regular expression:
+
+```bash
+./build/rtx5090-release/apps/ninfer models/qwen3_8_27b_nvfp4.ninfer \
+  --prompt "Classify this review: the service was excellent." --no-thinking \
+  --choice positive --choice neutral --choice negative
+
+./build/rtx5090-release/apps/ninfer models/qwen3_8_27b_nvfp4.ninfer \
+  --prompt "Return ticket TASK-0042." --no-thinking --regex '(BUG|TASK)-[0-9]{4}'
+```
+
+Candidates preserve exact text; `--choice ''` explicitly permits empty content. `--regex ''`
+permits only empty content. See the [language contract](maintainer/constrained-decoding.md#41-gbnf--regex--choice)
+for supported regex syntax.
+
+`--json-object` constrains the answer to a JSON object. `--json-schema-file FILE` applies a JSON
+Schema. All output constraint options are mutually exclusive:
+
+```bash
+printf '%s\n' '{"type":"object","properties":{"answer":{"type":"integer"}},"required":["answer"],"additionalProperties":false}' > answer.schema.json
+./build/rtx5090-release/apps/ninfer models/qwen3_8_27b_nvfp4.ninfer \
+  --prompt "Return the answer to 6 times 7 as JSON." --no-thinking \
+  --json-schema-file answer.schema.json --max-tokens 64
+```
+
+GBNF supports recursive rules, Unicode character classes and repetition. All constraint modes work with
+ordinary decoding, MTP, DFlash and DFlash2. Thinking may precede the constrained answer; an output
+limit or cancellation can leave it incomplete. JSON modes can accompany tools supplied in messages:
+the answer is either JSON or a tool-call sequence. GBNF, choice and regex require no active tools.
+Constraints reject custom stops and `--raw-output`. JSON uses compact separators and declared property order. Describe
+the desired content in the prompt; the schema is not added to it automatically. See the
+[supported schema subset](maintainer/constrained-decoding.md#42-json-与-schema-的执行合同).
+
 Omitted thinking and effort options use the selected template's defaults. `--no-thinking` or
 `--reasoning-effort none` requests disabled thinking; other effort values cannot be combined with
-`--no-thinking`. The template interprets the selected effort. `--greedy` selects exact argmax
+`--no-thinking`. The template interprets the selected effort. `--temperature 0` selects exact argmax
 decoding independently.
 
 `--thinking-budget N` places a positive upper bound on accepted model-origin tokens while the
@@ -60,7 +151,7 @@ close, stop condition, cancellation, or total output/context limit at the bounda
 and suppresses this insertion. The option cannot be combined with `--no-thinking`, but it can be
 combined with `--reasoning-effort`.
 
-`--max-new` counts every committed generated token, including internally inserted control tokens.
+`--max-tokens` counts every committed generated token, including internally inserted control tokens.
 When the effective output capacity extends beyond the thinking budget, it must have room for the
 complete tokenizer-derived control suffix plus one post-close model token; an undersized request is
 rejected rather than truncating the suffix. Normal output sends the inserted guidance to stderr as
@@ -71,14 +162,14 @@ For example, this allows at most 512 model-origin thinking tokens while retainin
 output capacity for the inserted suffix and the answer:
 
 ```bash
-./build/apps/ninfer models/qwen3_8_27b_nvfp4.ninfer \
+./build/rtx5090-release/apps/ninfer models/qwen3_8_27b_nvfp4.ninfer \
   --prompt "Explain speculative decoding, then give a concise conclusion." \
   --max-context 4096 \
-  --max-new 1024 \
+  --max-tokens 1024 \
   --thinking-budget 512 \
   --kv-dtype fp8 \
   --spec mtp --draft-tokens 3 \
-  --lm-head-draft
+  --proposal-head optimized
 ```
 
 ## Startup memory profile
@@ -92,8 +183,8 @@ GPU residency is frozen when the Engine starts:
 - Vision is disabled by default, omitting its weights and Vision-specific unified-workspace extent;
 - `--vision` loads the weights, expands the one Program workspace for Vision encode/handoff, and
   enables image/video input.
-- the one-request CLI uses root-only context mode, so it does not reserve an extra Device
-  checkpoint StateImage or capture a continuation that no later request could consume.
+- the one-request CLI disables cross-request history and Host context backing, so it does not
+  reserve an extra Device checkpoint StateImage or retain continuations.
 
 The complete `.ninfer` inventory is still validated. These choices are not lazy loading: an Engine
 started without Vision rejects media and cannot enable Vision later. DFlash/DFlash2 and Vision may
@@ -117,7 +208,7 @@ and an optional `tools` array.
     "content": [
       {
         "type": "image",
-        "image": "examples/cli/media/visual_chart.png"
+        "image": "../media/visual_chart.png"
       },
       {
         "type": "text",
@@ -128,17 +219,18 @@ and an optional `tools` array.
 ]
 ```
 
-Run message files from the repository root when they contain repository-relative media paths:
+Local media paths are relative to the messages file, so fixtures work independently of the
+current directory:
 
 ```bash
-./build/apps/ninfer models/qwen3_8_27b_nvfp4.ninfer \
+./build/rtx5090-release/apps/ninfer models/qwen3_8_27b_nvfp4.ninfer \
   --messages examples/cli/messages/image_chart.json \
   --max-context 8192 \
-  --max-new 128 \
+  --max-tokens 128 \
   --kv-dtype fp8 \
   --vision \
   --spec mtp --draft-tokens 3 \
-  --lm-head-draft
+  --proposal-head optimized
 ```
 
 Supported roles are `system`, `developer`, `user`, `assistant`, and `tool`.
@@ -165,30 +257,34 @@ long-decode, and long-context inputs.
 Speculative decoding is disabled by default. Select MTP with one to five draft positions, or the
 35B-A3B DFlash or Qwen3.8-27B DFlash2 backend with one to fifteen. Both masked-draft backends
 may be combined with `--vision`.
-`--lm-head-draft` selects the optimized proposal head and requires a selected backend:
+`--proposal-head optimized` selects the optimized proposal head when the architecture and artifact provide it,
+and requires a selected backend.
+
+Flash Next supports native MTP with the shared BF16 head or an optimized full-vocabulary Q4 head.
+It does not support DFlash or DFlash2.
 
 ```bash
-./build/apps/ninfer models/qwen3_6_35b_a3b.ninfer \
+./build/rtx5090-release/apps/ninfer models/qwen3_6_35b_a3b.ninfer \
   --prompt "Write a short explanation of speculative decoding." \
   --max-context 16384 \
-  --max-new 512 \
+  --max-tokens 512 \
   --kv-dtype fp8 \
   --spec mtp --draft-tokens 3 \
-  --lm-head-draft
+  --proposal-head optimized
 ```
 
 For DFlash:
 
 ```bash
-./build/apps/ninfer models/qwen3_6_35b_a3b.ninfer \
+./build/rtx5090-release/apps/ninfer models/qwen3_6_35b_a3b.ninfer \
   --prompt "Write a short explanation of speculative decoding." \
-  --max-context 16384 --max-new 512 \
+  --max-context 16384 --max-tokens 512 \
   --kv-dtype fp8 \
-  --spec dflash --draft-tokens 7 --lm-head-draft
+  --spec dflash --draft-tokens 7 --proposal-head optimized
 ```
 
 For Qwen3.8-27B artifacts containing the DFlash2 companion weights, select
-`--spec dflash2 --draft-tokens 7`, optionally with `--lm-head-draft` and `--vision`.
+`--spec dflash2 --draft-tokens 7`, optionally with `--proposal-head optimized` and `--vision`.
 DFlash2 accepts every draft count from 1 through 15; seven is the checkpoint recommendation.
 Both `groupwise-int` and `nvfp4` artifacts use the same Engine route, including CUDA Graph,
 concurrent requests, sampling penalties, and prefix reuse. An artifact without the companion
@@ -202,33 +298,15 @@ block length eight, while fifteen uses the maximum supported block length sixtee
 
 ## Common options
 
-The table lists executable defaults. The examples above select FP8 KV and MTP3.
+The complete field/flag mapping, defaults and override rules are maintained in
+[Startup configuration](startup-configuration.md). Both CLI and serve accept `--config FILE` and
+share the engine controls. The root [ninfer.example.toml](../ninfer.example.toml) lists every setting.
 
-| Option | Meaning | Default |
-|---|---|---:|
-| `--max-context N` | per-sequence logical context ceiling | `2048` |
-| `--kv-capacity N\|auto` | explicit shared Main Text KV capacity, or maximize it from remaining GPU memory; omitted means `--max-context` | `2048` |
-| `--prefill-chunk N` | text-prefill chunk, in multiples of 128 | device default: `4096` on an integrated GPU (GB10), `1024` on a discrete one |
-| `--max-new N` | requested output-token limit | `128` |
-| `--device N` | CUDA device index | `0` |
-| `--kv-dtype bf16\|int8\|fp8\|nvfp4\|k8v4` | KV-cache storage | `bf16` |
-| `--spec mtp\|dflash\|dflash2` | speculative backend | off |
-| `--draft-tokens N` | MTP `1..5` (Qwen3.5), `1..3` (Flash-Next 125B-A6B); DFlash/DFlash2 `1..15` | unset |
-| `--lm-head-draft` | optimized proposal head | off |
-| `--vision` | enable image/video input and load Vision GPU allocations | off |
-| `--no-cuda-graph` | disable CUDA Graph decode | graphs on |
-| `--chat-template FILE` | use a local Jinja template | artifact template |
-| `--no-thinking` | disable thinking | template default |
-| `--thinking-budget N` | positive model-origin thinking-token cap; omitted means unlimited | unset |
-| `--reasoning-effort none\|minimal\|low\|medium\|high\|xhigh\|max` | pass an effort value to the selected template | template default |
-| `--greedy` | exact argmax decoding | off |
-| `--temperature F` | sampling temperature override | registered model/mode default |
-| `--top-p F` | nucleus-threshold override | registered model/mode default |
-| `--top-k N` | top-k-threshold override (`0..20`; zero selects the top-20 cap) | registered model/mode default |
-| `--min-p F` | min-p-threshold override | registered model/mode default |
-| `--presence-penalty F` | presence-penalty override | registered model/mode default |
-| `--frequency-penalty F` | frequency-penalty override | registered model/mode default (`0`) |
-| `--seed N` | sampling seed | `0` |
+CLI defaults are 8192 context tokens, 128 output tokens, seed 0, no prefix reuse, zero extra state
+slots and zero Host context capacity. Explicit cache and concurrency settings are retained.
+Use `--temperature 0` for greedy sampling. `--seed random` chooses a fresh seed for the request;
+`model` clears a sampling or template override and `default` restores an entry-specific default
+where supported.
 
 When a sampling flag is omitted, Engine selects the general-task preset for the loaded architecture
 and rendered prompt mode. The current official models use:
@@ -245,24 +323,25 @@ and rendered prompt mode. The current official models use:
 Frequency penalty is `0` in every registered preset. Task-specific profiles such as Qwen's
 precise-coding profile use explicit sampling overrides.
 
+Flash Next reads temperature, top-p, top-k and min-p from the artifact's `generation_config.json`,
+using the same preset for thinking and non-thinking. Explicit sampling flags override these values.
+
 Repeat `--stop-token-id`, `--stop`, or `--reasoning-stop` to add stop conditions. Use
 `--raw-output` to expose the frontend's raw output stream and `--print-token-ids` to include
 generated token IDs in diagnostics.
 
-Run `./build/apps/ninfer --help` for the exact option contract.
+Run `./build/rtx5090-release/apps/ninfer --help` for the exact option contract.
 
 ## CUDA synchronization
 
 `NINFER_CUDA_SYNC` selects the CUDA device synchronization schedule at startup for both the CLI
-and HTTP server. When unset, it defaults to `spin` on discrete GPUs, prioritizing low
-synchronization latency at the cost of CPU usage while waiting for the GPU, and to `yield` on
-integrated devices such as GB10, where it measured fastest against `blocking`. Use `blocking` to
-let the waiting thread sleep;
+and HTTP server. When unset, it defaults to `spin`, prioritizing low synchronization latency at
+the cost of CPU usage while waiting for the GPU. Use `blocking` to let the waiting thread sleep;
 the decode performance cost depends on the host. `yield` yields the CPU while waiting, and `auto`
 uses CUDA's scheduling heuristic, not an automatic performance benchmark.
 
 ```bash
-NINFER_CUDA_SYNC=blocking ./build/apps/ninfer models/qwen3_8_27b_nvfp4.ninfer --prompt "Hello"
+NINFER_CUDA_SYNC=blocking ./build/rtx5090-release/apps/ninfer models/qwen3_8_27b_nvfp4.ninfer --prompt "Hello"
 ```
 
 The Engine-ready log reports the selected mode. Empty or unrecognized values, or failure to apply
@@ -277,35 +356,29 @@ The artifact describes its model configuration and weight representations;
 `--kv-dtype` independently selects runtime KV storage. The prepared prompt must fit
 `--max-context`; generation stops at the remaining context capacity when necessary.
 `--kv-capacity N` controls the shared physical Main Text KV pool independently and is rounded up to
-the 64-token page size. `--kv-capacity auto` loads the selected weights, measures the remaining GPU
-memory, and directly chooses the largest legal page capacity for the complete enabled runtime
-layout. This includes the selected speculative backend, fixed sequence state, unified workspace,
-and CUDA Graph allowance, while leaving the default 1 GiB automatic headroom
-unallocated. On an integrated GPU that shares host memory (GB10), remaining memory is the kernel's
-`MemAvailable`, which counts reclaimable page cache, less the pinned Host KV capacity and a fixed
-6 GiB for Host StateImages, the cached part of the file-mapped PLE table and the process; a
-discrete GPU uses the driver's free memory. It does not probe allocations or resize the pool at
-request time. The single-request
+the 64-token page size. Startup plans the selected weights and complete enabled runtime layout
+from artifact metadata before allocating their backing. With resident weights,
+`--kv-capacity auto` chooses the largest legal page capacity within the available Device budget,
+including the selected speculative backend, fixed sequence state, unified workspace and
+measured CUDA Graph rebuilding cost. Both explicit and automatic capacity use 1 GiB of base startup
+planning headroom. On Spark, Vision also reserves the configured live media capacity in shared memory.
+Startup calibration releases its temporary storage before sizing the final pools;
+retained driver memory is already included in the remaining free memory. With CPU expert
+offload, `auto` reserves one full context and assigns the remaining budget to expert storage;
+set an explicit capacity when more shared KV is needed. Graph calibration runs only at startup;
+the pool stays fixed while serving requests. The single-request
 CLI normally leaves the option omitted so it follows
 `--max-context`; the distinction matters primarily to a concurrent Engine or server.
 
 At Engine startup NInfer reserves model weights, persistent sequence state, one phase-reused
-Program workspace, and a separate CUDA Graph driver allowance. With Vision enabled, that one
+Program workspace, and CUDA Graph resources sized through calibration. With Vision enabled, that one
 workspace contains a general execution prefix and a fixed item-output handoff region. Vision encode
 may reuse the full backing before producing the output; Text/MTP/decode work remains inside the
 general prefix while the handoff is live. The capacity is therefore the maximum legal simultaneous
 extent, not the sum of Text, Vision scratch, and Vision output allocations. Text prefill uses
 `min(--prefill-chunk,--max-context)`; Vision keeps the existing 32,768-token aggregate prompt budget
 but plans Device execution for the registered 16,384-token maximum single item. Requests perform no
-project-owned device allocation or growth. Context-cache capacity controls are intentionally absent
-from this one-request interface; the persistent Engine and server routes own cross-request reuse and
-optional Host backing.
+project-owned device allocation or growth. CLI accepts the shared context-cache capacity controls; its defaults reserve no extra StateImages
+or Host context backing. Explicit values are passed to Engine resource planning.
 
 All weight, sequence, workspace, and graph allocations are released when the Engine is destroyed.
-
-## Flash-Next
-
-Use the [v3 Flash-Next artifact](maintainer/qwen3.8-flash-next-125b-a6b-artifact.md) with the same
-CLI. Text/Vision, MTP and prefix reuse are supported. The family keeps its registered chat-template
-renderer; `--chat-template` overrides are rejected. See [Flash-Next performance](performance/qwen3.8-flash-next-125b-a6b.md)
-for RTX PRO 6000 results.

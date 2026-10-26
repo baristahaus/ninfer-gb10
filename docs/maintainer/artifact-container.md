@@ -1,36 +1,5 @@
 # NInfer v3 容器规范
 
-## English clarification
-
-This document is written in Chinese. It comes from the original NInfer repository (Neroued).
-The Chinese text below is the normative text. This section maps the document in English.
-It is a clarification added on 2026-09-27. It is not normative.
-
-English title: "NInfer v3 Container Specification"
-
-V3 saves a compact model-instance config, the actual objects, the logical bindings, and the required resources.
-The model code defines the math, the component handoffs, and the state programs.
-A reader and a writer can build the file layout and the references from this document alone.
-The binder of each architecture then interprets the logical parameters and the config.
-An artifact has one fixed entry and one master catalog.
-A small artifact is one `.ninfer` file.
-A large artifact is the entry file plus continuation volumes.
-
-Top-level sections:
-
-1. Contract and notation (合同与记法): the authority for each part, plus the notation (U64, ID, Shape).
-2. File set and address space (文件集合与地址空间): entry and continuation volumes, the logical payload, the 32 GB per-file cap.
-3. Binary framing (二进制 framing): the 32-byte entry header, the continuation header, the file directory.
-4. JSON master catalog (JSON 总目录): the root record and the component records (text, vision, mtp, dflash, dflash2).
-5. Physical objects (物理对象): tensor objects, resource objects, object ranges and sharing.
-6. Number formats and layout names (V3 数值格式与布局名称): format names and the allowed format and shape per layout.
-7. Logical parameter binding (逻辑参数绑定): the two binding kinds.
-8. Uses and auxiliary inputs (使用许可与辅助输入): the `uses` array. Each Use names one read of a parameter.
-9. Resources and optional output representations (资源与可选输出表示): frontend resource references.
-10. Instance data and provenance (实例资料与 provenance): the `metadata` and `provenance` objects.
-11. Reading, writing, and error boundaries (读取、写入与错误边界): the generic reader and its failure rules.
-12. Concrete examples (具体例子): a complete Text-only catalog.
-
 V3 保存精简的模型实例配置、实际对象、逻辑绑定与所需资源。数学公式、组件交接和状态程序
 由模型代码定义。Reader 与 writer 根据本文即可独立实现文件组织和引用；
 对应架构的 binder 再解释逻辑参数与配置。
@@ -315,13 +284,14 @@ resource 对象自身只提供原始字节。
 ### 5.3 对象范围与共享
 
 所有对象按 offset 递增排列，ID 唯一，字节区间互不重叠且位于逻辑 payload 内。
-Tensor offset 满足 layout 的 256-byte 对象对齐，raw resource 的对齐为 1。
+Tensor offset 满足所选 layout 注册的对象对齐要求，raw resource 的对齐为 1。
+当前已注册 tensor layouts 均要求 256 bytes；文件 payload 的 4096-byte 对齐与对象对齐分别规定。
 Tensor bytes 等于对应 `(format,layout,shape)` 的 encoded size。
 
 对象间隙和末尾未引用的逻辑 payload 字节没有加载语义。常规 writer 只为对齐留空，并在最后
 一个对象结束处截断。完整编码对象内部的 padding 继续遵循其 layout 合同。
 
-多个逻辑用途共享同一个对象时都引用同一 ID；materializer 据此建立一次 backing。
+多个逻辑用途共享同一个对象时都引用同一 ID；materializer 在每个需要的位置建立一次 backing。
 没有被本次用途引用的对象保持未驻留。对象 ID、排列和文件位置只参与加载与诊断，执行中的
 权重引用由 binder 一次性解析。
 
@@ -350,6 +320,8 @@ group size、scale 类型和解码规则直接由该 codec 定义。
 | q8_g32_fp16 | Codes `[-127,127]`，G32，FP16 multiplier |
 | nvfp4 | E2M1 codes、G16 E4M3FN block scale、FP32 weight divisor |
 | fp8_e4m3fn_row_bf16 | E4M3FN codes，每行一个 BF16 multiplier |
+| fp8_e4m3fn_block128x128_bf16 | E4M3FN codes，每 128×128 块一个 BF16 multiplier |
+| nf4_g16_e4m3fn | 固定 NF4 codebook，G16 E4M3FN block scale，FP32 weight divisor |
 
 量化名字末尾的 FP16/BF16 表示 scale 类型。激活计算许可在 uses 中表达。
 Code 范围、特殊浮点值、舍入与精确重建按[数值合同](tensor-formats.md)解释。
@@ -365,7 +337,10 @@ Code 范围、特殊浮点值、舍入与精确重建按[数值合同](tensor-fo
 | contiguous_le_v1 | bf16/fp32/int32，rank 0..16 | 256 |
 | row_split_k128_v1 | q4_g64_fp16、q5_g64_fp16、q6_g64_fp16、q8_g32_fp16，正 rank-2 `[N,K]` | 256 |
 | block_scale_k16_m128x4_v1 | nvfp4，`N%128=0`、`K%64=0` | 256 |
+| batched_block_scale_k16_m128x4_v1 | nvfp4，rank-3 `[E,N,K]`，`N%128=0`、`K%64=0` | 256 |
+| block_scale_m128_k128_v1 | fp8_e4m3fn_block128x128_bf16，`[N,K]` 或 `[E,N,K]`，N/K 为 128 的倍数 | 256 |
 | row_scale_v1 | fp8_e4m3fn_row_bf16，正 rank-2 `[N,K]` | 256 |
+| row_paged_g16_4k_v1 | nf4_g16_e4m3fn，正 rank-2 `[N,K]`、`K%16=0`、encoded row≤4096 B | 4096 |
 | raw_bytes_v1 | Resource，非空字节串 | 1 |
 
 Byte packing、planes、内部 padding、swizzle 和 encoded-size 公式由
@@ -437,7 +412,8 @@ Binder 检查逻辑覆盖和对应关系，并保留每个 Part 的 parent、原
 
 Zero-copy view 由实际 layout 与 consumer 的寻址能力决定。RowSplit 的一段逻辑行涉及 base、
 可选 high-bit 和 scale 等多个 plane 区间；NVFP4 的 view 还保留原 parent 的 scale swizzle 与
-weight divisor。Materializer 上传 parent 的原始编码，Op 准备其真实可消费的 view。
+所属矩阵的 weight divisor。Bank 中各矩阵的 divisor 独立；一个 native NVFP4 矩阵 view
+不能跨越 divisor 域。Materializer 上传 parent 的原始编码，Op 准备其真实可消费的 view。
 需要改变 packing 或重新组织编码的工作由 converter 完成。
 
 文件分片只影响 parent 字节的获取。即使一个 parent 跨多个文件，以上逻辑引用和 Op 参数关系
@@ -491,7 +467,8 @@ Weight divisor 和 block scales 属于权重 codec，activation divisor 属于�
 
 ### 9.1 Frontend 资源引用
 
-组件的 resources 键由对应 Frontend 合同解释，常用上游文件角色可以直接使用原文件名：
+组件的 resources 键由消费它的模型/组件合同解释。当前 Frontend 资源角色由对应
+Frontend 合同拥有，常用上游文件角色可以直接使用原文件名：
 
 ```json
 {
@@ -503,10 +480,12 @@ Weight divisor 和 block scales 属于权重 codec，activation divisor 属于�
 ```
 
 这些值全部引用 resource 对象。它们是对象引用，实际资源字节随 artifact 保存。
+通用容器不把资源限定为 Frontend 文件；模型定义的二进制控制资源也必须由对应组件
+显式声明字节含义和消费者，不能将全部资源一律当作 UTF-8/JSON 或交给 Frontend 解析。
 Vision 的 processor 资源可放在 vision.resources 中，启用功能时按依赖取得。
 
 V3 可以在相应资源对象中承载自定义 chat template。资源保存原始字节，模板的识别与渲染由
-当前 [Frontend](../../src/models/qwen3_5/frontend/chat_template.cpp) 的实际能力决定。
+当前 [Frontend](../../src/models/common/qwen/frontend/chat_template.cpp) 的实际能力决定。
 完整 tokenizer 资源共同决定 token 域，固定模型 config 保留自己的权重 vocab_size。
 
 ### 9.2 可选 proposal 输出表示
@@ -572,9 +551,21 @@ copy_bytes          = b - a
 I/O 层可将这些段继续切成传输块，按原偏移写入同一个目标对象。File header 和文件对齐区
 不参与复制；跨文件数据通过上述范围映射交给 materializer。
 
-Materializer 按实际使用的 parent 去重，安排 device/host backing，再取得 typed view。
+Binder 只解析逻辑引用与 owning Host 资源；放置方案按 `(parent, Device)` 去重，
+使用 LayoutBuilder 分别规划 CPU/GPU backing。CPU tensor 使用对齐的可缓存 HostBuffer；
+声明 `CudaTransfer` 的 CPU 对象集中到独立注册区域，加载后建立由 backing owner 持有的
+CUDA 注册和传输视图。注册不改变 Device 或文件格式，同一 Host parent 的访问需求合并。
+资源字节单独保留原地址。Materializer 用有界 I/O 块向所需位置分发原编码，
+同一 parent 双端需求不重复读取完整 payload；`bind_view` 显式选择 Device。
+仅有 `CpuOnly` Host 需求的 materialization 不建立 CUDA 资源。
 辅助 scalar、索引等需要 owning Host 值的用途可以按 Binding 读取对应元素区间，保持其数值类型。
 Reader 的 JSON 与符号索引用于冷加载，运行时使用解析后的引用与直接调用。
+
+磁盘按需消费使用 `prepare_file_backing`：只为所选对象打开长期只读文件，保存编码几何和
+对象范围映射，不 materialize payload。`FileBacking` 的 views 在 Reader 销毁和 owner
+移动后仍有效；`map_file_range` 使用调用者提供的段缓冲，输出的文件索引属于
+`FileBacking::files()`。Core `io::ReadOnlyFile` 提供显式 buffered/direct 句柄，
+`io::DirectReadQueue` 借用文件和 Host buffers 完成有界异步读取；所有读取退役后才能销毁 backing。
 
 ### 11.3 语义与支持检查
 
@@ -585,7 +576,8 @@ Reader 的 JSON 与符号索引用于冷加载，运行时使用解析后的引�
 | 精简配置、逻辑参数 shape/覆盖、组件关系、所选功能数据缺失 | 对应架构 binder |
 | Codes/scales、编码 padding 与源数值转换正确性 | Converter、codec 与相应验证 |
 | 实际原生参数、format/layout/shape/phase 支持不足 | Op 准备、容量查询、warmup 或执行 |
-| 状态存储、实际容量与生命周期 | Program 与状态实现 |
+| 状态身份、范围分配与引用生命周期 | Session 与 ContextDirectory |
+| 固定物理存储、执行与退役 | RankProgram 与 ContextStorage |
 
 运行时沿实际消费者完成必要检查，使用已转换的 payload；常规上传依赖 producer 建立的
 codes/scales 合同。数值资格验证按现有 Op/codec 规则执行。

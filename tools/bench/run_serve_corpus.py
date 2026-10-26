@@ -25,11 +25,19 @@ MANIFEST_PATH = REPO_ROOT / "examples/cli/manifest.json"
 SPECULATIVE_MODES = {
     "mtp0": ("none", 0),
     "mtp3": ("mtp", 3),
+    "mtp5": ("mtp", 5),
     "dflash7": ("dflash", 7),
     "dflash2_7": ("dflash2", 7),
 }
 DEFAULT_MODES = ("mtp0", "mtp3")
 SAMPLING_MODES = ("stochastic", "greedy")
+KV_CACHE_NAMES = {
+    "bf16": "bf16",
+    "int8": "int8-group64",
+    "fp8": "fp8-e4m3-row256",
+    "nvfp4": "nvfp4",
+    "k8v4": "k8v4",
+}
 
 SEEDS = (
     7632647173703958409,
@@ -77,9 +85,9 @@ SCENARIO_FIXTURES = {
 
 WARMUP_FIXTURE = "text_smoke_zh"
 RUN_ARTIFACT_TYPE = "ninfer_serve_corpus_result"
-RUN_SCHEMA_VERSION = 7
+RUN_SCHEMA_VERSION = 8
 SERVER_LOG_ARTIFACT_TYPE = "ninfer_serve_request_log"
-SERVER_LOG_SCHEMA_VERSION = 21
+SERVER_LOG_SCHEMA_VERSION = 31
 STARTUP_TIMEOUT_SECONDS = 1800.0
 REQUEST_TIMEOUT_SECONDS = 24.0 * 60.0 * 60.0
 LOG_EVENT_TIMEOUT_SECONDS = 10.0
@@ -104,6 +112,7 @@ class RunSpec:
     speculative_backend: str
     draft_tokens: int
     sampling_mode: str
+    kv_dtype: str
     fixture: Fixture
     seed: int
 
@@ -267,7 +276,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--serve",
         type=Path,
-        default=REPO_ROOT / "build/apps/ninfer-serve",
+        required=True,
         help="ninfer-serve executable",
     )
     parser.add_argument(
@@ -292,6 +301,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--output", type=Path, required=True, help="campaign output directory")
     parser.add_argument("--port", type=int, default=8080, help="loopback serving port")
     parser.add_argument("--device", type=int, default=0, help="CUDA device index")
+    parser.add_argument("--kv-dtype", choices=tuple(KV_CACHE_NAMES), default="int8")
     return parser.parse_args(argv)
 
 
@@ -376,6 +386,7 @@ def build_specs(
     fixtures: dict[str, Fixture],
     mode_names: Sequence[str],
     sampling_mode: str,
+    kv_dtype: str,
 ) -> list[RunSpec]:
     specs: list[RunSpec] = []
     for target, artifact in artifacts:
@@ -392,6 +403,7 @@ def build_specs(
                             speculative_backend=backend,
                             draft_tokens=draft_tokens,
                             sampling_mode=sampling_mode,
+                            kv_dtype=kv_dtype,
                             fixture=fixtures[fixture_name],
                             seed=seed,
                         )
@@ -482,7 +494,7 @@ def validate_server_start(event: dict[str, Any], spec: RunSpec, device: int) -> 
         "max_context": 262144,
         "kv_capacity": 262144,
         "prefill_chunk": 1024,
-        "kv_cache": "int8-group64",
+        "kv_cache": KV_CACHE_NAMES[spec.kv_dtype],
         "cuda_graph": True,
         "prefix_reuse": False,
         "speculative_backend": spec.speculative_backend,
@@ -491,7 +503,13 @@ def validate_server_start(event: dict[str, Any], spec: RunSpec, device: int) -> 
     }
     if actual != expected:
         raise CampaignError(f"server_start Engine configuration mismatch: {actual!r}")
-    if event.get("sampling_defaults", {}).get("greedy") != (
+    context_cache = engine.get("context_cache", {})
+    if (
+        context_cache.get("extra_state_slots") != 0
+        or context_cache.get("host_capacity_bytes") != 0
+    ):
+        raise CampaignError("server_start context cache capacity differs from the campaign")
+    if (event.get("sampling_defaults", {}).get("server_overrides", {}).get("temperature") == 0) != (
         spec.sampling_mode == "greedy"
     ):
         raise CampaignError("server_start sampling mode does not match the campaign")
@@ -562,15 +580,15 @@ def build_result_record(
         fallback_steps = int(speculative["fallback_steps"])
         queue_wait_seconds = float(engine_timing["queue_wait_seconds"])
         engine_boundary_exposed_seconds = float(host_exposed["engine_boundary"])
-        program_submit_exposed_seconds = float(host_exposed["program_submit"])
-        program_post_exposed_seconds = float(host_exposed["program_post"])
+        session_call_exposed_seconds = float(host_exposed["session_call"])
+        executor_poll_exposed_seconds = float(host_exposed["executor_poll"])
         engine_commit_output_exposed_seconds = float(host_exposed["engine_commit_output"])
         engine_maintenance_exposed_seconds = float(host_exposed["engine_maintenance"])
         engine_host_exposed_seconds = float(host_exposed["total"])
-        device_wait_exposed_seconds = float(engine_timing["device_wait_exposed_seconds"])
+        scheduler_yield_exposed_seconds = float(engine_timing["scheduler_yield_exposed_seconds"])
         decode_host_exposed_seconds = float(decode_engine["host_exposed_seconds"])
-        decode_device_wait_exposed_seconds = float(
-            decode_engine["device_wait_exposed_seconds"]
+        decode_scheduler_yield_exposed_seconds = float(
+            decode_engine["scheduler_yield_exposed_seconds"]
         )
         decode_rounds = int(decode_engine["rounds"])
     except (KeyError, TypeError, ValueError) as exc:
@@ -578,8 +596,8 @@ def build_result_record(
 
     host_phase_sum = (
         engine_boundary_exposed_seconds
-        + program_submit_exposed_seconds
-        + program_post_exposed_seconds
+        + session_call_exposed_seconds
+        + executor_poll_exposed_seconds
         + engine_commit_output_exposed_seconds
         + engine_maintenance_exposed_seconds
     )
@@ -627,22 +645,22 @@ def build_result_record(
         # and per-request normalization but must not be summed across concurrent requests.
         "queue_wait_seconds": queue_wait_seconds,
         "engine_boundary_exposed_seconds": engine_boundary_exposed_seconds,
-        "program_submit_exposed_seconds": program_submit_exposed_seconds,
-        "program_post_exposed_seconds": program_post_exposed_seconds,
+        "session_call_exposed_seconds": session_call_exposed_seconds,
+        "executor_poll_exposed_seconds": executor_poll_exposed_seconds,
         "engine_commit_output_exposed_seconds": engine_commit_output_exposed_seconds,
         "engine_maintenance_exposed_seconds": engine_maintenance_exposed_seconds,
         "engine_host_exposed_seconds": engine_host_exposed_seconds,
-        "device_wait_exposed_seconds": device_wait_exposed_seconds,
+        "scheduler_yield_exposed_seconds": scheduler_yield_exposed_seconds,
         "decode_host_exposed_seconds": decode_host_exposed_seconds,
-        "decode_device_wait_exposed_seconds": decode_device_wait_exposed_seconds,
+        "decode_scheduler_yield_exposed_seconds": decode_scheduler_yield_exposed_seconds,
         "decode_rounds": decode_rounds,
         "queue_wait_ms": queue_wait_seconds * 1000.0,
         "engine_host_exposed_ms": engine_host_exposed_seconds * 1000.0,
         "decode_host_us_per_round": safe_ratio(
             decode_host_exposed_seconds * 1.0e6, float(decode_rounds)
         ),
-        "decode_device_wait_us_per_round": safe_ratio(
-            decode_device_wait_exposed_seconds * 1.0e6, float(decode_rounds)
+        "decode_scheduler_yield_us_per_round": safe_ratio(
+            decode_scheduler_yield_exposed_seconds * 1.0e6, float(decode_rounds)
         ),
     }
     return {
@@ -660,6 +678,7 @@ def build_result_record(
         "speculative_backend": spec.speculative_backend,
         "draft_tokens": spec.draft_tokens,
         "sampling_mode": spec.sampling_mode,
+        "kv_dtype": spec.kv_dtype,
         "request": payload,
         "response": response,
         "server_event": server_event,
@@ -705,6 +724,10 @@ def load_existing_records(
                 if key in records:
                     raise CampaignError(f"{path}:{line_number}: duplicate result for {key!r}")
                 spec = expected_specs[key]
+                if record.get("kv_dtype") != spec.kv_dtype:
+                    raise CampaignError(
+                        f"{path}:{line_number}: KV dtype differs from the current command"
+                    )
                 if Path(record.get("artifact_path", "")).resolve() != spec.artifact:
                     raise CampaignError(
                         f"{path}:{line_number}: artifact path differs from the current command"
@@ -739,17 +762,23 @@ def server_command(
         spec.model_id,
         "--max-context",
         "262144",
+        "--kv-capacity",
+        "262144",
         "--prefill-chunk",
         "1024",
-        "--log-stats-interval-ms",
+        "--stats-interval",
         "0",
         "--device",
         str(device),
         "--request-log-jsonl",
         str(server_log),
         "--kv-dtype",
-        "int8",
+        spec.kv_dtype,
         "--no-prefix-reuse",
+        "--extra-state-slots",
+        "0",
+        "--host-cache-capacity",
+        "0",
     ]
     if spec.speculative_backend != "none":
         command.extend(
@@ -758,11 +787,11 @@ def server_command(
                 spec.speculative_backend,
                 "--draft-tokens",
                 str(spec.draft_tokens),
-                "--lm-head-draft",
+                "--proposal-head", "optimized",
             ]
         )
     if spec.sampling_mode == "greedy":
-        command.append("--greedy")
+        command.extend(["--temperature", "0"])
     else:
         # Published stochastic measurements use this explicit profile; they must not drift when
         # product defaults follow a newly registered model recommendation.
@@ -801,7 +830,7 @@ def run_block(
     server_log = (
         output_dir
         / "server"
-        / f"{filename_label(first.target)}_{first.speculative_mode}_{first.sampling_mode}.jsonl"
+        / f"{filename_label(first.target)}_{first.kv_dtype}_{first.speculative_mode}_{first.sampling_mode}.jsonl"
     )
     command = server_command(serve, first, server_log, port, device)
     print(
@@ -887,6 +916,7 @@ SUMMARY_FIELDS = (
     "fixture",
     "speculative_mode",
     "sampling_mode",
+    "kv_dtype",
     "samples",
     "prompt_tokens_mean",
     "prompt_tokens_stddev",
@@ -904,8 +934,8 @@ SUMMARY_FIELDS = (
     "engine_host_exposed_ms_stddev",
     "decode_host_us_per_round_mean",
     "decode_host_us_per_round_stddev",
-    "decode_device_wait_us_per_round_mean",
-    "decode_device_wait_us_per_round_stddev",
+    "decode_scheduler_yield_us_per_round_mean",
+    "decode_scheduler_yield_us_per_round_stddev",
     "speculative_acceptance_mean",
     "speculative_acceptance_stddev",
     "speculative_tokens_per_round_mean",
@@ -936,6 +966,9 @@ def summary_row(
     prefill_signatures = {str(record.get("prefill_signature", "")) for record in records}
     if len(prefill_signatures) != 1 or not next(iter(prefill_signatures)):
         raise CampaignError("summary group does not have one canonical prefill_signature")
+    kv_dtypes = {record["kv_dtype"] for record in records}
+    if len(kv_dtypes) != 1:
+        raise CampaignError("summary group mixes KV dtypes")
     row: dict[str, Any] = {
         "section": section,
         "target": target,
@@ -944,6 +977,7 @@ def summary_row(
         "fixture": fixture,
         "speculative_mode": speculative_mode,
         "sampling_mode": sampling_mode,
+        "kv_dtype": next(iter(kv_dtypes)),
         "samples": len(records),
     }
     set_stats(row, "prompt_tokens", records, "prompt_tokens")
@@ -956,9 +990,9 @@ def summary_row(
     set_stats(row, "decode_host_us_per_round", records, "decode_host_us_per_round")
     set_stats(
         row,
-        "decode_device_wait_us_per_round",
+        "decode_scheduler_yield_us_per_round",
         records,
-        "decode_device_wait_us_per_round",
+        "decode_scheduler_yield_us_per_round",
     )
     set_stats(row, "speculative_acceptance", records, "speculative_acceptance")
     set_stats(
@@ -1165,7 +1199,7 @@ def write_summaries(rows: Sequence[dict[str, Any]], output_dir: Path) -> None:
                         format_mean_stddev(row, "completion_tokens"),
                         format_mean_stddev(row, "decode_tok_s"),
                         format_mean_stddev(row, "decode_host_us_per_round"),
-                        format_mean_stddev(row, "decode_device_wait_us_per_round"),
+                        format_mean_stddev(row, "decode_scheduler_yield_us_per_round"),
                         format_percent_mean_stddev(row, "speculative_acceptance"),
                         format_mean_stddev(
                             row, "speculative_tokens_per_round", digits=2
@@ -1197,7 +1231,7 @@ def write_summaries(rows: Sequence[dict[str, Any]], output_dir: Path) -> None:
                         str(row["samples"]),
                         format_mean_stddev(row, "decode_tok_s"),
                         format_mean_stddev(row, "decode_host_us_per_round"),
-                        format_mean_stddev(row, "decode_device_wait_us_per_round"),
+                        format_mean_stddev(row, "decode_scheduler_yield_us_per_round"),
                         format_percent_mean_stddev(row, "speculative_acceptance"),
                         format_mean_stddev(
                             row, "speculative_tokens_per_round", digits=2
@@ -1210,7 +1244,8 @@ def write_summaries(rows: Sequence[dict[str, Any]], output_dir: Path) -> None:
     markdown = (
         "# Serving corpus performance summary\n\n"
         "All values are arithmetic mean ± sample standard deviation. "
-        f"Sampling: {rows[0]['sampling_mode'] if rows else 'n/a'}.\n\n"
+        f"Sampling: {rows[0]['sampling_mode'] if rows else 'n/a'}. "
+        f"KV: {rows[0]['kv_dtype'] if rows else 'n/a'}.\n\n"
         + "\n\n".join(sections)
         + "\n"
     )
@@ -1235,7 +1270,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if len(mode_names) != len(set(mode_names)):
         raise CampaignError("duplicate --mode value")
     fixtures = load_fixtures()
-    specs = build_specs(artifacts, fixtures, mode_names, args.sampling)
+    specs = build_specs(artifacts, fixtures, mode_names, args.sampling, args.kv_dtype)
     expected_specs = {spec.key: spec for spec in specs}
     total = len(expected_specs)
 

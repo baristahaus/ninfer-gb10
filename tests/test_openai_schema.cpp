@@ -1,8 +1,8 @@
+#include "serve_tool_stream_fixture.h"
 #include "serve/generation_service.h"
 #include "serve/openai_chat.h"
 #include "serve/openai_common.h"
 #include "serve/translate.h"
-#include "serve/json_output.h"
 
 #include <nlohmann/json.hpp>
 
@@ -18,7 +18,7 @@ namespace {
 
 using Json = ninfer::serve::RequestJson;
 using namespace ninfer::serve;
-using ninfer::ChatRole;
+using ninfer::product::ServeOptions;
 
 int check(bool condition, const std::string& label) {
     if (condition) { return 0; }
@@ -146,55 +146,8 @@ int test_standard_field_policy() {
 
     rejected("n", 2, "n_not_supported");
     rejected("logit_bias", Json{{"12", 1}}, "logit_bias_not_supported");
-    {
-        // Probability reporting is an executable request now: the parser records it and the HTTP
-        // layer decides whether the loaded Engine can answer, so the parser must not reject it.
-        Json body                    = base_request();
-        body["logprobs"]             = true;
-        body["top_logprobs"]         = 5;
-        const OpenAIChatRequest reporting = parse(body);
-        failures += check(reporting.logprobs && reporting.top_logprobs == 5,
-                          "logprobs and top_logprobs are recorded for the response layer");
-    }
-    {
-        // Alternatives without reports has no defined answer, so the combination fails on its own
-        // field instead of the count being dropped.
-        Json body            = base_request();
-        body["top_logprobs"] = 2;
-        failures += check(api_error([&] { (void)parse(body); }).param == "top_logprobs",
-                          "top_logprobs without logprobs=true rejected");
-    }
-    {
-        // response_format json_object is accepted and recorded (prompt-guided JSON).
-        Json body              = base_request();
-        body["response_format"] = Json{{"type", "json_object"}};
-        const OpenAIChatRequest json_req = parse(body);
-        failures += check(
-            json_req.generation.response_format.kind == ResponseFormatKind::JsonObject,
-            "json_object response_format accepted and recorded");
-    }
-    {
-        // response_format json_schema accepted; the schema is captured for the
-        // folded instruction.
-        Json body         = base_request();
-        Json schema_spec  = Json::object();
-        schema_spec["schema"] = Json{{"type", "object"}};
-        body["response_format"] = Json{{"type", "json_schema"}, {"json_schema", schema_spec}};
-        const OpenAIChatRequest schema_req = parse(body);
-        failures += check(
-            schema_req.generation.response_format.kind == ResponseFormatKind::JsonSchema &&
-                !schema_req.generation.response_format.schema_json.empty(),
-            "json_schema response_format accepted with schema");
-    }
-    {
-        // malformed json_schema (missing schema object) is still rejected.
-        Json body = base_request();
-        body["response_format"] = Json{{"type", "json_schema"}, {"json_schema", Json::object()}};
-        const ApiError error = api_error([&] { (void)parse(body); });
-        failures += check(error.param == "response_format" &&
-                          error.code == "response_format_not_supported",
-                          "json_schema without schema object rejected");
-    }
+    rejected("logprobs", true, "logprobs_not_supported");
+    rejected("top_logprobs", 2, "logprobs_not_supported");
     rejected("modalities", Json::array({"text", "audio"}), "modality_not_supported");
     rejected("web_search_options", Json::object(), "web_search_not_supported");
     rejected("moderation", Json::object(), "moderation_not_supported");
@@ -234,35 +187,192 @@ int test_standard_field_policy() {
     return failures;
 }
 
-int test_constrained_decoding_extensions() {
-    int failures                                           = 0;
-    const std::vector<std::pair<const char*, Json>> active = {
-        {"grammar", "root ::= \"yes\" | \"no\""},
-        {"structured_outputs", Json{{"json", Json{{"type", "object"}}}}},
-        {"guided_json", Json{{"type", "object"}}},
-        {"guided_regex", "[a-z]+"},
-        {"guided_choice", Json::array({"yes", "no"})},
-        {"guided_grammar", "root ::= \"yes\" | \"no\""},
-    };
-    for (const auto& [field, value] : active) {
-        Json body            = base_request();
-        body[field]          = value;
-        const ApiError error = api_error([&] { (void)parse(body); });
-        failures +=
-            check(error.param == field && error.code == "constrained_decoding_not_supported" &&
-                      error.message.find(field) != std::string::npos,
-                  std::string(field) + " constrained decoding is explicitly rejected");
+int test_prompt_cache_boundaries() {
+    using Location = ninfer::PromptCacheMarkerLocation;
+    using Evidence = ninfer::SharedCandidateEvidence;
+    int failures   = 0;
+    for (const char* role : {"user", "system", "developer"}) {
+        Json body = base_request();
+        body["messages"].push_back(Json{{"role", role}, {"content", "complete message"}});
+        const auto prepared = prompt(parse(body).generation);
+        const auto& markers = prepared.context_cache.markers;
+        failures += check(
+            markers.size() == 1 && markers[0].location == Location::MessagePartBoundary &&
+                markers[0].after_message_count == 2 && markers[0].after_message_part_count == 1 &&
+                markers[0].evidence == Evidence::DefaultAutomatic,
+            std::string(role) + " automatic cache ends at the final source part");
     }
 
-    Json neutral                  = base_request();
-    neutral["grammar"]            = "";
-    neutral["structured_outputs"] = nullptr;
-    neutral["guided_json"]        = nullptr;
-    neutral["guided_regex"]       = nullptr;
-    neutral["guided_choice"]      = nullptr;
-    neutral["guided_grammar"]     = nullptr;
-    failures += check(parse(neutral).generation.messages.size() == 1,
-                      "neutral constrained-decoding extension values are accepted");
+    Json multipart                      = base_request();
+    multipart["messages"][0]["content"] = Json::array(
+        {Json{{"type", "text"}, {"text", "first"}}, Json{{"type", "text"}, {"text", "second"}}});
+    multipart["prompt_cache_options"] = Json{{"mode", "implicit"}};
+    const auto requested              = prompt(parse(multipart).generation);
+    failures +=
+        check(requested.context_cache.markers.size() == 1 &&
+                  requested.context_cache.markers[0].location == Location::MessagePartBoundary &&
+                  requested.context_cache.markers[0].after_message_part_count == 2 &&
+                  requested.context_cache.markers[0].evidence == Evidence::RequestedAutomatic,
+              "requested implicit caching uses the final source part");
+    multipart["prompt_cache_options"] = Json{{"mode", "explicit"}};
+    const auto disabled               = prompt(parse(multipart).generation);
+    failures += check(disabled.context_cache.markers.empty() &&
+                          !disabled.context_cache.allow_engine_automatic_shared_prefixes,
+                      "explicit mode without markers disables automatic shared writes");
+
+    Json marked                      = base_request();
+    marked["messages"][0]["content"] = Json::array();
+    for (int index = 0; index < 4; ++index) {
+        marked["messages"][0]["content"].push_back(
+            Json{{"type", "text"},
+                 {"text", "section " + std::to_string(index)},
+                 {"prompt_cache_breakpoint", Json{{"mode", "explicit"}}}});
+    }
+    const auto merged = prompt(parse(marked).generation);
+    failures += check(merged.context_cache.markers.size() == 4,
+                      "automatic caching reuses an explicitly marked final part");
+    for (std::size_t index = 0; index < merged.context_cache.markers.size(); ++index) {
+        const auto& marker = merged.context_cache.markers[index];
+        failures += check(
+            marker.location == Location::MessagePartBoundary &&
+                marker.after_message_part_count == index + 1 &&
+                ninfer::has_shared_candidate_evidence(marker.evidence, Evidence::ExplicitBoundary),
+            "explicit part locations survive automatic merging");
+    }
+    failures +=
+        check(merged.context_cache.markers.size() == 4 &&
+                  ninfer::has_shared_candidate_evidence(
+                      merged.context_cache.markers.back().evidence, Evidence::DefaultAutomatic),
+              "the final explicit part also carries the automatic opportunity");
+    marked["messages"][0]["content"].push_back(Json{{"type", "text"}, {"text", "new tail"}});
+    const auto full = prompt(parse(marked).generation);
+    failures += check(full.context_cache.markers.size() == 4,
+                      "automatic caching yields to four explicit boundaries");
+    for (std::size_t index = 0; index < full.context_cache.markers.size(); ++index) {
+        const auto& marker = full.context_cache.markers[index];
+        failures += check(marker.location == Location::MessagePartBoundary &&
+                              marker.after_message_part_count == index + 1 &&
+                              marker.evidence == Evidence::ExplicitBoundary,
+                          "a later implicit target does not displace an explicit boundary");
+    }
+
+    Json assistant = base_request();
+    assistant["messages"].push_back(Json{{"role", "assistant"}, {"content", "partial answer"}});
+    const auto assistant_prompt = prompt(parse(assistant).generation);
+    failures += check(assistant_prompt.context_cache.markers.size() == 1 &&
+                          assistant_prompt.context_cache.markers[0].location ==
+                              Location::MessagePartBoundary &&
+                          assistant_prompt.context_cache.markers[0].after_message_count == 2,
+                      "assistant content retains its part boundary for continuation");
+
+    Json tool = base_request();
+    tool["messages"].push_back(
+        Json{{"role", "assistant"},
+             {"tool_calls",
+              Json::array({Json{{"id", "call_cache"},
+                                {"type", "function"},
+                                {"function", Json{{"name", "lookup"}, {"arguments", "{}"}}}}})}});
+    tool["messages"].push_back(
+        Json{{"role", "tool"}, {"tool_call_id", "call_cache"}, {"content", "result"}});
+    const auto tool_prompt = prompt(parse(tool).generation);
+    failures +=
+        check(tool_prompt.context_cache.markers.size() == 1 &&
+                  tool_prompt.context_cache.markers[0].location == Location::MessagePartBoundary &&
+                  tool_prompt.context_cache.markers[0].after_message_count == 3,
+              "tool results retain their content boundary when a result group grows");
+    return failures;
+}
+
+int test_constrained_decoding_extensions() {
+    int failures               = 0;
+    Json body                  = base_request();
+    body["structured_outputs"] = Json{{"choice", {"", "yes", "你好"}}};
+    const auto choice          = options(parse(body).generation).constraint;
+    failures += check(choice == ninfer::OutputConstraint::choice({"", "yes", "你好"}),
+                      "choice literals were changed in Engine translation");
+    body["structured_outputs"] = Json{{"regex", ""}};
+    failures +=
+        check(options(parse(body).generation).constraint == ninfer::OutputConstraint::regex(""),
+              "empty regex was dropped in Engine translation");
+    for (const auto& value : {Json{{"choice", Json::array()}}, Json{{"choice", {"a", 1}}},
+                              Json{{"regex", 7}}, Json{{"regex", "a"}, {"choice", {"a"}}}}) {
+        body["structured_outputs"] = value;
+        failures += check(api_error([&] { (void)parse(body); }).status == 400,
+                          "invalid choice/regex request accepted");
+    }
+    for (const auto kind :
+         {ninfer::RequestErrorKind::InvalidChoice, ninfer::RequestErrorKind::InvalidRegex}) {
+        const auto param = kind == ninfer::RequestErrorKind::InvalidChoice
+                               ? "structured_outputs.choice"
+                               : "structured_outputs.regex";
+        const auto error = request_error_to_api_error(ninfer::RequestError(kind, "invalid"), param);
+        failures += check(error.status == 400 && error.param == param &&
+                              error.code == (kind == ninfer::RequestErrorKind::InvalidChoice
+                                                 ? "invalid_choice"
+                                                 : "invalid_regex"),
+                          "choice/regex error was misclassified");
+    }
+    body["structured_outputs"] = Json{{"grammar", "root ::= \"yes\" | \"no\""}};
+    const auto parsed          = parse(body);
+    failures += check(parsed.generation.constraint->source == "root ::= \"yes\" | \"no\"" &&
+                          options(parsed.generation).constraint == parsed.generation.constraint,
+                      "GBNF must survive protocol-to-Engine translation");
+    body["stop"] = "yes";
+    failures += check(api_error([&] { (void)parse(body); }).param == "structured_outputs.grammar",
+                      "grammar with custom stops accepted");
+    for (const auto& value : {Json{{"grammar", ""}}, Json{{"json", Json::object()}}, Json("bad")}) {
+        body                       = base_request();
+        body["structured_outputs"] = value;
+        failures += check(api_error([&] { (void)parse(body); }).status == 400,
+                          "malformed structured_outputs accepted");
+    }
+    for (const char* alias :
+         {"grammar", "guided_json", "guided_regex", "guided_choice", "guided_grammar"}) {
+        body        = base_request();
+        body[alias] = "root ::= \"yes\"";
+        failures += check(api_error([&] { (void)parse(body); }).param == alias,
+                          "unsupported constrained-decoding alias accepted");
+    }
+    body                    = base_request();
+    body["response_format"] = Json{{"type", "json_object"}};
+    failures += check(options(parse(body).generation).constraint->kind ==
+                          ninfer::OutputConstraintKind::JsonObject,
+                      "JSON object mode lost in Engine translation");
+    const Json schema = {
+        {"type", "object"},
+        {"properties", {{"description", {{"type", "string"}}}, {"a", {{"type", "integer"}}}}}};
+    body["response_format"] =
+        Json{{"type", "json_schema"},
+             {"json_schema", {{"name", "answer"}, {"strict", false}, {"schema", schema}}}};
+    const auto typed = parse(body).generation;
+    failures += check(typed.constraint->kind == ninfer::OutputConstraintKind::JsonSchema &&
+                          typed.constraint->source == schema.dump() &&
+                          typed.constraint_param == "response_format.json_schema.schema",
+                      "JSON schema source/order or diagnostic location lost");
+    body["tools"] = Json::array(
+        {Json{{"type", "function"},
+              {"function", {{"name", "lookup"}, {"parameters", {{"type", "object"}}}}}}});
+    const auto combined = parse(body).generation;
+    failures +=
+        check(combined.constraint && combined.uses_tools(), "JSON output blocked active tools");
+    const std::vector<std::string> schema_paths{combined.tools[0].schema_param};
+    const auto tool_error = request_error_to_api_error(
+        ninfer::RequestError(ninfer::RequestErrorKind::UnsupportedJsonSchema, "bad tool schema",
+                             "/0/parameters/properties/x/format",
+                             ninfer::RequestErrorSource::Tools),
+        combined.constraint_param, schema_paths);
+    failures += check(tool_error.param == "tools/0/function/parameters/properties/x/format",
+                      "combined request attributed tool error to body schema");
+    body["structured_outputs"] = Json{{"grammar", "root ::= \"x\""}};
+    failures +=
+        check(api_error([&] { (void)parse(body); }).status == 400, "conflicting formats accepted");
+    const auto error = request_error_to_api_error(
+        ninfer::RequestError(ninfer::RequestErrorKind::UnsupportedJsonSchema, "unsupported keyword",
+                             "/properties/x/format"),
+        typed.constraint_param);
+    failures += check(error.param == "response_format.json_schema.schema/properties/x/format" &&
+                          error.code == "unsupported_json_schema",
+                      "schema error lost its source path");
     return failures;
 }
 
@@ -280,8 +390,19 @@ int test_tools() {
     body["tools"]                     = Json::array({function_tool()});
     const OpenAIChatRequest automatic = parse(body);
     failures += check(automatic.generation.uses_tools(), "function tools default to auto");
+    failures += check(automatic.generation.constrains_tools() &&
+                          !options(automatic.generation).output.preserve_special_tokens,
+                      "ordinary auto tools must receive basic constraints");
     failures += check(prompt(automatic.generation).options.tool_jsons.size() == 1,
                       "auto tools reach PromptInput");
+    body["tool_constraints"] = "auto";
+    failures += check(!parse(body).generation.constrains_tools(),
+                      "explicit auto did not select request-driven constraints");
+    body["tool_choice"] = "required";
+    failures +=
+        check(parse(body).generation.constrains_tools(), "auto relaxed required tool choice");
+    body.erase("tool_choice");
+    body.erase("tool_constraints");
 
     body["tools"][0]["future_item_field"]                 = "ignored";
     body["tools"][0]["function"]["future_function_field"] = "ignored";
@@ -293,26 +414,18 @@ int test_tools() {
     body["tool_choice"]          = "none";
     body["parallel_tool_calls"]  = false;
     const OpenAIChatRequest none = parse(body);
-    failures +=
-        check(!none.generation.uses_tools() && prompt(none.generation).options.tool_jsons.empty(),
-              "tool_choice none makes parallel_tool_calls neutral and removes executable tools");
+    failures += check(!none.generation.uses_tools() &&
+                          prompt(none.generation).options.tool_jsons.size() == 1,
+                      "tool_choice none keeps declarations in the prompt");
 
     body["tool_choice"] = "required";
-    body.erase("parallel_tool_calls");
-    const OpenAIChatRequest required = parse(body);
-    failures += check(required.generation.tool_choice.mode == ToolChoiceMode::Required &&
-                          required.generation.uses_tools(),
-                      "required tool choice is accepted and keeps tools enabled");
-    {
-        Json no_tools = base_request();
-        no_tools["tool_choice"] = "required";
-        const ApiError no_tools_error = api_error([&] { (void)parse(no_tools); });
-        failures += check(no_tools_error.code == "tool_choice_not_supported",
-                          "required tool choice without tools rejected");
-    }
+    failures += check(parse(body).generation.tool_choice.mode == ToolChoiceMode::Required,
+                      "required choice reaches generation");
     body["tool_choice"] = Json{{"type", "function"}, {"function", Json{{"name", "weather"}}}};
-    failures += check(api_error([&] { (void)parse(body); }).code == "tool_choice_not_supported",
-                      "named tool choice rejected");
+    failures += check(parse(body).generation.tool_choice.allowed_names ==
+                              std::vector<std::string>{"weather"} &&
+                          !parse(body).generation.tool_choice.parallel,
+                      "named choice selects exactly one invocation");
 
     body          = base_request();
     body["tools"] = Json::array({function_tool(), function_tool("search")});
@@ -322,23 +435,23 @@ int test_tools() {
               Json{{"mode", "auto"},
                    {"tools", Json::array({Json{{"type", "function"}, {"name", "search"}}})}}}};
     const GenerationRequest allowed = parse(body).generation;
-    failures += check(allowed.tools.size() == 1 && allowed.tools[0].name == "search" &&
-                          prompt(allowed).options.tool_jsons.size() == 1,
-                      "allowed_tools auto narrows the executable function set");
+    failures += check(allowed.tools.size() == 2 &&
+                          allowed.tool_choice.allowed_names == std::vector<std::string>{"search"} &&
+                          prompt(allowed).options.tool_jsons.size() == 2,
+                      "allowed_tools preserves declarations and selects callable names");
 
     body["tool_choice"] =
         Json{{"type", "allowed_tools"},
              {"mode", "auto"},
              {"tools", Json::array({Json{{"type", "function"}, {"name", "weather"}}})}};
     const GenerationRequest direct_allowed = parse(body).generation;
-    failures += check(direct_allowed.tools.size() == 1 && direct_allowed.tools[0].name == "weather",
-                      "direct allowed_tools compatibility shape is accepted");
-    body["tool_choice"]["mode"]     = "required";
-    const ApiError required_allowed = api_error([&] { (void)parse(body); });
     failures +=
-        check(required_allowed.code == "tool_choice_not_supported" &&
-                  required_allowed.message.find("at least one tool call") != std::string::npos,
-              "required allowed_tools reports the unenforceable guarantee");
+        check(direct_allowed.tools.size() == 2 &&
+                  direct_allowed.tool_choice.allowed_names == std::vector<std::string>{"weather"},
+              "direct allowed_tools compatibility shape is accepted");
+    body["tool_choice"]["mode"] = "required";
+    failures += check(parse(body).generation.tool_choice.mode == ToolChoiceMode::Required,
+                      "allowed_tools required reaches generation");
     body["tool_choice"]["mode"]             = "auto";
     body["tool_choice"]["tools"][0]["name"] = "missing";
     failures += check(api_error([&] { (void)parse(body); }).param == "tool_choice",
@@ -346,8 +459,11 @@ int test_tools() {
 
     body          = base_request();
     body["tools"] = Json::array({function_tool("weather", true)});
-    failures += check(api_error([&] { (void)parse(body); }).code == "strict_tools_not_supported",
-                      "strict tools rejected");
+    failures += check(
+        parse(body).generation.tools[0].strict &&
+            Json::parse(
+                prompt(parse(body).generation).options.tool_jsons[0])["function"]["strict"] == true,
+        "strict survives prompt and request translation");
     body["tools"] = Json::array({Json{{"type", "custom"}, {"name", "shell"}}});
     failures += check(api_error([&] { (void)parse(body); }).code == "tool_type_not_supported",
                       "custom tools rejected");
@@ -355,9 +471,8 @@ int test_tools() {
     body                        = base_request();
     body["tools"]               = Json::array({function_tool()});
     body["parallel_tool_calls"] = false;
-    failures +=
-        check(api_error([&] { (void)parse(body); }).code == "parallel_tool_calls_not_supported",
-              "parallel_tool_calls=false rejected when tools exist");
+    failures += check(!parse(body).generation.tool_choice.parallel,
+                      "parallel_tool_calls=false reaches generation");
     body.erase("tools");
     failures += check(parse(body).generation.tools.empty(),
                       "parallel_tool_calls=false is neutral without tools");
@@ -398,13 +513,6 @@ int test_tools() {
                               ninfer::PromptCacheMarkerLocation::MessageBoundary &&
                           mixed_prompt.context_cache.markers.back().after_message_count == 2,
                       "automatic caching stops after a complete assistant text/tool-call turn");
-    failures += check(mixed_prompt.context_cache.allow_engine_automatic_shared_prefixes,
-                      "default automatic caching lets the Engine add its stable-layer candidates");
-    Json explicit_only                    = mixed_assistant;
-    explicit_only["prompt_cache_options"] = Json{{"mode", "explicit"}};
-    failures += check(
-        !prompt(parse(explicit_only).generation).context_cache.allow_engine_automatic_shared_prefixes,
-        "explicit prompt caching keeps Engine candidates out");
 
     const Json ordered = Json::parse(
         R"({"model":"qwen","messages":[{"role":"user","content":"probe"}],"tools":[{"type":"function","function":{"name":"probe","parameters":{"type":"object","properties":{"zeta":{"type":"string"},"alpha":{"type":"integer"}}}}}]})");
@@ -643,25 +751,6 @@ int test_stops_and_ranges() {
     failures +=
         check(api_error([&] { (void)parse(body); }).param == "stop", "empty stop string rejected");
 
-    body = base_request();
-    failures += check(options(parse(body).generation).stop.include_model_defaults,
-                      "an omitted ignore_eos keeps the checkpoint's own stop tokens");
-    body["ignore_eos"] = false;
-    failures += check(options(parse(body).generation).stop.include_model_defaults,
-                      "ignore_eos false keeps the checkpoint's own stop tokens");
-    body["ignore_eos"] = true;
-    failures += check(parse(body).generation.ignore_eos &&
-                          !options(parse(body).generation).stop.include_model_defaults,
-                      "ignore_eos suppresses the checkpoint's own stop tokens");
-    body["stop"] = Json::array({"A"});
-    failures += check(options(parse(body).generation).stop.strings.size() == 2 &&
-                          !options(parse(body).generation).stop.include_model_defaults,
-                      "ignore_eos leaves caller stop strings in place");
-    body.erase("stop");
-    body["ignore_eos"] = "true";
-    failures += check(api_error([&] { (void)parse(body); }).param == "ignore_eos",
-                      "a non-boolean ignore_eos is rejected");
-
     body                                  = base_request();
     body["top_k"]                         = 21;
     const GenerationRequest invalid_top_k = parse(body).generation;
@@ -677,17 +766,17 @@ int test_stops_and_ranges() {
 
 GenerationOutcome sample_outcome() {
     GenerationOutcome outcome;
-    outcome.text                                = "answer";
-    outcome.reasoning                           = "thought";
-    outcome.prompt_tokens                       = 20;
-    outcome.completion_tokens                   = 7;
-    outcome.reasoning_tokens                    = 3;
-    outcome.finish_reason                       = ninfer::FinishReason::StopToken;
-    outcome.metrics.prefix_cache_hit_tokens     = 12;
-    outcome.metrics.prompt_wall_seconds         = 0.04;
-    outcome.metrics.generation_wall_seconds     = 0.03;
-    outcome.metrics.speculative_draft_tokens    = 9;
-    outcome.metrics.speculative_accepted_tokens = 6;
+    outcome.text                                  = "answer";
+    outcome.reasoning                             = "thought";
+    outcome.prompt_tokens                         = 20;
+    outcome.completion_tokens                     = 7;
+    outcome.reasoning_tokens                      = 3;
+    outcome.finish_reason                         = ninfer::FinishReason::StopToken;
+    outcome.stats.reused_prompt_tokens            = 12;
+    outcome.stats.timings.prompt_wall_seconds     = 0.04;
+    outcome.stats.timings.generation_wall_seconds = 0.03;
+    outcome.stats.speculative.drafted_tokens      = 9;
+    outcome.stats.speculative.accepted_tokens     = 6;
     return outcome;
 }
 
@@ -698,7 +787,7 @@ OpenAIChatResponseIdentity identity() {
 int test_aggregate_response() {
     int failures              = 0;
     GenerationOutcome outcome = sample_outcome();
-    Json response = Json::parse(make_chat_completion_response(identity(), outcome, 0));
+    Json response             = Json::parse(make_chat_completion_response(identity(), outcome));
     failures += check(response["choices"][0]["message"]["content"] == "answer" &&
                           response["choices"][0]["message"]["reasoning_content"] == "thought" &&
                           response["choices"][0]["message"]["refusal"].is_null(),
@@ -723,7 +812,7 @@ int test_aggregate_response() {
         .name = "Edit",
         .arguments_json =
             R"({"file_path":"/tmp/probe.cpp","old_string":"old","new_string":"new"})"});
-    response         = Json::parse(make_chat_completion_response(identity(), outcome, 0));
+    response         = Json::parse(make_chat_completion_response(identity(), outcome));
     const Json& call = response["choices"][0]["message"]["tool_calls"][0];
     failures += check(response["choices"][0]["finish_reason"] == "tool_calls" &&
                           response["choices"][0]["message"]["content"].is_null(),
@@ -732,50 +821,15 @@ int test_aggregate_response() {
         call["id"].get<std::string>().starts_with("call_") && call["function"]["name"] == "Edit" &&
             !Json::parse(call["function"]["arguments"].get<std::string>()).contains("replace_all"),
         "OpenAI adapter owns wire tool-call identifiers");
-    return failures;
-}
-
-int test_aggregate_logprobs() {
-    int failures              = 0;
-    GenerationOutcome outcome = sample_outcome();
-    // Reports name vocabulary ids, and an alternative is a different id with its own text. Position in
-    // the generated sequence must never be what selects a piece.
-    outcome.token_logprobs = {
-        ninfer::GeneratedTokenLogprob{
-            .token = 151644, .logprob = -0.25F, .top = {{151644, -0.25F}, {198, -1.5F}}},
-        ninfer::GeneratedTokenLogprob{.token = 362, .injected = true},
-        ninfer::GeneratedTokenLogprob{
-            .token = 5215, .logprob = -0.5F, .top = {{264, -1.0F}}},
-    };
-    outcome.token_pieces = {{151644, "Hello"},
-                            {198, "\n"},
-                            {362, " there"},
-                            {5215, " world"},
-                            // A piece that ends inside a multi-byte character: `token` is lossy, the
-                            // byte list is not.
-                            {264, "\xF0\x9F\x98"}};
-    const Json logprobs =
-        Json::parse(make_chat_completion_response(identity(), outcome, 2))["choices"][0]["logprobs"];
-    failures += check(logprobs["content"].size() == 3 && logprobs["refusal"].is_null(),
-                      "logprobs reports one entry per generated token");
-    failures += check(logprobs["content"][0]["token"] == "Hello" &&
-                          logprobs["content"][0]["logprob"] == -0.25,
-                      "the chosen token reports its own piece");
-    // The regression this guards: alternatives are vocabulary ids. Id 198 is a tenth of a plausible
-    // position index and 151644 is far beyond any of them, so a lookup by position yields either
-    // nothing or the neighbouring token's text.
-    failures += check(logprobs["content"][0]["top_logprobs"][0]["token"] == "Hello" &&
-                          logprobs["content"][0]["top_logprobs"][1]["token"] == "\n" &&
-                          logprobs["content"][0]["top_logprobs"][1]["bytes"] == Json::array({10}),
-                      "each alternative resolves to the piece of the id it names");
-    failures += check(logprobs["content"][1]["injected"] == true &&
-                          logprobs["content"][1]["logprob"] == 0 &&
-                          logprobs["content"][1]["token"] == " there",
-                      "an injected control span is marked and keeps its position");
-    failures += check(logprobs["content"][2]["top_logprobs"][0]["bytes"].size() == 3 &&
-                          logprobs["content"][2]["top_logprobs"][0]["token"].get<std::string>() ==
-                              "\xEF\xBF\xBD",
-                      "a split character stays exact in bytes and lossy in text");
+    outcome.finish_reason    = ninfer::FinishReason::OutputLimit;
+    outcome.stats.constraint = ninfer::ConstraintObservation{
+        .branch = ninfer::ConstraintOutputBranch::Tools, .complete = true, .terminated = false};
+    response = Json::parse(make_chat_completion_response(identity(), outcome));
+    failures += check(response["choices"][0]["finish_reason"] == "length" &&
+                          response["choices"][0]["message"]["tool_calls"].size() == 1 &&
+                          response["constraint"]["complete"] == true &&
+                          response["constraint"]["terminated"] == false,
+                      "length limit lost a completed call or hid the interruption");
     return failures;
 }
 
@@ -792,7 +846,9 @@ int test_stream_response() {
                           content["choices"][0]["delta"]["content"] == "ans",
                       "stream separates reasoning and content deltas");
 
-    GenerationOutcome outcome             = sample_outcome();
+    GenerationOutcome outcome = sample_outcome();
+    outcome.stats.constraint  = ninfer::ConstraintObservation{
+         .branch = ninfer::ConstraintOutputBranch::Content, .complete = true, .terminated = true};
     const std::vector<std::string> events = stream.finish(outcome);
     failures +=
         check(events.size() == 4, "finish emits buffered suffix, terminal, usage, and done");
@@ -807,18 +863,11 @@ int test_stream_response() {
                           usage["timings"]["predicted_n"] == 7,
                       "dedicated stream usage carries token accounting and terminal timings");
     failures += check(events.back() == "data: [DONE]\n\n", "stream ends with DONE sentinel");
-
-    // JSON response_format content is withheld while streaming and cleaned at the end; the
-    // terminal suffix then carries the cleaned value as one content chunk.
-    OpenAIChatStream json_stream(identity(), false);
-    (void)json_stream.start();
-    (void)json_stream.reasoning_delta("thought");
-    GenerationOutcome json_outcome = sample_outcome();
-    json_outcome.text = ninfer::serve::json_output::extract("```json\n{\"a\":1}\n```\n");
-    const std::vector<std::string> json_events = json_stream.finish(json_outcome);
-    failures += check(json_events.size() >= 2 &&
-                          parse_sse(json_events[0])["choices"][0]["delta"]["content"] == "{\"a\":1}",
-                      "withheld JSON content streams once as the cleaned value");
+    failures += check(usage["constraint"]["branch"] == "content" &&
+                          usage["constraint"]["terminated"] == true &&
+                          !parse_sse(events[0]).contains("constraint") &&
+                          !parse_sse(events[1]).contains("constraint"),
+                      "Chat constraint state must appear once, with terminal usage");
 
     OpenAIChatStream mismatch(identity(), false);
     (void)mismatch.start();
@@ -828,22 +877,26 @@ int test_stream_response() {
 
     OpenAIChatStream tool_stream(identity(), false);
     (void)tool_stream.start();
-    const Json tool_progress = parse_sse(tool_stream.tool_call_progress(1536));
-    failures += check(tool_progress["choices"][0]["delta"].empty() &&
-                          tool_progress["tool_call_progress"]["bytes"] == 1536,
-                      "stream reports withheld tool-call progress without exposing markup");
     GenerationOutcome tool_outcome;
     tool_outcome.tool_calls.push_back(ninfer::GeneratedToolCall{
         .name = "Edit", .arguments_json = R"({"file_path":"/tmp/probe.cpp"})"});
-    tool_outcome.finish_reason                 = ninfer::FinishReason::StopToken;
-    const std::vector<std::string> tool_events = tool_stream.finish(tool_outcome);
-    const Json tool_delta                      = parse_sse(tool_events[0]);
+    tool_outcome.finish_reason = ninfer::FinishReason::StopToken;
+    const auto tool_events     = emit_tools(tool_stream, tool_outcome.tool_calls);
+    const auto tool_finish     = tool_stream.finish(tool_outcome);
+    const Json tool_delta      = parse_sse(tool_events[0]);
     failures += check(
         tool_delta["choices"][0]["delta"]["tool_calls"][0]["id"].get<std::string>().starts_with(
             "call_") &&
             tool_delta["choices"][0]["delta"]["tool_calls"][0]["function"]["name"] == "Edit" &&
-            parse_sse(tool_events[1])["choices"][0]["finish_reason"] == "tool_calls",
+            parse_sse(tool_finish[0])["choices"][0]["finish_reason"] == "tool_calls",
         "stream encoder owns stable OpenAI tool-call shape");
+    OpenAIChatStream interrupted(identity(), false);
+    (void)interrupted.start();
+    tool_outcome.finish_reason = ninfer::FinishReason::OutputLimit;
+    (void)emit_tools(interrupted, tool_outcome.tool_calls);
+    const auto partial_events = interrupted.finish(tool_outcome);
+    failures += check(parse_sse(partial_events[0])["choices"][0]["finish_reason"] == "length",
+                      "streamed completed call hid a later truncation");
     return failures;
 }
 
@@ -920,288 +973,19 @@ int test_common_objects() {
     return failures;
 }
 
-int test_output_directives() {
-    int failures = 0;
-    auto text_turn = [](ChatRole role, std::string text) {
-        ChatTurn turn;
-        turn.role = role;
-        ContentPart part;
-        part.kind     = ContentKind::Text;
-        part.text      = std::move(text);
-        part.type_raw  = "text";
-        turn.content.push_back(std::move(part));
-        return turn;
-    };
-    auto acquire = [](const ContentPart&) { return ninfer::OwnedMedia{}; };
-
-    // No directive: system turns stay in place; no extra part is appended.
-    {
-        GenerationRequest request;
-        request.messages = {text_turn(ChatRole::System, "You are a terse bot."),
-                            text_turn(ChatRole::User, "hi")};
-        const ninfer::PromptInput input = to_prompt_input(request, semantics(request), acquire);
-        failures += check(input.messages.size() == 2 &&
-                              input.messages[0].role == ChatRole::System &&
-                              input.messages[0].parts.size() == 1 &&
-                              input.messages[1].role == ChatRole::User &&
-                              input.messages[1].parts.size() == 1,
-                          "no directive leaves the prompt untouched");
-    }
-
-    // JSON schema: the directive is a trailing text part of the last user
-    // message; the system turn stays in place with its original text.
-    {
-        GenerationRequest request;
-        request.messages = {text_turn(ChatRole::System, "You are a terse bot."),
-                            text_turn(ChatRole::User, "hi")};
-        request.response_format.kind      = ResponseFormatKind::JsonSchema;
-        request.response_format.schema_json = R"({"type":"object"})";
-        const ninfer::PromptInput input = to_prompt_input(request, semantics(request), acquire);
-        failures += check(input.messages.size() == 2 &&
-                              input.messages[0].role == ChatRole::System &&
-                              input.messages[0].parts.size() == 1 &&
-                              input.messages[0].parts.front().text == "You are a terse bot.",
-                          "system turn stays in place, unmodified, under a directive");
-        failures += check(input.messages[1].parts.size() == 2 &&
-                              input.messages[1].parts.front().text == "hi",
-                          "the user text leads its message");
-        const std::string& tail = input.messages[1].parts.back().text;
-        failures += check(tail.find("single valid JSON object") != std::string::npos &&
-                              tail.find(R"({"type":"object"})") != std::string::npos,
-                          "directive is a trailing part of the last user message");
-        failures += check(tail.find("You are a terse bot.") == std::string::npos,
-                          "system text is no longer absorbed into the directive");
-    }
-
-    // tool_choice required: the tool-call directive is the trailing part and the
-    // conflicting system guidance keeps its original position.
-    {
-        GenerationRequest request;
-        request.messages = {text_turn(ChatRole::System, "Answer directly when you can."),
-                            text_turn(ChatRole::User, "hi")};
-        ToolDefinition tool;
-        tool.name              = "weather";
-        tool.input_schema_json = R"({"type":"object"})";
-        request.tools.push_back(tool);
-        request.tool_choice.mode = ToolChoiceMode::Required;
-        const ninfer::PromptInput input = to_prompt_input(request, semantics(request), acquire);
-        failures += check(input.messages.size() == 2 &&
-                              input.messages[0].parts.front().text ==
-                                  "Answer directly when you can.",
-                          "conflicting system turn is kept, not folded");
-        const std::string& tail = input.messages[1].parts.back().text;
-        failures += check(tail.find("You MUST call a tool") != std::string::npos &&
-                              tail.find("Answer directly when you can.") == std::string::npos,
-                          "tool-call directive trails the last user message");
-        failures += check(!prompt(request).options.tool_jsons.empty(),
-                          "required tool choice keeps the tools enabled");
-    }
-
-    // Both directives: the JSON instruction leads, the tool-call directive last,
-    // in one trailing part.
-    {
-        GenerationRequest request;
-        request.messages = {text_turn(ChatRole::User, "hi")};
-        request.response_format.kind      = ResponseFormatKind::JsonSchema;
-        request.response_format.schema_json = R"({"type":"object"})";
-        ToolDefinition tool;
-        tool.name              = "weather";
-        tool.input_schema_json = R"({"type":"object"})";
-        request.tools.push_back(tool);
-        request.tool_choice.mode = ToolChoiceMode::Required;
-        const ninfer::PromptInput input = to_prompt_input(request, semantics(request), acquire);
-        const std::string& tail = input.messages[0].parts.back().text;
-        failures += check(tail.find("single valid JSON object") != std::string::npos &&
-                              tail.find("You MUST call a tool") != std::string::npos &&
-                              tail.find("You MUST call a tool") > tail.find("JSON Schema"),
-                          "combined directive: JSON first, tool-call last");
-    }
-
-    // Agentic tail: the conversation ends on a tool result, so the directive
-    // anchors to the trailing tool turn, not the earlier user turn.
-    {
-        GenerationRequest request;
-        ChatTurn assistant;
-        assistant.role = ChatRole::Assistant;
-        ToolCall call;
-        call.id             = "call_1";
-        call.name           = "weather";
-        call.arguments_json = R"({"q":"sf"})";
-        assistant.tool_calls.push_back(call);
-        ChatTurn tool;
-        tool.role          = ChatRole::Tool;
-        tool.tool_call_id  = "call_1";
-        tool.tool_result_name = "weather";
-        ContentPart result;
-        result.kind     = ContentKind::Text;
-        result.text      = "64 and sunny";
-        result.type_raw  = "text";
-        tool.content.push_back(std::move(result));
-        request.messages = {text_turn(ChatRole::User, "weather in SF?"), std::move(assistant),
-                            std::move(tool)};
-        request.response_format.kind = ResponseFormatKind::JsonObject;
-        const ninfer::PromptInput input = to_prompt_input(request, semantics(request), acquire);
-        failures += check(input.messages.size() == 3 &&
-                              input.messages[0].parts.size() == 1 &&
-                              input.messages[1].parts.empty() &&
-                              input.messages[2].parts.size() == 2,
-                          "directive anchors to the trailing tool turn");
-        const std::string& tail = input.messages[2].parts.back().text;
-        failures += check(tail.find("single valid JSON object") != std::string::npos,
-                          "directive is the trailing part of the tool result turn");
-    }
-
-    // Client system/developer turns keep their cache markers at their actual
-    // positions: a boundary on the first system text part is the leading
-    // instruction marker, and a boundary on a kept turn points at its input
-    // position (no fold shifts positions).
-    {
-        GenerationRequest request;
-        ChatTurn system;
-        system.role = ChatRole::System;
-        ContentPart system_text;
-        system_text.kind     = ContentKind::Text;
-        system_text.text      = "system text";
-        system_text.type_raw  = "text";
-        system_text.cache_boundary_after = CacheBoundary{};
-        ChatTurn user;
-        user.role = ChatRole::User;
-        ContentPart user_text;
-        user_text.kind     = ContentKind::Text;
-        user_text.text      = "hi";
-        user_text.type_raw  = "text";
-        user_text.cache_boundary_after = CacheBoundary{};
-        user.content = {std::move(user_text)};
-        system.content = {std::move(system_text)};
-        request.messages = {std::move(system), std::move(user)};
-        request.response_format.kind = ResponseFormatKind::JsonObject;
-        bool threw = false;
-        ninfer::PromptInput input;
-        try { input = to_prompt_input(request, semantics(request), acquire); }
-        catch (...) { threw = true; }
-        failures += check(!threw && input.messages.size() == 2 &&
-                              input.context_cache.markers.size() == 2,
-                          "directive request keeps the prompt and both boundaries");
-        const auto leading = std::find_if(
-            input.context_cache.markers.begin(), input.context_cache.markers.end(),
-            [](const ninfer::PromptCacheMarker& marker) {
-                return marker.location == ninfer::PromptCacheMarkerLocation::LeadingInstructionBoundary;
-            });
-        failures += check(
-            leading != input.context_cache.markers.end() &&
-                leading->leading_instruction_bytes == 11U,
-            "first system text part keeps the leading-instruction marker");
-        const auto part_marker = std::find_if(
-            input.context_cache.markers.begin(), input.context_cache.markers.end(),
-            [](const ninfer::PromptCacheMarker& marker) {
-                return marker.location == ninfer::PromptCacheMarkerLocation::MessagePartBoundary;
-            });
-        failures += check(part_marker != input.context_cache.markers.end() &&
-                              part_marker->after_message_count == 2 &&
-                              part_marker->after_message_part_count == 1,
-                          "kept-turn part boundary marker points at its actual input position");
-    }
-    return failures;
-}
-
-int test_json_output_extract() {
-    int failures = 0;
-    auto check = [&failures](bool ok, const char* what) {
-        if (!ok) {
-            std::cerr << "  FAIL " << what << "\n";
-            return 1;
-        }
-        return 0;
-    };
-    using extract_t = std::string (*)(const std::string&);
-    const extract_t extract = &ninfer::serve::json_output::extract;
-
-    // A complete object is returned verbatim; values containing the marker
-    // substring "think" and a newline are never damaged.
-    {
-        const std::string in = "{\"summary\":\"I was thinking\nabout the plot\"}";
-        failures += check(extract(in) == in, "complete object with 'think' in a value is untouched");
-    }
-    // A leaked Qwen thinking block before the object is dropped.
-    {
-        const std::string in = "\nThe user wants JSON.\n{\"capital\":\"Paris\"}\ntail";
-        failures += check(extract(in) == "{\"capital\":\"Paris\"}", "qwen thinking leak is dropped");
-    }
-    // The DeepSeek-style pair is stripped too.
-    {
-        const std::string in = "a\n<end_think>\nb {\"a\":1} tail";
-        failures += check(extract(in) == "{\"a\":1}", "deepseek thinking pair is dropped");
-    }
-    // An unclosed fragment is left in place, not erased to the end.
-    {
-        const std::string in = "preamble think unterminated {\"a\":1} tail";
-        const std::string out = extract(in);
-        failures += check(out == "{\"a\":1}", "unclosed thinking fragment is not erased");
-    }
-    // Markdown-fenced JSON.
-    {
-        const std::string in = "```json\n{\"a\":1}\n```";
-        failures += check(extract(in) == "{\"a\":1}", "fenced json is unwrapped");
-    }
-    // Fenced JSON preceded by a thinking leak: both are handled.
-    {
-        const std::string in = "\nleak\n```json\n{\"a\":1}\n```";
-        failures += check(extract(in) == "{\"a\":1}", "leak and fence are both stripped");
-    }
-    // Prose before and after the object: the outermost object wins.
-    {
-        const std::string in = "Sure, here you go: {\"a\":{\"b\":2}} hope that helps";
-        failures += check(extract(in) == "{\"a\":{\"b\":2}}", "prose on both sides is trimmed");
-    }
-    // No JSON object at all: unchanged.
-    {
-        const std::string in = "no json here at all";
-        failures += check(extract(in) == in, "non-json text passes through");
-    }
-    // Surrounding whitespace is not part of the value.
-    {
-        failures += check(extract("\n\n{\"a\":1}\n") == "{\"a\":1}", "surrounding whitespace is trimmed");
-    }
-    // A fence inside a string value never damages a complete object.
-    {
-        const std::string in = "{\"code\":\"use ```x``` here\"}";
-        failures += check(extract(in) == in, "fence inside a string value is untouched");
-    }
-    // A closed thinking block containing braces is dropped before the value is located.
-    {
-        const std::string in = "<think>maybe {\"a\":0}</think>\n{\"a\":1}";
-        failures += check(extract(in) == "{\"a\":1}", "closed thinking block is dropped");
-    }
-    // Top-level arrays are JSON values too.
-    {
-        failures += check(extract("```json\n[1,{\"b\":2}]\n```") == "[1,{\"b\":2}]",
-                          "fenced top-level array is unwrapped");
-        failures += check(extract("Result: [{\"a\":1},{\"a\":2}] done") == "[{\"a\":1},{\"a\":2}]",
-                          "top-level array is not cut to its first object");
-    }
-    // Truncated JSON cannot be recovered and is returned unchanged.
-    {
-        const std::string in = "{\"a\":[1,2";
-        failures += check(extract(in) == in, "unrecoverable json is unchanged");
-    }
-    return failures;
-}
-
 } // namespace
 
 int main() {
     int failures = 0;
     failures += test_request_envelope_and_sampling();
     failures += test_standard_field_policy();
+    failures += test_prompt_cache_boundaries();
     failures += test_constrained_decoding_extensions();
     failures += test_tools();
-    failures += test_output_directives();
-    failures += test_json_output_extract();
     failures += test_messages_and_media();
     failures += test_reasoning_and_extensions();
     failures += test_stops_and_ranges();
     failures += test_aggregate_response();
-    failures += test_aggregate_logprobs();
     failures += test_stream_response();
     failures += test_stream_observations();
     failures += test_common_objects();

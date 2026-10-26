@@ -45,7 +45,7 @@ SATURATION_SEEDS = (
 CORPUS_ORDER_SEED = 20260811
 POINT_ARTIFACT_TYPE = "ninfer_serve_concurrency_bench_point"
 SUMMARY_ARTIFACT_TYPE = "ninfer_serve_concurrency_bench_summary"
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 @dataclasses.dataclass(frozen=True)
@@ -56,14 +56,16 @@ class Point:
     speculative_mode: str
     speculative_backend: str
     draft_tokens: int
+    proposal_head: str
     sampling_mode: str
+    kv_dtype: str
     suite: str
     concurrency: int
 
     @property
     def key(self) -> str:
         return (
-            f"{corpus.filename_label(self.target)}_{self.speculative_mode}_{self.sampling_mode}_"
+            f"{corpus.filename_label(self.target)}_{self.kv_dtype}_{self.speculative_mode}_{self.proposal_head}_{self.sampling_mode}_"
             f"{self.suite.replace('-', '_')}_c{self.concurrency}"
         )
 
@@ -96,7 +98,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--serve",
         type=Path,
-        default=REPO_ROOT / "build/apps/ninfer-serve",
+        required=True,
         help="ninfer-serve executable",
     )
     parser.add_argument(
@@ -117,6 +119,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         choices=corpus.SAMPLING_MODES,
         default="stochastic",
         help="sampling profile for all requests (default: stochastic)",
+    )
+    parser.add_argument(
+        "--proposal-head",
+        choices=("full", "optimized"),
+        default="optimized",
+        help="speculative proposal head (default: optimized)",
     )
     parser.add_argument(
         "--suite",
@@ -147,6 +155,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="shared Main KV capacity passed to ninfer-serve (default: 262144)",
     )
     parser.add_argument("--prefill-chunk", type=int, default=1024)
+    parser.add_argument("--kv-dtype", choices=tuple(corpus.KV_CACHE_NAMES), default="int8")
     parser.add_argument("--output", type=Path, required=True, help="benchmark output directory")
     parser.add_argument("--port", type=int, default=8080, help="loopback serving port")
     parser.add_argument("--device", type=int, default=0, help="CUDA device index")
@@ -202,7 +211,9 @@ def build_points(
                             speculative_mode=mode_name,
                             speculative_backend=backend,
                             draft_tokens=draft_tokens,
+                            proposal_head=args.proposal_head if draft_tokens else "full",
                             sampling_mode=args.sampling,
+                            kv_dtype=args.kv_dtype,
                             suite=suite,
                             concurrency=concurrency,
                         )
@@ -294,19 +305,23 @@ def server_command(
         str(point.concurrency),
         "--max-pending-requests",
         "1",
-        "--pending-timeout-ms",
+        "--pending-timeout",
         str(PENDING_TIMEOUT_MS),
         "--prefill-chunk",
         str(args.prefill_chunk),
-        "--log-stats-interval-ms",
+        "--stats-interval",
         str(STATS_INTERVAL_MS),
         "--device",
         str(args.device),
         "--request-log-jsonl",
         str(server_log),
         "--kv-dtype",
-        "int8",
+        point.kv_dtype,
         "--no-prefix-reuse",
+        "--extra-state-slots",
+        "0",
+        "--host-cache-capacity",
+        "0",
     ]
     if point.speculative_backend != "none":
         command.extend(
@@ -315,11 +330,12 @@ def server_command(
                 point.speculative_backend,
                 "--draft-tokens",
                 str(point.draft_tokens),
-                "--lm-head-draft",
             ]
         )
+        if point.proposal_head == "optimized":
+            command.extend(["--proposal-head", "optimized"])
     if point.sampling_mode == "greedy":
-        command.append("--greedy")
+        command.extend(["--temperature", "0"])
     else:
         # Preserve the sampling profile attached to the published benchmark methodology.
         command.extend(
@@ -355,17 +371,23 @@ def validate_server_start(
         "pending_timeout_ms": PENDING_TIMEOUT_MS,
         "prefill_chunk": args.prefill_chunk,
         "log_stats_interval_ms": STATS_INTERVAL_MS,
-        "kv_cache": "int8-group64",
+        "kv_cache": corpus.KV_CACHE_NAMES[point.kv_dtype],
         "cuda_graph": True,
         "prefix_reuse": False,
         "speculative_backend": point.speculative_backend,
         "speculative_draft_window": point.draft_tokens,
-        "proposal_head": "optimized" if point.draft_tokens else "full",
+        "proposal_head": point.proposal_head,
     }
     actual = {name: engine.get(name) for name in expected}
     if actual != expected:
         raise corpus.CampaignError(f"server_start Engine configuration mismatch: {actual!r}")
-    if event.get("sampling_defaults", {}).get("greedy") != (
+    context_cache = engine.get("context_cache", {})
+    if (
+        context_cache.get("extra_state_slots") != 0
+        or context_cache.get("host_capacity_bytes") != 0
+    ):
+        raise corpus.CampaignError("server_start context cache capacity differs from the point")
+    if (event.get("sampling_defaults", {}).get("server_overrides", {}).get("temperature") == 0) != (
         point.sampling_mode == "greedy"
     ):
         raise corpus.CampaignError("server_start sampling mode does not match the point")
@@ -605,6 +627,7 @@ def is_steady_interval(event: dict[str, Any], concurrency: int) -> bool:
         tokens = event["tokens"]
         batch = event["decode_batch"]
         scheduler = event["scheduler"]
+        scheduling = event["scheduling"]
         rounds = int(batch["rounds"])
         return (
             int(tokens["computed_prefill"]) == 0
@@ -613,6 +636,12 @@ def is_steady_interval(event: dict[str, Any], concurrency: int) -> bool:
             and int(scheduler["running"]) == concurrency
             and int(scheduler["prefilling"]) == 0
             and int(scheduler["decode_ready"]) == concurrency
+            and int(scheduler["paused"]) == 0
+            and int(scheduler["replaying"]) == 0
+            and int(scheduling["preemptions"]) == 0
+            and int(scheduling["snapshot_restores"]) == 0
+            and int(scheduling["replay_restores"]) == 0
+            and int(scheduling["replayed_tokens"]) == 0
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise corpus.CampaignError(
@@ -626,8 +655,8 @@ def steady_metrics(
     selected = [event for event in events if is_steady_interval(event, concurrency)]
     if not selected:
         raise corpus.CampaignError(
-            f"concurrency {concurrency} produced no complete full-batch decode interval; "
-            "increase --decode-tokens"
+            f"concurrency {concurrency} produced no recovery-free full-batch decode interval; "
+            "increase --decode-tokens or --kv-capacity, or reduce concurrency"
         )
     duration = sum(float(event["interval_seconds"]) for event in selected)
     tokens = sum(int(event["tokens"]["committed_decode"]) for event in selected)
@@ -738,7 +767,9 @@ def analyze_point(
         "speculative_mode": point.speculative_mode,
         "speculative_backend": point.speculative_backend,
         "draft_tokens": point.draft_tokens,
+        "proposal_head": point.proposal_head,
         "sampling_mode": point.sampling_mode,
+        "kv_dtype": point.kv_dtype,
         "suite": point.suite,
         "workload_order": workload_order(point),
         "concurrency": point.concurrency,
@@ -800,6 +831,7 @@ def run_point(
                         speculative_backend=point.speculative_backend,
                         draft_tokens=point.draft_tokens,
                         sampling_mode=point.sampling_mode,
+                        kv_dtype=point.kv_dtype,
                         fixture=job.fixture,
                         seed=job.seed,
                     )
@@ -866,13 +898,14 @@ def run_point(
 
 
 def add_speedups(reports: Sequence[dict[str, Any]]) -> None:
-    baselines: dict[tuple[str, str, str, str, str], dict[str, Any]] = {}
+    baselines: dict[tuple[str, str, str, str, str, str], dict[str, Any]] = {}
     for report in reports:
         key = (
             str(report["target"]),
             str(report["prefill_signature"]),
             str(report["speculative_mode"]),
             str(report["sampling_mode"]),
+            str(report["kv_dtype"]),
             str(report["suite"]),
         )
         if int(report["concurrency"]) == 1:
@@ -884,6 +917,7 @@ def add_speedups(reports: Sequence[dict[str, Any]]) -> None:
             str(report["prefill_signature"]),
             str(report["speculative_mode"]),
             str(report["sampling_mode"]),
+            str(report["kv_dtype"]),
             str(report["suite"]),
         )
         baseline = baselines.get(key)
@@ -905,6 +939,7 @@ SUMMARY_FIELDS = (
     "prefill_signature",
     "speculative_mode",
     "sampling_mode",
+    "kv_dtype",
     "corpus_order_seed",
     "concurrency",
     "request_count",
@@ -929,6 +964,7 @@ def summary_row(report: dict[str, Any]) -> dict[str, Any]:
         "prefill_signature": report["prefill_signature"],
         "speculative_mode": report["speculative_mode"],
         "sampling_mode": report["sampling_mode"],
+        "kv_dtype": report["kv_dtype"],
         "corpus_order_seed": report.get("workload_order", {}).get("seed"),
         "concurrency": report["concurrency"],
         "request_count": report["request_count"],
@@ -1002,20 +1038,21 @@ def write_summaries(reports: Sequence[dict[str, Any]], output_dir: Path) -> None
             {field: csv_value(row.get(field)) for field in SUMMARY_FIELDS} for row in rows
         )
 
-    groups: dict[tuple[str, str, str, str], list[dict[str, Any]]] = {}
+    groups: dict[tuple[str, str, str, str, str], list[dict[str, Any]]] = {}
     for row in rows:
         key = (
             str(row["target"]),
             str(row["prefill_signature"]),
+            str(row["kv_dtype"]),
             str(row["speculative_mode"]),
             str(row["suite"]),
         )
         groups.setdefault(key, []).append(row)
 
     sections: list[str] = []
-    for (target, prefill_signature, mode, suite), group in groups.items():
+    for (target, prefill_signature, kv_dtype, mode, suite), group in groups.items():
         group.sort(key=lambda row: int(row["concurrency"]))
-        title = f"## {target} / {prefill_signature} / {mode} / {suite}"
+        title = f"## {target} / {prefill_signature} / {kv_dtype} / {mode} / {suite}"
         if suite == "decode-saturation":
             table = markdown_table(
                 ("C", "Requests", "Steady s", "Avg batch", "Decode tok/s", "Speedup"),

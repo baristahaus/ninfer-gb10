@@ -26,53 +26,32 @@ void HttpServer::handle_chat_completions(const httplib::Request& req, httplib::R
     OpenAIChatRequest request;
     try {
         RequestLimits limits;
-        limits.default_max_tokens = options_.default_max_tokens;
+        limits.default_max_tokens = options_.launch.generation.max_tokens;
         request                   = parse_chat_completion_request(parse_json_body(req), limits);
         validate_openai_model(request.model, public_model_id_);
-        // Probability reporting needs the reports captured inside the Engine's decode graphs, so only
-        // a server started with --token-logprobs can answer it. Streaming is a separate refusal: the
-        // Engine attributes reports to generated tokens, not yet to the cleaned per-channel pieces a
-        // delta carries, so a streamed array could disagree with the text beside it.
-        if (request.logprobs && request.stream) {
-            ApiError error;
-            error.status  = 400;
-            error.type    = "invalid_request_error";
-            error.param   = "logprobs";
-            error.code    = "logprobs_not_supported";
-            error.message = "logprobs=true is not supported together with stream=true";
-            throw ApiException(std::move(error));
-        }
-        if (request.logprobs && !service_->engine_options().token_logprobs) {
-            ApiError error;
-            error.status  = 400;
-            error.type    = "invalid_request_error";
-            error.param   = "logprobs";
-            error.code    = "logprobs_not_enabled";
-            error.message =
-                "logprobs=true requires a server started with --token-logprobs on a Flash-Next "
-                "target";
-            throw ApiException(std::move(error));
-        }
     } catch (const ApiException& exception) {
         write_openai_error(res, exception.error());
         return;
     }
 
     const std::uint64_t req_id = ++request_seq_;
-    const RequestLogMetadata metadata{.model                  = request.model,
-                                      .stream                 = request.stream,
-                                      .output_tokens_explicit = request.output_tokens_explicit};
+    RequestLogMetadata metadata{.http_request_id        = res.get_header_value("x-request-id"),
+                                .model                  = request.model,
+                                .stream                 = request.stream,
+                                .output_tokens_explicit = request.output_tokens_explicit};
     PreparedRequest prepared;
     try {
-        const ninfer::GenerationObservationOptions observation{
-            .phase_timings   = true,
-            .live_timings    = request.stream && request.timings_per_token,
-            .prompt_progress = request.stream && request.return_progress,
+        ninfer::GenerationObservationOptions observation{
+            .constraint_timings = true,
+            .live_timings       = request.stream && request.timings_per_token,
+            .prompt_progress    = request.stream && request.return_progress,
+            .scheduling         = scheduling_observer(req_id, metadata.http_request_id),
+            .first_token        = first_token_observer(),
         };
-        prepared = service_->prepare(request.generation,
-                                     request.stream ? GenerationConsumerMode::Streaming
-                                                    : GenerationConsumerMode::Aggregate,
-                                     observation, [&req] { return client_disconnected(req); });
+        prepared = service_->prepare(
+            request.generation,
+            request.stream ? GenerationConsumerMode::Streaming : GenerationConsumerMode::Aggregate,
+            std::move(observation), [&req] { return client_disconnected(req); });
     } catch (const ApiException& exception) {
         record_request_rejected(make_request_rejection_log_context(
             req_id, "openai_chat_completions", request.generation, metadata, exception.error()));
@@ -90,6 +69,7 @@ void HttpServer::handle_chat_completions(const httplib::Request& req, httplib::R
     }
 
     const OpenAIChatResponseIdentity identity = make_openai_chat_response_identity(request.model);
+    metadata.response_id                      = identity.id;
     auto lifecycle                            = begin_request(make_request_log_context(
         req_id, "openai_chat_completions", request.generation, metadata, prepared));
 
@@ -114,10 +94,7 @@ void HttpServer::handle_chat_completions(const httplib::Request& req, httplib::R
         }
         lifecycle->done(outcome);
         try {
-            set_owned_json_content(res,
-                                   make_chat_completion_response(
-                                       identity, outcome,
-                                       request.logprobs ? request.top_logprobs : 0),
+            set_owned_json_content(res, make_chat_completion_response(identity, outcome),
                                    prepared.lifetime);
         } catch (const std::exception& exception) {
             lifecycle->response_failure(make_internal_request_failure(
@@ -206,9 +183,14 @@ void HttpServer::handle_chat_completions(const httplib::Request& req, httplib::R
                     output.on_reasoning = [&](const std::string& text) {
                         render_and_write(transport, [&] { return encoder->reasoning_delta(text); });
                     };
-                    output.on_tool_call_progress = [&](std::size_t bytes) {
-                        render_and_write(transport,
-                                         [&] { return encoder->tool_call_progress(bytes); });
+                    output.on_tool_start = [&](const ninfer::ToolCallStart& event) {
+                        render_and_write(transport, [&] { return encoder->tool_start(event); });
+                    };
+                    output.on_tool_arguments = [&](const ninfer::ToolArgumentsDelta& event) {
+                        render_and_write(transport, [&] { return encoder->tool_arguments(event); });
+                    };
+                    output.on_tool_end = [&](const ninfer::ToolCallEnd& event) {
+                        render_and_write(transport, [&] { return encoder->tool_end(event); });
                     };
                     output.is_cancelled = [&] { return transport.poll(); };
 
@@ -239,6 +221,12 @@ void HttpServer::handle_chat_completions(const httplib::Request& req, httplib::R
                 }
 
                 lifecycle->done(outcome);
+                if (outcome.finish_reason == ninfer::FinishReason::Cancelled ||
+                    stream->cancelled.load(std::memory_order_acquire)) {
+                    lifecycle->response_failure(
+                        make_client_disconnected_failure(RequestFailurePhase::Transport));
+                    return false;
+                }
                 std::vector<std::string> terminal;
                 try {
                     terminal = encoder->finish(outcome);

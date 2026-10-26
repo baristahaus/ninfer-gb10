@@ -11,15 +11,17 @@ The storage registry contains exactly these identities:
 
 | Identity | Kind | Compatible numeric formats | Logical shape | Object alignment |
 |---|---|---|---|---:|
-| `contiguous_le_v1` | tensor layout | `bf16`, `fp32`, `int32`, `fp8_e4m3fn` | rank `0..16` | 256 bytes |
+| `contiguous_le_v1` | tensor layout | `bf16`, `fp32`, `int32` | rank `0..16` | 256 bytes |
 | `row_split_k128_v1` | tensor layout | `q4_g64_fp16`, `q5_g64_fp16`, `q6_g64_fp16`, `q8_g32_fp16` | rank 2 `[N,K]` | 256 bytes |
 | `block_scale_k16_m128x4_v1` | tensor layout | `nvfp4` | rank 2 `[N,K]`, `N % 128 == 0`, `K % 64 == 0` | 256 bytes |
+| `batched_block_scale_k16_m128x4_v1` | tensor layout | `nvfp4` | rank 3 `[E,N,K]`, `N % 128 == 0`, `K % 64 == 0` | 256 bytes |
+| `block_scale_m128_k128_v1` | tensor layout | `fp8_e4m3fn_block128x128_bf16` | `[N,K]` or `[E,N,K]`, N and K multiples of 128 | 256 bytes |
 | `row_scale_v1` | tensor layout | `fp8_e4m3fn_row_bf16` | rank 2 `[N,K]` | 256 bytes |
-| `expert_block_scale_k16_m128x4_v1` | tensor layout | `nvfp4` | rank 3 `[E,N,K]`, `N % 128 == 0`, `K % 64 == 0` | 256 bytes |
+| `row_paged_g16_4k_v1` | tensor layout | `nf4_g16_e4m3fn` | rank 2 `[N,K]`, `K % 16 == 0`, encoded row ≤ 4096 bytes | 4096 bytes |
 | `raw_bytes_v1` | resource encoding | not applicable | nonempty byte string | 1 byte |
 
 These format/layout pairs define the current codec support. Native consumer requirements are
-covered separately in Section 8.
+covered separately in Section 9.
 
 Object alignment applies to the object's payload-relative `offset` in the `.ninfer` JSON. Internal
 plane offsets and padding belong to the selected layout. Inter-object padding belongs to the
@@ -62,7 +64,6 @@ Words are serialized least-significant byte first:
 |---|---:|---|
 | `bf16` | 2 | the exact 16-bit bfloat16 logical word, little-endian |
 | `fp32` | 4 | the exact 32-bit IEEE-754 binary32 logical word, little-endian |
-| `fp8_e4m3fn` | 1 | the exact E4M3FN logical word |
 | `int32` | 4 | the exact 32-bit two's-complement logical word, little-endian |
 
 Signed zero, subnormal, infinity, NaN payload, and integer-word behavior are determined by the
@@ -296,6 +297,27 @@ The scale word's byte offset within the scale plane is:
 Layout decoding must recover the original packed E2M1 words, natural `[N,K/16]` E4M3FN scale-word
 matrix, and exact divisor word. It never decodes and re-encodes either floating-point format.
 
+### 4.1 `batched_block_scale_k16_m128x4_v1`
+
+The bank layout stores `[E,N,K]`, E positive, with the same N/K constraints and inner-matrix
+code packing and scale swizzle as Section 4. It has no per-matrix padding:
+
+```text
+code_matrix_bytes     = N*K/2
+scale_matrix_bytes    = N*K/16
+code_plane_bytes      = E*code_matrix_bytes
+scale_plane_offset    = align_up(code_plane_bytes, 256)
+scale_plane_bytes     = E*scale_matrix_bytes
+weight_divisor_offset = scale_plane_offset + scale_plane_bytes
+payload_bytes         = weight_divisor_offset + 4*E
+```
+
+The code plane contains all matrices in C order. Matrix e's scale bytes start at
+`scale_plane_offset + e*scale_matrix_bytes`; its FP32 divisor starts at
+`weight_divisor_offset + 4*e`. All FP32 words are little-endian. Any gap before the scale plane
+is zero. A matrix slice keeps its own divisor; flattening the bank into a single scalar-scaled
+matrix is not a valid reinterpretation.
+
 ## 5. `row_scale_v1`
 
 `row_scale_v1` stores only rank-two `fp8_e4m3fn_row_bf16` matrices `[N,K]` with positive
@@ -323,7 +345,52 @@ encoded by concatenating the selected code rows, recomputing the scale-plane ali
 row count, and appending the selected scale words in the same row order. It does not decode or
 requantize either plane.
 
-## 6. `raw_bytes_v1`
+### 5.1 `block_scale_m128_k128_v1`
+
+This layout stores `fp8_e4m3fn_block128x128_bf16` as a rank-two matrix or rank-three bank.
+N and K are positive multiples of 128. For rank two use E=1 in these byte-size formulas:
+
+```text
+code_plane_bytes  = E*N*K
+scale_plane_offset = align_up(code_plane_bytes, 256)
+scale_plane_bytes = E*(N/128)*(K/128)*2
+payload_bytes     = scale_plane_offset + scale_plane_bytes
+```
+
+Codes use natural C-order `[E,N,K]`. Scales use natural C-order `[E,N/128,K/128]`, stored as
+little-endian BF16 words without swizzling or per-matrix padding. Scale words require two-byte
+alignment; NVFP4 tile-alignment rules do not apply. Any gap before the scale plane is zero.
+Gate/up can concatenate along N when their boundary is a multiple of 128, retaining every
+block's independent multiplier.
+
+## 6. `row_paged_g16_4k_v1`
+
+This independent layout stores NF4 codes and G16 scales together in each row. It has positive
+rank-two shape `[N,K]`, `K % 16 == 0`, and `row_bytes <= 4096`:
+
+```text
+row_bytes             = K/2 + K/16
+rows_per_page         = floor(4096 / row_bytes)
+page_count            = ceil_div(N, rows_per_page)
+row_offset(r)         = floor(r / rows_per_page)*4096 + (r % rows_per_page)*row_bytes
+weight_divisor_offset = page_count*4096
+payload_bytes         = weight_divisor_offset + 4
+```
+
+Each row begins with `K/2` packed-code bytes (low nibble is the even K coordinate), followed by
+`K/16` E4M3FN scale bytes in increasing group order. Rows never cross pages. Page tails and
+unused rows in the final page contain zero bytes. The little-endian FP32 divisor follows the
+complete final page. The tensor object's payload-relative offset is aligned to 4096 bytes.
+
+For `[2500012,160]`, a row occupies 90 bytes, a page holds 45 rows, and 55556 pages plus the
+divisor occupy 227557380 bytes. The final page holds 37 valid rows. A logical zero NF4 group
+uses packed `0x77` codes and scale zero; page padding has no logical values.
+
+`weight_paged_row_offset` and `weight_scale_offset` expose parent-relative C++ addresses;
+`row_paged_geometry` provides the corresponding Python geometry. Paged rows cannot be exposed
+as constant-stride code/scale planes or passed to the current native Linear `Weight` bridge.
+
+## 7. `raw_bytes_v1`
 
 `raw_bytes_v1` is a resource encoding, not a tensor layout. Its enclosing object payload is
 the resource byte string itself:
@@ -338,7 +405,7 @@ trailing padding. The resource object's JSON `bytes` is its exact nonzero length
 returns the complete span unchanged. A model contract assigns a resource name and interprets those
 bytes; the common encoding does not infer that meaning from the name.
 
-## 7. Decode boundary
+## 8. Decode boundary
 
 Layout decoding yields only persistent logical words:
 
@@ -347,15 +414,18 @@ Layout decoding yields only persistent logical words:
   `0..K-1`, discarding physical columns `K..K_pad-1`;
 - `block_scale_k16_m128x4_v1` yields the packed E2M1 words, natural E4M3FN group-scale words, and
   matrix-level FP32 weight divisor;
+- `batched_block_scale_k16_m128x4_v1` yields those words for each matrix and its independent divisor;
+- `block_scale_m128_k128_v1` yields natural E4M3FN codes and BF16 128×128 block multipliers;
 - `row_scale_v1` yields the natural row-major E4M3FN code words and one BF16 multiplier per logical
   row;
+- `row_paged_g16_4k_v1` yields packed NF4 codes, natural G16 E4M3FN scales and the object FP32 divisor;
 - `raw_bytes_v1` yields the enclosing resource bytes.
 
 Dequantized values follow the reconstruction rule in `tensor-formats.md`. This document does
 not select a quantization encoder, output dtype, accumulation dtype, kernel, runtime device layout,
 or model consumer.
 
-## 8. Logical views and native operands
+## 9. Logical views and native operands
 
 Bindings address C-order logical element ranges of a parent object. The parent retains its full
 geometry and backing allocation, so a view can locate code and scale planes using the original
@@ -365,25 +435,18 @@ matrix dimensions. Materialization uploads each required parent once and binds n
 native operands. Direct tensors can use a contiguous element range. Grouped integer matrices can
 use consecutive complete rows with unchanged K, using independent code, high-bit and scale pointers.
 
-The current native `Weight` bridge requires a complete parent for FP8 and NVFP4. Their consumers
-use the complete matrix geometry for plane addressing; a row slice cannot be passed as though its
-payload were a newly packed smaller matrix. Adjacent logical projections can still share one
-parent: when the chosen fused implementation consumes their complete union, it receives that
-parent as one native weight.
+The native `Weight` bridge requires a complete parent for row-scaled FP8. NVFP4 accepts complete
+128-row tiles within one matrix divisor domain, including within a bank. Its native code and scale
+pointers are rebased independently; the inner layout remains `BlockScaleK16M128x4`. Block-scaled
+FP8 accepts 128-row-aligned views with unchanged K and preserves the two-dimensional scale grid.
+Its native scale axes are `[K/128,N/128]` with byte strides `[2,2*(K/128)]`.
+`payload` and `payload_bytes` always describe the original backing, not a fabricated contiguous
+slice. Actual Ops still decide whether they support the format and geometry.
+
+Materialized parents borrow a Host divisor span from their backing owner. A bank has E words;
+a single NVFP4 matrix or NF4 parent has one. Preparing a CUDA operand reads this Host metadata
+and never dereferences its Device payload on the CPU.
 
 Offline codecs can produce a standalone slice with its own plane offsets. The loader does not
 perform that transformation. An execution implementation that accepts additional view forms must
 consume the original parent geometry correctly.
-
-## Expert-major NVFP4 bank
-
-`expert_block_scale_k16_m128x4_v1` represents `[E,N,K]` as one bank:
-
-- code plane: `E*N*K/2` bytes, expert-major, then row-major packed E2M1 pairs;
-- scale plane: starts at `align_up(code_bytes,256)`, with `E*N*K/16` E4M3FN bytes;
-- divisor plane: immediately follows scales, containing `E` positive FP32 weight divisors;
-- total bytes: `align_up(E*N*K/2,256) + E*N*K/16 + 4*E`.
-
-Each expert's scale slice uses the same K16/M128x4 ordering as the rank-two NVFP4 layout.
-The divisor is per expert. Activation divisors are separate Use auxiliaries, not part of weight
-storage. Flash-Next consumes the bank directly without runtime repacking.

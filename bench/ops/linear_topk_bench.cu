@@ -1,8 +1,9 @@
 // Public cold-cache benchmark for the three registered linear_topk profiles.
 #include "core/weight.h"
+#include "core/buffer.h"
 #include "ninfer/ops/linear_topk.h"
 
-#include "ninfer_bench_common.h"
+#include "op_measurement.cuh"
 #include "quantized_weight.cuh"
 
 #include <cuda_runtime.h>
@@ -13,7 +14,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <stdexcept>
-#include <sstream>
 #include <string_view>
 #include <string>
 #include <vector>
@@ -29,39 +29,6 @@ enum class Profile {
     Q4,
 };
 
-__device__ unsigned pattern(unsigned x) {
-    x ^= x >> 16;
-    x *= 0x7feb352du;
-    x ^= x >> 15;
-    x *= 0x846ca68bu;
-    return x ^ (x >> 16);
-}
-
-__global__ void varied_codes(std::uint8_t* codes, std::uint64_t count, Profile profile) {
-    const auto stride = std::uint64_t(gridDim.x) * blockDim.x;
-    for (auto i = std::uint64_t(blockIdx.x) * blockDim.x + threadIdx.x; i < count; i += stride) {
-        const unsigned bits = pattern(static_cast<unsigned>(i) ^ 0x8351729bu);
-        if (profile == Profile::Q4) {
-            const int a = static_cast<int>(bits % 15) - 7;
-            const int b = static_cast<int>((bits >> 8) % 15) - 7;
-            codes[i]    = (a & 15) | ((b & 15) << 4);
-        } else if (profile == Profile::Fp8) {
-            codes[i] = (bits % 127) | ((bits >> 24) & 128);
-        } else {
-            codes[i] = static_cast<std::uint8_t>(static_cast<int>(bits % 255) - 127);
-        }
-    }
-}
-
-__global__ void varied_scales(std::uint16_t* scales, std::uint64_t count, bool bf16) {
-    const auto stride = std::uint64_t(gridDim.x) * blockDim.x;
-    for (auto i = std::uint64_t(blockIdx.x) * blockDim.x + threadIdx.x; i < count; i += stride) {
-        const float value = 0.002f * (1 + pattern(static_cast<unsigned>(i) ^ 0x91f237u) % 31);
-        scales[i]         = bf16 ? __bfloat16_as_ushort(__float2bfloat16_rn(value))
-                                 : __half_as_ushort(__float2half_rn(value));
-    }
-}
-
 const char* profile_name(Profile profile) {
     if (profile == Profile::Q8) { return "q8-full"; }
     if (profile == Profile::Fp8) { return "fp8-full"; }
@@ -76,55 +43,51 @@ void run(Profile profile, std::int32_t columns, int warmup, int repeat) {
                                      : profile == Profile::Fp8 ? QType::FP8_E4M3FN_ROW_BF16
                                                                : QType::Q4_G64_FP16;
 
-    PackedQuantizedWeight packed =
-        profile == Profile::Fp8
-            ? make_fp8_weight(rows, kHidden)
-            : make_row_split_weight(qtype, rows, kHidden, kHidden,
-                                    QuantizedWeightFill{profile == Profile::Q4 ? std::uint8_t{0x11}
-                                                                               : std::uint8_t{0x01},
-                                                        0, 0x3c00});
-    varied_codes<<<4096, 256>>>(static_cast<std::uint8_t*>(packed.storage.p), packed.low_bytes,
-                                profile);
-    varied_scales<<<1024, 256>>>(
-        reinterpret_cast<std::uint16_t*>(static_cast<std::uint8_t*>(packed.storage.p) +
-                                         packed.scale_offset),
-        packed.scale_bytes / 2, profile == Profile::Fp8);
-    CUDA_CHECK(cudaGetLastError());
-    DeviceBuffer hidden = make_bf16(static_cast<std::size_t>(kHidden) * columns);
-    DeviceBuffer ids(static_cast<std::size_t>(kTopK) * columns * sizeof(std::int32_t));
-    DeviceBuffer scores(static_cast<std::size_t>(kTopK) * columns * sizeof(float));
+    PackedQuantizedWeight packed = profile == Profile::Fp8
+                                       ? make_fp8_weight(rows, kHidden)
+                                       : make_row_split_weight(qtype, rows, kHidden, kHidden, 501U);
+    DeviceBuffer hidden          = make_bf16(static_cast<std::size_t>(kHidden) * columns, 101U);
+    DeviceBuffer ids(ninfer::bench::device_context().device(),
+                     static_cast<std::size_t>(kTopK) * columns * sizeof(std::int32_t));
+    DeviceBuffer scores(ninfer::bench::device_context().device(),
+                        static_cast<std::size_t>(kTopK) * columns * sizeof(float));
     DeviceBuffer id_map(
-        profile == Profile::Q4 ? static_cast<std::size_t>(rows) * sizeof(std::int32_t) : 1);
+        ninfer::bench::device_context().device(),
+        profile == Profile::Q4 ? static_cast<std::size_t>(rows) * sizeof(std::int32_t) : 0);
     if (profile == Profile::Q4) {
         std::vector<std::int32_t> host_ids(static_cast<std::size_t>(rows));
         for (std::int32_t row = 0; row < rows; ++row) { host_ids[row] = row; }
-        id_map.copy_from_host(host_ids.data(), id_map.bytes);
+        id_map.copy_from_host(host_ids.data(), id_map.size());
     }
 
     const std::size_t workspace_bytes =
         ops::linear_topk_workspace_capacity_bytes(qtype, rows, kHidden, columns, columns);
-    WorkspaceArena workspace(workspace_bytes);
-    Tensor hidden_tensor(hidden.p, DType::BF16, {kHidden, columns});
-    Tensor ids_tensor(ids.p, DType::I32, {kTopK, columns});
-    Tensor scores_tensor(scores.p, DType::FP32, {kTopK, columns});
-    Tensor map_tensor(id_map.p, DType::I32, {rows});
-    DeviceBuffer flush(256ULL << 20);
+    ninfer::DeviceBuffer workspace_storage(ninfer::bench::device_context().device(),
+                                           workspace_bytes);
+    MemoryArena workspace(workspace_storage.span());
+    Tensor hidden_tensor(hidden.span(), DType::BF16, {kHidden, columns});
+    Tensor ids_tensor(ids.span(), DType::I32, {kTopK, columns});
+    Tensor scores_tensor(scores.span(), DType::FP32, {kTopK, columns});
+    Tensor map_tensor =
+        profile == Profile::Q4 ? Tensor(id_map.span(), DType::I32, {rows}) : Tensor{};
+    bench::L2FlushBuffer flush(256ULL << 20);
     cudaStream_t stream = nullptr;
     CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+    const auto cuda = ninfer::bench::device_context().execution_view(stream);
 
-    const auto launch = [&](cudaStream_t launch_stream) {
+    const auto launch = [&](CudaExecutionView cuda) {
         if (profile == Profile::Q4) {
             ops::linear_topk(hidden_tensor, packed.weight, map_tensor, ids_tensor, scores_tensor,
-                             workspace, launch_stream);
+                             workspace, cuda);
         } else {
             ops::linear_topk(hidden_tensor, packed.weight, 248077, ids_tensor, scores_tensor,
-                             workspace, launch_stream);
+                             workspace, cuda);
         }
     };
     TimedGraph graph;
     CUDA_CHECK(cudaDeviceSynchronize());
-    graph.capture(stream, launch);
-    const ColdTiming timing    = measure_cold_graph(graph, flush, stream, warmup, repeat);
+    graph.capture(cuda, launch);
+    const ColdTiming timing    = measure_cold_graph(graph, flush, cuda, warmup, repeat);
     const double weight_bytes  = static_cast<double>(packed.model_weight_bytes());
     const double effective_gbs = weight_bytes / timing.median_us / 1000.0;
     const double useful_tflops = 2.0 * static_cast<double>(profile == Profile::Q4 ? rows : 248077) *
@@ -168,20 +131,12 @@ int main(int argc, char** argv) {
             if (flag == "--profile")
                 profile = value;
             else if (flag == "--columns") {
-                std::istringstream input(value);
-                std::string item;
-                while (std::getline(input, item, ',')) {
-                    std::size_t end = 0;
-                    const int n     = std::stoi(item, &end);
-                    if (n < 1 || end != item.size())
-                        throw std::invalid_argument("columns must be positive integers");
-                    columns.push_back(n);
-                }
-                if (columns.empty()) throw std::invalid_argument("columns must not be empty");
+                const auto values = measurement::integers(value);
+                columns.insert(columns.end(), values.begin(), values.end());
             } else if (flag == "--warmup")
-                warmup = std::stoi(value);
+                warmup = measurement::integer(value, 0);
             else if (flag == "--repeat")
-                repeat = std::stoi(value);
+                repeat = measurement::integer(value);
             else
                 throw std::invalid_argument("unknown option: " + flag);
         }

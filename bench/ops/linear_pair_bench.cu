@@ -1,16 +1,17 @@
 // Cold-cache benchmark for the two registered public Q8 LinearPair geometries.
 
+#include "common/roofline.h"
 #include "core/weight.h"
+#include "core/buffer.h"
 #include "ninfer/ops/linear_pair.h"
 
 #include "core/device.h"
-#include "ninfer_bench_common.h"
+#include "op_measurement.cuh"
 #include "quantized_weight.cuh"
 
 #include <cuda_runtime.h>
 
 #include <algorithm>
-#include <cerrno>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -25,12 +26,10 @@ using namespace ninfer;
 
 namespace {
 
-constexpr std::int32_t kParentRows  = 6144;
-constexpr std::int32_t kFirstRow    = 4096;
-constexpr std::int32_t kSecondRow   = 5120;
-constexpr std::int32_t kRows        = 1024;
-constexpr double kRtx5090ReadGBs    = 1674.5;
-constexpr double kRtx5090Bf16Tflops = 209.5;
+constexpr std::int32_t kParentRows = 6144;
+constexpr std::int32_t kFirstRow   = 4096;
+constexpr std::int32_t kSecondRow  = 5120;
+constexpr std::int32_t kRows       = 1024;
 
 enum class Execution : std::uint8_t { Eager, Graph };
 
@@ -43,76 +42,6 @@ struct Options {
     std::uint64_t flush_bytes = 256ULL << 20;
 };
 
-std::uint64_t parse_u64(std::string_view text, const char* label) {
-    const std::string value(text);
-    char* end                       = nullptr;
-    errno                           = 0;
-    const unsigned long long parsed = std::strtoull(value.c_str(), &end, 10);
-    if (errno != 0 || end == value.c_str() || *end != '\0') {
-        throw std::invalid_argument(std::string("invalid ") + label + ": " + value);
-    }
-    return static_cast<std::uint64_t>(parsed);
-}
-
-std::int32_t parse_positive_i32(std::string_view text, const char* label) {
-    const std::uint64_t value = parse_u64(text, label);
-    if (value == 0 ||
-        value > static_cast<std::uint64_t>(std::numeric_limits<std::int32_t>::max())) {
-        throw std::invalid_argument(std::string(label) + " must be a positive int32");
-    }
-    return static_cast<std::int32_t>(value);
-}
-
-int parse_nonnegative_int(std::string_view text, const char* label) {
-    const std::uint64_t value = parse_u64(text, label);
-    if (value > static_cast<std::uint64_t>(std::numeric_limits<int>::max())) {
-        throw std::invalid_argument(std::string(label) + " is too large");
-    }
-    return static_cast<int>(value);
-}
-
-std::vector<std::int32_t> parse_tokens(std::string_view text) {
-    std::vector<std::int32_t> result;
-    std::size_t begin = 0;
-    while (begin < text.size()) {
-        const std::size_t end = text.find(',', begin);
-        result.push_back(parse_positive_i32(
-            text.substr(begin, end == std::string_view::npos ? text.size() - begin : end - begin),
-            "token extent"));
-        if (end == std::string_view::npos) { break; }
-        begin = end + 1;
-    }
-    if (result.empty()) { throw std::invalid_argument("--tokens must not be empty"); }
-    std::sort(result.begin(), result.end());
-    result.erase(std::unique(result.begin(), result.end()), result.end());
-    return result;
-}
-
-std::vector<std::int32_t> parse_sweep(std::string_view text) {
-    const std::size_t first = text.find(':');
-    const std::size_t second =
-        first == std::string_view::npos ? std::string_view::npos : text.find(':', first + 1);
-    if (first == std::string_view::npos || (second != std::string_view::npos &&
-                                            text.find(':', second + 1) != std::string_view::npos)) {
-        throw std::invalid_argument("--sweep must be START:END[:STEP]");
-    }
-    const std::int32_t begin = parse_positive_i32(text.substr(0, first), "sweep start");
-    const std::int32_t end   = parse_positive_i32(
-        text.substr(first + 1, second == std::string_view::npos ? text.size() - first - 1
-                                                                  : second - first - 1),
-        "sweep end");
-    const std::int32_t step = second == std::string_view::npos
-                                  ? 1
-                                  : parse_positive_i32(text.substr(second + 1), "sweep step");
-    if (begin > end) { throw std::invalid_argument("sweep start must not exceed end"); }
-    std::vector<std::int32_t> result;
-    for (std::int64_t token = begin; token <= end; token += step) {
-        result.push_back(static_cast<std::int32_t>(token));
-        if (token > static_cast<std::int64_t>(end) - step) { break; }
-    }
-    return result;
-}
-
 Options parse_options(int argc, char** argv) {
     Options options;
     bool have_tokens = false;
@@ -124,13 +53,16 @@ Options parse_options(int argc, char** argv) {
             return argv[index];
         };
         if (argument == "--tokens") {
-            options.tokens = parse_tokens(next("--tokens value"));
-            have_tokens    = true;
+            options.tokens = bench::measurement::integers(next("--tokens value"));
+            std::sort(options.tokens.begin(), options.tokens.end());
+            options.tokens.erase(std::unique(options.tokens.begin(), options.tokens.end()),
+                                 options.tokens.end());
+            have_tokens = true;
         } else if (argument == "--sweep") {
-            options.tokens = parse_sweep(next("--sweep value"));
+            options.tokens = bench::measurement::sweep(next("--sweep value"));
             have_sweep     = true;
         } else if (argument == "--k") {
-            options.k = parse_positive_i32(next("--k value"), "K");
+            options.k = bench::measurement::integer(next("--k value"));
             if (options.k != 2048 && options.k != 5120) {
                 throw std::invalid_argument("--k must be 2048 or 5120");
             }
@@ -143,11 +75,12 @@ Options parse_options(int argc, char** argv) {
             else
                 throw std::invalid_argument("--execution must be eager or graph");
         } else if (argument == "--warmup") {
-            options.warmup = parse_nonnegative_int(next("--warmup value"), "warmup");
+            options.warmup = bench::measurement::integer(next("--warmup value"), 0);
         } else if (argument == "--repeat") {
-            options.repeat = parse_nonnegative_int(next("--repeat value"), "repeat");
+            options.repeat = bench::measurement::integer(next("--repeat value"));
         } else if (argument == "--flush-mib") {
-            const std::uint64_t mib = parse_u64(next("--flush-mib value"), "flush MiB");
+            const std::uint64_t mib =
+                bench::measurement::integer<std::uint64_t>(next("--flush-mib value"));
             if (mib > (std::numeric_limits<std::uint64_t>::max() >> 20)) {
                 throw std::overflow_error("flush size overflows");
             }
@@ -200,42 +133,48 @@ int main(int argc, char** argv) {
         CUDA_CHECK(cudaGetDeviceProperties(&properties, device));
         cudaStream_t stream = nullptr;
         CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+        const auto cuda = ninfer::bench::device_context().execution_view(stream);
 
-        DeviceBuffer flush(options.flush_bytes);
-        DeviceBuffer input = bench::make_bf16(static_cast<std::size_t>(options.k) * maximum_tokens);
-        DeviceBuffer first_output(static_cast<std::size_t>(kRows) * maximum_tokens * 2);
-        DeviceBuffer second_output(static_cast<std::size_t>(kRows) * maximum_tokens * 2);
+        bench::L2FlushBuffer flush(options.flush_bytes);
+        DeviceBuffer input =
+            bench::make_bf16(static_cast<std::size_t>(options.k) * maximum_tokens, 101U);
+        DeviceBuffer first_output(ninfer::bench::device_context().device(),
+                                  static_cast<std::size_t>(kRows) * maximum_tokens * 2);
+        DeviceBuffer second_output(ninfer::bench::device_context().device(),
+                                   static_cast<std::size_t>(kRows) * maximum_tokens * 2);
         bench::PackedQuantizedWeight parent = bench::make_row_split_weight(
-            QType::Q8_G32_FP16, kParentRows, options.k, options.k, {0x31, 0x00, 0x3c00});
+            QType::Q8_G32_FP16, kParentRows, options.k, options.k, 501U);
         const Weight first_weight  = bench::row_view(parent.weight, kFirstRow, kRows);
         const Weight second_weight = bench::row_view(parent.weight, kSecondRow, kRows);
 
         std::printf("# gpu=%s public=linear_pair shape=two_adjacent_Q8[1024,%d] "
-                    "execution=%s cache=cold read_reference=%.1f_GB/s "
-                    "bf16_tc_reference=%.1f_TFLOP/s\n",
+                    "execution=%s cache=cold flush_bytes=%llu read_reference=%s_GB/s "
+                    "bf16_tc_reference=%s_TFLOP/s\n",
                     properties.name, options.k,
                     options.execution == Execution::Graph ? "graph_replay" : "eager",
-                    kRtx5090ReadGBs, kRtx5090Bf16Tflops);
+                    static_cast<unsigned long long>(options.flush_bytes),
+                    bench::format_metric(bench::kRoofline.sustained_read_gbs, 1).c_str(),
+                    bench::format_metric(bench::kRoofline.bf16_f32_tflops, 1).c_str());
 
         double t1_median = std::numeric_limits<double>::quiet_NaN();
         for (const std::int32_t tokens : options.tokens) {
-            Tensor x(input.p, DType::BF16, {options.k, tokens});
-            Tensor first(first_output.p, DType::BF16, {kRows, tokens});
-            Tensor second(second_output.p, DType::BF16, {kRows, tokens});
-            const auto launch = [&](cudaStream_t launch_stream) {
-                ops::linear_pair(x, first_weight, second_weight, first, second, launch_stream);
+            Tensor x(input.span(), DType::BF16, {options.k, tokens});
+            Tensor first(first_output.span(), DType::BF16, {kRows, tokens});
+            Tensor second(second_output.span(), DType::BF16, {kRows, tokens});
+            const auto launch = [&](CudaExecutionView cuda) {
+                ops::linear_pair(x, first_weight, second_weight, first, second, cuda);
             };
             bench::ColdTiming timing;
             if (options.execution == Execution::Graph) {
                 bench::TimedGraph graph;
-                graph.capture(stream, launch);
-                graph.launch(stream);
+                graph.capture(cuda, launch);
+                graph.launch(cuda);
                 CUDA_CHECK(cudaStreamSynchronize(stream));
                 timing =
-                    bench::measure_cold_graph(graph, flush, stream, options.warmup, options.repeat);
+                    bench::measure_cold_graph(graph, flush, cuda, options.warmup, options.repeat);
             } else {
-                timing = bench::measure_cold_launch(launch, flush, stream, options.warmup,
-                                                    options.repeat);
+                timing =
+                    bench::measure_cold_launch(launch, flush, cuda, options.warmup, options.repeat);
             }
             if (tokens == 1) { t1_median = timing.median_us; }
 
@@ -245,15 +184,15 @@ int main(int argc, char** argv) {
             const double extrapolation = std::isnan(t1_median)
                                              ? std::numeric_limits<double>::quiet_NaN()
                                              : tokens * t1_median / timing.median_us;
-            std::printf("T=%-3d median=%8.3f us min=%8.3f us p95=%8.3f us "
-                        "effective=%7.1f GB/s READ=%5.1f%% logical=%6.2f TFLOP/s ",
-                        tokens, timing.median_us, timing.min_us, timing.p95_us, gbs,
-                        100.0 * gbs / kRtx5090ReadGBs, tflops);
-            if (tokens == 1) {
-                std::printf("TC=n/a ");
-            } else {
-                std::printf("TC=%5.1f%% ", 100.0 * tflops / kRtx5090Bf16Tflops);
-            }
+            std::printf(
+                "T=%-3d median=%8.3f us min=%8.3f us p95=%8.3f us "
+                "effective=%7.1f GB/s READ=%5s%% logical=%6.2f TFLOP/s ",
+                tokens, timing.median_us, timing.min_us, timing.p95_us, gbs,
+                bench::format_metric(100.0 * gbs / bench::kRoofline.sustained_read_gbs, 1).c_str(),
+                tflops);
+            const double tc_pct = tokens > 1 ? 100.0 * tflops / bench::kRoofline.bf16_f32_tflops
+                                             : std::numeric_limits<double>::quiet_NaN();
+            std::printf("TC=%5s%% ", bench::format_metric(tc_pct, 1).c_str());
             if (std::isnan(extrapolation)) {
                 std::printf("T1_linear=n/a\n");
             } else {

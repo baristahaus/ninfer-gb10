@@ -34,7 +34,7 @@ void hyperconnection_add_repeated(const Tensor& embedding, Tensor& hyper,
 // The [320,10240] down and [10240,320] up projections are each BF16 or row-scaled FP8
 // (fp8_e4m3fn_row_bf16); the [4,10240] injection rows are BF16.
 void hyperconnection_mix(const Tensor& hyper, const HyperConnectionWeights& weights,
-                         Tensor& block_input, Tensor* injection, WorkspaceArena& workspace,
+                         Tensor& block_input, Tensor* injection, MemoryArena& workspace,
                          cudaStream_t stream, Bf16GemmContext* bf16_gemm = nullptr);
 
 // Commits one pending branch output and prepares the next branch in one pass,
@@ -43,7 +43,7 @@ void hyperconnection_combine_mix(Tensor& hyper, const Tensor& previous_block_out
                                  const Tensor& previous_injection,
                                  const HyperConnectionWeights& weights,
                                  Tensor& block_input, Tensor* injection,
-                                 WorkspaceArena& workspace, cudaStream_t stream,
+                                 MemoryArena& workspace, cudaStream_t stream,
                                  Bf16GemmContext* bf16_gemm = nullptr);
 
 void hyperconnection_combine(Tensor& hyper, const Tensor& block_output, const Tensor& injection,

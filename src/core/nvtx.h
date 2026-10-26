@@ -92,6 +92,9 @@ enum class Name : std::size_t {
     DFlashAttention,
     DFlashMlp,
     DecodeDFlashTarget,
+    SparseMoePrefill,
+    SparseMoeSmallT,
+    SparseMoeDecode,
     Count,
 };
 
@@ -217,6 +220,9 @@ enum class Name : std::size_t {
         "dflash.attention",
         "dflash.mlp",
         "decode.dflash.target",
+        "sparse_moe.prefill",
+        "sparse_moe.small_t",
+        "sparse_moe.decode",
     });
     static_assert(names.size() == static_cast<std::size_t>(Name::Count));
     static const auto handles = [] {

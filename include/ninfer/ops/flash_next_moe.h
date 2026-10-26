@@ -1,6 +1,7 @@
 #pragma once
 #include "core/weight.h"
 
+#include "core/device.h"
 #include "core/arena.h"
 #include "core/tensor.h"
 
@@ -12,7 +13,7 @@
 
 namespace ninfer::ops {
 
-class Bf16GemmContext;
+
 
 struct FlashNextExpertBank {
     const void* codes = nullptr;
@@ -51,7 +52,6 @@ struct FlashNextMoeWeights {
 // shared expert is BF16, or row-scaled FP8 with a packed gate/up parent (LinearSwiGLU's
 // Flash-Next profile). Destination is overwritten with the BF16 result.
 void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Tensor& destination,
-                    WorkspaceArena& workspace, cudaStream_t stream,
-                    Bf16GemmContext* bf16_gemm = nullptr);
+                    MemoryArena& workspace, CudaExecutionView execution);
 
 } // namespace ninfer::ops

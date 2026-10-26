@@ -8,10 +8,10 @@
 #include "ninfer/ops/silu_mul.h"
 #include "ops/common/device_info.h"
 #include "ops/linear/bf16/flash_next/bf16_config.h"
-#include "ops/linear/bf16/flash_next/bf16_gemm_mma.cuh"
 #include "ops/linear/bf16/flash_next/bf16_launch.h"
 #include "ops/linear/nvfp4/nvfp4_codec.cuh"
 #include "ops/linear/nvfp4/nvfp4_geometry.h"
+#include "ops/linear/bf16/flash_next/bf16_gemm_mma.cuh"
 #include "ops/sparse_moe/flash_next/flash_next_nvfp4_w4a4.cuh"
 
 #include <cuda_bf16.h>
@@ -800,7 +800,7 @@ void require_bank(const FlashNextExpertBank& bank, int rows, int columns, const 
 void run_nvfp4_decode_routes(const Tensor& input, const FlashNextMoeWeights& weights,
                              const Tensor& ids, const Tensor& alpha, const Tensor& shared_alpha,
                              Tensor& destination, Tensor& routed_activation,
-                             WorkspaceArena& workspace, cudaStream_t stream, int tokens) {
+                             MemoryArena& workspace, cudaStream_t stream, int tokens) {
     const int assignments = tokens * kTop;
     Tensor gate_codes     = workspace.alloc(DType::U8, {kHidden / 2, assignments});
     Tensor gate_scales    = workspace.alloc(DType::U8, {kHidden / 16, assignments});
@@ -879,7 +879,8 @@ std::size_t flash_next_moe_workspace_capacity_bytes(std::int32_t tokens) {
 }
 
 void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Tensor& destination,
-                    WorkspaceArena& workspace, cudaStream_t stream, Bf16GemmContext* bf16_gemm) {
+                    MemoryArena& workspace, CudaExecutionView execution) {
+    cudaStream_t stream = execution.stream();
     const auto* shared_pair   = std::get_if<FlashNextSharedGateUpPair>(&weights.shared_gate_up);
     const auto* shared_packed = std::get_if<Weight>(&weights.shared_gate_up);
     NINFER_PERF_SCOPE(
@@ -924,7 +925,7 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
                  "flash_next_moe: invalid routed down bank");
     auto scope    = workspace.scope();
     Tensor scores = workspace.alloc(DType::BF16, {kExperts, tokens});
-    linear(input, weights.router, scores, stream, bf16_gemm);
+    linear(input, weights.router, scores, execution);
     Tensor ids          = workspace.alloc(DType::I32, {kTop, tokens});
     Tensor alpha        = workspace.alloc(DType::FP32, {kTop, tokens});
     Tensor shared_alpha = workspace.alloc(DType::FP32, {tokens});
@@ -964,18 +965,18 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
         tokens);
     Tensor shared_activation = workspace.alloc(DType::BF16, {kIntermediate, tokens});
     if (shared_packed != nullptr) {
-        linear_swiglu(input, *shared_packed, shared_activation, workspace, stream);
+        linear_swiglu(input, *shared_packed, shared_activation, workspace, execution);
     } else if (tokens == 1) {
         detail::flash_next::launch_bf16_shared_swiglu_decode(
             input, shared_pair->gate, shared_pair->up, shared_activation, stream);
     } else {
         Tensor shared_gate = workspace.alloc(DType::BF16, {kIntermediate, tokens});
         Tensor shared_up   = workspace.alloc(DType::BF16, {kIntermediate, tokens});
-        linear(input, shared_pair->gate, shared_gate, stream, bf16_gemm);
-        linear(input, shared_pair->up, shared_up, stream, bf16_gemm);
-        silu_mul(shared_gate, shared_up, shared_activation, stream);
+        linear(input, shared_pair->gate, shared_gate, execution);
+        linear(input, shared_pair->up, shared_up, execution);
+        silu_mul(shared_gate, shared_up, shared_activation, execution);
     }
-    linear(shared_activation, weights.shared_down, destination, stream, bf16_gemm);
+    linear(shared_activation, weights.shared_down, destination, execution);
     Tensor routed_activation = workspace.alloc(DType::BF16, {kIntermediate, kTop, tokens});
     if (nvfp4) {
         if (!grouped) {

@@ -34,7 +34,7 @@ struct FlashNextPleWeights {
 // `source_state` is then left unchanged (a StateImage fork continuing from a checkpoint).
 void flash_next_ple(const Tensor& hyper, const Tensor& gathered_fp8,
                     const FlashNextPleWeights& weights, const Tensor& source_state,
-                    Tensor& destination_state, Tensor& destination, WorkspaceArena& workspace,
+                    Tensor& destination_state, Tensor& destination, MemoryArena& workspace,
                     cudaStream_t stream, Bf16GemmContext* bf16_gemm = nullptr);
 
 // Exact-B selected-slot transition. Inputs and output are flattened [rows,W,B]; state is
@@ -45,14 +45,14 @@ void flash_next_ple_batch_update(const Tensor& hyper, const Tensor& gathered_fp8
                                  const Tensor& valid_columns, const Tensor& source_slots,
                                  const Tensor& destination_slots, std::int32_t width,
                                  std::int32_t batch, Tensor& destination,
-                                 WorkspaceArena& workspace, cudaStream_t stream,
+                                 MemoryArena& workspace, cudaStream_t stream,
                                  Bf16GemmContext* bf16_gemm = nullptr);
 
 void flash_next_ple_replay_record(const Tensor& hyper, const Tensor& gathered_fp8,
                                   const FlashNextPleWeights& weights, const Tensor& states,
                                   const Tensor& valid_columns, const Tensor& source_slots,
                                   std::int32_t width, std::int32_t batch, Tensor& records,
-                                  Tensor& destination, WorkspaceArena& workspace,
+                                  Tensor& destination, MemoryArena& workspace,
                                   cudaStream_t stream,
                                   Bf16GemmContext* bf16_gemm = nullptr);
 

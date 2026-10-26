@@ -2,6 +2,52 @@
 
 > Selected checkpoints. Maximum single-GPU inference performance.
 
+## What this fork is
+
+NInfer is a from-scratch C++/CUDA inference engine. This fork runs it on NVIDIA GB10
+(a Grace Blackwell desktop part, compute capability 12.1, `sm_121a`) and on RTX
+5090-class parts (`sm_120a`). The product target is the Qwen3.8 Flash-Next 125B-A6B
+family: text, vision, MTP (multi-token prediction, where the model drafts several
+tokens per step), prefix reuse (the server reuses work from earlier prompts), and
+the OpenAI and Anthropic HTTP APIs.
+
+### What this fork owns
+
+Upstream does not carry these. This fork is their home:
+
+- The Qwen3.8 Flash-Next family runtime: frontend, Vision, MTP, state, CUDA Graphs.
+- The context-cache machinery: pressure planning, materialization, host restore.
+- The GB10 measurement record in `docs/performance/` and `profiles/bench/gb10/`.
+- The serving features this workload needs: tools, logprobs, CORS, shutdown drain.
+
+### What comes from upstream
+
+- The base engine. We merge upstream `master` at stable points. We do not track
+  upstream `dev`.
+- Sanctioned ports. We adopt an upstream feature one at a time when it is better
+  than building fresh. Constrained decoding and tuple schemas came this way.
+- Nothing else flows from upstream, and no fork work waits on upstream.
+
+### What goes to upstream
+
+Correctness fixes that matter to the RTX 5090 go upstream as goodwill PRs. The
+GB10-specific work does not land upstream.
+
+### The family peer
+
+`lkarlslund/ninfer` (now `ninfer6000`) is the Flash-Next peer line. We port its
+Flash-Next advances selectively and push draft branches back to it. This exchange
+carries more value than the upstream exchange.
+
+### Where the work lives
+
+- `master`: the Flash-Next 125B serving lane on GB10. This is the default branch.
+- `5090-test` and `gb10-field-report`: the EXL3, `qwen4_exp` and tiering work line.
+  This line does not carry the Flash-Next family yet. The integration branch is
+  `merge/work-line-integration`. Do not build that branch for Flash-Next serving.
+- `AGENTS.md` and `docs/maintainer/2026-10-12-fork-strategy.md` hold the full
+  contract for human and agent contributors.
+
 ## GB10 (sm_121a) — this fork
 
 **Lineage:** NInfer (Neroued) → lkarlslund/ninfer (Flash-Next support) → this fork (GB10 port),

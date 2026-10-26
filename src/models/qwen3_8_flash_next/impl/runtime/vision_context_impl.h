@@ -287,6 +287,7 @@ void VisionContext::encode(const VisionItemView& item, Tensor& output, MemorySpa
     const auto patches  = static_cast<std::int32_t>(patches64);
     const auto tokens   = static_cast<std::int32_t>(tokens64);
     cudaStream_t stream = ctx_.stream();
+    CudaExecutionView execution = ctx_.execution_view();
 
     Tensor position_ids = layout.position_ids.bind(backing);
     Tensor x            = layout.x.bind(backing);
@@ -298,8 +299,8 @@ void VisionContext::encode(const VisionItemView& item, Tensor& output, MemorySpa
                                       static_cast<std::uint64_t>(patches64));
         copy_host(control.position_ids.data(), position_ids, stream);
         copy_host(item.patches.data(), patch_bf16, stream);
-        ops::linear(patch_bf16, *patch_embed_, x, stream);
-        ops::add_bias(*patch_embed_bias_, x, stream);
+        ops::linear(patch_bf16, *patch_embed_, x, execution);
+        ops::add_bias(*patch_embed_bias_, x, execution);
         // The artifact records the source table shape [rows,hidden], while Tensor's
         // contiguous matrix convention is [inner,columns]. The payload is already
         // row-major, so this is a zero-copy [hidden,rows] view, not a transpose.
@@ -323,10 +324,10 @@ void VisionContext::encode(const VisionItemView& item, Tensor& output, MemorySpa
                 {
                     Tensor h = layout.attention_norm.bind(backing);
                     ops::layer_norm(x, *block.norm1_weight, *block.norm1_bias,
-                                    VisionScheduleConfig::norm_eps, h, stream);
-                    ops::linear(h, *block.qkv, qkv, stream);
+                                    VisionScheduleConfig::norm_eps, h, execution);
+                    ops::linear(h, *block.qkv, qkv, execution);
                 }
-                ops::add_bias(*block.qkv_bias, qkv, stream);
+                ops::add_bias(*block.qkv_bias, qkv, execution);
                 const std::int32_t plane      = VisionScheduleConfig::hidden;
                 const std::size_t plane_bytes = static_cast<std::size_t>(plane) * 2;
                 Tensor q(qkv.data, DType::BF16,
@@ -350,9 +351,9 @@ void VisionContext::encode(const VisionItemView& item, Tensor& output, MemorySpa
                                               control.segment_length, attended_heads, stream);
             }
             Tensor projected = layout.projected.bind(backing);
-            ops::linear(attended, *block.projection, projected, stream);
-            ops::add_bias(*block.projection_bias, projected, stream);
-            ops::residual_add(projected, x, stream);
+            ops::linear(attended, *block.projection, projected, execution);
+            ops::add_bias(*block.projection_bias, projected, execution);
+            ops::residual_add(projected, x, execution);
         }
         {
             nvtx::ScopedRange mlp_range(nvtx::Name::VisionMlp, nvtx::Category::PostMixer,
@@ -362,14 +363,14 @@ void VisionContext::encode(const VisionItemView& item, Tensor& output, MemorySpa
             {
                 Tensor h = layout.mlp_norm.bind(backing);
                 ops::layer_norm(x, *block.norm2_weight, *block.norm2_bias,
-                                VisionScheduleConfig::norm_eps, h, stream);
-                ops::linear(h, *block.fc1, up, stream);
+                                VisionScheduleConfig::norm_eps, h, execution);
+                ops::linear(h, *block.fc1, up, execution);
             }
-            ops::add_bias(*block.fc1_bias, up, stream);
-            ops::gelu(up, ops::GeluMode::Tanh, stream);
-            ops::linear(up, *block.fc2, down, stream);
-            ops::add_bias(*block.fc2_bias, down, stream);
-            ops::residual_add(down, x, stream);
+            ops::add_bias(*block.fc1_bias, up, execution);
+            ops::gelu(up, ops::GeluMode::Tanh, execution);
+            ops::linear(up, *block.fc2, down, execution);
+            ops::add_bias(*block.fc2_bias, down, execution);
+            ops::residual_add(down, x, execution);
         }
     }
 
@@ -378,14 +379,14 @@ void VisionContext::encode(const VisionItemView& item, Tensor& output, MemorySpa
                                       static_cast<std::uint64_t>(tokens64));
         Tensor normalized = layout.normalized.bind(backing);
         ops::layer_norm(x, *merger_.norm_weight, *merger_.norm_bias, VisionScheduleConfig::norm_eps,
-                        normalized, stream);
+                        normalized, execution);
         Tensor merged = normalized.view({VisionScheduleConfig::merger_hidden, tokens});
         Tensor hidden = layout.merger_hidden.bind(backing);
-        ops::linear(merged, *merger_.fc1, hidden, stream);
-        ops::add_bias(*merger_.fc1_bias, hidden, stream);
-        ops::gelu(hidden, ops::GeluMode::Exact, stream);
-        ops::linear(hidden, *merger_.fc2, output, stream);
-        ops::add_bias(*merger_.fc2_bias, output, stream);
+        ops::linear(merged, *merger_.fc1, hidden, execution);
+        ops::add_bias(*merger_.fc1_bias, hidden, execution);
+        ops::gelu(hidden, ops::GeluMode::Exact, execution);
+        ops::linear(hidden, *merger_.fc2, output, execution);
+        ops::add_bias(*merger_.fc2_bias, output, execution);
     }
 }
 

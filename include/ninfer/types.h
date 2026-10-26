@@ -120,6 +120,54 @@ struct ContextCacheOptions {
     // This does not bound total process RAM.
     // Engine::options() returns both resolved capacities after construction.
     std::optional<std::size_t> host_capacity_bytes;
+    // Master-generation independently configured Host capacities and bounded catalogs. The
+    // restructured runtime resolves host_capacity_bytes as one pool; these fields keep the
+    // finer-grained public contract until the cache policy consumes them.
+    std::optional<std::uint32_t> device_state_slots;
+    std::uint32_t host_state_slots     = 0;
+    std::size_t host_kv_capacity_bytes = 0;
+    std::optional<std::uint32_t> max_private_continuations;
+    std::optional<std::uint32_t> max_shared_prefixes;
+    // Bounded per-continuation long-anchor count. Absent lets the cache use its default.
+    std::optional<std::uint32_t> max_long_anchors_per_continuation;
+};
+
+
+// Arena capacity/usage/peak triple the master-generation startup reports.
+struct ArenaMemorySummary {
+    std::size_t capacity_bytes  = 0;
+    std::size_t used_bytes      = 0;
+    std::size_t peak_used_bytes = 0;
+};
+
+// Master-generation startup memory report: resolved KV capacity, per-arena usage and the
+// reservation/slack bookkeeping the Flash-Next startup prints.
+struct MemorySummary {
+    int device                                = 0;
+    std::uint32_t max_context                 = 0;
+    KvCapacityMode kv_capacity_mode           = KvCapacityMode::Explicit;
+    std::uint32_t kv_capacity                 = 0; // Resolved page-aligned Main KV capacity.
+    std::uint32_t kv_capacity_page_groups     = 0;
+    std::uint32_t kv_capacity_max_page_groups = 0;
+    KvCacheStorage kv_cache                   = KvCacheStorage::BFloat16;
+    ArenaMemorySummary weights;
+    ArenaMemorySummary sequence;
+    ArenaMemorySummary workspace;
+    std::optional<VisionWorkspaceMemorySummary> vision_workspace; // observability/resources.h type.
+    std::size_t minimum_runtime_reservation_bytes = 0;
+    std::size_t kv_capacity_increment_bytes       = 0;
+    std::size_t runtime_reservation_bytes         = 0;
+    std::size_t available_after_weights_bytes     = 0;
+    std::size_t available_after_startup_bytes     = 0;
+    std::size_t kv_capacity_headroom_bytes        = 0;
+    std::size_t planned_slack_bytes               = 0;
+    std::size_t workspace_logical_peak_bytes      = 0;
+    std::size_t cuda_graph_allowance_bytes        = 0;
+    std::size_t kv_payload_bytes                  = 0;
+    std::uint32_t host_state_capacity_slots       = 0;
+    std::uint32_t host_state_occupied_slots       = 0;
+    std::size_t host_kv_capacity_bytes            = 0;
+    std::size_t host_kv_occupied_bytes            = 0;
 };
 
 struct ContextCostOptions {

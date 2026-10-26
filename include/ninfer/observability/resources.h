@@ -29,6 +29,8 @@ struct VisionWorkspaceMemorySummary {
     std::uint32_t max_item_tokens         = 0;
     std::size_t general_capacity_bytes    = 0;
     std::size_t encode_required_bytes     = 0;
+    // Master-generation peak readback for the same region; reported alongside required.
+    std::size_t encode_peak_bytes         = 0;
     std::size_t handoff_offset_bytes      = 0;
     std::size_t handoff_capacity_bytes    = 0;
     std::size_t handoff_active_bytes      = 0;

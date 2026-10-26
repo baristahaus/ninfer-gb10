@@ -257,9 +257,17 @@ struct ConstraintObservation {
     std::uint64_t mask_upload_bytes = 0;
 };
 
+// Which reuse source a continuation actually consumed. The first two members are the
+// restructured cache's observation taxonomy; the rest are the master-generation path
+// taxonomy the Flash-Next programs switch on when they attribute restored state.
 enum class PrefixReusePath : std::uint8_t {
     Root,
     Checkpoint,
+    PrivateEndpoint,
+    PrivateTurnClosure,
+    PrivateResponseReplay,
+    PrivateLongAnchor,
+    SharedStablePrefix,
 };
 
 enum class AdmissionFallbackReason : std::uint8_t {

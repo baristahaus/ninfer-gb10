@@ -41,7 +41,7 @@ struct LinearAttentionStatePoolAllLayersView {
     LinearAttentionStatePoolSpec spec;
 };
 
-struct LinearAttentionStateLayerView {
+struct LinearAttentionStatePoolLayerView {
     Tensor conv;
     Tensor recurrent;
 };
@@ -79,7 +79,7 @@ public:
 
     [[nodiscard]] std::uint32_t layer_count() const noexcept;
     [[nodiscard]] std::int32_t slot_count() const noexcept;
-    [[nodiscard]] LinearAttentionStateLayerView layer_view(std::uint32_t layer) const;
+    [[nodiscard]] LinearAttentionStatePoolLayerView layer_view(std::uint32_t layer) const;
     [[nodiscard]] LinearAttentionStateSlotView slot_view(std::int32_t slot) const;
     [[nodiscard]] LinearAttentionStatePoolAllLayersView all_layers_view() const;
     [[nodiscard]] Tensor conv_slot(std::uint32_t layer, std::int32_t slot) const;

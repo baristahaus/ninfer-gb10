@@ -66,6 +66,9 @@ struct DeviceKVPagePoolLayout {
 struct KVExecutionTableLayout {
     KVExecutionTableSpec spec;
     TensorRegion block_tables;
+
+    // Host-side row metadata footprint the pool bridge reports.
+    [[nodiscard]] std::size_t metadata_bytes() const noexcept;
 };
 
 [[nodiscard]] DeviceKVPagePoolLayout plan_device_kv_page_pool(LayoutBuilder& builder,
@@ -75,3 +78,7 @@ struct KVExecutionTableLayout {
                                                               const KVExecutionTableSpec& spec);
 
 } // namespace ninfer
+
+// The pool classes the master-generation programs consume live beside the shared
+// spec/layout/planner vocabulary above.
+#include "core/device_kv_page_pool.h"

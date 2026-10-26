@@ -32,6 +32,8 @@ add_library(ninfer_core SHARED
   linear_attention_state.cpp
   cyclic_kv_cache_pool.cpp
   linear_attention_state_pool.cpp
+  device_kv_page_pool.cpp
+  host_kv_arena.cpp
   state_image.cpp
   layout.cpp
   tensor.cpp

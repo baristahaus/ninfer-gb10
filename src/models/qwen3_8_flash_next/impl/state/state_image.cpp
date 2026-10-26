@@ -303,7 +303,7 @@ bool HostStatePool::valid(HostStateSlotHandle handle) const noexcept {
 }
 
 std::byte* HostStatePool::slot_data(std::uint32_t index) const noexcept {
-    return static_cast<std::byte*>(backing_->data()) +
+    return static_cast<std::byte*>(const_cast<void*>(backing_->data())) +
            static_cast<std::size_t>(index) * layout_.image_bytes;
 }
 

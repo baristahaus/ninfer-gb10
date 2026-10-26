@@ -2,6 +2,7 @@
 
 #include "core/arena.h"
 #include "core/cyclic_kv_cache.h"
+#include "core/buffer.h"
 #include "core/layout.h"
 #include "core/cyclic_kv_cache_pool.h"
 #include "core/linear_attention_state.h"

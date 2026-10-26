@@ -2,6 +2,7 @@
 
 #include "artifact/reader.h"
 #include "core/arena.h"
+#include "core/buffer.h"
 #include "ninfer/ops/flash_next_ple_stage.h"
 
 #include <condition_variable>

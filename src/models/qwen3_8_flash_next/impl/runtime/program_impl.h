@@ -3,6 +3,7 @@
 #include "models/qwen3_8_flash_next/impl/runtime/rebuild_work.h"
 
 #include "core/nvtx.h"
+#include "core/buffer.h"
 #include "models/qwen3_8_flash_next/impl/runtime/diagnostics.h"
 #include "core/startup.h"
 #include "models/qwen3_8_flash_next/impl/runtime/schedule.h"

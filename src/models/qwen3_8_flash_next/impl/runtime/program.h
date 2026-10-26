@@ -3,6 +3,7 @@
 // Qwen3.8 family runtime implementation; instantiated only by exact variants.
 
 #include "core/arena.h"
+#include "core/buffer.h"
 #include "core/gdn_replay_records.h"
 #include "core/host_kv_arena.h"
 #include "ninfer/ops/gdn_replay.h"

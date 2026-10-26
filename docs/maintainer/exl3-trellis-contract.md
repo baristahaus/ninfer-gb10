@@ -317,9 +317,15 @@ future work under §7.
 
 Acceptance status: the 27B dense route (`exl3_dense_v1`) is accepted — 7.92 GiB artifact, full-
 corpus perplexity 5.18 against the FP8 control's 4.55 at 26.5 GiB (both `qwen3_8_27b` family).
-The 35B bank route assembles, smoke-serves, and was verified only to that level: the
-full-corpus acceptance run was stopped at 19/496 windows (early windows ~5.9 overall) by user
-decision before any quality verdict. No quality claims exist for the uncalibrated banks route.
+The 35B bank route completed its full-corpus acceptance on 2026-10-24: the uncalibrated k2=6
+banks artifact (14.0 GiB) scores overall perplexity 4.613 against the same-model FP8 control's
+4.552 (26.5 GiB, identical corpus, windows, context/stride 4096/2048 and fp8 KV) — within 1.4%
+at 53% of the bytes. Per corpus: banks 5.281 vs control 5.480 (chinese_reference), 7.808 vs
+7.807 (english_long_form, tied), 5.931 vs 6.080 (english_reference), 1.842 vs 1.640 (ninfer_code,
+the one clear regression). Single-run evidence without repeats; the routed experts' EXL3 trellis
+codes at k2=6 evidently lose little against this FP8 recipe on prose while code pays more. This
+anchor satisfied the campaign plan's quality gate; the 125B campaign was then closed by decision
+in favor of serving the FP8 artifact directly, so no 125B banks numbers exist.
 
 ## 7. Kernel contracts (`src/ops`)
 

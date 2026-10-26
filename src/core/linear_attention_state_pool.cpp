@@ -152,7 +152,7 @@ std::uint32_t LinearAttentionStatePool::layer_count() const noexcept {
 
 std::int32_t LinearAttentionStatePool::slot_count() const noexcept { return spec_.slot_count; }
 
-LinearAttentionStateLayerView LinearAttentionStatePool::layer_view(std::uint32_t layer) const {
+LinearAttentionStatePoolLayerView LinearAttentionStatePool::layer_view(std::uint32_t layer) const {
     if (layer >= layer_count()) {
         throw std::out_of_range("LinearAttentionStatePool layer_view layer out of range");
     }

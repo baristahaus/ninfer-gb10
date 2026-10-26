@@ -226,6 +226,61 @@ figures, so the eight-lane server sizing is ruled out; the 8000-character prompt
 512-token length, and the prompt set are not isolated. Records:
 profiles/bench/gb10/concurrency-sweep-2026-10-11/ and control-2026-10-11/.
 
+### Validated on the RTX 5090 (sm_120a) — 2026-10-12
+
+The fork passed the full `sm_120a` battery on an RTX 5090 and now serves the production endpoint
+with the production runtime spec (27B NVFP4 v3 artifact, vision, MTP3 + `--lm-head-draft`,
+`--preserve-thinking`, FP8 KV, 240k context, concurrency 6); vision, text, prefix-reuse and
+thinking-preservation smoke checks all pass through the live OpenAI route.
+
+**What the battery covered.** A clean `sm_120a` build on CUDA 13.4 (zero compile bumps) and the
+full CTest battery; real-model GPU tests on both 27B artifacts (groupwise and NVFP4): prefix
+(all scenarios including vision), score, loading (GPU and host-only), vision workspace, DFlash2
+and DFlash; serving contract and thinking-preservation smokes; the Python suites (artifact,
+conversion including NVFP4, serve corpus, chat templates, writer interop). The 35B-A3B MoE gap
+was closed by upgrading the v2 artifact in place — the MoE, DFlash and loading tests pass on it.
+
+**Two engine bugs found by the battery, both resolved.**
+- *Vision reuse divergence (fixed).* `allow_prefix_reuse` gated the capture-frontier chunk
+  splits, and the prefill's floating point is chunk-decomposition-dependent, so the flag alone
+  changed the computed prompt state at ULP level and flipped tight-margin greedy tokens. Splits
+  at capture frontiers are now structural; the flag gates only checkpoint publication. Verified
+  identical on both artifacts (vision and text controls). Inherited from upstream (merge base
+  `e31bc99b`); to be upstreamed.
+- *Host-restore state upload (not a defect).* The reported "missing state upload" was a zero-copy
+  bind of the still-Device-resident endpoint — correct behavior for that reuse shape. The
+  genuine Host state restore (a regeneration follow-up binding the demoted rewrite checkpoint)
+  is verified working on both artifacts.
+
+The battery also isolated a marginal host DRAM path on the test machine (single-bit corruption
+on GPU-to-host downloads, roughly one flip per 100 GB under EXPO); fixed machine-side at JEDEC
+timings, after which the bit-exact canaries (`gdn_replay_fold`, `kv_cache_append`) pass
+deterministically.
+
+**The trade — fork vs upstream on `tool-eval-bench --seed 42 --hardmode --trials 2`.** Same
+machine and GPU, same 27B NVFP4 artifact, same server flags, sequential runs, temperature 0:
+
+| Metric | Upstream (`Neroued/ninfer` @ `81c8ce09`) | This fork (@ `638b27cf`) |
+|---|---:|---:|
+| Score (mean of 2 trials) | 90.5 ± 0.7 | 88.0 ± 0.0 |
+| Total wall-clock, 97 scenarios | 858 s | 735 s (−14%) |
+| Requests reused | 473 / 654 | 535 / 597 |
+| MTP acceptance | 79.1% | 80.2% |
+| Decode rate | 198.1 tok/s | 195.7 tok/s |
+
+The −2 score is the net of bidirectional marginal flips (8 scenarios favor upstream, 6 favor the
+fork) between two deterministic-but-different reuse paths — chunk-decomposition-dependent FP
+divergence, the same class as the vision bug above — not a capability regression: no category
+shows a systematic gap (the fork leads Structured Output 83% vs 50%). The fork's structural wins
+are the 14% lower wall-clock (its shared-prefix reuse eliminated re-prefilling the system+tools
+prefix on 149 requests upstream re-prefilled) and perfect run-to-run determinism (every scenario
+reproduces exactly across trials; upstream's own two trials wobbled ±0.7). Disclosed trade-offs:
+per-cached-request TTFT is slightly higher on the fork (75.6 ms vs 62.4 ms, chunk-split prefill
+on short uncached tails) and the decode rate is marginally lower — both offset by the higher
+cache hit rate. One setup asymmetry: the host-spill knobs used each build's own defaults. Full
+record, root causes, repros and the corrected bug attribution:
+[docs/maintainer/5090-test-guidance.md](docs/maintainer/5090-test-guidance.md).
+
 NInfer is a from-scratch C++/CUDA inference engine for Qwen3.5 Dense/MoE and Qwen3.8 Flash-Next
 on one Blackwell GPU. The 27B/35B models target RTX 5090; Flash-Next targets RTX PRO 6000. It runs text, image, and video prompts through a local CLI or
 OpenAI-/Anthropic-compatible HTTP APIs. The runtime is deliberately specialized: one GPU, one

@@ -71,3 +71,6 @@ tools/gb10/config.local.sh
 .beads-credential-key
 .beads/proxieddb/
 *.gate.lock*
+
+# Local measurement artifacts (raw traces stay local-only; summarized results live in docs/performance.md)
+profiles/

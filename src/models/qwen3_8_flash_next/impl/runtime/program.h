@@ -662,9 +662,9 @@ public:
     const std::size_t graph_allowance_bytes;
     const WorkspacePlan workspace_plan;
 
-    DeviceArena persistent;
-    DeviceArena workspace_storage;
-    WorkspaceArena work;
+    MemoryArena persistent;
+    MemoryArena workspace_storage;
+    MemoryArena work;
     std::unique_ptr<ops::Bf16GemmContext> bf16_gemm;
     std::unique_ptr<qwen3_8_flash_next::DecoderState> decoder;
     std::unique_ptr<HostKVArena> host_kv_arena;

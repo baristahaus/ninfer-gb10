@@ -87,7 +87,7 @@ std::vector<GraphExecutionProfile> Variant::dflash_graph_profiles(std::uint32_t,
 void Variant::attention_projection(const Tensor& hidden,
                                    const FullAttentionProjectionWeights& weights, Tensor& query,
                                    Tensor& gate, Tensor& key, Tensor& value,
-                                   qwen3_8_flash_next::TextPhase, WorkspaceArena& workspace,
+                                   qwen3_8_flash_next::TextPhase, MemoryArena& workspace,
                                    cudaStream_t stream) {
     ops::flash_next_project_query_gate(hidden, weights.query_gate, query, gate, workspace, stream);
     ops::linear(hidden, weights.key, key, stream);
@@ -96,7 +96,7 @@ void Variant::attention_projection(const Tensor& hidden,
 
 void Variant::attention_output_projection(const Tensor& attention, const Weight& weight,
                                           Tensor& residual, qwen3_8_flash_next::TextPhase,
-                                          WorkspaceArena& workspace, cudaStream_t stream) {
+                                          MemoryArena& workspace, cudaStream_t stream) {
     auto scope   = workspace.scope();
     Tensor delta = workspace.alloc(DType::BF16, {weight.n, attention.ne[1]});
     ops::linear(attention, weight, delta, stream);
@@ -106,26 +106,26 @@ void Variant::attention_output_projection(const Tensor& attention, const Weight&
 void Variant::mtp_attention_projection(const Tensor& hidden,
                                        const MtpAttentionProjectionWeights& weights, Tensor& query,
                                        Tensor& gate, Tensor& key, Tensor& value,
-                                       WorkspaceArena& workspace, cudaStream_t stream) {
+                                       MemoryArena& workspace, cudaStream_t stream) {
     attention_projection(hidden, weights, query, gate, key, value,
                          qwen3_8_flash_next::TextPhase::Verify, workspace, stream);
 }
 
 void Variant::mtp_kv_projection(const Tensor& hidden, const MtpAttentionProjectionWeights& weights,
-                                Tensor& key, Tensor& value, WorkspaceArena&, cudaStream_t stream) {
+                                Tensor& key, Tensor& value, MemoryArena&, cudaStream_t stream) {
     ops::linear(hidden, weights.key, key, stream);
     ops::linear(hidden, weights.value, value, stream);
 }
 
 void Variant::mtp_q_gate_projection(const Tensor& hidden,
                                     const MtpAttentionProjectionWeights& weights, Tensor& query,
-                                    Tensor& gate, WorkspaceArena& workspace, cudaStream_t stream) {
+                                    Tensor& gate, MemoryArena& workspace, cudaStream_t stream) {
     ops::flash_next_project_query_gate(hidden, weights.query_gate, query, gate, workspace, stream);
 }
 
 void Variant::gdn_input_projection(const Tensor& hidden, const GdnProjectionWeights& weights,
                                    Tensor& qkv, Tensor& output_gate, qwen3_8_flash_next::TextPhase,
-                                   WorkspaceArena&, cudaStream_t stream) {
+                                   MemoryArena&, cudaStream_t stream) {
     ops::linear(hidden, weights.query_key_value, qkv, stream);
     ops::linear(hidden, weights.output_gate, output_gate, stream);
 }
@@ -133,7 +133,7 @@ void Variant::gdn_input_projection(const Tensor& hidden, const GdnProjectionWeig
 void Variant::gdn_input_projection_snapshot(const Tensor&, const GdnProjectionWeights&,
                                             const Tensor&, Tensor&, const Tensor&, const Tensor&,
                                             const Tensor&, Tensor&, Tensor&, Tensor&, Tensor&,
-                                            qwen3_8_flash_next::TextPhase, WorkspaceArena&,
+                                            qwen3_8_flash_next::TextPhase, MemoryArena&,
                                             cudaStream_t) {
     throw std::logic_error("Flash-Next GDN snapshot route is not bound to the Flash schedule");
 }
@@ -141,13 +141,13 @@ void Variant::gdn_input_projection_snapshot(const Tensor&, const GdnProjectionWe
 void Variant::gdn_input_projection_record(const Tensor&, const GdnProjectionWeights&, const Tensor&,
                                           const Tensor&, const Tensor&, const Tensor&, Tensor&,
                                           Tensor&, Tensor&, Tensor&, Tensor&,
-                                          qwen3_8_flash_next::TextPhase, WorkspaceArena&,
+                                          qwen3_8_flash_next::TextPhase, MemoryArena&,
                                           cudaStream_t) {
     throw std::logic_error("Flash-Next GDN record route is not bound to the Flash schedule");
 }
 
 void Variant::gdn_output_projection(const Tensor& hidden, const Weight& weight, Tensor& residual,
-                                    qwen3_8_flash_next::TextPhase phase, WorkspaceArena& workspace,
+                                    qwen3_8_flash_next::TextPhase phase, MemoryArena& workspace,
                                     cudaStream_t stream) {
     attention_output_projection(hidden, weight, residual, phase, workspace, stream);
 }
@@ -155,19 +155,19 @@ void Variant::gdn_output_projection(const Tensor& hidden, const Weight& weight, 
 void Variant::gdn_norm_control_projection(const Tensor& residual, const Tensor& norm_weight,
                                           float eps, const GdnProjectionWeights& weights,
                                           Tensor& hidden, Tensor& g, Tensor& beta,
-                                          WorkspaceArena& workspace,
-                                          DeviceExecutionView execution) {
-    ops::rmsnorm(residual, norm_weight, eps, true, hidden, execution.stream);
+                                          MemoryArena& workspace,
+                                          CudaExecutionView execution) {
+    ops::rmsnorm(residual, norm_weight, eps, true, hidden, execution.stream());
     auto scope = workspace.scope();
     Tensor a   = workspace.alloc(DType::BF16, {48, hidden.ne[1]});
     Tensor b   = workspace.alloc(DType::BF16, {48, hidden.ne[1]});
-    ops::linear(hidden, weights.a_projection, a, execution.stream);
-    ops::linear(hidden, weights.b_projection, b, execution.stream);
-    ops::gdn_gating(a, b, weights.a_log, weights.dt_bias, g, beta, execution.stream);
+    ops::linear(hidden, weights.a_projection, a, execution.stream());
+    ops::linear(hidden, weights.b_projection, b, execution.stream());
+    ops::gdn_gating(a, b, weights.a_log, weights.dt_bias, g, beta, execution.stream());
 }
 
 void Variant::post_mixer(const Tensor& hidden, const PostMixerWeights& weights, Tensor& residual,
-                         qwen3_8_flash_next::TextPhase, WorkspaceArena& workspace,
+                         qwen3_8_flash_next::TextPhase, MemoryArena& workspace,
                          cudaStream_t stream) {
     auto scope   = workspace.scope();
     Tensor delta = workspace.alloc(DType::BF16, {TextConfig::hidden, hidden.ne[1]});
@@ -176,7 +176,7 @@ void Variant::post_mixer(const Tensor& hidden, const PostMixerWeights& weights, 
 }
 
 void Variant::mtp_post_mixer(const Tensor& hidden, const MtpPostMixerWeights& weights,
-                             Tensor& residual, WorkspaceArena& workspace, cudaStream_t stream) {
+                             Tensor& residual, MemoryArena& workspace, cudaStream_t stream) {
     post_mixer(hidden, weights, residual, qwen3_8_flash_next::TextPhase::Verify, workspace, stream);
 }
 

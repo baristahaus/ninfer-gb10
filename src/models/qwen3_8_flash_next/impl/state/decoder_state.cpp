@@ -77,7 +77,7 @@ DecoderStateLayout plan_decoder_state(LayoutBuilder& builder, const DecoderState
     return layout;
 }
 
-PagedKVCache::PagedKVCache(DeviceSpan backing, const PagedKVCacheLayout& layout)
+PagedKVCache::PagedKVCache(MemorySpan backing, const PagedKVCacheLayout& layout)
     : pages_(backing, layout.pages), execution_tables_(backing, layout.execution_tables, pages_),
       layers_(layout.layers), max_context_(layout.max_context), kv_heads_(layout.kv_heads),
       layer_storage_(layout.layer_storage), auxiliary_planes_(layout.auxiliary_planes) {
@@ -152,7 +152,7 @@ std::size_t DecoderStateLayout::kv_payload_bytes() const noexcept {
     return text_kv.payload_bytes() + (mtp_kv ? mtp_kv->payload_bytes() : 0);
 }
 
-DecoderState::DecoderState(DeviceSpan backing, const DecoderStateLayout& layout)
+DecoderState::DecoderState(MemorySpan backing, const DecoderStateLayout& layout)
     : text_kv(backing, layout.text_kv) {
     if (layout.mtp_kv) { mtp_kv.emplace(backing, *layout.mtp_kv); }
 }

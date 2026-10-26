@@ -307,7 +307,7 @@ std::byte* HostStatePool::slot_data(std::uint32_t index) const noexcept {
            static_cast<std::size_t>(index) * layout_.image_bytes;
 }
 
-StateImageDevicePool::StateImageDevicePool(DeviceSpan backing, const StateImageDeviceLayout& layout)
+StateImageDevicePool::StateImageDevicePool(MemorySpan backing, const StateImageDeviceLayout& layout)
     : linear_(backing, layout.linear),
       continuation_hidden_(layout.continuation_hidden.bind(backing)), host_layout_(layout.host) {
     if (continuation_hidden_.dtype != DType::BF16 || !continuation_hidden_.is_contiguous() ||

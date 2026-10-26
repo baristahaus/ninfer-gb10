@@ -34,14 +34,14 @@ void mtp_bridge_and_propose(PrefillContext& state, const Tensor& next_token,
                         state.state_destination_slot, state.mtp_proposal_extent);
 
     Tensor position_view = state.execution.io.mtp->target_positions.slice(0, 0, 1);
-    ops::set_i32_scalar(position_view, position, state.execution.device.stream);
+    ops::set_i32_scalar(position_view, position, state.execution.device.stream());
     Tensor mtp_hidden         = state.execution.io.mtp->ar_hidden;
     Tensor logits             = state.execution.io.logits.slice(1, 0, 1);
     Tensor draft0             = state.execution.io.mtp->draft_tokens.slice(0, 0, 1);
     Tensor rope_position_view = state.execution.work.alloc(DType::I32, {1, 3});
     CUDA_CHECK(cudaMemcpyAsync(rope_position_view.data, rope_position.data(),
                                rope_position.size_bytes(), cudaMemcpyHostToDevice,
-                               state.execution.device.stream));
+                               state.execution.device.stream()));
     const auto bridge_visible = static_cast<std::uint32_t>(position + 1);
     const ops::CausalAttentionExecutionEnvelope bridge_envelope{bridge_visible, bridge_visible};
     if constexpr (Variant::flash_next) {
@@ -65,7 +65,7 @@ void mtp_bridge_and_propose(PrefillContext& state, const Tensor& next_token,
     }
 
     Tensor ar_position = state.execution.io.mtp->position.slice(0, 0, 1);
-    ops::set_i32_scalar(ar_position, position + 1, state.execution.device.stream);
+    ops::set_i32_scalar(ar_position, position + 1, state.execution.device.stream());
     for (int i = 1; i < static_cast<int>(state.mtp_proposal_extent); ++i) {
         Tensor previous_token = state.execution.io.mtp->draft_tokens.slice(0, i - 1, 1);
         Tensor next_draft     = state.execution.io.mtp->draft_tokens.slice(0, i, 1);
@@ -81,15 +81,15 @@ void mtp_bridge_and_propose(PrefillContext& state, const Tensor& next_token,
                                      envelope, next_hidden, logits, next_draft, &next_predictor);
             CUDA_CHECK(cudaMemcpyAsync(state.execution.io.mtp->ar_hidden.data, next_predictor.data,
                                        next_predictor.bytes(), cudaMemcpyDeviceToDevice,
-                                       state.execution.device.stream));
+                                       state.execution.device.stream()));
         } else {
             card.mtp_forward_ar_step(previous_token, state.execution.io.mtp->ar_hidden, ar_position,
                                      envelope, next_hidden, logits, next_draft);
             CUDA_CHECK(cudaMemcpyAsync(state.execution.io.mtp->ar_hidden.data, next_hidden.data,
                                        state.execution.io.mtp->ar_hidden.bytes(),
-                                       cudaMemcpyDeviceToDevice, state.execution.device.stream));
+                                       cudaMemcpyDeviceToDevice, state.execution.device.stream()));
         }
-        ops::increment_i32_scalar(ar_position, state.execution.device.stream);
+        ops::increment_i32_scalar(ar_position, state.execution.device.stream());
     }
 }
 
@@ -112,7 +112,7 @@ auto mtp_decode_batch_body(MtpBatchContext& state, std::int32_t batch_size, std:
                 throw std::logic_error("MTP deferred GDN fold storage is unavailable");
             }
             copy_gdn_replay_record_rows(*state.execution.replay_records, *state.pending_snapshot,
-                                        state.pending_fold_rows, state.execution.device.stream);
+                                        state.pending_fold_rows, state.execution.device.stream());
             if constexpr (Variant::flash_next) {
                 if (state.execution.ple_records == nullptr ||
                     state.execution.ple_state == nullptr) {
@@ -120,7 +120,7 @@ auto mtp_decode_batch_body(MtpBatchContext& state, std::int32_t batch_size, std:
                 }
                 ops::flash_next_ple_replay_fold_device(
                     *state.execution.ple_records, *state.execution.ple_state, frame.pending_folds,
-                    state.pending_fold_rows, state.execution.device.stream);
+                    state.pending_fold_rows, state.execution.device.stream());
             }
         }
 
@@ -188,13 +188,13 @@ auto mtp_decode_batch_body(MtpBatchContext& state, std::int32_t batch_size, std:
 
         ops::speculative_prepare_verify_inputs(anchors, current_drafts, frontiers, current_extents,
                                                verify_ids, target_positions,
-                                               state.execution.device.stream);
+                                               state.execution.device.stream());
         Tensor ple_history = frame.ple_history.slice(1, 0, batch_size);
         if (state.ple_stage_mailbox != nullptr) {
             // Publish the verify columns' PLE row IDs now; the host gathers them while the layers
             // before the first PLE consumer run.
             ops::flash_next_ple_publish_ids(verify_ids, ple_history, state.ple_stage_mailbox,
-                                            state.execution.device.stream);
+                                            state.execution.device.stream());
             card.set_ple_stage(state.ple_stage_mailbox, state.ple_stage_staging);
         }
         {
@@ -247,7 +247,7 @@ auto mtp_decode_batch_body(MtpBatchContext& state, std::int32_t batch_size, std:
 
             ops::target_logprobs(verify_logits, published, TextConfig::token_domain, chosen,
                                  &reported_ids, &reported_logprobs,
-                                 state.execution.device.stream);
+                                 state.execution.device.stream());
         }
 
         {
@@ -257,7 +257,7 @@ auto mtp_decode_batch_body(MtpBatchContext& state, std::int32_t batch_size, std:
                                         licensed_counts, rope_deltas, alignment_ids, next_extents,
                                         ar_positions, ar_rope_positions, ar_valid_columns,
                                         static_cast<std::int32_t>(state.text_cache.max_context()),
-                                        state.execution.device.stream);
+                                        state.execution.device.stream());
             if constexpr (Variant::flash_next) {
                 card.mtp_forward_decode_batch(
                     alignment_ids, target_mtp_hidden, target_positions, target_rope,
@@ -269,12 +269,12 @@ auto mtp_decode_batch_body(MtpBatchContext& state, std::int32_t batch_size, std:
                                               envelopes.batch, alignment_hidden);
             }
             ops::speculative_select_accepted_hidden(alignment_hidden, accepted, ar_hidden,
-                                                    state.execution.device.stream);
+                                                    state.execution.device.stream());
             if constexpr (Variant::flash_next) {
                 ops::speculative_select_accepted_hidden(
-                    alignment_mtp_hidden, accepted, ar_mtp_hidden, state.execution.device.stream);
+                    alignment_mtp_hidden, accepted, ar_mtp_hidden, state.execution.device.stream());
                 ops::flash_next_qsa_select_indices(alignment_qsa_indices, accepted, ar_qsa_indices,
-                                                   state.execution.device.stream);
+                                                   state.execution.device.stream());
             }
 
             Tensor proposal_logits = frame.proposal_logits.slice(1, 0, batch_size);
@@ -311,11 +311,11 @@ auto mtp_decode_batch_body(MtpBatchContext& state, std::int32_t batch_size, std:
                 card.mtp_propose_batch(next_hidden, proposal_logits, next);
                 CUDA_CHECK(cudaMemcpyAsync(ar_hidden.data, next_hidden.data, ar_hidden.bytes(),
                                            cudaMemcpyDeviceToDevice,
-                                           state.execution.device.stream));
+                                           state.execution.device.stream()));
                 if constexpr (Variant::flash_next) {
                     CUDA_CHECK(cudaMemcpyAsync(ar_mtp_hidden.data, next_mtp_hidden.data,
                                                ar_mtp_hidden.bytes(), cudaMemcpyDeviceToDevice,
-                                               state.execution.device.stream));
+                                               state.execution.device.stream()));
                 }
             }
         }
@@ -326,14 +326,14 @@ auto mtp_decode_batch_body(MtpBatchContext& state, std::int32_t batch_size, std:
         ops::mtp_advance_round(anchors, frontiers, licensed_counts, next_extents, next_drafts,
                                rope_deltas, state_destinations, budgets, current_extents,
                                target_valid, current_drafts, target_rope, pending_folds, verify_ids,
-                               licensed_tokens, ple_history, state.execution.device.stream);
+                               licensed_tokens, ple_history, state.execution.device.stream());
 
         CUDA_CHECK(cudaMemcpyAsync(&state.host_egress, frame.egress.data,
                                    sizeof(qwen3_8_flash_next::MtpDecodeEgress),
-                                   cudaMemcpyDeviceToHost, state.execution.device.stream));
+                                   cudaMemcpyDeviceToHost, state.execution.device.stream()));
         CUDA_CHECK(cudaMemcpyAsync(&state.host_frame, frame.ingress.data,
                                    sizeof(qwen3_8_flash_next::MtpDecodeIngress),
-                                   cudaMemcpyDeviceToHost, state.execution.device.stream));
+                                   cudaMemcpyDeviceToHost, state.execution.device.stream()));
     };
 }
 

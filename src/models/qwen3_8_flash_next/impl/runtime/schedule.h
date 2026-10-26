@@ -33,7 +33,7 @@ using qwen3_8_flash_next::PromptModality;
 struct ExecutionCore {
     DeviceContext& device;
     const LoadedModelData& model;
-    WorkspaceArena& work;
+    MemoryArena& work;
     LinearAttentionStatePool& linear_attention;
     Tensor* ple_state;
     Tensor* ple_records;

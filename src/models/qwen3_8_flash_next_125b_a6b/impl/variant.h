@@ -40,37 +40,37 @@ struct Variant {
 
     static void attention_projection(const Tensor&, const FullAttentionProjectionWeights&, Tensor&,
                                      Tensor&, Tensor&, Tensor&, qwen3_8_flash_next::TextPhase,
-                                     WorkspaceArena&, cudaStream_t);
+                                     MemoryArena&, cudaStream_t);
     static void attention_output_projection(const Tensor&, const Weight&, Tensor&,
-                                            qwen3_8_flash_next::TextPhase, WorkspaceArena&,
+                                            qwen3_8_flash_next::TextPhase, MemoryArena&,
                                             cudaStream_t);
     static void mtp_attention_projection(const Tensor&, const MtpAttentionProjectionWeights&,
-                                         Tensor&, Tensor&, Tensor&, Tensor&, WorkspaceArena&,
+                                         Tensor&, Tensor&, Tensor&, Tensor&, MemoryArena&,
                                          cudaStream_t);
     static void mtp_kv_projection(const Tensor&, const MtpAttentionProjectionWeights&, Tensor&,
-                                  Tensor&, WorkspaceArena&, cudaStream_t);
+                                  Tensor&, MemoryArena&, cudaStream_t);
     static void mtp_q_gate_projection(const Tensor&, const MtpAttentionProjectionWeights&, Tensor&,
-                                      Tensor&, WorkspaceArena&, cudaStream_t);
+                                      Tensor&, MemoryArena&, cudaStream_t);
     static void gdn_input_projection(const Tensor&, const GdnProjectionWeights&, Tensor&, Tensor&,
-                                     qwen3_8_flash_next::TextPhase, WorkspaceArena&, cudaStream_t);
+                                     qwen3_8_flash_next::TextPhase, MemoryArena&, cudaStream_t);
     static void gdn_input_projection_snapshot(const Tensor&, const GdnProjectionWeights&,
                                               const Tensor&, Tensor&, const Tensor&, const Tensor&,
                                               const Tensor&, Tensor&, Tensor&, Tensor&, Tensor&,
-                                              qwen3_8_flash_next::TextPhase, WorkspaceArena&,
+                                              qwen3_8_flash_next::TextPhase, MemoryArena&,
                                               cudaStream_t);
     static void gdn_input_projection_record(const Tensor&, const GdnProjectionWeights&,
                                             const Tensor&, const Tensor&, const Tensor&,
                                             const Tensor&, Tensor&, Tensor&, Tensor&, Tensor&,
-                                            Tensor&, qwen3_8_flash_next::TextPhase, WorkspaceArena&,
+                                            Tensor&, qwen3_8_flash_next::TextPhase, MemoryArena&,
                                             cudaStream_t);
     static void gdn_output_projection(const Tensor&, const Weight&, Tensor&,
-                                      qwen3_8_flash_next::TextPhase, WorkspaceArena&, cudaStream_t);
+                                      qwen3_8_flash_next::TextPhase, MemoryArena&, cudaStream_t);
     static void gdn_norm_control_projection(const Tensor&, const Tensor&, float,
                                             const GdnProjectionWeights&, Tensor&, Tensor&, Tensor&,
-                                            WorkspaceArena&, DeviceExecutionView);
+                                            MemoryArena&, CudaExecutionView);
     static void post_mixer(const Tensor&, const PostMixerWeights&, Tensor&,
-                           qwen3_8_flash_next::TextPhase, WorkspaceArena&, cudaStream_t);
-    static void mtp_post_mixer(const Tensor&, const MtpPostMixerWeights&, Tensor&, WorkspaceArena&,
+                           qwen3_8_flash_next::TextPhase, MemoryArena&, cudaStream_t);
+    static void mtp_post_mixer(const Tensor&, const MtpPostMixerWeights&, Tensor&, MemoryArena&,
                                cudaStream_t);
 
     static std::size_t mtp_attention_projection_workspace_capacity_bytes(std::int32_t,

@@ -84,7 +84,7 @@ RoundStateLayout begin_round_state_layout(LayoutBuilder& builder, const RoundSta
     return layout;
 }
 
-OrdinaryDecodeState::OrdinaryDecodeState(DeviceSpan backing,
+OrdinaryDecodeState::OrdinaryDecodeState(MemorySpan backing,
                                          const OrdinaryDecodeStateLayout& layout,
                                          std::uint32_t batch_capacity) {
     if (batch_capacity == 0 || batch_capacity > kMaximumConcurrency) {
@@ -253,16 +253,16 @@ void complete_round_state_layout(LayoutBuilder& builder, RoundStateLayout& layou
     layout.complete = true;
 }
 
-MtpPrefillState::MtpPrefillState(DeviceSpan backing, const MtpPrefillStateLayout& layout)
+MtpPrefillState::MtpPrefillState(MemorySpan backing, const MtpPrefillStateLayout& layout)
     : position(layout.position.bind(backing)), ar_hidden(layout.ar_hidden.bind(backing)),
       draft_tokens(layout.draft_tokens.bind(backing)),
       target_input_ids(layout.target_input_ids.bind(backing)),
       target_positions(layout.target_positions.bind(backing)) {}
 
-DFlashPrefillState::DFlashPrefillState(DeviceSpan backing, const DFlashPrefillStateLayout& layout)
+DFlashPrefillState::DFlashPrefillState(MemorySpan backing, const DFlashPrefillStateLayout& layout)
     : produced_count(layout.produced_count.bind(backing)) {}
 
-MtpDecodeState::MtpDecodeState(DeviceSpan backing, const MtpDecodeStateLayout& layout,
+MtpDecodeState::MtpDecodeState(MemorySpan backing, const MtpDecodeStateLayout& layout,
                                std::uint32_t batch_capacity, std::uint32_t draft_window) {
     if (batch_capacity == 0 || batch_capacity > kMaximumConcurrency || draft_window == 0 ||
         draft_window > kMtpDecodeMaximumDrafts) {
@@ -360,7 +360,7 @@ MtpDecodeState::MtpDecodeState(DeviceSpan backing, const MtpDecodeStateLayout& l
     }
 }
 
-DFlashDecodeState::DFlashDecodeState(DeviceSpan backing, const DFlashDecodeStateLayout& layout,
+DFlashDecodeState::DFlashDecodeState(MemorySpan backing, const DFlashDecodeStateLayout& layout,
                                      std::uint32_t batch_capacity, std::uint32_t draft_window) {
     if (batch_capacity == 0 || batch_capacity > kMaximumConcurrency || draft_window == 0 ||
         draft_window > kDFlashDecodeMaximumDrafts) {
@@ -420,7 +420,7 @@ DFlashDecodeState::DFlashDecodeState(DeviceSpan backing, const DFlashDecodeState
     target_continuation_hidden = layout.target_continuation_hidden.bind(backing);
 }
 
-RoundState::RoundState(DeviceSpan backing, const RoundStateLayout& layout) {
+RoundState::RoundState(MemorySpan backing, const RoundStateLayout& layout) {
     if (!layout.complete) { throw std::invalid_argument("RoundState layout is incomplete"); }
     if (layout.ordinary) {
         ordinary.emplace(backing, *layout.ordinary, layout.spec.batch_capacity);

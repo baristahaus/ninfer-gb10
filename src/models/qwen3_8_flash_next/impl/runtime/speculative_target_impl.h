@@ -34,20 +34,20 @@ void target_verify_accept(ExecutionCore& execution, Tensor& continuation_hidden_
                                           frame.current_extents, frame.frontiers, frame.anchors,
                                           frame.licensed_tokens, frame.licensed_counts,
                                           frame.accepted_drafts, TextConfig::token_domain,
-                                          frame.sampling, execution.work, execution.device.stream);
+                                          frame.sampling, execution.work, execution.device.stream());
     ops::speculative_select_accepted_hidden(frame.target_hidden, frame.accepted_drafts,
-                                            frame.selected_hidden, execution.device.stream);
+                                            frame.selected_hidden, execution.device.stream());
     ops::scatter(frame.selected_hidden, frame.state_destination_slots, continuation_hidden_store,
-                 execution.device.stream);
+                 execution.device.stream());
     if (frame.target_mtp_hidden.data != nullptr) {
         if (execution.mtp_continuation_hidden_store == nullptr ||
             frame.selected_mtp_hidden.data == nullptr) {
             throw std::logic_error("speculative target MTP continuation storage is unavailable");
         }
         ops::speculative_select_accepted_hidden(frame.target_mtp_hidden, frame.accepted_drafts,
-                                                frame.selected_mtp_hidden, execution.device.stream);
+                                                frame.selected_mtp_hidden, execution.device.stream());
         ops::scatter(frame.selected_mtp_hidden, frame.state_destination_slots,
-                     *execution.mtp_continuation_hidden_store, execution.device.stream);
+                     *execution.mtp_continuation_hidden_store, execution.device.stream());
     }
     card.set_flash_predictor_hidden_output(nullptr);
     card.set_gdn_pending_fold(nullptr, nullptr);

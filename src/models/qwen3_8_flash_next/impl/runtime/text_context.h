@@ -154,7 +154,7 @@ class VisionPrefillSession;
 class TextContext {
 public:
     TextContext(
-        DeviceContext& ctx, const LoadedModelData& weights, WorkspaceArena& work,
+        DeviceContext& ctx, const LoadedModelData& weights, MemoryArena& work,
         qwen3_8_flash_next::PagedKVCacheView kv, LinearAttentionStatePool& state,
         qwen3_8_flash_next::RoundState& io, Tensor& prefill_hidden, std::uint32_t prefill_chunk,
         std::uint32_t text_kv_base,
@@ -334,7 +334,7 @@ private:
                  const MultimodalPrefill* multimodal, Tap& tap, bool finalize_at_end);
     DeviceContext& ctx_;
     const LoadedModelData& weights_;
-    WorkspaceArena& work_;
+    MemoryArena& work_;
     qwen3_8_flash_next::PagedKVCacheView kv_;
     qwen3_8_flash_next::PagedKVCacheView mtp_kv_;
     const qwen3_8_flash_next::PagedKVCache* batch_text_kv_ = nullptr;

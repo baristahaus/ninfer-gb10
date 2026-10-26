@@ -241,7 +241,7 @@ VisionWorkspacePlan VisionContext::plan_workspace(std::uint32_t max_merged_token
     return out;
 }
 
-Tensor VisionContext::bind_output(DeviceSpan backing, const VisionWorkspacePlan& plan,
+Tensor VisionContext::bind_output(MemorySpan backing, const VisionWorkspacePlan& plan,
                                   std::size_t merged_tokens) {
     if (backing.data == nullptr || backing.bytes < plan.capacity_bytes || merged_tokens == 0 ||
         merged_tokens > plan.max_merged_tokens) {
@@ -259,7 +259,7 @@ Tensor VisionContext::bind_output(DeviceSpan backing, const VisionWorkspacePlan&
     return region.bind(backing);
 }
 
-void VisionContext::encode(const VisionItemView& item, Tensor& output, DeviceSpan backing,
+void VisionContext::encode(const VisionItemView& item, Tensor& output, MemorySpan backing,
                            const VisionWorkspacePlan& plan) const {
     if (item.control == nullptr) { throw std::invalid_argument("Vision item control is null"); }
     const qwen3_8_flash_next::VisionItemControl& control = *item.control;
@@ -286,7 +286,7 @@ void VisionContext::encode(const VisionItemView& item, Tensor& output, DeviceSpa
     }
     const auto patches  = static_cast<std::int32_t>(patches64);
     const auto tokens   = static_cast<std::int32_t>(tokens64);
-    cudaStream_t stream = ctx_.stream;
+    cudaStream_t stream = ctx_.stream();
 
     Tensor position_ids = layout.position_ids.bind(backing);
     Tensor x            = layout.x.bind(backing);
@@ -390,7 +390,7 @@ void VisionContext::encode(const VisionItemView& item, Tensor& output, DeviceSpa
 }
 
 VisionPrefillSession::VisionPrefillSession(DeviceContext& device, const LoadedModelData& model,
-                                           DeviceSpan workspace,
+                                           MemorySpan workspace,
                                            const VisionWorkspacePlan& workspace_plan,
                                            qwen3_8_flash_next::PreparedPromptData& prompt,
                                            const VisionPrefillPlan& plan,

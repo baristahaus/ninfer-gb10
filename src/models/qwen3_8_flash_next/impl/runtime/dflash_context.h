@@ -17,7 +17,7 @@ struct DFlashPersistentState {
     Tensor prefill_positions;
     Tensor pending_features;
 
-    DFlashPersistentState(DeviceSpan backing, const DFlashPersistentLayout& layout,
+    DFlashPersistentState(MemorySpan backing, const DFlashPersistentLayout& layout,
                           CyclicKVCache& local_state);
 
     [[nodiscard]] CyclicKVCacheLayerView local_layer(std::uint32_t layer) const;

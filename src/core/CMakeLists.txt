@@ -31,6 +31,7 @@ add_library(ninfer_core SHARED
   host_worker_pool.cpp
   linear_attention_state.cpp
   cyclic_kv_cache_pool.cpp
+  linear_attention_state_pool.cpp
   state_image.cpp
   layout.cpp
   tensor.cpp

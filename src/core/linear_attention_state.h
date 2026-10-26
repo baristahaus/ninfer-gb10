@@ -12,12 +12,7 @@ struct LinearAttentionStateSpec {
     std::int32_t value_head_dim = 0;
     std::int32_t key_head_dim   = 0;
     DType conv_dtype            = DType::BF16;
-    // Master-generation slots-per-pool; the restructured pool plans one slot per layout.
-    std::int32_t slot_count     = 1;
 };
-
-// Master-generation name for the same pool description.
-using LinearAttentionStatePoolSpec = LinearAttentionStateSpec;
 
 struct LinearAttentionStateLayout {
     LinearAttentionStateSpec spec;

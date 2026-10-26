@@ -5,6 +5,7 @@
 #include "core/layout.h"
 #include "core/cyclic_kv_cache_pool.h"
 #include "core/linear_attention_state.h"
+#include "core/linear_attention_state_pool.h"
 #include "core/tensor.h"
 #include "core/transfer_work.h"
 

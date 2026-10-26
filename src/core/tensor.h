@@ -20,6 +20,11 @@ struct Tensor {
     // A null, unlocated span describes planned capacity; a bound span supplies actual residency.
     Tensor(MemorySpan memory, DType dtype, std::initializer_list<std::int32_t> shape);
     Tensor(void* data, Device device, DType dtype, std::initializer_list<std::int32_t> shape);
+    // Master-generation convenience: a tensor whose data pointer is known without an explicit
+    // device. The Flash-Next family plans and binds storage this way; kernels receive the
+    // execution view separately.
+    Tensor(void* data, DType dtype, std::initializer_list<std::int32_t> shape)
+        : Tensor(data, Device{}, dtype, shape) {}
     [[nodiscard]] static Tensor metadata(DType dtype, std::initializer_list<std::int32_t> shape);
 
     std::int64_t numel() const;

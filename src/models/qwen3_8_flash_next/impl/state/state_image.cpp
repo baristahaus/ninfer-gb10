@@ -193,7 +193,7 @@ StateImageDeviceLayout plan_state_image_device_pool(LayoutBuilder& builder,
     if (spec.dflash_local) {
         const DFlashLocalStateSpec& dflash = *spec.dflash_local;
         out.dflash_local =
-            plan_cyclic_kv_cache(builder, dflash.layers, dflash.capacity, dflash.kv_heads,
+            plan_cyclic_kv_cache_pool(builder, dflash.layers, dflash.capacity, dflash.kv_heads,
                                  dflash.head_dim, spec.linear.slot_count);
     }
 

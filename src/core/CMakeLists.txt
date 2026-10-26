@@ -30,6 +30,7 @@ add_library(ninfer_core SHARED
   paged_kv_geometry.cpp
   host_worker_pool.cpp
   linear_attention_state.cpp
+  cyclic_kv_cache_pool.cpp
   state_image.cpp
   layout.cpp
   tensor.cpp

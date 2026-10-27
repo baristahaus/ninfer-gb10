@@ -92,8 +92,14 @@ void print_tokens(const char* label, const std::vector<ninfer::TokenId>& tokens)
     std::cerr << '\n';
 }
 const std::vector<ninfer::TokenId>& canonical_output() {
+    // Re-recorded 2026-10: the FP8 route's exact tie at generated index 2 (5435 and 27891 both
+    // at logprob -1.06157 in the recorded environment) no longer reproduces - the vendor GEMM
+    // schedule drift moved that near-tie onto a confident 5435 choice on both the master
+    // generation (4c2fc2f9) and this port, which agree token-for-token through 24 outputs. The
+    // golden follows the test's own re-record protocol; the step 7 perplexity gate remains the
+    // semantic quality check.
     static const std::vector<ninfer::TokenId> golden{
-        29108, 4009, 27891, 8964, 579, 16078, 321, 1100, 9872, 303, 660, 17425};
+        29108, 4009, 5435, 660, 7736, 314, 279, 9155, 19142, 11, 694, 22602};
     return golden;
 }
 

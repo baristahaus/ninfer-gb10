@@ -550,6 +550,9 @@ std::string format_server_start_json(const std::string& server_instance_id, std:
     const ninfer::ContextCacheOptions& cache       = engine_options.context_cache;
     const ninfer::ContextCostSummary& context_cost = load.context_cost;
     const auto total_device_state_slots            = description.device_state_capacity;
+    fprintf(stderr, "PROBE cache extra=%d host=%d\n",
+            (int)cache.extra_state_slots.has_value(),
+            (int)cache.host_capacity_bytes.has_value());
     record["engine"]                               = Json{
                                       {"device", engine_options.device},
                                       {"max_context", engine_options.max_context},

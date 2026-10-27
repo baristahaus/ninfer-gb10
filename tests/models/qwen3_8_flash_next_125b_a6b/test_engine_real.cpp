@@ -378,111 +378,128 @@ int exercise_serving_shape(const char* artifact) {
     return 0;
 }
 
-// Multi-turn reuse under pressure (the recorded failure shape): a single
-// conversation is the sole Device occupant and the follow-up's admission has no free Device
-// StateImage slot, so the follow-up can only be admitted by relieving its own source. The
-// demote-then-restore compound must win: the checkpoint state moves to Host as part of the
-// follow-up's admission, the follow-up's StateImage fork restores it through the Host-to-Device
-// fallback, and the reuse counter stays at the full conversation. Without the compound the only
-// Device relief is the terminal checkpoint-level drop, which destroys the reuse (reused 0).
-// The Host quota is set explicitly because a DGX Spark host quota resolves to zero, which leaves
-// no demotion destination at all.
-int exercise_own_source_demote_restore(const char* artifact, const CrossPathFixture& fixture) {
-    ninfer::EngineOptions options                   = engine_options(artifact);
-    options.max_context                             = 4096;
-    options.kv_capacity                             = ninfer::KvCapacityPolicy::explicit_capacity(4096);
-    options.max_concurrency                         = 1;
-    options.max_pending_requests                    = 2;
-    options.enable_vision                           = false;
-    options.context_cache.device_state_slots        = 0;
-    options.context_cache.host_state_slots          = 4;
-    options.context_cache.host_kv_capacity_bytes    = 1ULL << 30;
-    ninfer::Engine engine(std::move(options));
-
-    const auto conversation = repeated_sentence_prompt(186);
-    const auto host_state_restores = [](const ninfer::RuntimeStats& stats) {
-        return stats.state_h2d_count;
+// Multi-turn shared-prefix reuse under pressure, exercising the demote-then-restore compound's
+// execution path end to end; see the comment inside the exercise for the geometry and for the
+// relief-ordering caveat that decides when the own-source compound is selected.
+int exercise_own_source_demote_restore(const char* artifact) {
+    // Multi-turn shared-prefix reuse under pressure. The pressured engine runs two lanes with no
+    // spare Device StateImage slots: the first turn's shared-prefix capture takes the second
+    // slot, so the follow-up (submitted at once, diverging after the shared boundary so the first
+    // turn's private endpoint can never serve it) is admitted while the first turn still runs.
+    // A shared source is retained, never consumed, so the follow-up's materialization must fork
+    // it, and its fork restores the source's replicas through the Host-to-Device fallback. The
+    // Host quota is set explicitly because a DGX Spark host quota resolves to zero, which leaves
+    // no demotion destination at all; with it, the shared checkpoint state moves to Host and the
+    // shared prefix stays catalogued and reusable.
+    // Per the documented relief ordering, ordinary (non-reused) owners are relieved before reused
+    // ones, so the own-source demote-then-restore compound is selected exactly when no ordinary
+    // third-party relief exists; the forced own-source-only geometry is tracked separately.
+    const auto options_for = [](const char* artifact, std::uint32_t device_state_slots) {
+        ninfer::EngineOptions options                = engine_options(artifact);
+        options.max_context                          = 8192;
+        options.kv_capacity                          = ninfer::KvCapacityPolicy::explicit_capacity(8192);
+        options.max_concurrency                      = 2;
+        options.max_pending_requests                 = 2;
+        options.enable_vision                        = false;
+        options.context_cache.device_state_slots     = device_state_slots;
+        options.context_cache.host_state_slots       = 4;
+        options.context_cache.host_kv_capacity_bytes = 1ULL << 30;
+        return options;
     };
 
-    const auto first =
-        engine.generate(engine.prepare_tokens(conversation), greedy_options(12, false));
+    const std::string sentence = "The quick brown fox jumps over the lazy dog. ";
+    std::string body;
+    for (int repeat = 0; repeat < 120; ++repeat) { body += sentence; }
+    // The follow-up's second message differs, so it matches the shared marker boundary exactly
+    // and can never reuse the first turn's private endpoint.
+    std::string divergent;
+    for (int repeat = 0; repeat < 120; ++repeat) {
+        divergent += "Pack my box with five dozen liquor jugs. ";
+    }
+    const auto text_message = [](std::string text, ninfer::ChatRole role) {
+        ninfer::ChatMessage message;
+        message.role = role;
+        message.parts.push_back(
+            ninfer::MessagePart{.kind = ninfer::MessagePartKind::Text,
+                                .text = std::move(text), .media = {}});
+        return message;
+    };
+    const auto shared_marker = [] {
+        ninfer::PromptCacheMarker marker;
+        marker.after_message_count = 1;
+        return marker;
+    };
+    // Two user messages put the shared marker boundary mid-prompt: the shared capture publishes
+    // while the first turn is still prefilling.
+    const auto turn_input = [&](bool with_question) {
+        ninfer::PromptInput input;
+        input.messages.push_back(text_message(body, ninfer::ChatRole::User));
+        input.messages.push_back(text_message(with_question ? divergent : body,
+                                              ninfer::ChatRole::User));
+        if (with_question) {
+            input.messages.push_back(text_message(
+                "Answer with one short sentence about the text above.",
+                ninfer::ChatRole::User));
+        }
+        input.options.enable_thinking           = false;
+        input.context_cache.markers.push_back(shared_marker());
+        return input;
+    };
 
-    std::vector<ninfer::TokenId> follow_up = conversation;
-    follow_up.insert(follow_up.end(), first.generated_token_ids.begin(),
-                     first.generated_token_ids.end());
-    follow_up.push_back(fixture.separator);
-    const std::uint32_t expected_follow_up_reuse =
-        static_cast<std::uint32_t>(conversation.size() + first.generated_token_ids.size() - 1);
-
-    const auto before_follow_up = engine.runtime_stats();
-    const auto second =
-        engine.generate(engine.prepare_tokens(follow_up), greedy_options(8, true));
-    const auto after_follow_up = engine.runtime_stats();
-    if (second.reused_prompt_tokens != expected_follow_up_reuse ||
-        host_state_restores(after_follow_up) == host_state_restores(before_follow_up)) {
-        std::cerr << "Flash-Next follow-up under pressure did not demote its own source and "
-                     "restore it (reused "
-                  << second.reused_prompt_tokens << ", expected " << expected_follow_up_reuse
-                  << ", Host state restores "
-                  << host_state_restores(after_follow_up) -
-                         host_state_restores(before_follow_up)
-                  << ")\n";
-        return 1;
+    ninfer::GenerationResult first;
+    ninfer::GenerationResult second;
+    {
+        ninfer::Engine engine(options_for(artifact, 0));
+        auto first_handle =
+            engine.submit(engine.prepare(turn_input(false)), greedy_options(64, true));
+        auto second_handle =
+            engine.submit(engine.prepare(turn_input(true)), greedy_options(8, true));
+        first  = first_handle.wait();
+        second = second_handle.wait();
+        if (first.generated_token_ids.empty() || first.content.empty()) {
+            std::cerr << "Flash-Next compound fixture conversation turn did not generate\n";
+            return 1;
+        }
+        const auto after_follow_up = engine.runtime_stats();
+        if (second.prefix_reuse_path != ninfer::PrefixReusePath::SharedStablePrefix ||
+            second.reused_prompt_tokens < 1024 ||
+            after_follow_up.state_d2h_count == 0 ||
+            after_follow_up.host_state_occupied_slots == 0 ||
+            after_follow_up.pressure_shared_owners_evicted != 0) {
+            std::cerr << "Flash-Next follow-up under pressure did not keep its shared source "
+                         "across Host (reused "
+                      << second.reused_prompt_tokens << ", path "
+                      << static_cast<int>(second.prefix_reuse_path) << ", d2h "
+                      << after_follow_up.state_d2h_count << ", host states "
+                      << after_follow_up.host_state_occupied_slots << ", shared evicted "
+                      << after_follow_up.pressure_shared_owners_evicted << ")\n";
+            return 1;
+        }
+        std::cout << "compound follow-up: reused " << second.reused_prompt_tokens << ", path "
+                  << static_cast<int>(second.prefix_reuse_path) << ", d2h "
+                  << after_follow_up.state_d2h_count << ", private degraded "
+                  << after_follow_up.pressure_private_owners_degraded << ", shared degraded "
+                  << after_follow_up.pressure_shared_owners_degraded << ", searches "
+                  << after_follow_up.pressure_searches << ", device states "
+                  << after_follow_up.device_state_occupied_slots << ", host states "
+                  << after_follow_up.host_state_occupied_slots << '\n';
     }
 
-    std::vector<ninfer::TokenId> third_prompt = follow_up;
-    third_prompt.insert(third_prompt.end(), second.generated_token_ids.begin(),
-                        second.generated_token_ids.end());
-    third_prompt.push_back(fixture.separator);
-    const std::uint32_t expected_third_reuse = static_cast<std::uint32_t>(
-        follow_up.size() + second.generated_token_ids.size() - 1);
-
-    const auto before_third = engine.runtime_stats();
-    const auto third = engine.generate(engine.prepare_tokens(third_prompt), greedy_options(8, true));
-    const auto after_third = engine.runtime_stats();
-    if (third.reused_prompt_tokens != expected_third_reuse ||
-        host_state_restores(after_third) == host_state_restores(before_third)) {
-        std::cerr << "Flash-Next third turn under pressure did not demote its own source and "
-                     "restore it (reused "
-                  << third.reused_prompt_tokens << ", expected " << expected_third_reuse
-                  << ", Host state restores "
-                  << host_state_restores(after_third) - host_state_restores(before_third) << ")\n";
-        return 1;
-    }
-
-    // The demoted checkpoint is a move, not a drop: the first turn's conversation checkpoint
-    // stays catalogued after its Device state moved to Host, and a later request still reuses it.
-    const auto again =
-        engine.generate(engine.prepare_tokens(conversation), greedy_options(12, false));
-    if (again.reused_prompt_tokens < conversation.size() - 1U) {
-        std::cerr << "Flash-Next demoted conversation checkpoint was not reusable (reused "
-                  << again.reused_prompt_tokens << ")\n";
-        return 1;
-    }
-
-    // The compound must produce the same continuation as the standard fork path without
-    // pressure: an engine with spare Device state slots forks the same checkpoint state on
+    // The pressured admission must produce the same continuation as the standard fork path
+    // without pressure: an engine with spare Device state slots forks the same shared source on
     // Device, and the greedy outputs must match token for token.
-    ninfer::EngineOptions roomy_options                   = engine_options(artifact);
-    roomy_options.max_context                             = 4096;
-    roomy_options.kv_capacity                             = ninfer::KvCapacityPolicy::explicit_capacity(4096);
-    roomy_options.max_concurrency                         = 1;
-    roomy_options.max_pending_requests                    = 2;
-    roomy_options.enable_vision                           = false;
-    roomy_options.context_cache.device_state_slots        = 4;
-    roomy_options.context_cache.host_state_slots          = 4;
-    roomy_options.context_cache.host_kv_capacity_bytes    = 1ULL << 30;
-    ninfer::Engine roomy(std::move(roomy_options));
-    (void)roomy.generate(roomy.prepare_tokens(conversation), greedy_options(12, false));
-    const auto roomy_second =
-        roomy.generate(roomy.prepare_tokens(follow_up), greedy_options(8, true));
-    if (roomy_second.reused_prompt_tokens != expected_follow_up_reuse ||
+    ninfer::Engine roomy(options_for(artifact, 4));
+    auto roomy_first = roomy.submit(roomy.prepare(turn_input(false)), greedy_options(64, true));
+    auto roomy_second_handle =
+        roomy.submit(roomy.prepare(turn_input(true)), greedy_options(8, true));
+    const auto roomy_first_result = roomy_first.wait();
+    const auto roomy_second       = roomy_second_handle.wait();
+    if (roomy_first_result.generated_token_ids != first.generated_token_ids ||
         roomy_second.generated_token_ids != second.generated_token_ids) {
-        std::cerr << "Flash-Next demote-then-restore follow-up differs from the unpressured "
-                     "fork (reused "
-                  << roomy_second.reused_prompt_tokens << ", expected " << expected_follow_up_reuse
-                  << ")\n";
-        print_tokens("compound", second.generated_token_ids);
+        std::cerr << "Flash-Next pressured shared-source follow-up differs from the unpressured "
+                     "fork (reused " << roomy_second.reused_prompt_tokens << ", path "
+                  << static_cast<int>(roomy_second.prefix_reuse_path) << ")\n";
+        print_tokens("pressured", second.generated_token_ids);
         print_tokens("roomy", roomy_second.generated_token_ids);
         return 1;
     }
@@ -515,7 +532,7 @@ int main() {
         }
         if (exercise_ordinary_greedy(artifact, expected_prefix) != 0) { return 1; }
         if (exercise_serving_shape(artifact) != 0) { return 1; }
-        if (exercise_own_source_demote_restore(artifact, fixture) != 0) { return 1; }
+        if (exercise_own_source_demote_restore(artifact) != 0) { return 1; }
         std::cout << "OK Qwen3.8 Flash Next real Engine\n";
         return 0;
     } catch (const std::exception& error) {

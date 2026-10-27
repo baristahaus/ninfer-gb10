@@ -11,7 +11,7 @@ SERVE_ARGS=(
   --kv-capacity auto
   --max-concurrency 2
   --kv-dtype fp8
-  --spec mtp --draft-tokens 2 --lm-head-draft
+  --spec mtp --draft-tokens 2 --proposal-head full
   --vision
 )
 PYTHON=python3

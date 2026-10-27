@@ -334,6 +334,22 @@ Vision/rewrite 身份证明。索引不持有 snapshot、资源引用或 reader 
 时，更深且尚未证明的新后缀可以按普通边际损失处理；过浅的输入点不能代替曾实际采用的深位置。
 独立 Shared 热所有者仍保护涉及它的完整物理动作。降级与删除使用相同的保护判断。
 
+Own-source demote-then-restore compound. The protection above is written from the admitting
+candidate's point of view, and the pages and StateImage it protects are that candidate's own
+reuse source. For its own source only, the candidate accepts a deferrable compound: a
+demotion-only pressure decision on the own source (Device→Host StateImage demotion and KV page
+demotion) is eligible even though the source is protected, because demotion is a move that keeps
+the source catalogued and recoverable, and the candidate's own materialization restores the
+demoted replicas through the Host→Device fallback (Host-resident KV pages via the Device-replica
+restore, a Host-only checkpoint state via the Host fork). Drops of the own source (checkpoint
+drop, eviction, Device-replica drop) stay rejected: they would destroy the reuse the candidate
+exists for. The candidate's own source therefore joins the pressure victim domain with a
+demote-only maximal outcome and never with an eviction; every other request's protected pages,
+states and hot owners keep the full protection, and a third party's pinned pages stay
+ineligible. The compound relies on the materialization transaction ordering: the pressure
+transition (the D2H demotions) settles before the prefix fork pins the source pages and before
+the H2D restores are submitted, so a restore always reads the post-demotion Host state.
+
 每次按当前处理的 typed 缺口比较；Device 内优先处理 State，再处理 Main/backend KV，Host 目的
 单独预检。Runtime 在这个稀缺单位内排序：
 

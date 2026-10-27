@@ -1458,8 +1458,9 @@ ProgramImplCore::materialization_source_protection(const ResourceCandidateState&
         }
         const SharedPrefixState& source = shared_prefix_states[admission.shared_source_index];
         if (!source.kv) { return std::nullopt; }
-        kv               = &*source.kv;
-        protection.state = source.state;
+        kv                             = &*source.kv;
+        protection.state               = source.state;
+        protection.shared_source_index = admission.shared_source_index;
     }
     if (kv == nullptr) { return protection; }
 
@@ -1563,9 +1564,12 @@ ProgramImplCore::inspect_shared_pressure_option(
                    deficit.device.state_slots != 0 && residency == StateReplicaResidency::Both) {
             state_change =
                 qwen3_8_flash_next::detail::PressureStateDecision::DropSharedDeviceDuplicate;
-        } else if (!protected_state && state_store->checkpoint_references(shared.state) == 1 &&
+        } else if (state_store->checkpoint_references(shared.state) == 1 &&
                    deficit.device.state_slots != 0 &&
                    residency == StateReplicaResidency::DeviceOnly && host_state_images != nullptr) {
+            // The protected state is this candidate's own shared source. Demotion is a move to
+            // Host that the candidate's own materialization restores through the Host-to-Device
+            // fallback, so the compound keeps the source catalogued and reusable.
             state_change = qwen3_8_flash_next::detail::PressureStateDecision::DemoteSharedToHost;
             ++option.effect.added.host.state_slots;
             append_pressure_transfer(option, state_transfer_requirement(
@@ -1595,8 +1599,14 @@ ProgramImplCore::inspect_shared_pressure_option(
             requested, host_kv_remaining, resource, changes,
             [&](std::uint32_t page, LogicalKVPageHandle logical,
                 qwen3_8_flash_next::detail::PressureKVDecisionKind action) {
+                // Protected pages are this candidate's own source prefix. A DemoteToHost of
+                // those pages is the first half of the demote-then-restore compound: the
+                // candidate's own materialization restores them through the Host-to-Device
+                // fallback, so only a Device-replica drop stays blocked here.
                 return action !=
-                           qwen3_8_flash_next::detail::PressureKVDecisionKind::DropHostDuplicate &&
+                           qwen3_8_flash_next::detail::PressureKVDecisionKind::
+                               DropHostDuplicate &&
+                       action != qwen3_8_flash_next::detail::PressureKVDecisionKind::DemoteToHost &&
                        protected_materialization_page(protection, addresses, page, logical,
                                                       backend);
             });
@@ -1794,9 +1804,13 @@ ProgramImplCore::inspect_pressure_option(
         } else if (!protected_state && state_exclusive_to_sequence(sequence, state) &&
                    residual.device.state_slots != 0 && residency == StateReplicaResidency::Both) {
             change = endpoint_drop;
-        } else if (!protected_state && state_exclusive_to_sequence(sequence, state) &&
+        } else if (state_exclusive_to_sequence(sequence, state) &&
                    residual.device.state_slots != 0 &&
                    residency == StateReplicaResidency::DeviceOnly && host_state_images != nullptr) {
+            // The protected state is this candidate's own source. Demotion is a move to Host
+            // that this candidate's own materialization restores through the Host-to-Device
+            // fallback, so the demote-then-restore compound keeps the source reusable; a drop
+            // of the own source stays blocked above.
             change = endpoint_demote;
             ++option.effect.added.host.state_slots;
             append_pressure_transfer(option, state_transfer_requirement(
@@ -1833,8 +1847,14 @@ ProgramImplCore::inspect_pressure_option(
             requested, host_kv_remaining, resource, changes,
             [&](std::uint32_t page, LogicalKVPageHandle logical,
                 qwen3_8_flash_next::detail::PressureKVDecisionKind action) {
+                // Protected pages are this candidate's own source prefix. A DemoteToHost of
+                // those pages is the first half of the demote-then-restore compound: the
+                // candidate's own materialization restores them through the Host-to-Device
+                // fallback, so only a Device-replica drop stays blocked here.
                 return action !=
-                           qwen3_8_flash_next::detail::PressureKVDecisionKind::DropHostDuplicate &&
+                           qwen3_8_flash_next::detail::PressureKVDecisionKind::
+                               DropHostDuplicate &&
+                       action != qwen3_8_flash_next::detail::PressureKVDecisionKind::DemoteToHost &&
                        protected_materialization_page(protection, addresses, page, logical,
                                                       backend);
             });
@@ -2732,8 +2752,8 @@ bool ProgramImplCore::pressure_decision_valid(
             state_store->role(*state) != StateImageRole::CheckpointImmutable ||
             state_store->source_pins(*state) != 0 ||
             (!drops_host && !state_exclusive_to_sequence(sequence, *state)) ||
-            (!drops_host && protection != nullptr && protection->state &&
-             *protection->state == *state) ||
+            (!drops_host && !pressure_state_demotes(action) && protection != nullptr &&
+             protection->state && *protection->state == *state) ||
             std::find(targeted_states.begin(), targeted_states.end(), *state) !=
                 targeted_states.end()) {
             return false;
@@ -2779,7 +2799,9 @@ bool ProgramImplCore::pressure_decision_valid(
                     pages->writer_references(page) != 0 || pages->source_pins(page) != 0 ||
                     (protected_page &&
                      action.kind !=
-                         qwen3_8_flash_next::detail::PressureKVDecisionKind::DropHostDuplicate)) {
+                         qwen3_8_flash_next::detail::PressureKVDecisionKind::DropHostDuplicate &&
+                     action.kind !=
+                         qwen3_8_flash_next::detail::PressureKVDecisionKind::DemoteToHost)) {
                     return false;
                 }
                 targeted.push_back(page);
@@ -2842,8 +2864,8 @@ bool ProgramImplCore::shared_pressure_decision_valid(
             state_store->role(*state) != StateImageRole::CheckpointImmutable ||
             state_store->source_pins(*state) != 0 ||
             (!drops_host && state_store->checkpoint_references(*state) != 1) ||
-            (!drops_host && protection != nullptr && protection->state &&
-             *protection->state == *state)) {
+            (!drops_host && !pressure_state_demotes(action) && protection != nullptr &&
+             protection->state && *protection->state == *state)) {
             return false;
         }
         const StateReplicaResidency residency = state_store->residency(*state);
@@ -2882,7 +2904,9 @@ bool ProgramImplCore::shared_pressure_decision_valid(
                     pages->writer_references(page) != 0 || pages->source_pins(page) != 0 ||
                     (protected_page &&
                      action.kind !=
-                         qwen3_8_flash_next::detail::PressureKVDecisionKind::DropHostDuplicate)) {
+                         qwen3_8_flash_next::detail::PressureKVDecisionKind::DropHostDuplicate &&
+                     action.kind !=
+                         qwen3_8_flash_next::detail::PressureKVDecisionKind::DemoteToHost)) {
                     return false;
                 }
                 targeted.push_back(page);
@@ -3090,7 +3114,8 @@ std::optional<detail::PressureTargetProjection> ProgramImplCore::evaluate_pressu
                 pressure_states.begin(), pressure_states.end(),
                 [&](const PressureSelectedState& selected) { return selected.state == *state; });
             if (!state_store->valid(*state) ||
-                (protected_state && !pressure_state_drops_host(change)) ||
+                (protected_state && !pressure_state_drops_host(change) &&
+                 !pressure_state_demotes(change)) ||
                 existing != pressure_states.end()) {
                 return false;
             }
@@ -3139,7 +3164,9 @@ std::optional<detail::PressureTargetProjection> ProgramImplCore::evaluate_pressu
                     protection, *addresses, action.begin_page + offset, page, backend);
                 if ((protected_page &&
                      action.kind !=
-                         qwen3_8_flash_next::detail::PressureKVDecisionKind::DropHostDuplicate) ||
+                         qwen3_8_flash_next::detail::PressureKVDecisionKind::DropHostDuplicate &&
+                     action.kind !=
+                         qwen3_8_flash_next::detail::PressureKVDecisionKind::DemoteToHost) ||
                     slot.pressure_targeted) {
                     return false;
                 }
@@ -3189,8 +3216,13 @@ std::optional<detail::PressureTargetProjection> ProgramImplCore::evaluate_pressu
             return std::nullopt;
         }
         const std::uint32_t index = ContractAccess::index(*owner);
+        // The candidate's own source may carry a demote-only pressure decision: the compound
+        // moves the source to Host and the candidate's own materialization restores it. Evicting
+        // the own source would destroy the reuse, so it stays rejected here.
+        const bool own_source =
+            protection != nullptr && protection->private_source_index == index;
         if ((private_owner_state[index] & kOwnerSelected) != 0 ||
-            (protection != nullptr && protection->private_source_index == index)) {
+            (own_source && option.evicts_continuation)) {
             return std::nullopt;
         }
         private_owner_state[index] |= kOwnerSelected;
@@ -3222,7 +3254,14 @@ std::optional<detail::PressureTargetProjection> ProgramImplCore::evaluate_pressu
             return std::nullopt;
         }
         const std::uint32_t index = ContractAccess::index(*owner);
-        if ((shared_owner_state[index] & kOwnerSelected) != 0) { return std::nullopt; }
+        // See the private loop above: the candidate's own shared source may carry a demote-only
+        // decision, but never an eviction.
+        const bool own_shared_source =
+            protection != nullptr && protection->shared_source_index == index;
+        if ((shared_owner_state[index] & kOwnerSelected) != 0 ||
+            (own_shared_source && option.evicts_continuation)) {
+            return std::nullopt;
+        }
         shared_owner_state[index] |= kOwnerSelected;
         if (option.evicts_continuation) {
             if (option.effect.added != detail::PhysicalResources{}) { return std::nullopt; }
@@ -3830,8 +3869,11 @@ bool ProgramImplCore::compose_pressure_candidate(
         if (!valid_continuation(*owner)) { return false; }
         const std::uint32_t index      = ContractAccess::index(*owner);
         const std::uint64_t generation = ContractAccess::epoch(*owner);
-        if ((details.has_source && index == details.source_index &&
-             generation == details.source_generation) ||
+        // The candidate's own source may carry a demote-only pressure decision (the
+        // demote-then-restore compound); only an eviction of the own source stays invalid here.
+        const bool own_source = details.has_source && index == details.source_index &&
+                                generation == details.source_generation;
+        if ((own_source && proposed.evicts_continuation) ||
             std::find(details.pressure_indices.begin(), details.pressure_indices.end(), index) !=
                 details.pressure_indices.end()) {
             throw std::invalid_argument("materialization pressure owner is duplicated");
@@ -3886,8 +3928,12 @@ bool ProgramImplCore::compose_pressure_candidate(
         if (!valid_shared_prefix(*owner)) { return false; }
         const std::uint32_t index      = ContractAccess::index(*owner);
         const std::uint64_t generation = ContractAccess::epoch(*owner);
-        if ((details.has_shared_source && index == details.shared_source_index &&
-             generation == details.shared_source_generation) ||
+        // See the private loop above: the candidate's own shared source may carry a demote-only
+        // decision; only an eviction of the own source stays invalid here.
+        const bool own_shared_source = details.has_shared_source &&
+                                       index == details.shared_source_index &&
+                                       generation == details.shared_source_generation;
+        if ((own_shared_source && proposed.evicts_continuation) ||
             std::find(details.shared_pressure_indices.begin(),
                       details.shared_pressure_indices.end(),
                       index) != details.shared_pressure_indices.end()) {
@@ -4173,7 +4219,8 @@ ProgramImplCore::revalidate_materialization(const AdmissionCandidate& plan,
         }
         if (!matches) { return runtime::PreflightStatus::StalePolicyState; }
         if (details.has_source && index == details.source_index &&
-            generation == details.source_generation) {
+            generation == details.source_generation &&
+            details.pressure_options[victim].evicts_continuation) {
             return runtime::PreflightStatus::InvariantFailure;
         }
         for (std::size_t prior = 0; prior < victim; ++prior) {
@@ -4205,9 +4252,12 @@ ProgramImplCore::revalidate_materialization(const AdmissionCandidate& plan,
             matches = shared_pressure_decision_valid(
                 shared_prefix_states[index], details.shared_pressure_options[victim], &*protection);
         }
-        if ((details.has_shared_source && index == details.shared_source_index &&
-             generation == details.shared_source_generation) ||
-            shared_prefix_states[index].active_references != 0 || !matches) {
+        if (shared_prefix_states[index].active_references != 0 || !matches) {
+            return runtime::PreflightStatus::StalePolicyState;
+        }
+        if (details.has_shared_source && index == details.shared_source_index &&
+            generation == details.shared_source_generation &&
+            details.shared_pressure_options[victim].evicts_continuation) {
             return runtime::PreflightStatus::StalePolicyState;
         }
         for (std::size_t prior = 0; prior < victim; ++prior) {
@@ -4411,7 +4461,8 @@ ProgramImplCore::reserve_materialization(AdmissionCandidate&& plan, PreparedProm
         const std::uint32_t index      = details.pressure_indices[victim];
         const std::uint64_t generation = details.pressure_generations[victim];
         if (details.has_source && index == transaction.source_index &&
-            generation == transaction.source_generation) {
+            generation == transaction.source_generation &&
+            details.pressure_options[victim].evicts_continuation) {
             throw std::logic_error("materialization source was also selected as a victim");
         }
         for (std::size_t prior = 0; prior < victim; ++prior) {
@@ -4436,9 +4487,12 @@ ProgramImplCore::reserve_materialization(AdmissionCandidate&& plan, PreparedProm
     for (std::size_t victim = 0; victim < shared_victim_count; ++victim) {
         const std::uint32_t index      = details.shared_pressure_indices[victim];
         const std::uint64_t generation = details.shared_pressure_generations[victim];
-        if ((details.has_shared_source && index == transaction.shared_source_index &&
-             generation == transaction.shared_source_generation) ||
-            shared_prefix_states[index].active_references != 0) {
+        if (shared_prefix_states[index].active_references != 0) {
+            throw std::logic_error("shared pressure victim has active references");
+        }
+        if (details.has_shared_source && index == transaction.shared_source_index &&
+            generation == transaction.shared_source_generation &&
+            details.shared_pressure_options[victim].evicts_continuation) {
             throw std::logic_error("materialization shared source was also selected as a victim");
         }
         for (std::size_t prior = 0; prior < victim; ++prior) {

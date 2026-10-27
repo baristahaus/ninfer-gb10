@@ -337,11 +337,13 @@ PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::PressurePlanningS
                     binding.state->shared_source_index &&
                 PlanningContractAccess::epoch(*pressure_owner.shared_handle) ==
                     binding.state->shared_source_generation;
-            if (!selected_private_source && !selected_shared_source) {
-                options.victims.push_back(CandidateVictimOptions{
-                    .owner_index = static_cast<std::uint32_t>(owner_index),
-                });
-            }
+            // The candidate's own source joins the victim domain: a demote-only decision on it
+            // is the first half of the demote-then-restore compound. populate_options() never
+            // offers an eviction for it.
+            options.victims.push_back(CandidateVictimOptions{
+                .owner_index = static_cast<std::uint32_t>(owner_index),
+                .own_source  = selected_private_source || selected_shared_source,
+            });
         }
         choice_scratch.assign(options.victims.size(), 0);
         if (intern_target(static_cast<std::uint32_t>(index), choice_scratch) != index) {
@@ -537,7 +539,35 @@ void PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT>::populate_opt
         const Owner& owner                       = owners[victim.owner_index];
         std::vector<PressureDecision>& decisions = victim.decisions;
         using PlanningContractAccess             = qwen3_8_flash_next::detail::RuntimeContractAccess<NINFER_QWEN38_FLASH_NEXT_VARIANT>;
-        if (owner.shared) {
+        if (victim.own_source) {
+            // The candidate's own source is never evicted: that would destroy the reuse the
+            // candidate exists for. Its maximal outcome is the first half of the
+            // demote-then-restore compound — demote every movable Device replica of the source
+            // to Host; the candidate's own materialization restores them through the
+            // Host-to-Device fallback. The decision must stay a pure move, never a drop.
+            constexpr std::uint32_t kUnlimited = std::numeric_limits<std::uint32_t>::max();
+            detail::PhysicalResources maximal;
+            maximal.device.state_slots      = kUnlimited;
+            maximal.device.main_kv_pages    = kUnlimited;
+            maximal.device.backend_kv_pages = kUnlimited;
+            std::optional<PressureDecision> demote;
+            if (owner.shared) {
+                demote = program->inspect_shared_pressure_option(
+                    program->shared_prefix_states[PlanningContractAccess::index(
+                        *owner.shared_handle)],
+                    maximal, &*protection, nullptr);
+                if (demote && !demote->shared_owner) { demote.reset(); }
+            } else {
+                demote = program->inspect_pressure_option(
+                    program->continuation_states[PlanningContractAccess::index(
+                        *owner.private_handle)],
+                    maximal, &*protection, nullptr, {}, {}, nullptr);
+                if (demote && demote->shared_owner) { demote.reset(); }
+            }
+            if (demote && !demote->evicts_continuation) {
+                decisions.push_back(std::move(*demote));
+            }
+        } else if (owner.shared) {
             PressureDecision eviction = program->inspect_shared_eviction_option(
                 program->shared_prefix_states[PlanningContractAccess::index(*owner.shared_handle)]);
             if (!eviction.evicts_continuation || !eviction.shared_owner) {
@@ -582,14 +612,18 @@ std::vector<PressureDecision> PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NE
                 ->continuation_states[PlanningContractAccess::index(*victim_owner.private_handle)],
             residual, &protection, current);
     }
-    if (victim_options.eviction_choice == 0 ||
-        victim_options.eviction_choice > victim_options.decisions.size()) {
+    if (victim_options.eviction_choice > victim_options.decisions.size()) {
         throw std::logic_error("eligible pressure owner has no maximal outcome");
     }
-    const PressureDecision& eviction =
-        victim_options.decisions[victim_options.eviction_choice - 1U];
-    if (std::find(successors.begin(), successors.end(), eviction) == successors.end()) {
-        successors.push_back(eviction);
+    // eviction_choice == 0 means this victim has no maximal outcome; that is only possible for
+    // an own-source victim with nothing left to demote, so there is no maximal decision to pin
+    // into the successor set.
+    if (victim_options.eviction_choice != 0) {
+        const PressureDecision& eviction =
+            victim_options.decisions[victim_options.eviction_choice - 1U];
+        if (std::find(successors.begin(), successors.end(), eviction) == successors.end()) {
+            successors.push_back(eviction);
+        }
     }
     return successors;
 }

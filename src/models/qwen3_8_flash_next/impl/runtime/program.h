@@ -782,6 +782,7 @@ private:
         };
 
         std::optional<std::uint32_t> private_source_index;
+        std::optional<std::uint32_t> shared_source_index;
         bool consumed_private_source = false;
         std::optional<StateImageHandle> state;
         std::uint32_t consumed_state_references = 0;
@@ -1336,6 +1337,9 @@ struct PressurePlanningSessionImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT> {
 
     struct CandidateVictimOptions {
         std::uint32_t owner_index = 0;
+        // An own-source victim is the candidate's own reuse source. It is never evicted; its
+        // maximal outcome is the demote half of the demote-then-restore compound.
+        bool own_source = false;
         std::vector<PressureDecision> decisions;
         std::uint16_t eviction_choice = 0;
     };

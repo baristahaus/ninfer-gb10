@@ -28,6 +28,8 @@ include("${CMAKE_CURRENT_LIST_DIR}/gdn_gating_proj/sources.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/sparse_moe/sources.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/kv_cache/sources.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/linear/sources.cmake")
+# Master-generation BF16 vendor route (Bf16GemmContext) beside the restructured projection layer.
+include("${CMAKE_CURRENT_LIST_DIR}/linear/sources_master.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/linear_attention/sources.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/ple/sources.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/normalization/sources.cmake")

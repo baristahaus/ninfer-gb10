@@ -8,8 +8,34 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 
 namespace ninfer::ops {
+// Smallest column count routed to the vendor backend. A model that captures larger shapes must
+// assert that they stay below it.
+inline constexpr std::int32_t kBf16GemmContextMinimumTokens = 49;
+
+// Program-owned dense-BF16 execution resource. Registered BF16 projections with at least
+// kBf16GemmContextMinimumTokens columns use the vendor tensor-core backend; every smaller call,
+// which includes every decode and MTP verify shape a CUDA Graph captures, stays on NInfer's fixed
+// CUDA kernels. On GB10 a cuBLAS GEMM captured into the Flash-Next 24-row verify graph produced
+// non-finite router scores that crashed graph preparation, although the same GEMM is correct
+// eager and captured alone (ninfer-gb10-dnf, 2026-10-11).
+class Bf16GemmContext {
+public:
+    explicit Bf16GemmContext(cudaStream_t stream);
+    ~Bf16GemmContext();
+
+    Bf16GemmContext(const Bf16GemmContext&) = delete;
+    Bf16GemmContext& operator=(const Bf16GemmContext&) = delete;
+
+    void launch(const Tensor& x, const Weight& w, Tensor& out, cudaStream_t stream);
+
+private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+};
+
 
 /**
  * @brief Permitted private activation-compute profiles for a linear projection.
@@ -68,5 +94,12 @@ void linear(const Tensor& x, const Weight& w, Tensor& out, LinearPolicy policy,
 
 /** A16-only projection with the same operand requirements and no transient workspace. */
 void linear(const Tensor& x, const Weight& w, Tensor& out, CudaExecutionView execution);
+
+// Master-generation entry points beside the policy/view overloads above. The stream form routes
+// by quantization type; the stream+context form lets a registered BF16 projection use the vendor
+// tensor-core backend when its column count admits it.
+void linear(const Tensor& x, const Weight& w, Tensor& out, cudaStream_t stream);
+void linear(const Tensor& x, const Weight& w, Tensor& out, cudaStream_t stream,
+            Bf16GemmContext* bf16_gemm);
 
 } // namespace ninfer::ops

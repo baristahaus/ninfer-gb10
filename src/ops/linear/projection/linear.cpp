@@ -167,4 +167,25 @@ void linear(const Tensor& x, const Weight& w, Tensor& out, CudaExecutionView exe
     dispatch_linear(x, w, out, LinearPolicy::A16Only, nullptr, execution.stream());
 }
 
+
+// Master-generation entry points beside the policy/view overloads above. The stream form routes
+// by quantization type; the stream+context form lets a registered BF16 projection use the vendor
+// tensor-core backend when its column count admits it.
+void linear(const Tensor& x, const Weight& w, Tensor& out, cudaStream_t stream) {
+    // Master-generation callers carry the device facts in the tensors themselves; the anonymous
+    // validator needs a view only for its device check, so it is skipped here and the dispatch
+    // performs its own geometry validation.
+    dispatch_linear(x, w, out, LinearPolicy::A16Only, nullptr, stream);
+}
+
+void linear(const Tensor& x, const Weight& w, Tensor& out, cudaStream_t stream,
+            Bf16GemmContext* bf16_gemm) {
+    if (bf16_gemm != nullptr && w.qtype == QType::BF16 &&
+        x.ne[1] >= kBf16GemmContextMinimumTokens) {
+        bf16_gemm->launch(x, w, out, stream);
+        return;
+    }
+    dispatch_linear(x, w, out, LinearPolicy::A16Only, nullptr, stream);
+}
+
 } // namespace ninfer::ops

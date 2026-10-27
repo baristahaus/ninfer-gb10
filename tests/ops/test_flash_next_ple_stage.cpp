@@ -106,8 +106,8 @@ int run_publish(const std::string& label, int width, const std::vector<std::int3
     PinnedMailbox mailbox;
     DeviceBuffer d_tokens  = to_device(tokens);
     DeviceBuffer d_history = to_device(history);
-    Tensor t_tokens(d_tokens.p, DType::I32, {width, batch});
-    Tensor t_history(d_history.p, DType::I32, {2, batch});
+    Tensor t_tokens(d_tokens.data(), DType::I32, {width, batch});
+    Tensor t_history(d_history.data(), DType::I32, {2, batch});
 
     std::vector<std::uint32_t> published;
     std::int32_t published_tokens = 0;

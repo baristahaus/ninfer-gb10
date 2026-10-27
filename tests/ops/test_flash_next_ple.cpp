@@ -29,8 +29,8 @@ std::vector<std::uint16_t> encode(const std::vector<float>& values) {
 
 Weight bf16_weight(const DeviceBuffer& storage, int rows, int columns) {
     Weight out{};
-    out.payload = out.qdata = storage.p;
-    out.payload_bytes = storage.bytes;
+    out.payload = out.qdata = storage.data();
+    out.payload_bytes = storage.size();
     out.qtype = QType::BF16;
     out.layout = QuantLayout::Contiguous;
     out.n = out.shape[0] = out.padded_shape[0] = rows;
@@ -164,22 +164,22 @@ int run(bool fork) {
     DeviceBuffer d_state             = to_device(state_bits);
     DeviceBuffer d_destination_state = to_device(fork ? encode(stale) : state_bits);
     GuardedDeviceBuffer d_output(expected.size() * sizeof(std::uint16_t));
-    Tensor hyper_tensor(d_hyper.p, DType::BF16, {kHyper, kTokens});
-    Tensor gathered_tensor(d_gathered.p, DType::FP8_E4M3FN, {kHidden, kTokens});
-    Tensor state_tensor(d_state.p, DType::BF16, {kHyper, kState});
-    Tensor destination_state_tensor(fork ? d_destination_state.p : d_state.p, DType::BF16,
+    Tensor hyper_tensor(d_hyper.data(), DType::BF16, {kHyper, kTokens});
+    Tensor gathered_tensor(d_gathered.data(), DType::FP8_E4M3FN, {kHidden, kTokens});
+    Tensor state_tensor(d_state.data(), DType::BF16, {kHyper, kState});
+    Tensor destination_state_tensor(fork ? d_destination_state.data() : d_state.data(), DType::BF16,
                                     {kHyper, kState});
     Tensor output_tensor(d_output.data(), DType::BF16, {kHyper, kTokens});
     ops::FlashNextPleWeights weights{
         .key_projection = bf16_weight(d_key_weight, kHyper, kHidden),
         .value_projection = bf16_weight(d_value_weight, kHidden, kHidden),
-        .key_norm = Tensor(d_key_norm.p, DType::BF16, {kHyper}),
-        .query_norm = Tensor(d_query_norm.p, DType::BF16, {kHyper}),
-        .convolution_norm = Tensor(d_conv_norm.p, DType::BF16, {kHyper}),
-        .convolution = Tensor(d_conv_weight.p, DType::BF16, {kHyper, 4}),
-        .embedding_scale = Tensor(d_scale.p, DType::BF16, {1}),
+        .key_norm = Tensor(d_key_norm.data(), DType::BF16, {kHyper}),
+        .query_norm = Tensor(d_query_norm.data(), DType::BF16, {kHyper}),
+        .convolution_norm = Tensor(d_conv_norm.data(), DType::BF16, {kHyper}),
+        .convolution = Tensor(d_conv_weight.data(), DType::BF16, {kHyper, 4}),
+        .embedding_scale = Tensor(d_scale.data(), DType::BF16, {1}),
     };
-    WorkspaceArena workspace(ops::flash_next_ple_workspace_capacity_bytes(kTokens));
+    MemoryArena workspace(ops::flash_next_ple_workspace_capacity_bytes(kTokens));
     ops::flash_next_ple(hyper_tensor, gathered_tensor, weights, state_tensor,
                         destination_state_tensor, output_tensor, workspace, nullptr);
     cuda_synchronize();
@@ -241,7 +241,7 @@ int run_replay_fold() {
     }
 
     DeviceBuffer d_records = to_device(record_bits);
-    Tensor records_tensor(d_records.p, DType::BF16, {kHyper, kWidth, kRows});
+    Tensor records_tensor(d_records.data(), DType::BF16, {kHyper, kWidth, kRows});
     int failures     = 0;
     const auto check = [&](const DeviceBuffer& d_states, const char* label) {
         const std::vector<std::uint16_t> actual =
@@ -253,7 +253,7 @@ int run_replay_fold() {
     };
 
     DeviceBuffer d_host_states = to_device(state_bits);
-    Tensor host_states(d_host_states.p, DType::BF16, {kHyper, kState, kSlots});
+    Tensor host_states(d_host_states.data(), DType::BF16, {kHyper, kState, kSlots});
     const std::vector<ops::FlashNextPleFoldRow> host_rows{
         {rows[0].source, rows[0].destination, rows[0].columns},
         {rows[1].source, rows[1].destination, rows[1].columns}};
@@ -262,19 +262,19 @@ int run_replay_fold() {
     check(d_host_states, "host rows");
 
     DeviceBuffer d_device_states = to_device(state_bits);
-    Tensor device_states(d_device_states.p, DType::BF16, {kHyper, kState, kSlots});
+    Tensor device_states(d_device_states.data(), DType::BF16, {kHyper, kState, kSlots});
     std::vector<std::int32_t> words(4 * kRows, 0);
     DeviceBuffer d_words = to_device(words);
-    Tensor words_tensor(d_words.p, DType::I32, {4, kRows});
+    Tensor words_tensor(d_words.data(), DType::I32, {4, kRows});
     DeviceContext context;
     DecodeGraphDefinition definition;
     DecodeGraphExecutable graph;
-    definition.capture(context.stream, [&] {
+    definition.capture(context.stream(), [&] {
         ops::flash_next_ple_replay_fold_device(records_tensor, device_states, words_tensor, kRows,
-                                               context.stream);
+                                               context.stream());
     });
     graph.instantiate(definition);
-    graph.launch(context.stream);
+    graph.launch(context.stream());
     context.synchronize();
     if (from_device<std::uint16_t>(d_device_states, state_bits.size()) != state_bits) {
         std::cerr << "Flash-Next PLE replay fold wrote state for zero-column device rows\n";
@@ -285,10 +285,10 @@ int run_replay_fold() {
         words[4 * row + 1] = rows[row].destination;
         words[4 * row + 2] = rows[row].columns;
     }
-    cuda_check(cudaMemcpy(d_words.p, words.data(), words.size() * sizeof(std::int32_t),
+    cuda_check(cudaMemcpy(d_words.data(), words.data(), words.size() * sizeof(std::int32_t),
                           cudaMemcpyHostToDevice),
                "write device fold rows");
-    graph.launch(context.stream);
+    graph.launch(context.stream());
     context.synchronize();
     check(d_device_states, "device rows");
     return failures;

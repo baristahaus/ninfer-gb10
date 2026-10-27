@@ -39,3 +39,10 @@ endforeach()
 # Restored Flash-Next BF16 bank kernels (expert-major grouped GEMM/GEMV routes).
 file(GLOB _ninfer_fn_bf16_sources "${NINFER_OPS_DIR}/linear/bf16/flash_next/*.cu")
 target_sources(ninfer_ops PRIVATE ${_ninfer_fn_bf16_sources})
+# Master-generation HyperConnection entry points (stream and stream+Bf16GemmContext forms); the
+# Flash-Next family and its qualification tests call these directly.
+target_sources(ninfer_ops PRIVATE
+  "${NINFER_OPS_DIR}/launcher/hyperconnection.cu"
+  "${NINFER_OPS_DIR}/launcher/flash_next_ple.cu"
+  "${NINFER_OPS_DIR}/linear_attention/flash_next_gdn.cu"
+)

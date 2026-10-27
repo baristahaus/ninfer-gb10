@@ -49,6 +49,7 @@ struct Options {
     int device                          = 0;
     ninfer::KvCacheStorage kv           = ninfer::KvCacheStorage::Fp8E4M3Row256;
     bool quick                          = false;
+    bool token_scores                   = false;
     ninfer::product::LogLevel log_level = ninfer::product::LogLevel::Info;
 };
 
@@ -56,7 +57,7 @@ std::string usage_text() {
     return "usage: ninfer-perplexity <model.ninfer> "
            "(--corpus <manifest.json> [--quick] | --text <utf8-file>)\n"
            "       [--context N] [--stride N] [--device N]\n"
-           "       [--kv-dtype bf16|int8|fp8|nvfp4|k8v4] [--output <directory>]\n"
+           "       [--kv-dtype bf16|int8|fp8|nvfp4|k8v4] [--output <directory>] [--token-scores]\n"
            "       [--log-level trace|debug|info|warning|error|critical|off]\n";
 }
 
@@ -95,6 +96,8 @@ Options parse_options(int argc, char** argv) {
             out.text = std::filesystem::path(value("--text"));
         } else if (option == "--quick") {
             out.quick = true;
+        } else if (option == "--token-scores") {
+            out.token_scores = true;
         } else if (option == "--context") {
             out.context = parse_integer<std::uint32_t>(value("--context"), "context");
         } else if (option == "--stride") {
@@ -253,6 +256,11 @@ int run(const Options& options, const std::shared_ptr<spdlog::logger>& logger,
                  ninfer::product::format_pretty_duration(preflight_seconds));
 
     const std::filesystem::path output_directory = prepare_output_directory(options, load, corpus);
+    std::ofstream token_scores;
+    if (options.token_scores) {
+        token_scores.open(output_directory / "token_scores.jsonl");
+        if (!token_scores) { throw std::runtime_error("cannot open token score output"); }
+    }
     const Clock::time_point scoring_started      = Clock::now();
     logger->info("scoring | {} streams | {} tokens | {} windows",
                  ninfer::product::format_pretty_count(streams.size()),
@@ -299,6 +307,19 @@ int run(const Options& options, const std::shared_ptr<spdlog::logger>& logger,
             }
             ScoreAggregate window_score;
             window_score.add(logprobs);
+            if (options.token_scores) {
+                for (std::size_t i = 0; i < logprobs.size(); ++i) {
+                    const auto position = window.target_begin + i;
+                    token_scores << json{{"stream", stream.source.id},
+                                         {"window", window_index},
+                                         {"position", position},
+                                         {"token", stream.tokens[position]},
+                                         {"logprob", logprobs[i]}}
+                                        .dump()
+                                 << '\n';
+                }
+                if (!token_scores) { throw std::runtime_error("cannot write token scores"); }
+            }
             stream_score.add(window_score);
             overall.add(window_score);
             domains[stream.source.domain].add(window_score);
@@ -310,6 +331,11 @@ int run(const Options& options, const std::shared_ptr<spdlog::logger>& logger,
             window_report["target_begin"] = window.target_begin;
             window_report["target_end"]   = window.target_end;
             window_report["first_target"] = window.first_target;
+            if (options.token_scores) {
+                window_report["input_ids"] = std::vector<ninfer::TokenId>(
+                    stream.tokens.begin() + static_cast<std::ptrdiff_t>(window.input_begin),
+                    stream.tokens.begin() + static_cast<std::ptrdiff_t>(window.input_end));
+            }
             window_report["seconds"]      = seconds_since(window_started);
             window_reports.push_back(std::move(window_report));
 

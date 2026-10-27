@@ -44,39 +44,6 @@ void increment_generation(std::uint32_t& generation) noexcept {
 
 } // namespace
 
-HostKVPageLayout plan_host_kv_page_layout(const KVPageGeometry& geometry) {
-    if (geometry.page_tokens == 0 || geometry.planes.empty()) {
-        throw std::invalid_argument("Host KV page geometry is empty");
-    }
-
-    HostKVPageLayout out;
-    out.geometry = geometry;
-    out.planes.reserve(geometry.planes.size());
-    std::size_t cursor = 0;
-    for (const KVPlaneGeometry& plane : geometry.planes) {
-        if (plane.leading_extent <= 0 || plane.head_extent <= 0) {
-            throw std::invalid_argument("Host KV plane geometry must be positive");
-        }
-        // Device slab alignment is not part of the canonical packed Host representation.
-        cursor = align_up(cursor, kHostKVAlignment, "Host KV plane");
-        const std::size_t head_bytes =
-            checked_mul(checked_mul(static_cast<std::size_t>(plane.leading_extent),
-                                    geometry.page_tokens, "Host KV head payload overflow"),
-                        dtype_size(plane.dtype), "Host KV head payload overflow");
-        const std::size_t page_bytes =
-            checked_mul(head_bytes, static_cast<std::size_t>(plane.head_extent),
-                        "Host KV plane payload overflow");
-        out.planes.push_back(HostKVPlaneLayout{
-            .offset             = cursor,
-            .page_payload_bytes = page_bytes,
-            .head_payload_bytes = head_bytes,
-        });
-        cursor = checked_add(cursor, page_bytes, "Host KV page payload overflow");
-    }
-    out.page_stride = align_up(cursor, kHostKVAlignment, "Host KV page record");
-    return out;
-}
-
 TransferWork plan_host_kv_transfer_work(const HostKVPageLayout& layout, std::uint32_t pages,
                                         std::uint32_t contiguous_runs) {
     if (pages == 0) { return {}; }
@@ -650,7 +617,10 @@ void HostKVArena::insert_free_extent(FreeExtent extent) noexcept {
 
 std::byte* HostKVArena::allocation_data(const Descriptor& descriptor) const noexcept {
     if (!backing_) { return nullptr; }
-    return static_cast<std::byte*>(backing_->data()) + descriptor.offset;
+    // The arena exposes mutable access through a const accessor; the backing owner is
+    // never shared, so the const on data() is an interface artifact of the restructured
+    // buffer API, not a real aliasing constraint.
+    return static_cast<std::byte*>(const_cast<void*>(backing_->data())) + descriptor.offset;
 }
 
 void HostKVArena::bump_revision() noexcept {

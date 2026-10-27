@@ -146,10 +146,8 @@ public:
     [[nodiscard]] MediaCacheSummary media_cache_summary() const;
     [[nodiscard]] OutputSession
     make_output_session(const PreparedPrompt& prompt, const StopPolicy& caller_stop,
-                        const OutputOptions& output                       = {},
-                        const ThinkingControlOptions& thinking            = {},
-                        const std::optional<OutputConstraint>& constraint = {},
-                        const ToolChoice& tool_choice                     = {}) const;
+                        const OutputOptions& output            = {},
+                        const ThinkingControlOptions& thinking = {}) const;
     [[nodiscard]] const StopPolicy& default_stop_policy() const noexcept;
 
 private:

@@ -11,7 +11,7 @@
 
 namespace ninfer {
 
-class DeviceArena;
+class MemoryArena;
 
 namespace models::qwen3_8_flash_next {
 
@@ -87,7 +87,7 @@ struct ModelView {
     using MtpLayer  = MtpWeights<MtpAttentionPayload, MtpPostMixerPayload>;
     using DFlash    = DFlashPayload;
 
-    DeviceArena* weights_arena = nullptr;
+    MemoryArena* weights_arena = nullptr;
     Weight token_embedding;
     std::array<FullLayer, FullAttentionLayers> full_layers;
     std::array<GdnLayer, GdnLayers> gdn_layers;

@@ -71,7 +71,7 @@ struct VisionWorkspaceLayout {
 
 TensorRegion alias_tensor(const TensorRegion& storage, DType dtype,
                           std::initializer_list<std::int32_t> shape, const char* label) {
-    Tensor tensor(nullptr, dtype, shape);
+    Tensor tensor = Tensor::metadata(dtype, shape);
     if (tensor.bytes() > storage.region.bytes) {
         throw std::logic_error(std::string("Vision ") + label +
                                " does not fit its aliased storage");
@@ -163,8 +163,9 @@ std::size_t merger_hidden_bytes(std::size_t merged_tokens) {
         merged_tokens > static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max())) {
         throw std::invalid_argument("Vision merger hidden extent must fit positive int32");
     }
-    Tensor tensor(nullptr, DType::BF16,
-                  {VisionScheduleConfig::merger_hidden, static_cast<std::int32_t>(merged_tokens)});
+    Tensor tensor =
+        Tensor::metadata(DType::BF16,
+                         {VisionScheduleConfig::merger_hidden, static_cast<std::int32_t>(merged_tokens)});
     return tensor.bytes();
 }
 
@@ -241,7 +242,7 @@ VisionWorkspacePlan VisionContext::plan_workspace(std::uint32_t max_merged_token
     return out;
 }
 
-Tensor VisionContext::bind_output(DeviceSpan backing, const VisionWorkspacePlan& plan,
+Tensor VisionContext::bind_output(MemorySpan backing, const VisionWorkspacePlan& plan,
                                   std::size_t merged_tokens) {
     if (backing.data == nullptr || backing.bytes < plan.capacity_bytes || merged_tokens == 0 ||
         merged_tokens > plan.max_merged_tokens) {
@@ -259,7 +260,7 @@ Tensor VisionContext::bind_output(DeviceSpan backing, const VisionWorkspacePlan&
     return region.bind(backing);
 }
 
-void VisionContext::encode(const VisionItemView& item, Tensor& output, DeviceSpan backing,
+void VisionContext::encode(const VisionItemView& item, Tensor& output, MemorySpan backing,
                            const VisionWorkspacePlan& plan) const {
     if (item.control == nullptr) { throw std::invalid_argument("Vision item control is null"); }
     const qwen3_8_flash_next::VisionItemControl& control = *item.control;
@@ -286,7 +287,8 @@ void VisionContext::encode(const VisionItemView& item, Tensor& output, DeviceSpa
     }
     const auto patches  = static_cast<std::int32_t>(patches64);
     const auto tokens   = static_cast<std::int32_t>(tokens64);
-    cudaStream_t stream = ctx_.stream;
+    cudaStream_t stream = ctx_.stream();
+    CudaExecutionView execution = ctx_.execution_view();
 
     Tensor position_ids = layout.position_ids.bind(backing);
     Tensor x            = layout.x.bind(backing);
@@ -298,8 +300,8 @@ void VisionContext::encode(const VisionItemView& item, Tensor& output, DeviceSpa
                                       static_cast<std::uint64_t>(patches64));
         copy_host(control.position_ids.data(), position_ids, stream);
         copy_host(item.patches.data(), patch_bf16, stream);
-        ops::linear(patch_bf16, *patch_embed_, x, stream);
-        ops::add_bias(*patch_embed_bias_, x, stream);
+        ops::linear(patch_bf16, *patch_embed_, x, execution);
+        ops::add_bias(*patch_embed_bias_, x, execution);
         // The artifact records the source table shape [rows,hidden], while Tensor's
         // contiguous matrix convention is [inner,columns]. The payload is already
         // row-major, so this is a zero-copy [hidden,rows] view, not a transpose.
@@ -323,18 +325,20 @@ void VisionContext::encode(const VisionItemView& item, Tensor& output, DeviceSpa
                 {
                     Tensor h = layout.attention_norm.bind(backing);
                     ops::layer_norm(x, *block.norm1_weight, *block.norm1_bias,
-                                    VisionScheduleConfig::norm_eps, h, stream);
-                    ops::linear(h, *block.qkv, qkv, stream);
+                                    VisionScheduleConfig::norm_eps, h, execution);
+                    ops::linear(h, *block.qkv, qkv, execution);
                 }
-                ops::add_bias(*block.qkv_bias, qkv, stream);
+                ops::add_bias(*block.qkv_bias, qkv, execution);
                 const std::int32_t plane      = VisionScheduleConfig::hidden;
                 const std::size_t plane_bytes = static_cast<std::size_t>(plane) * 2;
-                Tensor q(qkv.data, DType::BF16,
+                Tensor q(qkv.data, qkv.device, DType::BF16,
                          {VisionScheduleConfig::head_dim, VisionScheduleConfig::heads, patches});
-                Tensor k(static_cast<unsigned char*>(qkv.data) + plane_bytes, DType::BF16,
-                         {VisionScheduleConfig::head_dim, VisionScheduleConfig::heads, patches});
-                Tensor v(static_cast<unsigned char*>(qkv.data) + 2 * plane_bytes, DType::BF16,
-                         {VisionScheduleConfig::head_dim, VisionScheduleConfig::heads, patches});
+                Tensor k(static_cast<unsigned char*>(qkv.data) + plane_bytes, qkv.device,
+                         DType::BF16, {VisionScheduleConfig::head_dim, VisionScheduleConfig::heads,
+                                       patches});
+                Tensor v(static_cast<unsigned char*>(qkv.data) + 2 * plane_bytes, qkv.device,
+                         DType::BF16, {VisionScheduleConfig::head_dim, VisionScheduleConfig::heads,
+                                       patches});
                 q.nb[2] = qkv.nb[1];
                 k.nb[2] = qkv.nb[1];
                 v.nb[2] = qkv.nb[1];
@@ -350,9 +354,9 @@ void VisionContext::encode(const VisionItemView& item, Tensor& output, DeviceSpa
                                               control.segment_length, attended_heads, stream);
             }
             Tensor projected = layout.projected.bind(backing);
-            ops::linear(attended, *block.projection, projected, stream);
-            ops::add_bias(*block.projection_bias, projected, stream);
-            ops::residual_add(projected, x, stream);
+            ops::linear(attended, *block.projection, projected, execution);
+            ops::add_bias(*block.projection_bias, projected, execution);
+            ops::residual_add(projected, x, execution);
         }
         {
             nvtx::ScopedRange mlp_range(nvtx::Name::VisionMlp, nvtx::Category::PostMixer,
@@ -362,14 +366,14 @@ void VisionContext::encode(const VisionItemView& item, Tensor& output, DeviceSpa
             {
                 Tensor h = layout.mlp_norm.bind(backing);
                 ops::layer_norm(x, *block.norm2_weight, *block.norm2_bias,
-                                VisionScheduleConfig::norm_eps, h, stream);
-                ops::linear(h, *block.fc1, up, stream);
+                                VisionScheduleConfig::norm_eps, h, execution);
+                ops::linear(h, *block.fc1, up, execution);
             }
-            ops::add_bias(*block.fc1_bias, up, stream);
-            ops::gelu(up, ops::GeluMode::Tanh, stream);
-            ops::linear(up, *block.fc2, down, stream);
-            ops::add_bias(*block.fc2_bias, down, stream);
-            ops::residual_add(down, x, stream);
+            ops::add_bias(*block.fc1_bias, up, execution);
+            ops::gelu(up, ops::GeluMode::Tanh, execution);
+            ops::linear(up, *block.fc2, down, execution);
+            ops::add_bias(*block.fc2_bias, down, execution);
+            ops::residual_add(down, x, execution);
         }
     }
 
@@ -378,19 +382,19 @@ void VisionContext::encode(const VisionItemView& item, Tensor& output, DeviceSpa
                                       static_cast<std::uint64_t>(tokens64));
         Tensor normalized = layout.normalized.bind(backing);
         ops::layer_norm(x, *merger_.norm_weight, *merger_.norm_bias, VisionScheduleConfig::norm_eps,
-                        normalized, stream);
+                        normalized, execution);
         Tensor merged = normalized.view({VisionScheduleConfig::merger_hidden, tokens});
         Tensor hidden = layout.merger_hidden.bind(backing);
-        ops::linear(merged, *merger_.fc1, hidden, stream);
-        ops::add_bias(*merger_.fc1_bias, hidden, stream);
-        ops::gelu(hidden, ops::GeluMode::Exact, stream);
-        ops::linear(hidden, *merger_.fc2, output, stream);
-        ops::add_bias(*merger_.fc2_bias, output, stream);
+        ops::linear(merged, *merger_.fc1, hidden, execution);
+        ops::add_bias(*merger_.fc1_bias, hidden, execution);
+        ops::gelu(hidden, ops::GeluMode::Exact, execution);
+        ops::linear(hidden, *merger_.fc2, output, execution);
+        ops::add_bias(*merger_.fc2_bias, output, execution);
     }
 }
 
 VisionPrefillSession::VisionPrefillSession(DeviceContext& device, const LoadedModelData& model,
-                                           DeviceSpan workspace,
+                                           MemorySpan workspace,
                                            const VisionWorkspacePlan& workspace_plan,
                                            qwen3_8_flash_next::PreparedPromptData& prompt,
                                            const VisionPrefillPlan& plan,

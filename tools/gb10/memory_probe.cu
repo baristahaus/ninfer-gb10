@@ -8,8 +8,7 @@
 // repeats the compression comparison on real weight bytes.
 //
 // Build (no libcuda link needed; driver-API calls go through the runtime entry-point query):
-//   nvcc -O3 -std=c++17 -arch=sm_120a tools/gb10/memory_probe.cu -o memory_probe
-//   (RTX 5090 box; use sm_121a on GB10)
+//   nvcc -O3 -std=c++17 -arch=sm_121a tools/gb10/memory_probe.cu -o memory_probe
 // Run on an otherwise idle machine; nothing else should hold the GPU.
 
 #include <cuda.h>

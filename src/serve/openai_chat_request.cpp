@@ -19,12 +19,6 @@ void require_object(const Json& value, const char* message, const char* param = 
     if (!value.is_object()) { bad_request(message, param == nullptr ? "" : param); }
 }
 
-bool get_bool(const Json& object, const char* key, bool fallback) {
-    if (!object.contains(key) || object.at(key).is_null()) { return fallback; }
-    if (!object.at(key).is_boolean()) { bad_request(std::string(key) + " must be a boolean", key); }
-    return object.at(key).get<bool>();
-}
-
 std::optional<bool> get_optional_bool(const Json& object, const char* key) {
     if (!object.contains(key) || object.at(key).is_null()) { return std::nullopt; }
     if (!object.at(key).is_boolean()) {
@@ -112,26 +106,22 @@ void validate_standard_output_controls(const Json& body) {
             }
         }
     }
-    // Per-token probability reporting is answered when the Engine was loaded with --token-logprobs.
-    // The request layer only fixes the shape here: a boolean flag and at most the sampler's own
-    // candidate ceiling of 20 reported alternatives. Whether this server can answer, and whether the
-    // route supports it at all, is decided against the loaded Engine.
     if (body.contains("logprobs") && !body.at("logprobs").is_null()) {
         if (!body.at("logprobs").is_boolean()) {
             bad_request("logprobs must be a boolean", "logprobs");
         }
+        if (body.at("logprobs").get<bool>()) {
+            bad_request("logprobs=true requires per-token log probabilities in the response, which "
+                        "NInfer does not provide",
+                        "logprobs", "logprobs_not_supported");
+        }
     }
     if (const std::optional<int> top_logprobs = optional_int(body, "top_logprobs")) {
-        if (*top_logprobs < 0 || *top_logprobs > 20) {
-            bad_request("top_logprobs must be in [0,20]", "top_logprobs");
-        }
-        // Alternatives without reports has no defined answer, and silently dropping the field hides a
-        // client's intent, so the combination fails instead.
-        const bool requested =
-            body.contains("logprobs") && !body.at("logprobs").is_null() &&
-            body.at("logprobs").is_boolean() && body.at("logprobs").get<bool>();
-        if (*top_logprobs > 0 && !requested) {
-            bad_request("top_logprobs requires logprobs=true", "top_logprobs");
+        if (*top_logprobs != 0) {
+            bad_request(
+                "nonzero top_logprobs requires alternative-token probabilities in the response, "
+                "which NInfer does not provide",
+                "top_logprobs", "logprobs_not_supported");
         }
     }
 
@@ -580,7 +570,7 @@ void parse_tools(const Json& body, GenerationRequest& output) {
         const Json& function = item.at("function");
         ToolDefinition tool;
         tool.schema_param = "tools/" + std::to_string(output.tools.size()) + "/function/parameters";
-        tool.name = require_function_name(function, "tools");
+        tool.name         = require_function_name(function, "tools");
         if (function.contains("description") && !function.at("description").is_null()) {
             if (!function.at("description").is_string()) {
                 bad_request("function description must be a string", "tools");
@@ -702,7 +692,6 @@ void parse_parallel_tool_calls(const Json& body, GenerationRequest& output) {
 }
 
 void parse_stop(const Json& body, GenerationRequest& output) {
-    output.ignore_eos = get_bool(body, "ignore_eos", false);
     if (!body.contains("stop") || body.at("stop").is_null()) { return; }
     output.stop_strings_apply_to_reasoning = true;
     const Json& stop                       = body.at("stop");
@@ -795,11 +784,11 @@ void parse_reasoning_effort(const Json& body, GenerationRequest& output) {
 }
 
 void parse_stream_options(const Json& body, OpenAIChatRequest& output) {
-    output.stream = get_bool(body, "stream", false);
+    output.stream = optional_bool(body, "stream", false);
     if (!body.contains("stream_options") || body.at("stream_options").is_null()) { return; }
     const Json& options = body.at("stream_options");
     if (!options.is_object()) { bad_request("stream_options must be an object", "stream_options"); }
-    output.include_usage = get_bool(options, "include_usage", false);
+    output.include_usage = optional_bool(options, "include_usage", false);
     if (options.contains("include_obfuscation") && !options.at("include_obfuscation").is_null() &&
         !options.at("include_obfuscation").is_boolean()) {
         bad_request("include_obfuscation must be a boolean", "stream_options");
@@ -807,12 +796,8 @@ void parse_stream_options(const Json& body, OpenAIChatRequest& output) {
 }
 
 void parse_response_observations(const Json& body, OpenAIChatRequest& output) {
-    output.timings_per_token = get_bool(body, "timings_per_token", false);
-    output.return_progress   = get_bool(body, "return_progress", false);
-    // Reporting fields join the other response-shape flags here: they change what the response
-    // carries, not what the Engine generates.
-    output.logprobs     = get_bool(body, "logprobs", false);
-    output.top_logprobs = optional_int(body, "top_logprobs").value_or(0);
+    output.timings_per_token = optional_bool(body, "timings_per_token", false);
+    output.return_progress   = optional_bool(body, "return_progress", false);
 }
 
 void parse_output_limit(const Json& body, const RequestLimits& limits, OpenAIChatRequest& output) {

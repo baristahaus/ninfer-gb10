@@ -2,26 +2,11 @@
 
 #include "runtime/contract/request.h"
 #include "runtime/contract/timing.h"
-#include <compare>
-#include <cstddef>
-#include <cstdint>
+#include <array>
 #include <span>
+#include <compare>
 
 namespace ninfer::runtime {
-
-// Borrowed for one synchronous Program call. Engine maps compact rows to request-owned matchers.
-class TokenMaskProvider {
-public:
-    virtual ~TokenMaskProvider()                                           = default;
-    [[nodiscard]] virtual bool constrained(std::size_t row) const noexcept = 0;
-    // Fills one packed vocabulary mask per position: position 0 extends the committed output and
-    // position i extends it by drafts[0..i). Returns dead-end position bits. Even dead/unreachable
-    // positions receive a safe nonempty mask; a dead end fails a row only if verification reaches
-    // that position.
-    [[nodiscard]] virtual std::uint32_t fill(std::size_t row, std::span<const TokenId> drafts,
-                                             std::span<std::uint32_t> words) = 0;
-    virtual void uploaded(std::size_t row, std::size_t bytes) noexcept       = 0;
-};
 
 struct LaneId {
     std::uint32_t value = 0;
@@ -39,15 +24,7 @@ enum class CommitDisposition : std::uint8_t {
     Active,
     Finishable,
     CancelledReleased,
-    // A constrained row reached a position with no legal token; it commits nothing.
     FailedReleased,
-};
-
-// The product Engine only needs statistics for rows whose sequence is released by commit.
-// Direct diagnostic callers may temporarily request cumulative snapshots for every row.
-enum class CommitObservation : std::uint8_t {
-    ReleasedRowsOnly,
-    AllRows,
 };
 
 struct CommitDecision {
@@ -60,12 +37,31 @@ struct CommitDecision {
     std::optional<std::uint32_t> prefix_execution_split_after;
 };
 
+struct ExecutionComplete {
+    ExecutionSample sample;
+    std::size_t row_count = 0;
+};
+
 struct BeginSummary {
     std::uint32_t prompt_tokens        = 0;
     std::uint32_t reused_prompt_tokens = 0;
     PrefixReusePath prefix_reuse_path  = PrefixReusePath::Root;
 
     [[nodiscard]] friend constexpr bool operator==(BeginSummary, BeginSummary) noexcept = default;
+};
+
+struct RoundBudget {
+    std::uint32_t generated_tokens_remaining = 0;
+};
+
+
+// Master-generation round-report contract: token-logprob egress views and the commit
+// observation switch the Flash-Next instance and serving adapters consume. Additive.
+// The product Engine only needs statistics for rows whose sequence is released by commit.
+// Direct diagnostic callers may temporarily request cumulative snapshots for every row.
+enum class CommitObservation : std::uint8_t {
+    ReleasedRowsOnly,
+    AllRows,
 };
 
 // Target-model probability reports for one round's published tokens, laid out exactly like the
@@ -100,10 +96,6 @@ struct PrefillStepResult {
     std::uint32_t processed_prompt_tokens = 0;
     bool complete                         = false;
     ExecutionTiming timing;
-};
-
-struct RoundBudget {
-    std::uint32_t generated_tokens_remaining = 0;
 };
 
 } // namespace ninfer::runtime

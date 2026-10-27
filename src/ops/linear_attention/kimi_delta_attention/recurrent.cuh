@@ -1,13 +1,12 @@
 #pragma once
 
-#include "ops/common/math.cuh"
-#include "ops/common/memory.cuh"
-#include "ops/common/warp.cuh"
+#include "ops/common/numeric/math.cuh"
+#include "ops/common/numeric/convert.cuh"
+#include "ops/common/cuda/reduce.cuh"
+#include "ops/common/cuda/memory.cuh"
 #include "ops/linear_attention/kimi_delta_attention/launch.h"
-
 #include <cuda_bf16.h>
 #include <cuda_runtime.h>
-
 #include <cstdint>
 
 namespace ninfer::ops::detail::kimi_delta_attention {
@@ -15,7 +14,7 @@ namespace ninfer::ops::detail::kimi_delta_attention {
 inline constexpr int kDvPerWarp = 4;
 inline constexpr int kNumWarps  = 4;
 inline constexpr int kBlockDv   = kNumWarps * kDvPerWarp;
-inline constexpr int kQkPerLane = kStateDim / kWarpSize;
+inline constexpr int kQkPerLane = kStateDim / common::kWarpSize;
 
 static_assert(kQkPerLane == 4);
 static_assert(kStateDim % kBlockDv == 0);
@@ -34,9 +33,9 @@ __device__ __forceinline__ void normalize_qk(float (&values)[kQkPerLane], int la
     for (int index = 0; index < kQkPerLane; ++index) {
         sum = fmaf(values[index], values[index], sum);
     }
-    sum       = warp_reduce_sum(sum);
+    sum       = common::warp_reduce_sum(sum);
     float inv = lane == 0 ? rsqrtf(sum + kQkL2NormEps) : 0.0F;
-    inv       = __shfl_sync(kFullWarpMask, inv, 0);
+    inv       = __shfl_sync(common::kFullWarpMask, inv, 0);
 #pragma unroll
     for (int index = 0; index < kQkPerLane; ++index) { values[index] *= inv; }
 }
@@ -45,9 +44,10 @@ __device__ __forceinline__ void load_state(float (&state)[kDvPerWarp][kQkPerLane
                                            const float* base, int dv_base, int dqk_base) {
 #pragma unroll
     for (int row = 0; row < kDvPerWarp; ++row) {
-        store_vec(state[row],
-                  load_vec<float4>(base + static_cast<std::int64_t>(dv_base + row) * kStateDim +
-                                   dqk_base));
+        common::store_vec(
+            state[row],
+            common::load_vec<float4>(base + static_cast<std::int64_t>(dv_base + row) * kStateDim +
+                                     dqk_base));
     }
 }
 
@@ -55,8 +55,8 @@ __device__ __forceinline__ void store_state(const float (&state)[kDvPerWarp][kQk
                                             float* base, int dv_base, int dqk_base) {
 #pragma unroll
     for (int row = 0; row < kDvPerWarp; ++row) {
-        store_vec(base + static_cast<std::int64_t>(dv_base + row) * kStateDim + dqk_base,
-                  load_vec<float4>(state[row]));
+        common::store_vec(base + static_cast<std::int64_t>(dv_base + row) * kStateDim + dqk_base,
+                          common::load_vec<float4>(state[row]));
     }
 }
 
@@ -71,8 +71,8 @@ __device__ __forceinline__ void apply_transition(float (&state)[kDvPerWarp][kQkP
         for (int column = 0; column < kQkPerLane; ++column) {
             prediction = fmaf(state[row][column] * alpha[column], key[column], prediction);
         }
-        prediction        = warp_sum<kWarpSize>(prediction);
-        const float value = __shfl_sync(kFullWarpMask, value_local, row);
+        prediction        = common::warp_sum<common::kWarpSize>(prediction);
+        const float value = __shfl_sync(common::kFullWarpMask, value_local, row);
         const float delta = beta * (value - prediction);
 #pragma unroll
         for (int column = 0; column < kQkPerLane; ++column) {
@@ -93,7 +93,7 @@ __device__ __forceinline__ void store_readout(const float (&state)[kDvPerWarp][k
         for (int column = 0; column < kQkPerLane; ++column) {
             partial = fmaf(state[row][column], query[column], partial);
         }
-        partial = warp_sum<kWarpSize>(partial);
+        partial = common::warp_sum<common::kWarpSize>(partial);
         if (lane == row) { result = partial; }
     }
     if (lane < kDvPerWarp) { output[dv_base + lane] = __float2bfloat16(result * scale); }
@@ -108,23 +108,25 @@ run_recurrent_token(float (&state)[kDvPerWarp][kQkPerLane], const __nv_bfloat16*
                     float lower_bound, float scale) {
     float key[kQkPerLane];
     float query[kQkPerLane];
-    load_bf16x4(key, key_source + dqk_base);
-    load_bf16x4(query, query_source + dqk_base);
+    common::load_bf16x4(key, key_source + dqk_base);
+    common::load_bf16x4(query, query_source + dqk_base);
     normalize_qk(key, lane);
     normalize_qk(query, lane);
 
     const float gate_raw = __bfloat162float(gate_source[thread]);
     const float log_alpha =
-        lower_bound * sigmoid_approx(a_scale * (gate_raw + dt_bias_source[thread]));
-    gate_stage.alpha[stage][thread] = exp_approx_ftz(log_alpha);
-    if (thread == 0) { gate_stage.beta[stage] = sigmoid_approx(__bfloat162float(*beta_source)); }
+        lower_bound * common::sigmoid_approx(a_scale * (gate_raw + dt_bias_source[thread]));
+    gate_stage.alpha[stage][thread] = common::exp_approx_ftz(log_alpha);
+    if (thread == 0) {
+        gate_stage.beta[stage] = common::sigmoid_approx(__bfloat162float(*beta_source));
+    }
 
     // Alpha and beta are produced once per CTA. Direct alternates buffers so the writes for a
     // later token cannot race state warps still consuming the preceding token.
     __syncthreads();
 
     float alpha[kQkPerLane];
-    store_vec(alpha, load_vec<float4>(gate_stage.alpha[stage] + dqk_base));
+    common::store_vec(alpha, common::load_vec<float4>(gate_stage.alpha[stage] + dqk_base));
 
     float value_local = 0.0F;
     if (lane < kDvPerWarp) { value_local = __bfloat162float(value_source[dv_base + lane]); }
@@ -132,7 +134,7 @@ run_recurrent_token(float (&state)[kDvPerWarp][kQkPerLane], const __nv_bfloat16*
     store_readout(state, query, output, dv_base, lane, scale);
 }
 
-__global__ void __launch_bounds__(kWarpSize* kNumWarps, 2) recurrent_direct_kernel(
+__global__ void __launch_bounds__(common::kWarpSize* kNumWarps, 2) recurrent_direct_kernel(
     const __nv_bfloat16* __restrict__ q, const __nv_bfloat16* __restrict__ k,
     const __nv_bfloat16* __restrict__ v, const __nv_bfloat16* __restrict__ g,
     const __nv_bfloat16* __restrict__ beta, const float* __restrict__ a_log,
@@ -143,7 +145,7 @@ __global__ void __launch_bounds__(kWarpSize* kNumWarps, 2) recurrent_direct_kern
 
     const int lane          = threadIdx.x;
     const int warp          = threadIdx.y;
-    const int thread        = warp * kWarpSize + lane;
+    const int thread        = warp * common::kWarpSize + lane;
     const int head          = static_cast<int>(blockIdx.x);
     const int state_tile    = static_cast<int>(blockIdx.z);
     const int dv_base       = state_tile * kBlockDv + warp * kDvPerWarp;
@@ -172,7 +174,7 @@ __global__ void __launch_bounds__(kWarpSize* kNumWarps, 2) recurrent_direct_kern
     store_state(state, state_write + state_offset, dv_base, dqk_base);
 }
 
-__global__ void __launch_bounds__(kWarpSize* kNumWarps, 2) recurrent_batch_update_kernel(
+__global__ void __launch_bounds__(common::kWarpSize* kNumWarps, 2) recurrent_batch_update_kernel(
     const __nv_bfloat16* __restrict__ q, const __nv_bfloat16* __restrict__ k,
     const __nv_bfloat16* __restrict__ v, const __nv_bfloat16* __restrict__ g,
     const __nv_bfloat16* __restrict__ beta, const float* __restrict__ a_log,
@@ -184,7 +186,7 @@ __global__ void __launch_bounds__(kWarpSize* kNumWarps, 2) recurrent_batch_updat
 
     const int lane       = threadIdx.x;
     const int warp       = threadIdx.y;
-    const int thread     = warp * kWarpSize + lane;
+    const int thread     = warp * common::kWarpSize + lane;
     const int head       = static_cast<int>(blockIdx.x);
     const int batch      = static_cast<int>(blockIdx.y);
     const int state_tile = static_cast<int>(blockIdx.z);

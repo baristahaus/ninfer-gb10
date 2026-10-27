@@ -136,11 +136,12 @@ __global__ __launch_bounds__(kRouterThreads, 2) void sparse_moe_prefill_router_m
     }
 }
 
-__global__ void sparse_moe_prefill_select_count_kernel(
-    const float* __restrict__ scores, int* __restrict__ ids, float* __restrict__ alpha,
-    float* __restrict__ shared_scale, int* __restrict__ local_rank,
-    int* __restrict__ tile_counts, int tokens,
-    std::uint32_t* __restrict__ expert_activations) {
+__global__ void sparse_moe_prefill_select_count_kernel(const float* __restrict__ scores,
+                                                       int* __restrict__ ids,
+                                                       float* __restrict__ alpha,
+                                                       float* __restrict__ shared_scale,
+                                                       int* __restrict__ local_rank,
+                                                       int* __restrict__ tile_counts, int tokens) {
     __shared__ int counts[kExperts];
     __shared__ float selected_logits[kSparseMoeRouteTileTokens][kTopK];
     const int tid  = static_cast<int>(threadIdx.x);
@@ -154,8 +155,7 @@ __global__ void sparse_moe_prefill_select_count_kernel(
         sparse_moe_select_top8_warp(scores + static_cast<std::int64_t>(token) *
                                                  kSparseMoeRouterScoreRows,
                                     ids + token * kTopK, alpha + token * kTopK,
-                                    shared_scale + token, selected_logits[warp],
-                                    expert_activations);
+                                    shared_scale + token, selected_logits[warp]);
         __syncwarp();
         if (lane == 0) {
 #pragma unroll
@@ -323,9 +323,7 @@ __global__ __launch_bounds__(ExpertWarps * 32, 3) void sparse_moe_prefill_q4_gat
     const int* __restrict__ expert_offsets, const int* __restrict__ route_job_experts,
     const int* __restrict__ route_job_columns, const int* __restrict__ route_job_count,
     const std::uint8_t* __restrict__ codes, const std::uint8_t* __restrict__ scales,
-    __nv_bfloat16* __restrict__ activation, const std::uint8_t* __restrict__ warm_codes,
-    const std::uint8_t* __restrict__ warm_scales,
-    const unsigned* __restrict__ expert_residency) {
+    __nv_bfloat16* __restrict__ activation) {
     if constexpr (Route != GateUpRoute::Any) {
         const bool spread =
             route_job_count[0] * kGateUpDeepJobsDen < kGateUpDeepJobsNum * route_job_count[1];
@@ -364,11 +362,6 @@ __global__ __launch_bounds__(ExpertWarps * 32, 3) void sparse_moe_prefill_q4_gat
         const int route_job   = work / row_blocks;
         const int row_block   = work - route_job * row_blocks;
         const int expert      = route_job_experts[route_job];
-        bool tier_warm = false;
-        int tier_expert = expert;
-        sparse_moe_residency(expert_residency, expert, tier_warm, tier_expert);
-        const std::uint8_t* tier_codes  = tier_warm ? warm_codes : codes;
-        const std::uint8_t* tier_scales = tier_warm ? warm_scales : scales;
         const int logical0    = row_block * (kExpertBM / 2);
         const int begin       = expert_offsets[expert];
         const int count       = expert_offsets[expert + 1] - begin;
@@ -390,7 +383,7 @@ __global__ __launch_bounds__(ExpertWarps * 32, 3) void sparse_moe_prefill_q4_gat
 
         auto global_row = [&](int local_row) {
             const int logical = logical0 + (local_row & (kExpertBM / 2 - 1));
-            return tier_expert * 1024 + logical + (local_row >= kExpertBM / 2 ? kIntermediate : 0);
+            return expert * 1024 + logical + (local_row >= kExpertBM / 2 ? kIntermediate : 0);
         };
 
         auto stage_scales = [&] {
@@ -401,8 +394,7 @@ __global__ __launch_bounds__(ExpertWarps * 32, 3) void sparse_moe_prefill_q4_gat
                 const int chunk = item - row * ChunksPerRow;
                 const std::int64_t gi =
                     static_cast<std::int64_t>(global_row(row)) * GroupsPerRow + chunk * 8;
-                cp_async<16, Cache::cg>(&Sr[row * ScaleBytesPerRow + chunk * 16],
-                                        &tier_scales[gi * 2]);
+                cp_async<16, Cache::cg>(&Sr[row * ScaleBytesPerRow + chunk * 16], &scales[gi * 2]);
             }
         };
 
@@ -424,7 +416,7 @@ __global__ __launch_bounds__(ExpertWarps * 32, 3) void sparse_moe_prefill_q4_gat
                 const std::int64_t gi =
                     static_cast<std::int64_t>(global_row(row)) * GroupsPerRow + group;
                 cp_async<16, Cache::cg>(&Cr[stage][row * 32 + half * 16],
-                                        &tier_codes[gi * 32 + half * 16]);
+                                        &codes[gi * 32 + half * 16]);
             }
         };
 
@@ -556,9 +548,7 @@ template <bool Routed, bool Adaptive = false>
 __global__ __launch_bounds__(kExpertThreads, 1) void sparse_moe_prefill_q8_gate_up_kernel(
     const __nv_bfloat16* __restrict__ input, const int* __restrict__ expert_offsets,
     const std::uint8_t* __restrict__ codes, const std::uint8_t* __restrict__ scales,
-    __nv_bfloat16* __restrict__ activation, int tokens, const int* __restrict__ route_job_count,
-    const std::uint8_t* __restrict__ warm_codes, const std::uint8_t* __restrict__ warm_scales,
-    const unsigned* __restrict__ expert_residency) {
+    __nv_bfloat16* __restrict__ activation, int tokens, const int* __restrict__ route_job_count) {
     __shared__ __align__(16) __nv_bfloat16 As[kExpertBM * kExpertBK];
     __shared__ __align__(16) __nv_bfloat16 Bs[kExpertStages][kExpertBN * kExpertBK];
     __shared__ __align__(16) std::uint8_t Cr[kExpertBM * kExpertBK];
@@ -570,12 +560,7 @@ __global__ __launch_bounds__(kExpertThreads, 1) void sparse_moe_prefill_q8_gate_
     if constexpr (Adaptive) {
         if (*route_job_count < 0) { return; }
     }
-    const int expert      = Routed ? static_cast<int>(blockIdx.y) : 0;
-    bool tier_warm = false;
-    int tier_expert = expert;
-    if (Routed) { sparse_moe_residency(expert_residency, expert, tier_warm, tier_expert); }
-    const std::uint8_t* tier_codes  = tier_warm ? warm_codes : codes;
-    const std::uint8_t* tier_scales = tier_warm ? warm_scales : scales;
+    const int expert   = Routed ? static_cast<int>(blockIdx.y) : 0;
     const int logical0 = static_cast<int>(blockIdx.x) * (kExpertBM / 2);
     const int begin    = Routed ? expert_offsets[expert] : static_cast<int>(blockIdx.y) * kExpertBN;
     const int count    = Routed ? expert_offsets[expert + 1] - begin
@@ -601,7 +586,7 @@ __global__ __launch_bounds__(kExpertThreads, 1) void sparse_moe_prefill_q8_gate_
         auto global_row = [&](int local_row) {
             const int logical = logical0 + (local_row & (kExpertBM / 2 - 1));
             const int row     = logical + (local_row >= kExpertBM / 2 ? kIntermediate : 0);
-            return (Routed ? tier_expert * 1024 : 0) + row;
+            return (Routed ? expert * 1024 : 0) + row;
         };
 
         auto stage_x = [&](int stage, int kt) {
@@ -628,13 +613,13 @@ __global__ __launch_bounds__(kExpertThreads, 1) void sparse_moe_prefill_q8_gate_
                 const std::int64_t gi =
                     static_cast<std::int64_t>(global_row(row)) * groups_per_row + group0;
                 cp_async<16, Cache::cg>(&Cr[row * kExpertBK + chunk * 16],
-                                        &tier_codes[gi * 32 + chunk * 16]);
+                                        &codes[gi * 32 + chunk * 16]);
             }
             if ((kt % scale_cache_tiles) == 0) {
                 for (int row = tid; row < kExpertBM; row += kExpertThreads) {
                     const std::int64_t gi =
                         static_cast<std::int64_t>(global_row(row)) * groups_per_row + group0;
-                    cp_async<16, Cache::cg>(&Sr[row * 16], &tier_scales[gi * 2]);
+                    cp_async<16, Cache::cg>(&Sr[row * 16], &scales[gi * 2]);
                 }
             }
         };
@@ -776,9 +761,7 @@ __global__ __launch_bounds__(ExpertWarps * 32, 3) void sparse_moe_prefill_qx_dow
     const int* __restrict__ route_job_experts, const int* __restrict__ route_job_columns,
     const int* __restrict__ route_job_count, const std::uint8_t* __restrict__ codes,
     const std::uint8_t* __restrict__ high, const std::uint8_t* __restrict__ scales,
-    __nv_bfloat16* __restrict__ output, const std::uint8_t* __restrict__ warm_codes,
-    const std::uint8_t* __restrict__ warm_high, const std::uint8_t* __restrict__ warm_scales,
-    const unsigned* __restrict__ expert_residency) {
+    __nv_bfloat16* __restrict__ output) {
     constexpr int ExpertThreads = ExpertWarps * 32;
     constexpr int GroupsPerRow  = kIntermediate / 64;
     __shared__ __align__(16) __nv_bfloat16 As[kExpertBM * kExpertBK];
@@ -806,12 +789,6 @@ __global__ __launch_bounds__(ExpertWarps * 32, 3) void sparse_moe_prefill_qx_dow
         const int route_job   = work / row_blocks;
         const int row_block   = work - route_job * row_blocks;
         const int expert      = route_job_experts[route_job];
-        bool tier_warm = false;
-        int tier_expert = expert;
-        sparse_moe_residency(expert_residency, expert, tier_warm, tier_expert);
-        const std::uint8_t* tier_codes   = tier_warm ? warm_codes : codes;
-        const std::uint8_t* tier_high    = tier_warm ? warm_high : high;
-        const std::uint8_t* tier_scales  = tier_warm ? warm_scales : scales;
         const int row0        = row_block * kExpertBM;
         const int begin       = expert_offsets[expert];
         const int count       = expert_offsets[expert + 1] - begin;
@@ -821,9 +798,9 @@ __global__ __launch_bounds__(ExpertWarps * 32, 3) void sparse_moe_prefill_qx_dow
 
         auto stage_scales = [&] {
             for (int row = tid; row < kExpertBM; row += ExpertThreads) {
-                const int global_row  = tier_expert * kHidden + row0 + row;
+                const int global_row  = expert * kHidden + row0 + row;
                 const std::int64_t gi = static_cast<std::int64_t>(global_row) * GroupsPerRow;
-                cp_async<16, Cache::cg>(&Sr[row * GroupsPerRow * 2], &tier_scales[gi * 2]);
+                cp_async<16, Cache::cg>(&Sr[row * GroupsPerRow * 2], &scales[gi * 2]);
             }
         };
 
@@ -844,20 +821,19 @@ __global__ __launch_bounds__(ExpertWarps * 32, 3) void sparse_moe_prefill_qx_dow
             for (int item = tid; item < kExpertBM * 2; item += ExpertThreads) {
                 const int row         = item >> 1;
                 const int half        = item & 1;
-                const int global_row  = tier_expert * kHidden + row0 + row;
+                const int global_row  = expert * kHidden + row0 + row;
                 const std::int64_t gi = static_cast<std::int64_t>(global_row) * GroupsPerRow + kt;
                 cp_async<16, Cache::cg>(&Cr[stage][row * 32 + half * 16],
-                                        &tier_codes[gi * 32 + half * 16]);
+                                        &codes[gi * 32 + half * 16]);
             }
             for (int row = tid; row < kExpertBM; row += ExpertThreads) {
-                const int global_row  = tier_expert * kHidden + row0 + row;
+                const int global_row  = expert * kHidden + row0 + row;
                 const std::int64_t gi = static_cast<std::int64_t>(global_row) * GroupsPerRow + kt;
                 if constexpr (Codec::kHighBytes == 8) {
-                    cp_async<8>(&Hr[stage][row * Codec::kHighBytes],
-                                &tier_high[gi * Codec::kHighBytes]);
+                    cp_async<8>(&Hr[stage][row * Codec::kHighBytes], &high[gi * Codec::kHighBytes]);
                 } else {
                     cp_async<16, Cache::cg>(&Hr[stage][row * Codec::kHighBytes],
-                                            &tier_high[gi * Codec::kHighBytes]);
+                                            &high[gi * Codec::kHighBytes]);
                 }
             }
         };
@@ -963,9 +939,7 @@ __global__ __launch_bounds__(kExpertThreads, 1) void sparse_moe_prefill_q8_down_
     const std::uint8_t* __restrict__ codes, const std::uint8_t* __restrict__ scales,
     __nv_bfloat16* __restrict__ grouped_output, const float* __restrict__ routed_sum,
     const float* __restrict__ shared_scale, __nv_bfloat16* __restrict__ destination, int tokens,
-    const int* __restrict__ route_job_count, const std::uint8_t* __restrict__ warm_codes,
-    const std::uint8_t* __restrict__ warm_scales,
-    const unsigned* __restrict__ expert_residency) {
+    const int* __restrict__ route_job_count) {
     __shared__ __align__(16) __nv_bfloat16 As[kExpertBM * kExpertBK];
     __shared__ __align__(16) __nv_bfloat16 Bs[kExpertStages][kExpertBN * kExpertBK];
     __shared__ __align__(16) std::uint8_t Cr[kExpertBM * kExpertBK];
@@ -977,12 +951,7 @@ __global__ __launch_bounds__(kExpertThreads, 1) void sparse_moe_prefill_q8_down_
     if constexpr (Adaptive) {
         if (*route_job_count < 0) { return; }
     }
-    const int expert      = Routed ? static_cast<int>(blockIdx.y) : 0;
-    bool tier_warm = false;
-    int tier_expert = expert;
-    if (Routed) { sparse_moe_residency(expert_residency, expert, tier_warm, tier_expert); }
-    const std::uint8_t* tier_codes  = tier_warm ? warm_codes : codes;
-    const std::uint8_t* tier_scales = tier_warm ? warm_scales : scales;
+    const int expert = Routed ? static_cast<int>(blockIdx.y) : 0;
     const int row0   = static_cast<int>(blockIdx.x) * kExpertBM;
     const int begin  = Routed ? expert_offsets[expert] : static_cast<int>(blockIdx.y) * kExpertBN;
     const int count  = Routed ? expert_offsets[expert + 1] - begin
@@ -1027,18 +996,18 @@ __global__ __launch_bounds__(kExpertThreads, 1) void sparse_moe_prefill_q8_down_
             for (int item = tid; item < kExpertBM * (kExpertBK / 16); item += kExpertThreads) {
                 const int row        = item / (kExpertBK / 16);
                 const int chunk      = item - row * (kExpertBK / 16);
-                const int global_row = (Routed ? tier_expert * kHidden : 0) + row0 + row;
+                const int global_row = (Routed ? expert * kHidden : 0) + row0 + row;
                 const std::int64_t gi =
                     static_cast<std::int64_t>(global_row) * groups_per_row + group0;
                 cp_async<16, Cache::cg>(&Cr[row * kExpertBK + chunk * 16],
-                                        &tier_codes[gi * 32 + chunk * 16]);
+                                        &codes[gi * 32 + chunk * 16]);
             }
             if ((kt % scale_cache_tiles) == 0) {
                 for (int row = tid; row < kExpertBM; row += kExpertThreads) {
-                    const int global_row = (Routed ? tier_expert * kHidden : 0) + row0 + row;
+                    const int global_row = (Routed ? expert * kHidden : 0) + row0 + row;
                     const std::int64_t gi =
                         static_cast<std::int64_t>(global_row) * groups_per_row + group0;
-                    cp_async<16, Cache::cg>(&Sr[row * 16], &tier_scales[gi * 2]);
+                    cp_async<16, Cache::cg>(&Sr[row * 16], &scales[gi * 2]);
                 }
             }
         };
@@ -1221,12 +1190,6 @@ void sparse_moe_prefill_launch(const Tensor& x, const SparseMoeWeights& weights,
     const auto* routed_down_codes  = static_cast<const std::uint8_t*>(weights.routed_down.qdata);
     const auto* routed_down_high   = static_cast<const std::uint8_t*>(weights.routed_down.qhigh);
     const auto* routed_down_scales = static_cast<const std::uint8_t*>(weights.routed_down.scales);
-    const auto* warm_gate_codes = static_cast<const std::uint8_t*>(weights.warm_routed_gate_up.qdata);
-    const auto* warm_gate_scales = static_cast<const std::uint8_t*>(weights.warm_routed_gate_up.scales);
-    const auto* warm_down_codes  = static_cast<const std::uint8_t*>(weights.warm_routed_down.qdata);
-    const auto* warm_down_high   = static_cast<const std::uint8_t*>(weights.warm_routed_down.qhigh);
-    const auto* warm_down_scales = static_cast<const std::uint8_t*>(weights.warm_routed_down.scales);
-    const unsigned* expert_residency = weights.expert_residency;
     const auto* shared_gate_codes  = static_cast<const std::uint8_t*>(weights.shared_gate_up.qdata);
     const auto* shared_gate_scales =
         static_cast<const std::uint8_t*>(weights.shared_gate_up.scales);
@@ -1273,8 +1236,7 @@ void sparse_moe_prefill_launch(const Tensor& x, const SparseMoeWeights& weights,
         CUDA_CHECK(cudaGetLastError());
 
         sparse_moe_prefill_select_count_kernel<<<route_tiles, kRouterThreads, 0, stream>>>(
-            scores, ids, alpha, shared_scale, local_rank, tile_counts, tokens,
-            weights.expert_activations);
+            scores, ids, alpha, shared_scale, local_rank, tile_counts, tokens);
         CUDA_CHECK(cudaGetLastError());
 
         const bool wide_plan   = tokens >= kSparseMoePrefillWideMin;
@@ -1328,26 +1290,23 @@ void sparse_moe_prefill_launch(const Tensor& x, const SparseMoeWeights& weights,
                 sparse_moe_prefill_q4_gate_up_kernel<8, 64>
                     <<<routed_gate_blocks, 8 * 32, 0, stream>>>(
                         input, packed_token, offsets, route_job_experts, route_job_columns,
-                        route_job_count, routed_gate_codes, routed_gate_scales, routed_activation,
-                        warm_gate_codes, warm_gate_scales, expert_residency);
+                        route_job_count, routed_gate_codes, routed_gate_scales, routed_activation);
             } else {
                 sparse_moe_prefill_q4_gate_up_kernel<4, 32, kExpertStages, GateUpRoute::Packed>
                     <<<routed_gate_blocks, 4 * 32, 0, stream>>>(
                         input, packed_token, offsets, route_job_experts, route_job_columns,
-                        route_job_count, routed_gate_codes, routed_gate_scales, routed_activation,
-                        warm_gate_codes, warm_gate_scales, expert_residency);
+                        route_job_count, routed_gate_codes, routed_gate_scales, routed_activation);
                 sparse_moe_prefill_q4_gate_up_kernel<4, 32, kGateUpNarrowStages,
                                                      GateUpRoute::Spread>
                     <<<routed_gate_blocks, 4 * 32, 0, stream>>>(
                         input, packed_token, offsets, route_job_experts, route_job_columns,
-                        route_job_count, routed_gate_codes, routed_gate_scales, routed_activation,
-                        warm_gate_codes, warm_gate_scales, expert_residency);
+                        route_job_count, routed_gate_codes, routed_gate_scales, routed_activation);
             }
         } else if (weights.routed_gate_up.qtype == QType::Q8_G32_FP16) {
             sparse_moe_prefill_q8_gate_up_kernel<true>
                 <<<routed_gate_grid, kExpertThreads, 0, stream>>>(
                     grouped_io, offsets, routed_gate_codes, routed_gate_scales, routed_activation,
-                    tokens, nullptr, warm_gate_codes, warm_gate_scales, expert_residency);
+                    tokens, nullptr);
         } else {
             throw std::invalid_argument("sparse_moe prefill: unsupported gate/up codec");
         }
@@ -1359,12 +1318,12 @@ void sparse_moe_prefill_launch(const Tensor& x, const SparseMoeWeights& weights,
             sparse_moe_prefill_q8_gate_up_kernel<false, true>
                 <<<shared_gate_grid, kExpertThreads, 0, stream>>>(
                     input, nullptr, shared_gate_codes, shared_gate_scales, shared_activation,
-                    tokens, route_job_count, nullptr, nullptr, 0);
+                    tokens, route_job_count);
         } else {
             sparse_moe_prefill_q8_gate_up_kernel<false, false>
                 <<<shared_gate_grid, kExpertThreads, 0, stream>>>(
                     input, nullptr, shared_gate_codes, shared_gate_scales, shared_activation,
-                    tokens, nullptr, nullptr, nullptr, 0);
+                    tokens, nullptr);
         }
         CUDA_CHECK(cudaGetLastError());
 
@@ -1376,15 +1335,13 @@ void sparse_moe_prefill_launch(const Tensor& x, const SparseMoeWeights& weights,
                     <<<routed_down_blocks, 8 * 32, 0, stream>>>(
                         routed_activation, offsets, route_job_experts, route_job_columns,
                         route_job_count, routed_down_codes, routed_down_high, routed_down_scales,
-                        grouped_io, warm_down_codes, warm_down_high, warm_down_scales,
-                        expert_residency);
+                        grouped_io);
             } else {
                 sparse_moe_prefill_qx_down_kernel<Q5DownMma, 4, 32>
                     <<<routed_down_blocks, 4 * 32, 0, stream>>>(
                         routed_activation, offsets, route_job_experts, route_job_columns,
                         route_job_count, routed_down_codes, routed_down_high, routed_down_scales,
-                        grouped_io, warm_down_codes, warm_down_high, warm_down_scales,
-                        expert_residency);
+                        grouped_io);
             }
             break;
         case QType::Q6_G64_FP16:
@@ -1393,23 +1350,20 @@ void sparse_moe_prefill_launch(const Tensor& x, const SparseMoeWeights& weights,
                     <<<routed_down_blocks, 8 * 32, 0, stream>>>(
                         routed_activation, offsets, route_job_experts, route_job_columns,
                         route_job_count, routed_down_codes, routed_down_high, routed_down_scales,
-                        grouped_io, warm_down_codes, warm_down_high, warm_down_scales,
-                        expert_residency);
+                        grouped_io);
             } else {
                 sparse_moe_prefill_qx_down_kernel<Q6DownMma, 4, 32>
                     <<<routed_down_blocks, 4 * 32, 0, stream>>>(
                         routed_activation, offsets, route_job_experts, route_job_columns,
                         route_job_count, routed_down_codes, routed_down_high, routed_down_scales,
-                        grouped_io, warm_down_codes, warm_down_high, warm_down_scales,
-                        expert_residency);
+                        grouped_io);
             }
             break;
         case QType::Q8_G32_FP16:
             sparse_moe_prefill_q8_down_kernel<true>
                 <<<routed_down_grid, kExpertThreads, 0, stream>>>(
                     routed_activation, offsets, routed_down_codes, routed_down_scales, grouped_io,
-                    nullptr, nullptr, nullptr, tokens, nullptr, warm_down_codes, warm_down_scales,
-                    expert_residency);
+                    nullptr, nullptr, nullptr, tokens, nullptr);
             break;
         default:
             throw std::invalid_argument("sparse_moe prefill: unsupported down codec");
@@ -1430,12 +1384,12 @@ void sparse_moe_prefill_launch(const Tensor& x, const SparseMoeWeights& weights,
             sparse_moe_prefill_q8_down_kernel<false, true>
                 <<<shared_down_grid, kExpertThreads, 0, stream>>>(
                     shared_activation, nullptr, shared_down_codes, shared_down_scales, nullptr,
-                    routed_sum, shared_scale, output, tokens, route_job_count, nullptr, nullptr, 0);
+                    routed_sum, shared_scale, output, tokens, route_job_count);
         } else {
             sparse_moe_prefill_q8_down_kernel<false, false>
                 <<<shared_down_grid, kExpertThreads, 0, stream>>>(
                     shared_activation, nullptr, shared_down_codes, shared_down_scales, nullptr,
-                    routed_sum, shared_scale, output, tokens, nullptr, nullptr, nullptr, 0);
+                    routed_sum, shared_scale, output, tokens, nullptr);
         }
         CUDA_CHECK(cudaGetLastError());
     }

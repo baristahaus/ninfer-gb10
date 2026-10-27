@@ -46,8 +46,8 @@ namespace ninfer::ops {
  * latter may change private launch decomposition but never the mathematical result.
  */
 void gdn_gating_proj(const Tensor& x, const Weight& a_weight, const Weight& b_weight,
-                     const Tensor& A_log, const Tensor& dt_bias, WorkspaceArena& ws, Tensor& g,
-                     Tensor& beta, DeviceExecutionView execution);
+                     const Tensor& A_log, const Tensor& dt_bias, MemoryArena& ws, Tensor& g,
+                     Tensor& beta, CudaExecutionView execution);
 
 /**
  * Registered contiguous-parent storage forms of gdn_gating_proj:
@@ -60,8 +60,8 @@ void gdn_gating_proj(const Tensor& x, const Weight& a_weight, const Weight& b_we
  * and non-overlap requirements match the two-weight form.
  */
 void gdn_gating_proj(const Tensor& x, const Weight& ab_weight, const Tensor& A_log,
-                     const Tensor& dt_bias, WorkspaceArena& ws, Tensor& g, Tensor& beta,
-                     DeviceExecutionView execution);
+                     const Tensor& dt_bias, MemoryArena& ws, Tensor& g, Tensor& beta,
+                     CudaExecutionView execution);
 
 /**
  * Applies the Qwen3.6 GDN input RMSNorm and control projection as one semantic Op:
@@ -85,13 +85,13 @@ void gdn_gating_proj(const Tensor& x, const Weight& ab_weight, const Tensor& A_l
  */
 void gdn_norm_gating_proj(const Tensor& x, const Tensor& norm_weight, float eps,
                           const Weight& a_weight, const Weight& b_weight, const Tensor& A_log,
-                          const Tensor& dt_bias, WorkspaceArena& ws, Tensor& h, Tensor& g,
-                          Tensor& beta, DeviceExecutionView execution);
+                          const Tensor& dt_bias, MemoryArena& ws, Tensor& h, Tensor& g,
+                          Tensor& beta, CudaExecutionView execution);
 
 /** The Qwen3.8-27B and Qwen3.6-35B-A3B contiguous-parent storage forms described above. */
 void gdn_norm_gating_proj(const Tensor& x, const Tensor& norm_weight, float eps,
                           const Weight& ab_weight, const Tensor& A_log, const Tensor& dt_bias,
-                          WorkspaceArena& ws, Tensor& h, Tensor& g, Tensor& beta,
-                          DeviceExecutionView execution);
+                          MemoryArena& ws, Tensor& h, Tensor& g, Tensor& beta,
+                          CudaExecutionView execution);
 
 } // namespace ninfer::ops

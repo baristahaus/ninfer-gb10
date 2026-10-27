@@ -1,9 +1,10 @@
 #include "model_context_fixture.h"
+#include "core/buffer.h"
 
 #include "artifact/reader.h"
 #include "core/arena.h"
 #include "core/device.h"
-#include "core/host_kv_arena.h"
+#include "models/common/context/storage.h"
 #include "core/layout.h"
 #include "core/paged_kv_cache.h"
 #include "ninfer/engine.h"
@@ -152,14 +153,13 @@ std::vector<TransferCase> transfer_cases(std::size_t payload_bytes) {
     return out;
 }
 
-std::vector<DeviceKVPageHandle> select_runs(const std::vector<DeviceKVPageHandle>& physical,
-                                            std::size_t base, std::uint32_t pages,
-                                            std::uint32_t runs) {
+std::vector<std::int32_t> select_runs(const std::vector<std::int32_t>& physical, std::size_t base,
+                                      std::uint32_t pages, std::uint32_t runs) {
     if (pages == 0 || runs == 0 || runs > pages ||
         base + static_cast<std::size_t>(pages) + runs - 1U > physical.size()) {
         throw std::invalid_argument("invalid fragmented transfer selection");
     }
-    std::vector<DeviceKVPageHandle> selected;
+    std::vector<std::int32_t> selected;
     selected.reserve(pages);
     std::size_t cursor           = base;
     std::uint32_t remaining      = pages;
@@ -216,8 +216,8 @@ std::vector<GeometryCase> transfer_geometries() {
 void measure_geometry(DeviceContext& device, const GeometryCase& fixture,
                       const MeasurementOptions& options, std::vector<TransferMeasurement>& output) {
     const HostKVPageLayout host_layout = plan_host_kv_page_layout(fixture.geometry);
-    const std::size_t page_payload =
-        static_cast<std::size_t>(plan_host_kv_transfer_work(host_layout, 1, 1).payload_bytes);
+    std::size_t page_payload           = 0;
+    for (const auto& plane : host_layout.planes) { page_payload += plane.page_payload_bytes; }
     const std::vector<TransferCase> cases = transfer_cases(page_payload);
     std::uint32_t maximum_pages           = 0;
     for (const TransferCase& test : cases) { maximum_pages = std::max(maximum_pages, test.pages); }
@@ -228,73 +228,68 @@ void measure_geometry(DeviceContext& device, const GeometryCase& fixture,
     const DeviceKVPagePoolLayout layout =
         plan_device_kv_page_pool(builder, DeviceKVPagePoolSpec{.page_group_count = physical_pages,
                                                                .geometry = fixture.geometry});
-    DeviceBuffer backing(builder.finish(256, "context-cost transfer fixture"));
-    DeviceKVPagePool pool(DeviceSpan{backing.p, backing.bytes}, layout);
-    auto reservation = pool.reserve(physical_pages);
-    if (!reservation) { throw std::runtime_error("failed to reserve transfer fixture pages"); }
-    std::vector<DeviceKVPageLease> leases;
-    leases.reserve(physical_pages);
-    pool.materialize(*reservation, physical_pages, leases);
-    std::vector<DeviceKVPageHandle> handles;
-    handles.reserve(leases.size());
-    for (const DeviceKVPageLease& lease : leases) { handles.push_back(lease.handle()); }
-    pool.zero_pages(handles, device.transfer_stream);
+    DeviceBuffer backing(device.device(), builder.finish(256, "context-cost transfer fixture"));
+    models::context::DevicePageStorage pool(backing.span(), layout);
+    std::vector<std::int32_t> handles(physical_pages);
+    for (std::uint32_t i = 0; i < physical_pages; ++i) handles[i] = static_cast<std::int32_t>(i);
+    pool.zero_pages(handles, device.transfer_view());
 
     const std::size_t host_bytes =
         checked_size_mul(host_layout.page_stride, region_pages, "transfer fixture Host bytes");
-    const std::array<HostKVPageLayout, 1> layouts{host_layout};
-    HostKVArena host(host_bytes, layouts);
-    auto allocation = host.allocate(host_layout, region_pages);
-    if (!allocation) { throw std::runtime_error("failed to allocate transfer fixture Host pages"); }
-    HostKVAllocationView host_view = host.writable_view(*allocation);
-    fill_transfer_payload(host_view.data(), host_bytes, 0x7ac5d3e91b2468f0ULL);
-    pool.copy_from_host(HostKVAllocationConstView(host_view),
-                        std::span<const DeviceKVPageHandle>(handles).first(region_pages),
-                        device.transfer_stream);
-    pool.copy_from_host(HostKVAllocationConstView(host_view),
-                        std::span<const DeviceKVPageHandle>(handles).subspan(region_pages),
-                        device.transfer_stream);
-    CUDA_CHECK(cudaStreamSynchronize(device.transfer_stream));
+    PinnedHostBuffer host(host_bytes);
+    fill_transfer_payload(host.data(), host_bytes, 0x7ac5d3e91b2468f0ULL);
+    pool.copy_from_host(host.span(), host_layout,
+                        std::span<const std::int32_t>(handles).first(region_pages),
+                        device.transfer_view());
+    pool.copy_from_host(host.span(), host_layout,
+                        std::span<const std::int32_t>(handles).subspan(region_pages),
+                        device.transfer_view());
+    CUDA_CHECK(cudaStreamSynchronize(device.transfer_stream()));
 
-    CudaEventTimer timer(device, device.transfer_stream);
+    CudaEventTimer timer(device, device.transfer_stream());
     const auto run = [&](const TransferCase& test) {
+        TransferWork work;
         timer.start();
         if (test.direction == TransferDirection::DeviceToHost) {
             const auto source = select_runs(handles, 0, test.pages, test.runs);
-            pool.copy_to_host(source, host_view.subview(0, test.pages), device.transfer_stream);
+            work              = pool.copy_to_host(source,
+                                                  host.span().subspan(0, test.pages * host_layout.page_stride),
+                                                  host_layout, device.transfer_view());
         } else if (test.direction == TransferDirection::HostToDevice) {
             const auto destination = select_runs(handles, region_pages, test.pages, test.runs);
-            pool.copy_from_host(HostKVAllocationConstView(host_view.subview(0, test.pages)),
-                                destination, device.transfer_stream);
+            work = pool.copy_from_host(host.span().subspan(0, test.pages * host_layout.page_stride),
+                                       host_layout, destination, device.transfer_view());
         } else {
             for (std::uint32_t page = 0; page < test.pages; ++page) {
-                pool.copy_page(handles[page], handles[region_pages + page], device.transfer_stream);
+                const auto part = pool.copy_page(handles[page], handles[region_pages + page],
+                                                 device.transfer_view());
+                work.payload_bytes += part.payload_bytes;
+                work.copy_operations += part.copy_operations;
             }
         }
-        return elapsed_ns(timer.stop_ms());
+        return std::pair{elapsed_ns(timer.stop_ms()), work};
     };
 
     for (const TransferCase& test : cases) {
         for (int warmup = 0; warmup < options.transfer_warmup; ++warmup) { (void)run(test); }
     }
     std::vector<std::vector<double>> samples(cases.size());
+    std::vector<TransferWork> measured_work(cases.size());
     for (int repetition = 0; repetition < options.transfer_repetitions; ++repetition) {
         for (std::size_t offset = 0; offset < cases.size(); ++offset) {
             const std::size_t index =
                 (offset + static_cast<std::size_t>(repetition)) % cases.size();
-            samples[index].push_back(run(cases[index]));
+            const auto [elapsed, work] = run(cases[index]);
+            samples[index].push_back(elapsed);
+            measured_work[index] = work;
         }
     }
     for (std::size_t index = 0; index < cases.size(); ++index) {
         const TransferCase& test = cases[index];
-        const TransferWork work =
-            test.direction == TransferDirection::DeviceToDevice
-                ? plan_device_kv_copy_work(host_layout, test.pages)
-                : plan_host_kv_transfer_work(host_layout, test.pages, test.runs);
         output.push_back(TransferMeasurement{
             .label           = fixture.label,
             .direction       = test.direction,
-            .work            = work,
+            .work            = measured_work[index],
             .page_count      = test.pages,
             .contiguous_runs = test.runs,
             .validation      = test.validation,
@@ -327,21 +322,21 @@ void measure_contiguous_d2d(DeviceContext& device, const MeasurementOptions& opt
 
     PinnedHostBuffer host_source(maximum_bytes);
     fill_transfer_payload(host_source.data(), host_source.size(), 0xb3f71d6c4a928e05ULL);
-    DeviceBuffer source(maximum_bytes);
-    DeviceBuffer destination(maximum_bytes);
+    DeviceBuffer source(device.device(), maximum_bytes);
+    DeviceBuffer destination(device.device(), maximum_bytes);
     source.copy_from_host(host_source.data(), host_source.size());
     destination.fill(0xa5);
 
-    CudaEventTimer timer(device, device.transfer_stream);
+    CudaEventTimer timer(device, device.transfer_stream());
     const auto run = [&](const ContiguousCase& test) {
         const std::size_t operation_bytes = test.payload_bytes / test.copy_operations;
         timer.start();
         for (std::uint32_t operation = 0; operation < test.copy_operations; ++operation) {
             const std::size_t offset = static_cast<std::size_t>(operation) * operation_bytes;
-            CUDA_CHECK(cudaMemcpyAsync(static_cast<std::byte*>(destination.p) + offset,
-                                       static_cast<const std::byte*>(source.p) + offset,
+            CUDA_CHECK(cudaMemcpyAsync(static_cast<std::byte*>(destination.data()) + offset,
+                                       static_cast<const std::byte*>(source.data()) + offset,
                                        operation_bytes, cudaMemcpyDeviceToDevice,
-                                       device.transfer_stream));
+                                       device.transfer_stream()));
         }
         return elapsed_ns(timer.stop_ms());
     };
@@ -494,8 +489,8 @@ PrefillSuiteResult measure_prefill(const ArtifactProfile& artifact,
     engine_options.enable_vision         = true;
     engine_options.use_cuda_graph        = true;
     engine_options.context_cache.enabled = false;
-    engine_options.context_cache.host_state_slots       = 0;
-    engine_options.context_cache.host_kv_capacity_bytes = 0;
+    engine_options.context_cache.extra_state_slots   = 0;
+    engine_options.context_cache.host_capacity_bytes = 0;
 
     Engine engine(engine_options);
     const auto run_root = [&](std::uint32_t tokens) {
@@ -503,11 +498,12 @@ PrefillSuiteResult measure_prefill(const ArtifactProfile& artifact,
         GenerationResult generated = engine.generate(std::move(prompt), one_token_request());
         if (generated.generated_token_ids.size() != 1 ||
             generated.finish_reason != FinishReason::OutputLimit ||
-            generated.prefix_reuse_path != PrefixReusePath::Root ||
-            generated.reused_prompt_tokens != 0 || !(generated.timings.prefill_seconds > 0.0)) {
+            generated.stats.prefix_reuse_path != PrefixReusePath::Root ||
+            generated.stats.reused_prompt_tokens != 0 ||
+            !(generated.stats.timings.prefill_seconds > 0.0)) {
             throw std::runtime_error("text prefill calibration left the expected root path");
         }
-        return generated.timings.prefill_seconds * 1'000'000'000.0;
+        return generated.stats.timings.prefill_seconds * 1'000'000'000.0;
     };
 
     const std::vector<std::uint32_t> lengths(root_lengths.begin(), root_lengths.end());
@@ -526,7 +522,7 @@ PrefillSuiteResult measure_prefill(const ArtifactProfile& artifact,
     }
 
     PrefillSuiteResult result;
-    result.load = engine.load_summary();
+    result.load = engine.startup_report().load;
     for (const TextCase& test : cases) {
         std::vector<double> samples;
         const auto& endpoint = root_samples.at(test.prefix + test.suffix);
@@ -573,10 +569,10 @@ PrefillSuiteResult measure_prefill(const ArtifactProfile& artifact,
         GenerationResult generated  = engine.generate(std::move(prompt), one_token_request());
         if (patches == 0 || generated.generated_token_ids.size() != 1 ||
             generated.finish_reason != FinishReason::OutputLimit || !generated.prompt.has_media ||
-            !(generated.timings.vision_seconds > 0.0)) {
+            !(generated.stats.timings.vision_seconds > 0.0)) {
             throw std::runtime_error("Vision prefill calibration did not execute Vision");
         }
-        return std::pair{patches, generated.timings.vision_seconds * 1'000'000'000.0};
+        return std::pair{patches, generated.stats.timings.vision_seconds * 1'000'000'000.0};
     };
     (void)run_vision(vision_cases.back().dimension);
     std::array<std::vector<double>, vision_cases.size()> vision_samples;

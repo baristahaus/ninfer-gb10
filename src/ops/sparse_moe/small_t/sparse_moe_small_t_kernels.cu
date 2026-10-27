@@ -80,8 +80,7 @@ constexpr int kS2Threads = 128;
 __global__ void sparse_moe_small_t_s2_kernel(const float* __restrict__ partial_scores,
                                              int* __restrict__ token_ids,
                                              float* __restrict__ token_alpha,
-                                             float* __restrict__ shared_scale,
-                                             std::uint32_t* __restrict__ expert_activations) {
+                                             float* __restrict__ shared_scale) {
     __shared__ float scores[kRouterRows];
     __shared__ float selected_logits[kTopK];
     const int tid   = static_cast<int>(threadIdx.x);
@@ -102,7 +101,7 @@ __global__ void sparse_moe_small_t_s2_kernel(const float* __restrict__ partial_s
 
     if (tid < 32) {
         sparse_moe_select_top8_warp(scores, token_ids + token * kTopK, token_alpha + token * kTopK,
-                                    shared_scale + token, selected_logits, expert_activations);
+                                    shared_scale + token, selected_logits);
     }
 }
 
@@ -115,13 +114,11 @@ void launch_s1(const __nv_bfloat16* x, const __nv_bfloat16* router, float* parti
     CUDA_CHECK(cudaGetLastError());
 }
 
-void launch_s2(const float* partial_scores, int* token_ids, float* token_alpha,
-               float* shared_scale, std::int32_t tokens, std::uint32_t* expert_activations,
-               cudaStream_t stream) {
+void launch_s2(const float* partial_scores, int* token_ids, float* token_alpha, float* shared_scale,
+               std::int32_t tokens, cudaStream_t stream) {
     CUDA_CHECK(pdl::launch_dependent(
         {dim3(static_cast<unsigned int>(tokens)), dim3(kS2Threads), 0, stream},
-        sparse_moe_small_t_s2_kernel, partial_scores, token_ids, token_alpha, shared_scale,
-        expert_activations));
+        sparse_moe_small_t_s2_kernel, partial_scores, token_ids, token_alpha, shared_scale));
 }
 
 void launch_s3_tiled(const Tensor& x, const SparseMoeWeights& weights,
@@ -301,8 +298,7 @@ void sparse_moe_small_t_launch(const Tensor& x, const SparseMoeWeights& weights,
     launch_s2(static_cast<const float*>(workspace.scratch.data),
               static_cast<int*>(workspace.token_ids.data),
               static_cast<float*>(workspace.token_alpha.data),
-              static_cast<float*>(workspace.shared_scale.data), plan.tokens,
-              weights.expert_activations, stream);
+              static_cast<float*>(workspace.shared_scale.data), plan.tokens, stream);
     launch_s3_tiled(x, weights, plan, workspace, stream);
     launch_s4_tiled(weights, destination, plan, workspace, stream);
 }

@@ -2,9 +2,12 @@ add_library(ninfer_artifact STATIC
   schema.cpp
   formats.cpp
   layouts.cpp
-  file_io.cpp
   reader.cpp
+  mapped_range.cpp
+  backing.cpp
   binder.cpp
+  placement.cpp
+  encoded_slice.cpp
   materializer.cpp
   tier_plan.cpp
   views.cpp

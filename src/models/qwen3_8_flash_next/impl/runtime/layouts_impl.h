@@ -261,7 +261,7 @@ PersistentLayout persistent_layout(const SequencePlanImpl& plan) {
                            "Flash-Next prefill predictor hidden");
         }
         out.flash_decode_ple = add_tensor(
-            builder, DType::BF16,
+            builder, DType::FP8_E4M3FN,
             {TextConfig::hidden,
              static_cast<std::int32_t>(std::max<std::uint32_t>(1U, plan.draft_window + 1U)),
              static_cast<std::int32_t>(plan.max_concurrency)},
@@ -804,7 +804,6 @@ std::unique_ptr<SequencePlanImpl> build_sequence_candidate(const SequencePlannin
     impl->context_cache       = inputs.context_cache;
     impl->kv_storage          = inputs.kv_storage;
     impl->token_logprobs      = inputs.token_logprobs;
-    impl->mtp_capture_path    = inputs.mtp_capture_path;
     impl->persistent          = persistent_layout(*impl);
     impl->workspace           = build_workspace_plan(*impl);
     if (impl->use_cuda_graph) {
@@ -883,7 +882,6 @@ make_sequence_planner_impl(DeviceContext& device, const EngineOptions& options,
         .device         = options.device,
         .context_cache  = options.context_cache,
         .token_logprobs = options.token_logprobs,
-        .mtp_capture_path = options.mtp_capture_path,
     };
     const std::uint32_t logical_pages = page_count(inputs.capacity);
     const std::uint32_t minimum_pages = std::max(logical_pages, inputs.max_concurrency);

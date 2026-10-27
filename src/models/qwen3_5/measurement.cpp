@@ -1,6 +1,7 @@
 #include "models/qwen3_5/measurement.h"
 
-#include "models/qwen3_5/frontend/digest.h"
+#include "models/common/qwen/frontend/digest.h"
+#include "models/qwen3_5/program/planning/moe.h"
 
 #include <nlohmann/json.hpp>
 
@@ -10,7 +11,8 @@
 
 namespace ninfer::models::qwen3_5 {
 
-std::string prefill_signature(const Model& model) {
+std::string prefill_signature(const ModelDefinition& model, const moe::Plan* moe,
+                              std::uint32_t chunk) {
     using Json         = nlohmann::json;
     const auto& config = model.config();
     const auto& t      = config.text;
@@ -22,6 +24,20 @@ std::string prefill_signature(const Model& model) {
                {"num_hidden_layers", t.num_hidden_layers},
                {"rms_norm_eps", t.rms_norm_eps},
                {"layer_types", t.layer_types}};
+    if (moe) {
+        auto& execution = facts["moe_execution"];
+        execution       = {{"implementation", "eager-fixed-windows-2"},
+                           {"chunk", chunk},
+                           {"workers", moe->description().cpu_workers},
+                           {"cache_bytes", moe->description().cache_bytes},
+                           {"fixed_bytes", moe->description().fixed_bytes},
+                           {"window_count", moe->description().window_count},
+                           {"layers", Json::array()}};
+        for (const auto& layer : moe->description().layers) {
+            execution["layers"].push_back({layer.hybrid_max_tokens, layer.priority,
+                                           layer.fixed_experts, layer.cache_experts});
+        }
+    }
     if (t.attention) {
         const auto& a      = *t.attention;
         facts["attention"] = {a.num_attention_heads, a.num_key_value_heads, a.head_dim};
@@ -79,7 +95,7 @@ std::string prefill_signature(const Model& model) {
         }
         inventory.push_back(std::move(item));
     }
-    return frontend::sha256_hex(frontend::sha256(facts.dump()));
+    return qwen::frontend::sha256_hex(qwen::frontend::sha256(facts.dump()));
 }
 
 } // namespace ninfer::models::qwen3_5

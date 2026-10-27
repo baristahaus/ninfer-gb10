@@ -31,7 +31,7 @@ void nvfp4_attn_input_a4_launch(const Tensor& x, const Weight& weight, Tensor& q
                                 cudaStream_t stream);
 
 void nvfp4_attn_input_dispatch(const Tensor& x, const Weight& weight, Tensor& q, Tensor& gate,
-                               Tensor& k, Tensor& v, LinearPolicy policy, WorkspaceArena* workspace,
+                               Tensor& k, Tensor& v, LinearPolicy policy, MemoryArena* workspace,
                                cudaStream_t stream);
 
 } // namespace ninfer::ops::detail

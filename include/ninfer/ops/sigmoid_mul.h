@@ -1,8 +1,8 @@
 #pragma once
 
+#include "core/device.h"
 #include "core/tensor.h"
 
-#include <cuda_runtime.h> // cudaStream_t
 
 namespace ninfer::ops {
 
@@ -11,12 +11,12 @@ namespace ninfer::ops {
  *
  *   ideal[i] = x[i] * (1 / (1 + exp(-gate[i]))).
  *
- * `gate` and `x` are non-overlapping, same-shaped contiguous BF16 tensors. The oracle evaluates
- * `ideal` in FP64 from the represented inputs. The updated BF16 x is promoted and compared directly
- * with that result; output storage rounding belongs to the Op's numerical criterion, not the
- * oracle. Private kernel arithmetic is implementation-defined. The Op uses no workspace or other
- * persistent state.
+ * gate/x are same-shaped, contiguous, non-overlapping BF16 tensors.
+ * Updates x in place and preserves gate. Empty tensors perform no device work.
  */
+void sigmoid_mul(const Tensor& gate, Tensor& x, CudaExecutionView execution);
+
+// Stream-based variant for callers that own only a stream; operands are pinned to gate's device.
 void sigmoid_mul(const Tensor& gate, Tensor& x, cudaStream_t stream);
 
 } // namespace ninfer::ops

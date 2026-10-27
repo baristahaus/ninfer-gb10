@@ -37,19 +37,6 @@ class Nvfp4Format:
 
 
 @dataclass(frozen=True, slots=True)
-class Mxfp8Format:
-    """E4M3FN weights with one UE8M0 exponent word per K-axis group.
-
-    A UE8M0 word is an unsigned 8-bit biased exponent: the stored group scale is
-    exactly ``2^(word - 127)``. The scale carries no mantissa, so no separate
-    global scale field is required.
-    """
-
-    name: str
-    group_size: int
-
-
-@dataclass(frozen=True, slots=True)
 class Fp8RowFormat:
     """E4M3FN weights with one BF16 multiplier per logical row."""
 
@@ -57,22 +44,27 @@ class Fp8RowFormat:
 
 
 @dataclass(frozen=True, slots=True)
-class Exl3Format:
-    """EXL3 trellis codes; numeric decode per the SP-7 contract (exl3-trellis-contract.md).
-
-    One 16-bit codebook state per weight element, decoded from a tail-biting ring
-    per 16x16 tile. The codebook (3inst, mcg, mul1) is a per-object scalar carried
-    in the exl3_expert_bank payload, uniform within a bank.
-    """
+class Fp8BlockFormat:
+    """E4M3FN weights with one BF16 multiplier per 128-by-128 block."""
 
     name: str
-    codebooks: tuple[str, ...] = ("3inst", "mcg", "mul1")
+    block_rows: int = 128
+    block_columns: int = 128
 
 
-NumericFormat: TypeAlias = DirectFormat | QuantFormat | Nvfp4Format | Mxfp8Format | Fp8RowFormat | Exl3Format
+@dataclass(frozen=True, slots=True)
+class Nf4Format:
+    """Fixed NF4 codebook, K16 E4M3FN scales and an FP32 divisor."""
+
+    name: str
+    group_size: int = 16
 
 
-FP8_E4M3FN = DirectFormat("fp8_e4m3fn", 1)
+NumericFormat: TypeAlias = (
+    DirectFormat | QuantFormat | Nvfp4Format | Fp8RowFormat | Fp8BlockFormat | Nf4Format
+)
+
+
 BF16 = DirectFormat("bf16", 2)
 FP32 = DirectFormat("fp32", 4)
 INT32 = DirectFormat("int32", 4)
@@ -82,21 +74,51 @@ Q5_G64_FP16 = QuantFormat("q5_g64_fp16", 5, 64, -16, 15)
 Q6_G64_FP16 = QuantFormat("q6_g64_fp16", 6, 64, -32, 31)
 Q8_G32_FP16 = QuantFormat("q8_g32_fp16", 8, 32, -127, 127)
 NVFP4 = Nvfp4Format("nvfp4", 16)
-MXFP8 = Mxfp8Format("mxfp8", 32)
 FP8_E4M3FN_ROW_BF16 = Fp8RowFormat("fp8_e4m3fn_row_bf16")
-EXL3 = Exl3Format("exl3")
+FP8_E4M3FN_BLOCK128X128_BF16 = Fp8BlockFormat("fp8_e4m3fn_block128x128_bf16")
+NF4_G16_E4M3FN = Nf4Format("nf4_g16_e4m3fn")
+NF4_CODEBOOK_WORDS = (
+    0xBF800000,
+    0xBF3239B1,
+    0xBF066B30,
+    0xBECA32A0,
+    0xBE91A24D,
+    0xBE3D353F,
+    0xBDBA7871,
+    0x00000000,
+    0x3DA2FAFF,
+    0x3E24CAE3,
+    0x3E7C04DD,
+    0x3EAD033A,
+    0x3EE1A4B8,
+    0x3F1007AB,
+    0x3F3913B3,
+    0x3F800000,
+)
+NF4_CODEBOOK = tuple(
+    struct.unpack("<f", struct.pack("<I", w))[0] for w in NF4_CODEBOOK_WORDS
+)
 
 
-DIRECT_FORMATS = MappingProxyType({item.name: item for item in (BF16, FP32, INT32, FP8_E4M3FN)})
+DIRECT_FORMATS = MappingProxyType({item.name: item for item in (BF16, FP32, INT32)})
 QUANT_FORMATS = MappingProxyType(
     {item.name: item for item in (Q4_G64_FP16, Q5_G64_FP16, Q6_G64_FP16, Q8_G32_FP16)}
 )
 NVFP4_FORMATS = MappingProxyType({NVFP4.name: NVFP4})
-MXFP8_FORMATS = MappingProxyType({MXFP8.name: MXFP8})
 FP8_ROW_FORMATS = MappingProxyType({FP8_E4M3FN_ROW_BF16.name: FP8_E4M3FN_ROW_BF16})
-EXL3_FORMATS = MappingProxyType({EXL3.name: EXL3})
+FP8_BLOCK_FORMATS = MappingProxyType(
+    {FP8_E4M3FN_BLOCK128X128_BF16.name: FP8_E4M3FN_BLOCK128X128_BF16}
+)
+NF4_FORMATS = MappingProxyType({NF4_G16_E4M3FN.name: NF4_G16_E4M3FN})
 NUMERIC_FORMATS = MappingProxyType(
-    {**DIRECT_FORMATS, **QUANT_FORMATS, **NVFP4_FORMATS, **MXFP8_FORMATS, **FP8_ROW_FORMATS, **EXL3_FORMATS}
+    {
+        **DIRECT_FORMATS,
+        **QUANT_FORMATS,
+        **NVFP4_FORMATS,
+        **FP8_ROW_FORMATS,
+        **FP8_BLOCK_FORMATS,
+        **NF4_FORMATS,
+    }
 )
 
 
@@ -177,22 +199,24 @@ __all__ = [
     "Q6_G64_FP16",
     "Q8_G32_FP16",
     "NVFP4",
-    "MXFP8",
     "FP8_E4M3FN_ROW_BF16",
-    "EXL3",
+    "FP8_E4M3FN_BLOCK128X128_BF16",
+    "NF4_G16_E4M3FN",
+    "NF4_CODEBOOK_WORDS",
+    "NF4_CODEBOOK",
+    "NF4_FORMATS",
+    "Nf4Format",
     "DIRECT_FORMATS",
     "QUANT_FORMATS",
     "NVFP4_FORMATS",
-    "MXFP8_FORMATS",
     "FP8_ROW_FORMATS",
-    "EXL3_FORMATS",
+    "FP8_BLOCK_FORMATS",
     "NUMERIC_FORMATS",
     "DirectFormat",
     "QuantFormat",
     "Nvfp4Format",
-    "Mxfp8Format",
     "Fp8RowFormat",
-    "Exl3Format",
+    "Fp8BlockFormat",
     "NumericFormat",
     "get_format",
     "decode_e2m1_word",

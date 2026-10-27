@@ -1,5 +1,6 @@
 #include "serve/http_transport.h"
 
+#include "core/cpu/task_pool.h"
 #include "serve/request_validation.h"
 #include "text/json_input.h"
 
@@ -9,10 +10,26 @@
 #endif
 
 #include <stdexcept>
+#include <limits>
 #include <utility>
 
 namespace ninfer::serve {
 namespace {
+
+class HttpTaskQueue final : public httplib::TaskQueue {
+public:
+    HttpTaskQueue(std::uint32_t workers, std::size_t capacity)
+        : pool_({.threads = workers, .queue_capacity = capacity}) {}
+
+    bool enqueue(std::function<void()> task) override {
+        return pool_.try_enqueue(task) == EnqueueResult::Accepted;
+    }
+
+    void shutdown() override { pool_.shutdown(); }
+
+private:
+    TaskPool pool_;
+};
 
 #if defined(__linux__)
 constexpr int kKeepAliveIdleSeconds                = 10;
@@ -27,6 +44,13 @@ void set_socket_option(socket_t socket, int level, int option, const T& value) n
 #endif
 
 } // namespace
+
+std::unique_ptr<httplib::TaskQueue> make_http_task_queue(std::size_t workers,
+                                                         std::size_t queued_requests) {
+    if (workers > std::numeric_limits<std::uint32_t>::max())
+        throw std::invalid_argument("HTTP worker count exceeds uint32");
+    return std::make_unique<HttpTaskQueue>(static_cast<std::uint32_t>(workers), queued_requests);
+}
 
 RequestJson parse_json_body(const httplib::Request& request) {
     text::ParsedJsonNumbers parsed;

@@ -19,6 +19,6 @@ namespace ninfer::ops::detail {
                                                               std::int32_t max_tokens);
 
 void fp8_dispatch(const Tensor& x, const Weight& weight, Tensor& out, LinearPolicy policy,
-                  WorkspaceArena* workspace, cudaStream_t stream);
+                  MemoryArena* workspace, cudaStream_t stream);
 
 } // namespace ninfer::ops::detail

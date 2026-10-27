@@ -85,7 +85,7 @@ void validate_policy(LinearPolicy policy) {
 }
 
 void dispatch_single_parent(const Tensor& x, const Weight& weight, Tensor& q, Tensor& gate,
-                            Tensor& k, Tensor& v, LinearPolicy policy, WorkspaceArena* workspace,
+                            Tensor& k, Tensor& v, LinearPolicy policy, MemoryArena* workspace,
                             cudaStream_t stream) {
     validate_policy(policy);
     if (weight.qtype == QType::BF16) {
@@ -229,7 +229,7 @@ void attn_input_proj(const Tensor& x, const Weight& query_key_weight,
 
 void attn_input_proj(const Tensor& x, const Weight& query_key_gate_value_weight, Tensor& q,
                      Tensor& gate, Tensor& k, Tensor& v, LinearPolicy policy,
-                     WorkspaceArena& workspace, cudaStream_t stream) {
+                     MemoryArena& workspace, cudaStream_t stream) {
     dispatch_single_parent(x, query_key_gate_value_weight, q, gate, k, v, policy, &workspace,
                            stream);
 }

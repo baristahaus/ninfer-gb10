@@ -83,9 +83,9 @@ SparseMoePrefillWorkspace allocate_sparse_moe_prefill_workspace(Arena& arena,
     // Both maps alias the dead prefix of tile_counts, whose last reader is the scan. The
     // layout builder allocates nothing, so the offset is only formed when there is a pointer.
     auto* const counts = static_cast<std::int32_t*>(out.tile_counts.data);
-    out.packed_index   = Tensor(counts, DType::I32, {assignments});
+    out.packed_index   = Tensor(counts, out.tile_counts.device, DType::I32, {assignments});
     out.packed_token =
-        Tensor(counts != nullptr ? counts + assignments : nullptr, DType::I32, {assignments});
+        Tensor(counts != nullptr ? counts + assignments : nullptr, out.tile_counts.device, DType::I32, {assignments});
     out.tile_bases     = arena.alloc(DType::I32, {256, route_tiles}, 256);
     out.expert_offsets = arena.alloc(DType::I32, {257}, 256);
     // A route job is one nonempty expert column tile. The bound is for the
@@ -98,12 +98,12 @@ SparseMoePrefillWorkspace allocate_sparse_moe_prefill_workspace(Arena& arena,
     out.route_job_count = arena.alloc(DType::I32, {2}, 256);
 
     out.score_storage = arena.alloc(DType::FP32, {kSparseMoeRouterScoreRows, capacity_tokens}, 256);
-    out.shared_activation = Tensor(out.score_storage.data, DType::BF16, {512, capacity_tokens});
+    out.shared_activation = Tensor(out.score_storage.data, out.score_storage.device, DType::BF16, {512, capacity_tokens});
 
     out.grouped_io = arena.alloc(DType::BF16, {2048, assignments}, 256);
 
     out.routed_storage = arena.alloc(DType::BF16, {512, assignments}, 256);
-    out.routed_sum     = Tensor(out.routed_storage.data, DType::FP32, {2048, capacity_tokens});
+    out.routed_sum     = Tensor(out.routed_storage.data, out.routed_storage.device, DType::FP32, {2048, capacity_tokens});
     return out;
 }
 

@@ -9,6 +9,7 @@
 #include "core/tensor.h"
 #include "core/weight.h"
 #include "ninfer/ops/flash_next_ple_stage.h"
+#include "ninfer/ops/linear.h"
 #include "ninfer/ops/sampling.h"
 #include "ninfer/ops/softmax_attention.h"
 #include <ninfer/models/qwen3_8_flash_next/decoder_state.h>
@@ -154,7 +155,7 @@ class VisionPrefillSession;
 class TextContext {
 public:
     TextContext(
-        DeviceContext& ctx, const LoadedModelData& weights, WorkspaceArena& work,
+        DeviceContext& ctx, const LoadedModelData& weights, MemoryArena& work,
         qwen3_8_flash_next::PagedKVCacheView kv, LinearAttentionStatePool& state,
         qwen3_8_flash_next::RoundState& io, Tensor& prefill_hidden, std::uint32_t prefill_chunk,
         std::uint32_t text_kv_base,
@@ -177,6 +178,7 @@ public:
 
     void set_bf16_gemm(ops::Bf16GemmContext* context) noexcept { bf16_gemm_ = context; }
 
+    
     void set_prefill_split_frontier(std::int64_t position) noexcept {
         prefill_split_frontier_ = position;
     }
@@ -334,7 +336,7 @@ private:
                  const MultimodalPrefill* multimodal, Tap& tap, bool finalize_at_end);
     DeviceContext& ctx_;
     const LoadedModelData& weights_;
-    WorkspaceArena& work_;
+    MemoryArena& work_;
     qwen3_8_flash_next::PagedKVCacheView kv_;
     qwen3_8_flash_next::PagedKVCacheView mtp_kv_;
     const qwen3_8_flash_next::PagedKVCache* batch_text_kv_ = nullptr;

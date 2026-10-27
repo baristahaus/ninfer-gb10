@@ -53,9 +53,9 @@ public:
                                                      std::size_t merged_tokens);
     [[nodiscard]] static VisionWorkspacePlan plan_workspace(std::uint32_t max_merged_tokens,
                                                             std::size_t general_capacity_bytes);
-    [[nodiscard]] static Tensor bind_output(DeviceSpan backing, const VisionWorkspacePlan& plan,
+    [[nodiscard]] static Tensor bind_output(MemorySpan backing, const VisionWorkspacePlan& plan,
                                             std::size_t merged_tokens);
-    void encode(const VisionItemView& item, Tensor& output, DeviceSpan backing,
+    void encode(const VisionItemView& item, Tensor& output, MemorySpan backing,
                 const VisionWorkspacePlan& plan) const;
 
 private:
@@ -99,7 +99,7 @@ struct VisionChunk {
 
 class VisionPrefillSession {
 public:
-    VisionPrefillSession(DeviceContext& device, const LoadedModelData& model, DeviceSpan workspace,
+    VisionPrefillSession(DeviceContext& device, const LoadedModelData& model, MemorySpan workspace,
                          const VisionWorkspacePlan& workspace_plan,
                          qwen3_8_flash_next::PreparedPromptData& prompt,
                          const VisionPrefillPlan& plan, std::size_t& handoff_peak_bytes);
@@ -115,7 +115,7 @@ public:
 
 private:
     DeviceContext& device_;
-    DeviceSpan workspace_;
+    MemorySpan workspace_;
     const VisionWorkspacePlan& workspace_plan_;
     qwen3_8_flash_next::PreparedPromptData& prompt_;
     const VisionPrefillPlan& plan_;

@@ -2,8 +2,11 @@
 
 #include "core/arena.h"
 #include "core/cyclic_kv_cache.h"
+#include "core/buffer.h"
 #include "core/layout.h"
+#include "core/cyclic_kv_cache_pool.h"
 #include "core/linear_attention_state.h"
+#include "core/linear_attention_state_pool.h"
 #include "core/tensor.h"
 #include "core/transfer_work.h"
 
@@ -59,7 +62,7 @@ struct StateImageDeviceLayout {
     TensorRegion continuation_hidden;
     std::optional<TensorRegion> mtp_hidden;
     std::optional<TensorRegion> ple;
-    std::optional<CyclicKVCacheLayout> dflash_local;
+    std::optional<CyclicKVCachePoolLayout> dflash_local;
     StateImageHostLayout host;
 };
 
@@ -140,7 +143,7 @@ struct StateImageDeviceSlotView {
  */
 class StateImageDevicePool {
 public:
-    StateImageDevicePool(DeviceSpan backing, const StateImageDeviceLayout& layout);
+    StateImageDevicePool(MemorySpan backing, const StateImageDeviceLayout& layout);
 
     StateImageDevicePool(const StateImageDevicePool&)            = delete;
     StateImageDevicePool& operator=(const StateImageDevicePool&) = delete;

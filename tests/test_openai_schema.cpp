@@ -1,3 +1,4 @@
+#include "serve_tool_stream_fixture.h"
 #include "serve/generation_service.h"
 #include "serve/openai_chat.h"
 #include "serve/openai_common.h"
@@ -17,7 +18,7 @@ namespace {
 
 using Json = ninfer::serve::RequestJson;
 using namespace ninfer::serve;
-using ninfer::ChatRole;
+using ninfer::product::ServeOptions;
 
 int check(bool condition, const std::string& label) {
     if (condition) { return 0; }
@@ -145,24 +146,8 @@ int test_standard_field_policy() {
 
     rejected("n", 2, "n_not_supported");
     rejected("logit_bias", Json{{"12", 1}}, "logit_bias_not_supported");
-    {
-        // Probability reporting is an executable request now: the parser records it and the HTTP
-        // layer decides whether the loaded Engine can answer, so the parser must not reject it.
-        Json body                    = base_request();
-        body["logprobs"]             = true;
-        body["top_logprobs"]         = 5;
-        const OpenAIChatRequest reporting = parse(body);
-        failures += check(reporting.logprobs && reporting.top_logprobs == 5,
-                          "logprobs and top_logprobs are recorded for the response layer");
-    }
-    {
-        // Alternatives without reports has no defined answer, so the combination fails on its own
-        // field instead of the count being dropped.
-        Json body            = base_request();
-        body["top_logprobs"] = 2;
-        failures += check(api_error([&] { (void)parse(body); }).param == "top_logprobs",
-                          "top_logprobs without logprobs=true rejected");
-    }
+    rejected("logprobs", true, "logprobs_not_supported");
+    rejected("top_logprobs", 2, "logprobs_not_supported");
     rejected("modalities", Json::array({"text", "audio"}), "modality_not_supported");
     rejected("web_search_options", Json::object(), "web_search_not_supported");
     rejected("moderation", Json::object(), "moderation_not_supported");
@@ -199,6 +184,102 @@ int test_standard_field_policy() {
     const OpenAIChatRequest zero        = parse(zero_limit);
     failures += check(zero.output_tokens_explicit && zero.generation.max_tokens == 0,
                       "an explicit zero output limit reaches Engine's no-generation path");
+    return failures;
+}
+
+int test_prompt_cache_boundaries() {
+    using Location = ninfer::PromptCacheMarkerLocation;
+    using Evidence = ninfer::SharedCandidateEvidence;
+    int failures   = 0;
+    for (const char* role : {"user", "system", "developer"}) {
+        Json body = base_request();
+        body["messages"].push_back(Json{{"role", role}, {"content", "complete message"}});
+        const auto prepared = prompt(parse(body).generation);
+        const auto& markers = prepared.context_cache.markers;
+        failures += check(
+            markers.size() == 1 && markers[0].location == Location::MessagePartBoundary &&
+                markers[0].after_message_count == 2 && markers[0].after_message_part_count == 1 &&
+                markers[0].evidence == Evidence::DefaultAutomatic,
+            std::string(role) + " automatic cache ends at the final source part");
+    }
+
+    Json multipart                      = base_request();
+    multipart["messages"][0]["content"] = Json::array(
+        {Json{{"type", "text"}, {"text", "first"}}, Json{{"type", "text"}, {"text", "second"}}});
+    multipart["prompt_cache_options"] = Json{{"mode", "implicit"}};
+    const auto requested              = prompt(parse(multipart).generation);
+    failures +=
+        check(requested.context_cache.markers.size() == 1 &&
+                  requested.context_cache.markers[0].location == Location::MessagePartBoundary &&
+                  requested.context_cache.markers[0].after_message_part_count == 2 &&
+                  requested.context_cache.markers[0].evidence == Evidence::RequestedAutomatic,
+              "requested implicit caching uses the final source part");
+    multipart["prompt_cache_options"] = Json{{"mode", "explicit"}};
+    const auto disabled               = prompt(parse(multipart).generation);
+    failures += check(disabled.context_cache.markers.empty() &&
+                          !disabled.context_cache.allow_engine_automatic_shared_prefixes,
+                      "explicit mode without markers disables automatic shared writes");
+
+    Json marked                      = base_request();
+    marked["messages"][0]["content"] = Json::array();
+    for (int index = 0; index < 4; ++index) {
+        marked["messages"][0]["content"].push_back(
+            Json{{"type", "text"},
+                 {"text", "section " + std::to_string(index)},
+                 {"prompt_cache_breakpoint", Json{{"mode", "explicit"}}}});
+    }
+    const auto merged = prompt(parse(marked).generation);
+    failures += check(merged.context_cache.markers.size() == 4,
+                      "automatic caching reuses an explicitly marked final part");
+    for (std::size_t index = 0; index < merged.context_cache.markers.size(); ++index) {
+        const auto& marker = merged.context_cache.markers[index];
+        failures += check(
+            marker.location == Location::MessagePartBoundary &&
+                marker.after_message_part_count == index + 1 &&
+                ninfer::has_shared_candidate_evidence(marker.evidence, Evidence::ExplicitBoundary),
+            "explicit part locations survive automatic merging");
+    }
+    failures +=
+        check(merged.context_cache.markers.size() == 4 &&
+                  ninfer::has_shared_candidate_evidence(
+                      merged.context_cache.markers.back().evidence, Evidence::DefaultAutomatic),
+              "the final explicit part also carries the automatic opportunity");
+    marked["messages"][0]["content"].push_back(Json{{"type", "text"}, {"text", "new tail"}});
+    const auto full = prompt(parse(marked).generation);
+    failures += check(full.context_cache.markers.size() == 4,
+                      "automatic caching yields to four explicit boundaries");
+    for (std::size_t index = 0; index < full.context_cache.markers.size(); ++index) {
+        const auto& marker = full.context_cache.markers[index];
+        failures += check(marker.location == Location::MessagePartBoundary &&
+                              marker.after_message_part_count == index + 1 &&
+                              marker.evidence == Evidence::ExplicitBoundary,
+                          "a later implicit target does not displace an explicit boundary");
+    }
+
+    Json assistant = base_request();
+    assistant["messages"].push_back(Json{{"role", "assistant"}, {"content", "partial answer"}});
+    const auto assistant_prompt = prompt(parse(assistant).generation);
+    failures += check(assistant_prompt.context_cache.markers.size() == 1 &&
+                          assistant_prompt.context_cache.markers[0].location ==
+                              Location::MessagePartBoundary &&
+                          assistant_prompt.context_cache.markers[0].after_message_count == 2,
+                      "assistant content retains its part boundary for continuation");
+
+    Json tool = base_request();
+    tool["messages"].push_back(
+        Json{{"role", "assistant"},
+             {"tool_calls",
+              Json::array({Json{{"id", "call_cache"},
+                                {"type", "function"},
+                                {"function", Json{{"name", "lookup"}, {"arguments", "{}"}}}}})}});
+    tool["messages"].push_back(
+        Json{{"role", "tool"}, {"tool_call_id", "call_cache"}, {"content", "result"}});
+    const auto tool_prompt = prompt(parse(tool).generation);
+    failures +=
+        check(tool_prompt.context_cache.markers.size() == 1 &&
+                  tool_prompt.context_cache.markers[0].location == Location::MessagePartBoundary &&
+                  tool_prompt.context_cache.markers[0].after_message_count == 3,
+              "tool results retain their content boundary when a result group grows");
     return failures;
 }
 
@@ -358,17 +439,6 @@ int test_tools() {
                           allowed.tool_choice.allowed_names == std::vector<std::string>{"search"} &&
                           prompt(allowed).options.tool_jsons.size() == 2,
                       "allowed_tools preserves declarations and selects callable names");
-    {
-        // A family without token masks honors the selection by declaring only callable tools.
-        ResolvedPromptSemantics unconstrained = semantics(allowed);
-        unconstrained.output_constraints      = false;
-        const auto declared = to_prompt_input(allowed, unconstrained, {}).options.tool_jsons;
-        const auto selected = to_request_options(allowed, ServeOptions{}, unconstrained, true);
-        failures += check(
-            declared.size() == 1 && Json::parse(declared[0])["function"]["name"] == "search" &&
-                !selected.tool_choice.allowed_names && selected.output.preserve_special_tokens,
-            "a family without constraints declares only the allowed tools");
-    }
 
     body["tool_choice"] =
         Json{{"type", "allowed_tools"},
@@ -443,13 +513,6 @@ int test_tools() {
                               ninfer::PromptCacheMarkerLocation::MessageBoundary &&
                           mixed_prompt.context_cache.markers.back().after_message_count == 2,
                       "automatic caching stops after a complete assistant text/tool-call turn");
-    failures += check(mixed_prompt.context_cache.allow_engine_automatic_shared_prefixes,
-                      "default automatic caching lets the Engine add its stable-layer candidates");
-    Json explicit_only                    = mixed_assistant;
-    explicit_only["prompt_cache_options"] = Json{{"mode", "explicit"}};
-    failures += check(
-        !prompt(parse(explicit_only).generation).context_cache.allow_engine_automatic_shared_prefixes,
-        "explicit prompt caching keeps Engine candidates out");
 
     const Json ordered = Json::parse(
         R"({"model":"qwen","messages":[{"role":"user","content":"probe"}],"tools":[{"type":"function","function":{"name":"probe","parameters":{"type":"object","properties":{"zeta":{"type":"string"},"alpha":{"type":"integer"}}}}}]})");
@@ -688,25 +751,6 @@ int test_stops_and_ranges() {
     failures +=
         check(api_error([&] { (void)parse(body); }).param == "stop", "empty stop string rejected");
 
-    body = base_request();
-    failures += check(options(parse(body).generation).stop.include_model_defaults,
-                      "an omitted ignore_eos keeps the checkpoint's own stop tokens");
-    body["ignore_eos"] = false;
-    failures += check(options(parse(body).generation).stop.include_model_defaults,
-                      "ignore_eos false keeps the checkpoint's own stop tokens");
-    body["ignore_eos"] = true;
-    failures += check(parse(body).generation.ignore_eos &&
-                          !options(parse(body).generation).stop.include_model_defaults,
-                      "ignore_eos suppresses the checkpoint's own stop tokens");
-    body["stop"] = Json::array({"A"});
-    failures += check(options(parse(body).generation).stop.strings.size() == 2 &&
-                          !options(parse(body).generation).stop.include_model_defaults,
-                      "ignore_eos leaves caller stop strings in place");
-    body.erase("stop");
-    body["ignore_eos"] = "true";
-    failures += check(api_error([&] { (void)parse(body); }).param == "ignore_eos",
-                      "a non-boolean ignore_eos is rejected");
-
     body                                  = base_request();
     body["top_k"]                         = 21;
     const GenerationRequest invalid_top_k = parse(body).generation;
@@ -722,17 +766,17 @@ int test_stops_and_ranges() {
 
 GenerationOutcome sample_outcome() {
     GenerationOutcome outcome;
-    outcome.text                                = "answer";
-    outcome.reasoning                           = "thought";
-    outcome.prompt_tokens                       = 20;
-    outcome.completion_tokens                   = 7;
-    outcome.reasoning_tokens                    = 3;
-    outcome.finish_reason                       = ninfer::FinishReason::StopToken;
-    outcome.metrics.prefix_cache_hit_tokens     = 12;
-    outcome.metrics.prompt_wall_seconds         = 0.04;
-    outcome.metrics.generation_wall_seconds     = 0.03;
-    outcome.metrics.speculative_draft_tokens    = 9;
-    outcome.metrics.speculative_accepted_tokens = 6;
+    outcome.text                                  = "answer";
+    outcome.reasoning                             = "thought";
+    outcome.prompt_tokens                         = 20;
+    outcome.completion_tokens                     = 7;
+    outcome.reasoning_tokens                      = 3;
+    outcome.finish_reason                         = ninfer::FinishReason::StopToken;
+    outcome.stats.reused_prompt_tokens            = 12;
+    outcome.stats.timings.prompt_wall_seconds     = 0.04;
+    outcome.stats.timings.generation_wall_seconds = 0.03;
+    outcome.stats.speculative.drafted_tokens      = 9;
+    outcome.stats.speculative.accepted_tokens     = 6;
     return outcome;
 }
 
@@ -743,7 +787,7 @@ OpenAIChatResponseIdentity identity() {
 int test_aggregate_response() {
     int failures              = 0;
     GenerationOutcome outcome = sample_outcome();
-    Json response = Json::parse(make_chat_completion_response(identity(), outcome, 0));
+    Json response             = Json::parse(make_chat_completion_response(identity(), outcome));
     failures += check(response["choices"][0]["message"]["content"] == "answer" &&
                           response["choices"][0]["message"]["reasoning_content"] == "thought" &&
                           response["choices"][0]["message"]["refusal"].is_null(),
@@ -768,7 +812,7 @@ int test_aggregate_response() {
         .name = "Edit",
         .arguments_json =
             R"({"file_path":"/tmp/probe.cpp","old_string":"old","new_string":"new"})"});
-    response         = Json::parse(make_chat_completion_response(identity(), outcome, 0));
+    response         = Json::parse(make_chat_completion_response(identity(), outcome));
     const Json& call = response["choices"][0]["message"]["tool_calls"][0];
     failures += check(response["choices"][0]["finish_reason"] == "tool_calls" &&
                           response["choices"][0]["message"]["content"].is_null(),
@@ -777,59 +821,15 @@ int test_aggregate_response() {
         call["id"].get<std::string>().starts_with("call_") && call["function"]["name"] == "Edit" &&
             !Json::parse(call["function"]["arguments"].get<std::string>()).contains("replace_all"),
         "OpenAI adapter owns wire tool-call identifiers");
-    outcome.finish_reason = ninfer::FinishReason::OutputLimit;
-    outcome.constraint    = ninfer::ConstraintObservation{
-           .branch = ninfer::ConstraintOutputBranch::Tools, .complete = true, .terminated = false};
-    response = Json::parse(make_chat_completion_response(identity(), outcome, 0));
+    outcome.finish_reason    = ninfer::FinishReason::OutputLimit;
+    outcome.stats.constraint = ninfer::ConstraintObservation{
+        .branch = ninfer::ConstraintOutputBranch::Tools, .complete = true, .terminated = false};
+    response = Json::parse(make_chat_completion_response(identity(), outcome));
     failures += check(response["choices"][0]["finish_reason"] == "length" &&
                           response["choices"][0]["message"]["tool_calls"].size() == 1 &&
                           response["constraint"]["complete"] == true &&
                           response["constraint"]["terminated"] == false,
                       "length limit lost a completed call or hid the interruption");
-    return failures;
-}
-
-int test_aggregate_logprobs() {
-    int failures              = 0;
-    GenerationOutcome outcome = sample_outcome();
-    // Reports name vocabulary ids, and an alternative is a different id with its own text. Position in
-    // the generated sequence must never be what selects a piece.
-    outcome.token_logprobs = {
-        ninfer::GeneratedTokenLogprob{
-            .token = 151644, .logprob = -0.25F, .top = {{151644, -0.25F}, {198, -1.5F}}},
-        ninfer::GeneratedTokenLogprob{.token = 362, .injected = true},
-        ninfer::GeneratedTokenLogprob{
-            .token = 5215, .logprob = -0.5F, .top = {{264, -1.0F}}},
-    };
-    outcome.token_pieces = {{151644, "Hello"},
-                            {198, "\n"},
-                            {362, " there"},
-                            {5215, " world"},
-                            // A piece that ends inside a multi-byte character: `token` is lossy, the
-                            // byte list is not.
-                            {264, "\xF0\x9F\x98"}};
-    const Json logprobs =
-        Json::parse(make_chat_completion_response(identity(), outcome, 2))["choices"][0]["logprobs"];
-    failures += check(logprobs["content"].size() == 3 && logprobs["refusal"].is_null(),
-                      "logprobs reports one entry per generated token");
-    failures += check(logprobs["content"][0]["token"] == "Hello" &&
-                          logprobs["content"][0]["logprob"] == -0.25,
-                      "the chosen token reports its own piece");
-    // The regression this guards: alternatives are vocabulary ids. Id 198 is a tenth of a plausible
-    // position index and 151644 is far beyond any of them, so a lookup by position yields either
-    // nothing or the neighbouring token's text.
-    failures += check(logprobs["content"][0]["top_logprobs"][0]["token"] == "Hello" &&
-                          logprobs["content"][0]["top_logprobs"][1]["token"] == "\n" &&
-                          logprobs["content"][0]["top_logprobs"][1]["bytes"] == Json::array({10}),
-                      "each alternative resolves to the piece of the id it names");
-    failures += check(logprobs["content"][1]["injected"] == true &&
-                          logprobs["content"][1]["logprob"] == 0 &&
-                          logprobs["content"][1]["token"] == " there",
-                      "an injected control span is marked and keeps its position");
-    failures += check(logprobs["content"][2]["top_logprobs"][0]["bytes"].size() == 3 &&
-                          logprobs["content"][2]["top_logprobs"][0]["token"].get<std::string>() ==
-                              "\xEF\xBF\xBD",
-                      "a split character stays exact in bytes and lossy in text");
     return failures;
 }
 
@@ -847,8 +847,8 @@ int test_stream_response() {
                       "stream separates reasoning and content deltas");
 
     GenerationOutcome outcome = sample_outcome();
-    outcome.constraint        = ninfer::ConstraintObservation{
-               .branch = ninfer::ConstraintOutputBranch::Content, .complete = true, .terminated = true};
+    outcome.stats.constraint  = ninfer::ConstraintObservation{
+         .branch = ninfer::ConstraintOutputBranch::Content, .complete = true, .terminated = true};
     const std::vector<std::string> events = stream.finish(outcome);
     failures +=
         check(events.size() == 4, "finish emits buffered suffix, terminal, usage, and done");
@@ -877,27 +877,25 @@ int test_stream_response() {
 
     OpenAIChatStream tool_stream(identity(), false);
     (void)tool_stream.start();
-    const Json tool_progress = parse_sse(tool_stream.tool_call_progress(1536));
-    failures += check(tool_progress["choices"][0]["delta"].empty() &&
-                          tool_progress["tool_call_progress"]["bytes"] == 1536,
-                      "stream reports withheld tool-call progress without exposing markup");
     GenerationOutcome tool_outcome;
     tool_outcome.tool_calls.push_back(ninfer::GeneratedToolCall{
         .name = "Edit", .arguments_json = R"({"file_path":"/tmp/probe.cpp"})"});
-    tool_outcome.finish_reason                 = ninfer::FinishReason::StopToken;
-    const std::vector<std::string> tool_events = tool_stream.finish(tool_outcome);
-    const Json tool_delta                      = parse_sse(tool_events[0]);
+    tool_outcome.finish_reason = ninfer::FinishReason::StopToken;
+    const auto tool_events     = emit_tools(tool_stream, tool_outcome.tool_calls);
+    const auto tool_finish     = tool_stream.finish(tool_outcome);
+    const Json tool_delta      = parse_sse(tool_events[0]);
     failures += check(
         tool_delta["choices"][0]["delta"]["tool_calls"][0]["id"].get<std::string>().starts_with(
             "call_") &&
             tool_delta["choices"][0]["delta"]["tool_calls"][0]["function"]["name"] == "Edit" &&
-            parse_sse(tool_events[1])["choices"][0]["finish_reason"] == "tool_calls",
+            parse_sse(tool_finish[0])["choices"][0]["finish_reason"] == "tool_calls",
         "stream encoder owns stable OpenAI tool-call shape");
     OpenAIChatStream interrupted(identity(), false);
     (void)interrupted.start();
     tool_outcome.finish_reason = ninfer::FinishReason::OutputLimit;
-    const auto partial_events  = interrupted.finish(tool_outcome);
-    failures += check(parse_sse(partial_events[1])["choices"][0]["finish_reason"] == "length",
+    (void)emit_tools(interrupted, tool_outcome.tool_calls);
+    const auto partial_events = interrupted.finish(tool_outcome);
+    failures += check(parse_sse(partial_events[0])["choices"][0]["finish_reason"] == "length",
                       "streamed completed call hid a later truncation");
     return failures;
 }
@@ -981,13 +979,13 @@ int main() {
     int failures = 0;
     failures += test_request_envelope_and_sampling();
     failures += test_standard_field_policy();
+    failures += test_prompt_cache_boundaries();
     failures += test_constrained_decoding_extensions();
     failures += test_tools();
     failures += test_messages_and_media();
     failures += test_reasoning_and_extensions();
     failures += test_stops_and_ranges();
     failures += test_aggregate_response();
-    failures += test_aggregate_logprobs();
     failures += test_stream_response();
     failures += test_stream_observations();
     failures += test_common_objects();

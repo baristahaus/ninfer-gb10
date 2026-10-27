@@ -8,13 +8,18 @@ from fnmatch import fnmatchcase
 from math import prod
 from typing import Sequence
 
-from tools.artifact.layouts import (
-    encoded_size,
-    exl3_bank_geometry,
+from tools.artifact.layouts import encoded_size
+from tools.artifact.formats import (
+    DirectFormat,
+    Fp8BlockFormat,
+    Fp8RowFormat,
+    Nvfp4Format,
+    Nf4Format,
+    get_format,
 )
-from tools.artifact.formats import DirectFormat, Fp8RowFormat, Nvfp4Format, get_format
 from tools.artifact.schema import ACTIVATION_POLICIES, TensorSpec
 from .methods import (
+    SOURCE_CACHE_BYTES,
     AuxiliaryValue,
     MethodInput,
     PrepareRequest,
@@ -26,7 +31,6 @@ from .methods import (
     import_encoded,
 )
 from .model import Model
-from .sources.exllamav3 import Exl3ExpertSource
 from .sources.logical import LogicalSource, select_rows
 
 
@@ -39,6 +43,7 @@ class Selection:
     method: object
     source: LogicalSource
     parameters: dict
+    source_origin: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +54,13 @@ class WeightJob:
     sources: tuple[str, ...]
     method_name: str
     method_parameters: dict
+    placement: tuple[int, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class AuxiliaryReference:
+    tensor: str
+    element: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,10 +77,12 @@ def default_layout(format: str) -> str:
         return "contiguous_le_v1"
     if isinstance(kind, Fp8RowFormat):
         return "row_scale_v1"
+    if isinstance(kind, Fp8BlockFormat):
+        return "block_scale_m128_k128_v1"
     if isinstance(kind, Nvfp4Format):
         return "block_scale_k16_m128x4_v1"
-    if kind.name == "exl3":
-        return "exl3_expert_bank"
+    if isinstance(kind, Nf4Format):
+        return "row_paged_g16_4k_v1"
     return "row_split_k128_v1"
 
 
@@ -91,12 +105,17 @@ class Recipe:
 
     def __init__(self, model: Model):
         self.model = model
+        self.provenance = {}
         self.selections: dict[str, list[Selection]] = {}
         self.policies = {}
         self.auxiliary_overrides = {}
         self.aliases: dict[str, str] = {}
         self.separate_parameters: set[str] = set()
         self.explicit_groups: list[tuple[tuple[str, ...], tuple[int, ...] | None]] = []
+        self.explicit_parents = []
+        self.placements = {}
+        self.auxiliary_tensors = {}
+        self.auxiliary_references = {}
         for parameter in model.parameters.values():
             self.add_parameter(parameter.name)
 
@@ -197,6 +216,8 @@ class Recipe:
                     if previous.begin < low:
                         updated.append(replace(previous, end=low))
                     changes = {"begin": low, "end": high}
+                    if source is not None:
+                        changes["source_origin"] = 0
                     for key, value in (
                         ("format", format),
                         ("layout", layout),
@@ -235,11 +256,79 @@ class Recipe:
             self.policies[key] = activation_policy
         if auxiliaries is not None:
             for role, value in auxiliaries.items():
+                if isinstance(value, AuxiliaryReference):
+                    tensor = self.auxiliary_tensors[value.tensor]
+                    if tensor.format != "fp32" or not 0 <= value.element < prod(
+                        tensor.shape
+                    ):
+                        raise ValueError(
+                            "auxiliary reference requires one FP32 element"
+                        )
+                    self.auxiliary_references[(*key, role)] = value
+                    value = AuxiliaryValue.activation_divisor(
+                        tensor.data[value.element * 4 : (value.element + 1) * 4]
+                    )
+                else:
+                    self.auxiliary_references.pop((*key, role), None)
                 if not isinstance(value, AuxiliaryValue):
                     if role != "activation_input_divisor":
                         raise TypeError("provide an AuxiliaryValue for this role")
                     value = AuxiliaryValue.activation_divisor(value)
                 self.auxiliary_overrides[(*key, role)] = value
+
+    def auxiliary_tensor(self, name: str, value: AuxiliaryValue) -> None:
+        if name in self.auxiliary_tensors:
+            raise ValueError(f"duplicate auxiliary tensor {name}")
+        if len(value.data) != encoded_size(
+            default_layout(value.format), value.format, value.shape
+        ):
+            raise ValueError("auxiliary tensor size differs from its representation")
+        self.auxiliary_tensors[name] = value
+
+    def place(self, selectors, order: tuple[int, ...]) -> None:
+        for name in self.match(selectors):
+            self.placements[name] = tuple(order)
+
+    def parent(
+        self, parts, *, shape, format, method, layout=None, parameters=None, order=()
+    ):
+        """Place exact logical regions into one parent, with explicit fragment sources."""
+        if isinstance(method, str):
+            method = METHODS[method]
+        regions = []
+        for name, begin, end, source in parts:
+            if name not in self.selections or name in self.aliases:
+                raise ValueError(f"invalid parent parameter {name}")
+            if (
+                not 0 <= begin < end <= prod(self.model.parameters[name].shape)
+                or prod(source.shape) != end - begin
+            ):
+                raise ValueError(f"{name}: parent fragment has invalid coverage")
+            updated = []
+            for previous in self.selections[name]:
+                low, high = max(begin, previous.begin), min(end, previous.end)
+                if low >= high:
+                    updated.append(previous)
+                    continue
+                if previous.begin < low:
+                    updated.append(replace(previous, end=low))
+                if high < previous.end:
+                    updated.append(replace(previous, begin=high))
+            updated.append(
+                Selection(
+                    begin,
+                    end,
+                    format,
+                    layout,
+                    method,
+                    source,
+                    dict(parameters or {}),
+                    begin,
+                )
+            )
+            self.selections[name] = sorted(updated, key=lambda s: s.begin)
+            regions.append((name, begin, end))
+        self.explicit_parents.append((tuple(regions), tuple(shape), tuple(order)))
 
     def separate(self, selectors) -> None:
         self.separate_parameters.update(self.match(selectors))
@@ -268,7 +357,14 @@ class Recipe:
         self.aliases[parameter] = target
         self.selections[parameter] = list(self.selections[target])
 
-    def prepare(self, *, device="cuda", rows_per_chunk=512) -> PreparedRecipe:
+    def prepare(
+        self,
+        *,
+        device="cuda",
+        rows_per_chunk=None,
+        source_cache_bytes=SOURCE_CACHE_BYTES,
+        reader=None,
+    ) -> PreparedRecipe:
         weights = []
         fragments = {name: [] for name in self.selections}
         auxiliary_values = dict(self.auxiliary_overrides)
@@ -284,7 +380,11 @@ class Recipe:
 
         def parent_shape(items, chosen):
             sources = [
-                _slice_source(value.source, value.begin, value.end)
+                _slice_source(
+                    value.source,
+                    value.begin - value.source_origin,
+                    value.end - value.source_origin,
+                )
                 for _, value in items
             ]
             size = sum(prod(source.shape) for source in sources)
@@ -309,7 +409,7 @@ class Recipe:
                 "grouped inputs need compatible rows or an explicit parent shape"
             )
 
-        def emit(items, chosen=None):
+        def emit(items, chosen=None, order=None):
             if len({self.model.parameters[name].residency for name, _ in items}) > 1:
                 raise ValueError(
                     "grouping crosses independently selected private weights"
@@ -321,44 +421,9 @@ class Recipe:
             dims, sources = parent_shape(items, chosen)
             selection = items[0][1]
             layout = selection.layout or default_layout(selection.format)
-            declared_bytes = None
-            if selection.format == "exl3" or layout == "exl3_expert_bank":
-                if layout != "exl3_expert_bank" or selection.format != "exl3":
-                    raise ValueError("the EXL3 format exists only as the expert bank")
-                experts = []
-                for _, value in items:
-                    source = value.source
-                    if not isinstance(source, Exl3ExpertSource):
-                        raise ValueError(
-                            "EXL3 banks pack whole experts from EXL3 expert sources"
-                        )
-                    if value.begin != 0 or value.end != prod(source.shape):
-                        raise ValueError(
-                            "EXL3 banks pack whole experts; partial selections are invalid"
-                        )
-                    experts.append(source)
-                codebooks = {source.linear.codebook for source in experts}
-                if len(codebooks) != 1:
-                    raise ValueError(
-                        f"a bank's codebook must be uniform; got {sorted(codebooks)}"
-                    )
-                n, k = experts[0].shape
-                if any(source.shape != (n, k) for source in experts):
-                    raise ValueError("a bank's experts must share one [n, k] shape")
-                geometry = exl3_bank_geometry(
-                    n, k, [source.linear.k2 for source in experts], next(iter(codebooks))
-                )
-                if tuple(dims) != (geometry.experts * n, k):
-                    raise ValueError("bank parent shape is not the stacked expert rows")
-                declared_bytes = geometry.payload_bytes
-                encoded_size(
-                    layout, selection.format, dims, payload_bytes=declared_bytes
-                )
-            else:
-                encoded_size(layout, selection.format, dims)
+            encoded_size(layout, selection.format, dims)
             spec = TensorSpec(
-                f"weight/{len(weights):06d}", dims, selection.format, layout,
-                bytes=declared_bytes,
+                f"weight/{len(weights):06d}", dims, selection.format, layout
             )
             inputs = tuple(
                 MethodInput(
@@ -371,13 +436,15 @@ class Recipe:
                 for (name, _), source in zip(items, sources)
             )
             request = PrepareRequest(
-                spec,
-                inputs,
-                self.policies,
-                selection.parameters,
-                device,
-                rows_per_chunk,
-                self.auxiliary_overrides,
+                target=spec,
+                inputs=inputs,
+                policies=self.policies,
+                parameters=selection.parameters,
+                device=device,
+                rows_per_chunk=rows_per_chunk,
+                auxiliary_overrides=self.auxiliary_overrides,
+                source_cache_bytes=source_cache_bytes,
+                reader=reader,
             )
             try:
                 prepared = selection.method(request)
@@ -403,6 +470,11 @@ class Recipe:
                         selection.method, "__name__", type(selection.method).__name__
                     ),
                     dict(selection.parameters),
+                    (
+                        min((self.placements.get(name, ()) for name, _ in items))
+                        if order is None
+                        else order
+                    ),
                 )
             )
             cursor = 0
@@ -410,6 +482,38 @@ class Recipe:
                 count = value.end - value.begin
                 fragments[name].append((value.begin, spec.id, cursor, cursor + count))
                 cursor += count
+
+        covered = {name: [] for name in self.selections}
+        for regions, chosen, order in self.explicit_parents:
+            items = []
+            for name, begin, end in regions:
+                choices = [
+                    s
+                    for s in self.selections[name]
+                    if s.begin <= begin and s.end >= end
+                ]
+                if len(choices) != 1 or any(
+                    begin < b and end > a for a, b in covered[name]
+                ):
+                    raise ValueError(
+                        f"{name}: explicit parent overlaps or crosses selections"
+                    )
+                covered[name].append((begin, end))
+                items.append((name, replace(choices[0], begin=begin, end=end)))
+            emit(items, chosen, order)
+        for name, spans in covered.items():
+            if spans:
+                spans.sort()
+                cursor = 0
+                for begin, end in spans:
+                    if begin != cursor:
+                        raise ValueError(
+                            f"{name}: explicit parents must cover the whole parameter"
+                        )
+                    cursor = end
+                if cursor != prod(self.model.parameters[name].shape):
+                    raise ValueError(f"{name}: incomplete explicit parent coverage")
+                used.add(name)
 
         for names, chosen in self.explicit_groups:
             if any(name in used or name in self.aliases for name in names):
@@ -485,7 +589,18 @@ class Recipe:
             bindings[name] = deepcopy(bindings[target])
 
         uses = []
-        auxiliary_outputs = []
+        auxiliary_outputs = [
+            (
+                TensorSpec(
+                    f"auxiliary/shared/{name}",
+                    value.shape,
+                    value.format,
+                    default_layout(value.format),
+                ),
+                value.data,
+            )
+            for name, value in self.auxiliary_tensors.items()
+        ]
         for (name, input_name), policy in self.policies.items():
             # Explicitly shared weights retain independent Use and calibration records.
             key = (name, input_name, "activation_input_divisor")
@@ -503,6 +618,19 @@ class Recipe:
             referenced = {}
             for (parameter, source_input, role), value in auxiliary_values.items():
                 if (parameter, source_input) != (name, input_name):
+                    continue
+                reference = self.auxiliary_references.get(
+                    (parameter, source_input, role)
+                )
+                if reference is not None:
+                    referenced[role] = {
+                        "parts": [
+                            {
+                                "object": f"auxiliary/shared/{reference.tensor}",
+                                "range": [reference.element, reference.element + 1],
+                            }
+                        ]
+                    }
                     continue
                 if role == "activation_input_divisor":
                     if value.format != "fp32" or value.shape != ():
@@ -528,5 +656,8 @@ class Recipe:
         if any((key[0], key[1]) not in known_uses for key in auxiliary_values):
             raise ValueError("method returned an auxiliary for an unknown Use")
         return PreparedRecipe(
-            tuple(weights), bindings, tuple(uses), tuple(auxiliary_outputs)
+            tuple(sorted(weights, key=lambda job: job.placement)),
+            bindings,
+            tuple(uses),
+            tuple(auxiliary_outputs),
         )

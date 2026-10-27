@@ -179,35 +179,6 @@ __global__ void conv_replay_record_kernel(const __nv_bfloat16* input, const __nv
     }
 }
 
-// The control-gating projection for the decode-specialized paths. The fused kernel reads the
-// a/b projections as raw BF16 rows; a non-BF16 storage (the native MXFP8 recipe) routes through
-// the generic linear dispatch, which decodes the stored format exactly.
-void project_control_gating(const Tensor& input, const FlashNextGdnWeights& weights, Tensor& g,
-                            Tensor& beta, int rows, WorkspaceArena& workspace, cudaStream_t stream,
-                            Bf16GemmContext* bf16_gemm) {
-    if (weights.a_projection.qtype == QType::BF16 &&
-        weights.a_projection.layout == QuantLayout::Contiguous &&
-        weights.b_projection.qtype == QType::BF16 &&
-        weights.b_projection.layout == QuantLayout::Contiguous) {
-        project_control_gating_kernel<<<dim3(kHeads, static_cast<unsigned int>(rows)), 256, 0,
-                                        stream>>>(
-            static_cast<const __nv_bfloat16*>(input.data),
-            static_cast<const __nv_bfloat16*>(weights.a_projection.qdata),
-            static_cast<const __nv_bfloat16*>(weights.b_projection.qdata),
-            static_cast<const float*>(weights.a_log.data),
-            static_cast<const float*>(weights.dt_bias.data), static_cast<float*>(g.data),
-            static_cast<float*>(beta.data));
-        CUDA_CHECK(cudaGetLastError());
-        return;
-    }
-    auto scope = workspace.scope();
-    Tensor a = workspace.alloc(DType::BF16, {kHeads, rows});
-    Tensor b = workspace.alloc(DType::BF16, {kHeads, rows});
-    linear(input, weights.a_projection, a, stream, bf16_gemm);
-    linear(input, weights.b_projection, b, stream, bf16_gemm);
-    gdn_gating(a, b, weights.a_log, weights.dt_bias, g, beta, stream);
-}
-
 void validate(const Tensor& input, const FlashNextGdnWeights& weights,
               const Tensor& conv_in, const Tensor& conv_out, const Tensor& recurrent_in,
               const Tensor& recurrent_out, const Tensor& destination) {
@@ -232,16 +203,15 @@ void validate(const Tensor& input, const FlashNextGdnWeights& weights,
         throw std::invalid_argument("flash_next_gdn: invalid exact tensor geometry");
     }
     require_weight(weights.a_projection, kHeads, kHidden,
-                   "flash_next_gdn: invalid a projection", WeightFormats::Bf16Fp8OrMxfp8);
+                   "flash_next_gdn: invalid a projection");
     require_weight(weights.b_projection, kHeads, kHidden,
-                   "flash_next_gdn: invalid b projection", WeightFormats::Bf16Fp8OrMxfp8);
+                   "flash_next_gdn: invalid b projection");
     require_weight(weights.query_key_value, kConvolution, kHidden,
-                   "flash_next_gdn: invalid qkv projection", WeightFormats::Bf16Fp8OrMxfp8);
+                   "flash_next_gdn: invalid qkv projection", WeightFormats::Bf16OrFp8);
     require_weight(weights.output_gate, kValue, kHidden,
-                   "flash_next_gdn: invalid output gate projection",
-                   WeightFormats::Bf16Fp8OrMxfp8);
+                   "flash_next_gdn: invalid output gate projection", WeightFormats::Bf16OrFp8);
     require_weight(weights.output, kHidden, kValue, "flash_next_gdn: invalid output projection",
-                   WeightFormats::Bf16Fp8OrMxfp8);
+                   WeightFormats::Bf16OrFp8);
 }
 
 } // namespace
@@ -268,9 +238,9 @@ std::size_t flash_next_gdn_workspace_capacity_bytes(std::int32_t tokens) {
 void flash_next_gdn(const Tensor& input, const FlashNextGdnWeights& weights,
                     const Tensor& convolution_state_in, Tensor& convolution_state_out,
                     const Tensor& recurrent_state_in, Tensor& recurrent_state_out,
-                    Tensor& destination, WorkspaceArena& workspace,
-                    DeviceExecutionView execution, Bf16GemmContext* bf16_gemm) {
-    const cudaStream_t stream = execution.stream;
+                    Tensor& destination, MemoryArena& workspace,
+                    CudaExecutionView execution, Bf16GemmContext* bf16_gemm) {
+    const cudaStream_t stream = execution.stream();
     NINFER_PERF_SCOPE("gdn.prefill", input.ne[1], 1, 0,
                        flash_next_work::gdn(input.ne[1], 1, false, true,
                                             fp8_row_weight(weights.query_key_value)));
@@ -279,9 +249,25 @@ void flash_next_gdn(const Tensor& input, const FlashNextGdnWeights& weights,
              recurrent_state_out, destination);
     const int tokens = input.ne[1];
     auto scope = workspace.scope();
-    Tensor g    = workspace.alloc(DType::FP32, {kHeads, tokens});
+    Tensor a = workspace.alloc(DType::BF16, {kHeads, tokens});
+    Tensor b = workspace.alloc(DType::BF16, {kHeads, tokens});
+    Tensor g = workspace.alloc(DType::FP32, {kHeads, tokens});
     Tensor beta = workspace.alloc(DType::FP32, {kHeads, tokens});
-    project_control_gating(input, weights, g, beta, tokens, workspace, stream, bf16_gemm);
+    if (tokens > 16) {
+        linear(input, weights.a_projection, a, stream, bf16_gemm);
+        linear(input, weights.b_projection, b, stream, bf16_gemm);
+        gdn_gating(a, b, weights.a_log, weights.dt_bias, g, beta, stream);
+    } else {
+        project_control_gating_kernel<<<dim3(kHeads, static_cast<unsigned int>(tokens)), 256, 0,
+                                        stream>>>(
+            static_cast<const __nv_bfloat16*>(input.data),
+            static_cast<const __nv_bfloat16*>(weights.a_projection.qdata),
+            static_cast<const __nv_bfloat16*>(weights.b_projection.qdata),
+            static_cast<const float*>(weights.a_log.data),
+            static_cast<const float*>(weights.dt_bias.data), static_cast<float*>(g.data),
+            static_cast<float*>(beta.data));
+        CUDA_CHECK(cudaGetLastError());
+    }
 
     Tensor projected = workspace.alloc(DType::BF16, {kConvolution, tokens});
     Tensor z = workspace.alloc(DType::BF16, {kValue, tokens});
@@ -313,7 +299,7 @@ void flash_next_gdn(const Tensor& input, const FlashNextGdnWeights& weights,
 void flash_next_gdn_batch_update(const Tensor& input, const FlashNextGdnWeights& weights,
                                  Tensor& convolution_states, Tensor& recurrent_states,
                                  const Tensor& source_slots, const Tensor& destination_slots,
-                                 Tensor& destination, WorkspaceArena& workspace,
+                                 Tensor& destination, MemoryArena& workspace,
                                  cudaStream_t stream) {
     NINFER_PERF_SCOPE("gdn.update", input.ne[1], input.ne[1], 0,
                        flash_next_work::gdn(input.ne[1], input.ne[1], false, false,
@@ -338,9 +324,19 @@ void flash_next_gdn_batch_update(const Tensor& input, const FlashNextGdnWeights&
              recurrent_states.slice(3, 0, 1).view({kDim, kDim, kHeads}), destination);
 
     auto scope = workspace.scope();
-    Tensor g    = workspace.alloc(DType::FP32, {kHeads, batch});
+    Tensor a = workspace.alloc(DType::BF16, {kHeads, batch});
+    Tensor b = workspace.alloc(DType::BF16, {kHeads, batch});
+    Tensor g = workspace.alloc(DType::FP32, {kHeads, batch});
     Tensor beta = workspace.alloc(DType::FP32, {kHeads, batch});
-    project_control_gating(input, weights, g, beta, batch, workspace, stream, nullptr);
+    project_control_gating_kernel<<<dim3(kHeads, static_cast<unsigned int>(batch)), 256, 0,
+                                    stream>>>(
+        static_cast<const __nv_bfloat16*>(input.data),
+        static_cast<const __nv_bfloat16*>(weights.a_projection.qdata),
+        static_cast<const __nv_bfloat16*>(weights.b_projection.qdata),
+        static_cast<const float*>(weights.a_log.data),
+        static_cast<const float*>(weights.dt_bias.data), static_cast<float*>(g.data),
+        static_cast<float*>(beta.data));
+    CUDA_CHECK(cudaGetLastError());
 
     Tensor projected = workspace.alloc(DType::BF16, {kConvolution, batch});
     Tensor z = workspace.alloc(DType::BF16, {kValue, batch});
@@ -373,7 +369,7 @@ void flash_next_gdn_replay_record(const Tensor& input, const FlashNextGdnWeights
                                   Tensor& convolution_states, Tensor& recurrent_states,
                                   const Tensor& valid_columns, const Tensor& source_slots,
                                   GdnReplayRecordLayer records, Tensor& destination,
-                                  WorkspaceArena& workspace, cudaStream_t stream,
+                                  MemoryArena& workspace, cudaStream_t stream,
                                   const FlashNextGdnPendingFold* pending) {
     NINFER_PERF_SCOPE("gdn.record", input.ne[1], records.conv.ne[2], 0,
                        flash_next_work::gdn(input.ne[1], records.conv.ne[2], true, false,
@@ -426,9 +422,19 @@ void flash_next_gdn_replay_record(const Tensor& input, const FlashNextGdnWeights
              recurrent_states.slice(3, 0, 1).view({kDim, kDim, kHeads}), destination);
 
     auto scope = workspace.scope();
-    Tensor g    = workspace.alloc(DType::FP32, {kHeads, tokens});
+    Tensor a = workspace.alloc(DType::BF16, {kHeads, tokens});
+    Tensor b = workspace.alloc(DType::BF16, {kHeads, tokens});
+    Tensor g = workspace.alloc(DType::FP32, {kHeads, tokens});
     Tensor beta = workspace.alloc(DType::FP32, {kHeads, tokens});
-    project_control_gating(input, weights, g, beta, tokens, workspace, stream, nullptr);
+    project_control_gating_kernel<<<dim3(kHeads, static_cast<unsigned int>(tokens)), 256, 0,
+                                    stream>>>(
+        static_cast<const __nv_bfloat16*>(input.data),
+        static_cast<const __nv_bfloat16*>(weights.a_projection.qdata),
+        static_cast<const __nv_bfloat16*>(weights.b_projection.qdata),
+        static_cast<const float*>(weights.a_log.data),
+        static_cast<const float*>(weights.dt_bias.data), static_cast<float*>(g.data),
+        static_cast<float*>(beta.data));
+    CUDA_CHECK(cudaGetLastError());
     Tensor projected = workspace.alloc(DType::BF16, {kConvolution, tokens});
     Tensor z = workspace.alloc(DType::BF16, {kValue, tokens});
     linear(input, weights.query_key_value, projected, stream);
@@ -459,12 +465,16 @@ void flash_next_gdn_replay_record(const Tensor& input, const FlashNextGdnWeights
                                                pending->records.value, pending->records.gate};
         gated_delta_net_fold_replay_record(q_batch, k_batch, v_batch, g_batch, beta_batch,
                                            0.08838834764831845F, recurrent_states, valid_columns,
-                                           source_slots, records.key, records.value, records.gate,
+                                           source_slots,
+                                           GdnRecurrenceRecords{records.key, records.value,
+                                                                records.gate},
                                            recurrent_batch, recurrent_pending, stream);
     } else {
         gated_delta_net_replay_record(q_batch, k_batch, v_batch, g_batch, beta_batch,
                                       0.08838834764831845F, recurrent_states, valid_columns,
-                                      source_slots, records.key, records.value, records.gate,
+                                      source_slots,
+                                      GdnRecurrenceRecords{records.key, records.value,
+                                                           records.gate},
                                       recurrent_batch, stream);
     }
     Tensor normalized = workspace.alloc(DType::BF16, {kValue, tokens});

@@ -1,1248 +1,679 @@
-# Constrained Decoding Design
+# Constrained decoding 设计
 
-This document defines the architecture, functional semantics, and execution contract of NInfer
-constrained decoding. GBNF, JSON object, JSON Schema, choice, regex, and tool constraints are
-implemented for the Qwen3.5 family and cover ordinary decoding, MTP, DFlash, and DFlash2. Content
-constraints are used through `RequestOptions::constraint`, the CLI, and the three HTTP protocols;
-tool declarations belong to the prompt, and the call policy belongs to
-`RequestOptions::tool_choice`. The independent Qwen3.8 Flash-Next family has no token-mask
-execution; see [§2.3](#23-model-family-scope).
+本文定义 NInfer 约束解码的架构、功能语义与执行合同。当前已实现 GBNF、JSON object、JSON Schema、choice、regex 和工具约束，覆盖普通解码、MTP、DFlash、DFlash2。正文约束经 `RequestOptions::constraint`、CLI 和三个 HTTP 协议使用；工具声明属于 Prompt，调用策略属于 `RequestOptions::tool_choice`。
 
-The goal is one token-constraint mechanism shared by GBNF, JSON, JSON Schema, and tool calls,
-integrated with the existing ordinary sampling, MTP, DFlash, DFlash2, thinking, streaming output,
-and context-cache/prefix-reuse paths. NInfer keeps one GPU, fixed resident lanes, and native
-C++/CUDA execution.
+目标是让 GBNF、JSON、JSON Schema 和工具调用共用一套 token 约束机制，接入现有普通采样、MTP、DFlash、DFlash2、thinking、流式输出与抢占恢复。NInfer 保持单 GPU、固定 resident lanes、原生 C++/CUDA 执行。
 
-Overall choices: vendor the XGrammar CPU core; the Frontend builds grammars that match the model's
-output semantics; the request owns the matcher; the Program owns the bitmask buffers and execution
-timing; the Sampling Ops build the target distribution over the legal set. Model state, grammar
-state, and user-visible output advance across the same commit boundary.
+总体选择：vendor XGrammar 的 CPU 核心；Frontend 构造符合模型输出语义的 grammar；请求拥有 matcher；Session 管理逻辑提交，RankProgram 管理位图缓冲和执行时序；Sampling Ops 在合法集合内建立目标分布。模型状态、语法状态和用户可见输出沿同一提交边界前进。
 
-This is the English, fork-adapted form of the upstream NInfer design, ported together with the
-feature (upstream commit `81c8ce09`). Where the fork differs from upstream (model-family scope, no
-request preemption, the mask region layout, and the observability names), this text states the
-fork's behavior.
+## 1. 功能与语义
 
-## 1. Function and semantics
-
-### 1.1 One underlying mechanism, several constraint entry points
+### 1.1 一个底层机制，多种约束入口
 
 ```mermaid
 flowchart LR
-    G[GBNF] --> C[Grammar compilation]
+    G[GBNF] --> C[Grammar 编译]
     J[JSON / JSON Schema] --> C
     R[Regex / Choice] --> C
-    T[Model tool output rules] --> C
-    C --> CG[Shared immutable CompiledGrammar]
-    CG --> M[Per-request Matcher]
-    M --> B[Per-position legal token bitmask]
-    B --> S[GPU sampling / speculative acceptance]
-    S --> P[Accepted prefix and commit]
+    T[模型工具输出规则] --> C
+    C --> CG[共享的不可变 CompiledGrammar]
+    CG --> M[每请求 Matcher]
+    M --> B[逐位置合法 Token Bitmask]
+    B --> S[GPU Sampling / Speculative Acceptance]
+    S --> P[接受前缀与提交]
     P --> M
 ```
 
-GBNF is the direct grammar input and is the smallest complete use of the underlying mechanism. JSON
-Schema and tool rules build the same runtime objects through compilation; the sampling Ops do not
-branch on JSON, GBNF, or tool type.
+GBNF 是直接的 grammar 输入，适合作为底层机制的最小完整使用方式。JSON Schema 和工具规则通过编译建立相同的运行时对象；采样算子不根据 JSON、GBNF 或工具类型分支。
 
-A constraint controls the legal set of next tokens. The complete bytes of a candidate token must be
-acceptable from the current grammar state; a token may span several punctuation marks, rules, or
-output phases, and may also contain only part of a UTF-8 sequence.
+约束控制下一 token 的合法集合。一个候选 token 的完整 bytes 必须能被当前 grammar 状态接受；token 可以横跨多个标点、规则、输出阶段，也可以仅包含部分 UTF-8 字节。
 
-An output that completes normally under a constraint must belong to the declared language or schema
-subset. A length limit, context exhaustion, or cancellation can leave an unfinished result.
-Structural conformance and factual correctness of the content are different properties.
+一次正常完成的受约束输出必须满足所声明的语言或 schema 子集。长度限制、上下文耗尽或取消可能留下未完成结果。结构符合要求与内容在事实上正确是不同的性质。
 
-### 1.2 Scope of a constraint
+### 1.2 约束的作用范围
 
-| Request form | Constrained object | Initialization point |
+| 请求形式 | 约束对象 | 初始化位置 |
 |---|---|---|
-| JSON, schema, GBNF, regex, or choice for a new Chat reply | Final content | Start of the newly added content; thinking is carried by the model's outer rule |
-| Direct grammar on a raw token/text continuation | All newly added text | After the prompt; the prompt is not automatically treated as a grammar prefix |
-| ContinueFinalAssistant | Concatenation of the existing final assistant content and the newly generated suffix | The matcher is initialized with the final content prefix |
-| Tool constraints | The model's native tool envelope, the call policy, and the argument values | Start of this assistant output, including the permitted thinking/content |
+| 新 Chat 回复的 JSON、schema、GBNF、regex、choice | 最终 content | 本次新增正文起点；thinking 由模型外层规则承接 |
+| 原始 token/text continuation 的直接 grammar | 全部新增文本 | prompt 之后，不自动把 prompt 当作 grammar 前缀 |
+| ContinueFinalAssistant | 已有末条 assistant 正文与新生成后缀的连接 | 用末条正文前缀初始化 matcher |
+| 工具约束 | 模型原生工具封装、调用策略及参数值 | 本次 assistant 输出起点，包含允许的 thinking/content |
 
-Constraints belong to Generation requests. Ordinary CausalScoring does not enter this path. Vision
-only affects prompt construction; afterwards the same output constraints apply. Every request form
-above applies to Qwen3.5-family models; [§2.3](#23-model-family-scope) defines what Flash-Next does
-with them.
+约束属于 Generation 请求。普通 CausalScoring 不进入这条路径。Vision 只影响 prompt 的构造，之后使用相同的输出约束。
 
-### 1.3 Completeness and sampling semantics
+### 1.3 完整性与采样语义
 
-Three facts are recorded separately:
+需要分别记录三个事实：
 
-- the current token prefix can still be continued by the grammar;
-- the current content is already in a state that allows ending;
-- whether the request ended through normal constrained completion.
+- 当前 token 前缀仍可按 grammar 延续。
+- 当前内容已处于允许结束的状态。
+- 请求是否以正常的受约束完成方式结束。
 
-For example, the grammar `root ::= [0-9]+` allows ending after generating `1` and still allows more
-digits. "Allowed to end" must not be equated with "forced to end now".
+例如 grammar `root ::= [0-9]+` 在生成 `1` 后已允许结束，同时仍允许继续生成数字。不能把“允许结束”直接等同于“现在强制结束”。
 
-Constrained decoding defines a new per-token distribution. It is not the original model's global
-distribution conditioned on "the whole final text satisfies the grammar". Speculative decoding
-preserves the per-token target distribution exactly as defined for ordinary constrained sampling.
+约束解码定义新的逐 token 分布。它不等于原始模型在“整段最终满足 grammar”条件下的全局条件分布。Speculative decoding 保持的是与普通受约束采样相同定义的逐 token 目标分布。
 
-## 2. Source and module boundaries
+## 2. 源码与模块边界
 
-### 2.1 Vendored XGrammar
+### 2.1 Vendor XGrammar
 
-The source lives in `third_party/xgrammar/` and is maintained the same way as
-`third_party/llama-jinja/`: a fixed source version, retained provenance and license information,
-NInfer-maintained modifications where needed, and upstream changes absorbed on demand.
+源码位于 `third_party/xgrammar/`，采用与 `third_party/llama-jinja/` 相同的维护方式：固定来源版本，保留来源与许可信息，由 NInfer 维护需要的修改，按需吸收上游变更。
 
-The starting point is the CPU core and its dependencies: grammar parsing and compilation, JSON
-Schema/regex conversion, vocabulary indexing, the matcher, the bitmask, and rollback. The recursion,
-Unicode, and token-level rule capabilities that GBNF needs are kept. Python/TVM bindings, the
-upstream CUDA/Triton integration, examples, and unrelated build branches do not enter the product
-target.
+起点为 CPU 核心及其依赖，包括 grammar 解析与编译、JSON Schema/regex 转换、词表索引、matcher、bitmask、rollback。保留 GBNF 所需的递归、Unicode 和 token 级规则能力。Python/TVM 绑定、上游 CUDA/Triton 接入、示例和无关构建分支不进入产品 target。
 
-The product build uses an explicit source list and a dedicated CMake target (`ninfer_xgrammar`).
-Small dependencies the core currently needs, such as picojson and DLPack, are managed inside that
-boundary; DLPack only adapts the library's CPU tensor view and does not enter the NInfer public API
-or any CUDA Op contract.
+产品构建使用明确的源码列表和独立 CMake target。核心当前需要的 picojson、DLPack 等小型依赖在该边界内管理；DLPack 只用于适配库的 CPU tensor view，不进入 NInfer 公共 API 或 CUDA Op 合同。
 
-Direct customization is allowed for:
+允许直接定制以下部分：
 
-- making the compiler return a structured error for an assertion it cannot execute, instead of
-  emitting a warning and relaxing the semantics;
-- providing a caller-owned bitmask view and reducing intermediate allocations and format
-  conversions;
-- exposing what a reliable mark/rollback/preview requires;
-- optimizing vocabulary handling, temporary state, and the compilation cache for real workloads.
+- 让编译器对无法执行的断言返回结构化错误，替代 warning 后放宽语义。
+- 提供 caller-owned bitmask view、减少中间分配和格式转换。
+- 暴露可靠的 mark/rollback/preview 所需能力。
+- 优化真实 workload 中的词表处理、临时状态和编译缓存。
 
-Source trimming keeps the complete dependencies of the selected CPU functions. The library's
-internal types do not all need to become NInfer contracts.
+源码裁剪以保留所选 CPU 功能的完整依赖为准。库内部原有类型不需要全部成为 NInfer 的公共合同。
 
-### 2.2 Ownership
+### 2.2 职责划分
 
-| Owner | Responsibility |
+| 所有者 | 负责内容 |
 |---|---|
-| Third-party CPU core | Grammar, tokenizer-aware compilation, matcher, legal sets, and rollback |
-| NInfer public request contract | User constraint types, content constraints, tool selection, and strict intent; no third-party type is exposed |
-| Generic text-constraint adapter | Schema validation and composition reduction, source locations, shared compilation resources, CPU bitmasks, and temporary matcher operations |
-| Model Frontend | Raw vocabulary and control tokens; thinking/content/tool envelopes; continuation prefixes; tool value representation |
-| Request OutputSession | Mutable matcher, output parsing, preview, and formal commit |
-| Engine | Request lifecycle, per-round request/row mapping, the call-scoped mask provider, batch commit, and result publication |
-| Program | Device/pinned buffers, per-position data layout, fixed execution composition, CUDA Graphs, and physical state commit |
-| Sampling / Speculative Ops | Legal-candidate filtering, probability normalization, p/q acceptance, residuals, and sampling results |
-| Gateway / CLI | File acquisition, protocol field translation, protocol errors, and response encoding |
+| 第三方 CPU 核心 | Grammar、tokenizer-aware 编译、matcher、合法集合和回退 |
+| NInfer 公共请求合同 | 用户约束类型、正文约束、工具选择与 strict 意图；不暴露第三方类型 |
+| 通用文本约束适配 | Schema 校验与组合归约、源定位、共享编译资源、CPU 位图和临时 matcher 操作 |
+| 模型 Frontend | 原始词表与控制 token；thinking/content/tool 封装；continuation 前缀；工具值表示 |
+| 请求 OutputSession | 可变 matcher、输出解析、preview 与正式提交 |
+| Engine | 请求生命周期、冻结的 request/row 映射、决策输入准备、批次提交和结果发布 |
+| Session | 原生生成事务、逻辑前沿、接受前缀与执行结果采用 |
+| Executor / RankProgram | owning 决策消息、Device/pinned buffers、逐位置排列、CUDA Graph 与物理提交 |
+| Sampling / Speculative Ops | 合法候选筛选、概率归一化、p/q 接受、残差与采样结果 |
+| Gateway / CLI | 文件获取、协议字段翻译、协议错误和响应编码 |
 
-The generic adapter lives in `src/text/` (`grammar.h`, `json_schema.h`, `schema_composition.h`);
-Qwen output semantics live in `src/models/qwen3_5/frontend/`. The execution data contract
-(`TokenMaskProvider`, `CommitDecision`, `CommitDisposition`) belongs to `src/runtime/contract/`; the
-physical consumers are owned by the Program and the Ops.
+通用适配位于 `src/text/`；Qwen 输出语义位于 `src/models/common/qwen/frontend/`。执行数据合同属于 `src/runtime/contract/`，物理消费者由 RankProgram/Ops 拥有。
 
-### 2.3 Model-family scope
+## 3. 请求输入与编译
 
-Token-mask execution exists only in the Qwen3.5 family (`src/models/qwen3_5`). Every rule in this
-document about matchers, masks, constrained sampling, and speculative acceptance applies to
-Qwen3.5-family models, and "all requests" in this document means all Qwen3.5-family requests.
+### 3.1 请求表示
 
-The independent Qwen3.8 Flash-Next family (`src/models/qwen3_8_flash_next`) samples without token
-masks. Its family trait `FlashNextInstance::kOutputConstraints` is `false`
-(`src/runtime/engine/model_instance.h`), and the Engine compiles the constraint paths (constraint
-observation, matcher discard, and the single-row constraint failure of
-[§10.2](#102-no-legal-token-at-a-reachable-position)) out with `if constexpr` in
-`src/runtime/engine/engine_core.h`. Flash-Next does not answer an enforceable request unconstrained;
-its Frontend (`make_output_session` in `src/models/qwen3_8_flash_next/impl/frontend/frontend.cpp`)
-refuses:
+公共请求拥有可选的正文约束，表达一种以下内容：
 
-- every explicit content constraint: JSON object and JSON Schema with `UnsupportedJsonSchema`,
-  choice with `InvalidChoice`, regex with `InvalidRegex`, and GBNF with `InvalidGrammar`;
-- with declared tools, every tool requirement it cannot enforce: a strict tool, a `tool_choice` mode
-  other than Auto, `allowed_names`, or `parallel=false`, with `InvalidToolConstraint` and source
-  `Tools`.
+- JSON object；
+- JSON Schema 文档；
+- GBNF 文本，入口规则为 `root`；
+- regex；
+- 有限字符串 choice。
 
-The default Basic tool mode therefore runs as free generation on Flash-Next: tool calls are parsed
-from unconstrained output.
+正文约束使用 `RequestOptions::constraint` 中的 `OutputConstraint`，以枚举区分 Grammar、JsonObject、JsonSchema、Choice、Regex，并拥有源文本或字面量列表。运行时不读取文件。CLI 的 grammar/schema 文件在输入准备时读取；HTTP 将字段内容直接转换为请求数据。
 
-`LoadSummary::output_constraints` (`include/ninfer/types.h`) tells serving whether the loaded family
-enforces constraints; serving carries it as `ResolvedPromptSemantics::output_constraints`
-(`src/serve/translate.cpp`). On an enforcing family every tool declaration and its cache marker
-stays in the prompt and the grammar applies the selection ([§4.3](#43-tool-constraints)). On a
-non-enforcing family serving honors `tool_choice` none and an `allowed_tools` subset by declaring
-only the selectable tools, and then drops `allowed_names` before handing the request to the Engine.
+工具约束来自 owning 工具定义及工具策略：每个工具的 name、参数 schema、strict 标志，以及 auto/none/required/named、是否允许多个调用。它与模板收到的工具定义来自同一请求事实；执行不从渲染后的 prompt 文本反向提取 schema。
 
-## 3. Request input and compilation
+沿用 `prepare(PromptInput)` 与 `submit(PreparedPrompt, RequestOptions)` 的分工。PreparedPrompt 保存已解析工具定义、起始输出阶段和必要的 continuation 前缀；工具选择策略与正文约束在 submit 时结合这些事实构造 OutputSession。CompiledGrammar 和 matcher 由该 OutputSession 持有，普通 `count_tokens` 不编译输出约束。
 
-### 3.1 Request representation
+JSON object / JSON Schema 可以与活动工具集合并用。Auto 的输出语言是 JSON 正文与完整工具序列的并集；Required / named 本轮只允许工具序列；None 只允许正文。GBNF、choice、regex 与活动工具集合的组合在准备阶段拒绝。
 
-A public request owns an optional content constraint that expresses one of:
-
-- a JSON object;
-- a JSON Schema document;
-- GBNF text, with entry rule `root`;
-- a regex;
-- a finite set of string choices.
-
-The content constraint is the `OutputConstraint` in `RequestOptions::constraint`. An enum
-distinguishes Grammar, JsonObject, JsonSchema, Choice, and Regex, and the value owns its source text
-or its literal list. The runtime does not read files. The CLI reads grammar/schema files while it
-prepares the input; HTTP converts the field content directly into request data.
-
-Tool constraints come from the owning tool definitions and the tool policy: each tool's name,
-parameter schema, and strict flag, plus auto/none/required/named and whether several calls are
-allowed. They come from the same request facts as the tool definitions the template receives;
-execution never extracts a schema back out of the rendered prompt text.
-
-The division between `prepare(PromptInput)` and `submit(PreparedPrompt, RequestOptions)` is kept.
-The PreparedPrompt stores the parsed tool definitions, the starting output phase, and any necessary
-continuation prefix; at submit, the tool selection policy and the content constraint combine with
-these facts to build the OutputSession. The CompiledGrammar and the matcher are held by that
-OutputSession; ordinary `count_tokens` does not compile output constraints.
-
-JSON object / JSON Schema can be combined with an active tool set. The output language of Auto is
-the union of the JSON content and a complete tool sequence; Required / named allow only the tool
-sequence this turn; None allows only content. Combinations of GBNF, choice, or regex with an active
-tool set are refused at preparation.
-
-### 3.2 Preparation flow
+### 3.2 准备流程
 
 ```text
-protocol/CLI translates the owning request
-  → prepare: the Frontend renders the prompt and fixes the output phase and continuation prefix
-  → submit: reserve an outstanding slot and prepare the OutputSession on the calling thread
-  → validate the constraint kind and feature combination; look up the cache by source content and
-    model output envelope
-  → on a miss, validate the schema, convert it, and compile an immutable grammar
-  → create and initialize the request matcher
-  → join the existing waiting queue
+协议/CLI 翻译 owning 请求
+  → prepare：Frontend 渲染 prompt，确定输出阶段及 continuation 前缀
+  → submit：保留 outstanding 名额，在调用线程准备 OutputSession
+  → 校验约束类型与功能组合，按源内容和模型输出封装查询缓存
+  → miss 时校验 schema、转换并编译不可变 grammar
+  → 创建并初始化请求 matcher
+  → 加入现有 waiting queue
 ```
 
-Compilation happens at the calling-thread preparation boundary where `make_output_session` already
-runs, outside the Engine worker; it does not hold the queue/execution mutex while compiling. It
-occupies the existing outstanding slot and releases it on failure. Cold compilation latency counts
-toward request preparation; a compilation cache hit reuses the grammar and creates a new matcher.
-The parameter-representation analysis of strict tools belongs to request preparation and uses the
-same schema reduction result as the grammar.
+编译发生在现有 `make_output_session` 所在的调用线程准备边界，位于 Engine worker 之外；不持有 queue/execution mutex 进行编译。占用现有 outstanding 名额，失败时释放。冷编译延迟计入请求准备；编译缓存命中复用 grammar 并创建新 matcher。严格工具的参数表示分析属于请求准备，使用与 grammar 相同的 schema 归约结果。
 
-Submit still creates the request synchronously and returns a handle; a cold compilation can lengthen
-that call. The pending deadline is not moved later because of compilation; after the library call
-returns and before enqueueing, the deadline and the Engine state are checked again. Cancellation of
-generation uses the existing handle/consumer mechanism; no scheduler for preemptible compilation
-tasks is added.
+submit 仍同步建立请求并返回 handle，冷编译可能延长这次调用。pending deadline 不因编译后移；库调用返回后、入队前重新检查 deadline 和 Engine 状态。取消生成沿既有 handle/consumer 机制处理，不增加一个可抢占编译任务的调度器。
 
-The initial mask can be checked and cached at preparation. If a generation request has no legal
-token at its initial position, a request error is returned. An empty set on a temporary speculative
-branch later must not fail the whole request early; see [§7](#7-bitmask-and-sampling-data-contract).
+初始 mask 可在准备时检查并缓存。若生成请求在初始位置已经没有合法 token，返回请求错误。后续临时 spec 分支上的空集合不能提前判定整个请求失败，见第7节。
 
-### 3.3 Vocabulary adaptation
+### 3.3 词表适配
 
-The adapter uses the raw bytes of `decoded_token(id)` and the valid/special flags already resolved
-by the model Frontend, so the token domain matches the sampling Ops. The vocabulary is adapted once:
+使用模型 Frontend 已解析的 `decoded_token(id)` 原始 bytes 和 valid/special 标记，token domain 与采样算子保持一致。词表只适配一次：
 
-- no display-level decode first, no replacement of incomplete UTF-8, no NFC renormalization;
-- padding, invalid IDs, Vision-only tokens, and other non-generatable tokens do not enter the
-  ordinary text candidates;
-- ordinary text tokens match by their bytes;
-- EOS is a completion control; necessary special tokens such as thinking markers are allowed only in
-  the corresponding model rule;
-- an ordinary token spelling and a special token identity with the same visible string are handled
-  separately.
+- 不先做展示层 decode，不替换不完整 UTF-8，不进行 NFC 再归一化。
+- Padding、无效 ID、Vision 专用等不可生成 token 不进入普通文本候选。
+- 普通文本 token 按其 bytes 匹配。
+- EOS 是完成控制；thinking 等必要特殊 token 只在相应模型规则中允许。
+- 相同可见字符串的普通 token 拼写和 special token 身份分别处理。
 
-NInfer supplies these classifications explicitly. The upstream `TokenizerInfo` default judgment of
-special tokens does not replace the model Frontend's facts. The adaptation may pass explicit
-classifications through the vendor interface; it does not infer semantics by treating every control
-token as an ordinary string.
+NInfer 显式提供这些分类。上游 `TokenizerInfo` 对 special token 的默认判断不能代替模型 Frontend 的事实。适配可以通过 vendor 接口接收显式分类；不靠把所有控制 token 当作普通字符串来推断语义。
 
-### 3.4 Compilation sharing and memory
+### 3.4 编译共享与内存
 
-Each Frontend holds a compiler/cache bound to its current vocabulary. A CompiledGrammar is
-immutable, and an OutputSession holds a shared reference to it.
+每个 Frontend 持有与当前词表绑定的 compiler/cache。CompiledGrammar 不可变，OutputSession 持有共享引用。
 
-The constraint vocabulary index and the compiler are initialized thread-safely on the first use of a
-constraint; that time belongs to that prepare. The ordinary tokenizer keeps its existing
-initialization. Requests that use no constraint trigger no extra CPU index construction.
+约束词表索引与 compiler 在首次使用约束时线程安全地初始化；其耗时属于该次 prepare。普通 tokenizer 保持现有初始化方式。未使用约束的请求不触发额外 CPU 索引构建。
 
-The cache key is formed jointly from the constraint kind and source content, the compilation
-options, and the model output envelope. Different starting content phases can produce different
-envelopes; the concrete content prefix of a continuation only advances the new matcher and is not
-part of the compiled grammar's identity. Different vocabularies use different compiler instances.
+缓存键由约束类型及源内容、编译选项、模型输出封装共同构成。正文起始阶段可以产生不同封装；continuation 的具体正文前缀仅推进新 matcher，不加入 compiled grammar 身份。不同词表使用不同 compiler 实例。
 
-JSON sources are parsed and serialized order-preserving; the declared property order is part of the
-generated layout and must not be sorted arbitrarily to raise the hit rate while pretending the
-semantics are identical. A regex uses its source text and compilation options as the key.
+JSON 源以保序方式解析和序列化；声明的属性顺序是生成布局的一部分，不能为提高命中率任意排序后假装语义完全相同。regex 使用源文本和编译选项作为键。
 
-One thread-safe compilation cache of the library is reused. Concurrent cold compilations of the same
-key share one build result; the cache lock does not cover the whole compilation of different keys.
-At most two cold compilations run at once per model, each on its submit calling thread and each
-single-threaded inside; a cache hit does not take a cold-compilation slot. GBNF, JSON object, JSON
-Schema, and regex use the kind, the source text, and the model output envelope as the cache key;
-choice uses the normalized literal set. Validation, conversion, envelope construction, and
-vocabulary compilation all happen inside the same bounded build of a cache miss; a hit does not
-parse or convert again. Continuation bytes are used only to initialize the matcher.
+复用库的一套线程安全编译缓存。并发相同 key 的冷编译共享一个构建结果；缓存锁不覆盖不同 key 的整个编译过程。
+每模型最多两个冷编译同时运行，各自在 submit 调用线程执行，编译内部单线程；缓存命中不占用冷编译名额。
+GBNF、JSON object、JSON Schema、regex 以种类、源文本和模型输出封装作为缓存键；choice 使用规范化后的字面量集合。校验、转换、封装和词表编译均在缓存 miss 的同一个受限构建内完成；命中不重新解析或转换。continuation bytes 仅用于初始化 matcher。
 
-The default compilation cache budget is 256 MiB, configured by the Engine startup option
-`grammar_cache_bytes`. The budget limits the compiled results the cache retains; an object still
-used by a request survives eviction from the cache, so it is not a hard upper bound on total process
-RAM. The vocabulary index, active matchers, and temporary compilation memory are accounted
-separately and are not charged to the KV/GDN Host cache quota.
+设计默认编译缓存预算为 256 MiB，配置为 Engine 启动选项 `grammar_cache_bytes`。该预算限制缓存保留的编译结果；请求正在使用的对象被逐出缓存后仍可存活，因此不是进程 RAM 的总硬上限。词表索引、活跃 matcher 和编译临时内存分别计量，不扣入 KV/GDN Host cache 配额。
 
-## 4. GBNF, JSON Schema, and functional semantics
+## 4. GBNF、JSON Schema 与功能语义
 
-### 4.1 GBNF, regex and choice
+### 4.1 GBNF / regex / choice
 
-GBNF uses the EBNF/GBNF text syntax supported by the vendored version, with `root` as the entry. It
-supports literals, character classes, sequences, alternatives, repetition, and recursion. Syntax
-errors carry line/column locations.
+GBNF 使用 vendor 版本支持的 EBNF/GBNF 文本语法，以 `root` 为入口。支持字面量、字符类、序列、分支、重复和递归。语法错误携带行列定位。
 
-The first public grammar contract is the language constraint itself. Library extensions that can
-change the temperature, add a token budget, or alter generation behavior are not implicit runtime
-parameters; those capabilities stay under NInfer's sampling and budget contracts. Token-level
-terminals are checked against the current model token domain and the control-token rules.
+首个公开 grammar 合同采用语言约束本身。库中能够改变 temperature、额外 token budget 或生成行为的扩展不作为隐式运行参数；这些能力继续由 NInfer 的采样与预算合同控制。token 级终结符经当前模型 token domain 和控制 token 规则校验。
 
-Token terminals use the vendor's `Token(id, ...)` / `ExcludeToken(id, ...)` notation. The GBNF entry
-does not expose the upstream `TagDispatch`, `TokenTagDispatch`, `Regex`, or `Substring`
-constructors. XGrammar's `(= ...)` lookahead annotation syntax is kept to describe the legal suffix
-after a rule and to help token-mask compilation; the complete language is defined by the rule
-bodies, and the annotation should agree with the following rules. It keeps the upstream semantics of
-a compilation hint and is not an independent regex lookahead constraint. A user's direct grammar can
-reference ordinary generatable tokens; EOS and the reserved model control tokens are owned by the
-outer completion/phase rules and are not visible content terminals. The model envelope may use the
-exact IDs of the corresponding control tokens.
+Token 终结符采用 vendor 的 `Token(id, ...)` / `ExcludeToken(id, ...)` 写法。
+GBNF 入口不暴露上游的 `TagDispatch`、`TokenTagDispatch`、`Regex`、`Substring` 构造器。
+保留 XGrammar 的 `(= ...)` lookahead 注解语法，用于描述规则之后的合法后缀，辅助编译 token mask；
+完整语言由规则正文定义，注解应与后续规则一致。它沿用上游的编译提示语义，不作为独立的正则前瞻约束。
+用户直接 grammar 可以引用普通可生成 token；EOS 与保留的模型控制 token 由外层完成/阶段规则拥有，不作为可见正文终结符。模型封装可以使用相应控制 token 的精确 ID。
 
-Choice is built from literal grammar alternatives and preserves the case, whitespace, and Unicode of
-each string exactly; multi-token options and shared prefixes are supported. The candidate list must
-not be empty; the empty string is allowed, duplicate candidates are deduplicated, and candidate
-order carries no weight. When a short candidate is also a prefix of a longer one, matching the short
-candidate allows both EOS and further generation. The public interface is
-`OutputConstraint::choice(vector<string>)`.
+Choice 通过字面量 grammar 分支构造，精确保留字符串的大小写、空白与 Unicode，支持多 token 选项和共享前缀。候选列表不能为空；允许空字符串，重复候选去重，候选顺序不参与权重。短候选若也是长候选的前缀，匹配短候选后既允许 EOS，也允许继续生成。公共接口为 `OutputConstraint::choice(vector<string>)`。
 
-Regex matches the complete content; the public interface is `OutputConstraint::regex(string)`. An
-empty expression allows only empty content. It supports literals, Unicode characters, character
-classes, groups, alternatives, and the repetitions `*`, `+`, `?`, and `{m,n}`. Greedy and lazy forms
-describe the same legal set; no capture values are returned. Character classes follow ECMAScript
-semantics: `\d`/`\w` are ASCII ranges, `\s` includes Unicode whitespace, and `.` excludes `\n`,
-`\r`, U+2028, and U+2029. Escapes such as `\xNN` and `\uNNNN` are supported; non-BMP characters are
-written directly. The output contains only Unicode scalar values.
+Regex 按完整正文匹配，公共接口为 `OutputConstraint::regex(string)`；空表达式只允许空正文。支持字面量、Unicode 字符、字符类、分组、分支和 `*`、`+`、`?`、`{m,n}` 重复。贪婪/非贪婪写法描述相同的合法集合；不返回捕获值。字符类沿用 ECMAScript 语义：`\d`/`\w` 为 ASCII 范围，`\s` 包括 Unicode 空白，`.` 排除 `\n`、`\r`、U+2028、U+2029。支持 `\xNN`、`\uNNNN` 等转义；非 BMP 字符直接书写。输出只包含 Unicode scalar values。
 
-`^`/`$` are accepted only at the two ends of the expression or of a top-level alternative; any other
-position, backreferences, lookahead/lookbehind assertions, word boundaries, Unicode property
-classes, flags, surrogate escapes, and unknown escapes return a request error. `regex_converter`
-shares the character and escape normalization logic: regex uses a full match, and JSON Schema
-`pattern` keeps a search match. Invalid candidates or expressions use `InvalidChoice` /
-`InvalidRegex` respectively; a generation prefix that cannot continue uses `ConstraintDeadEnd`.
+`^`/`$` 只接受在表达式或顶层分支两端；其他位置、反向引用、前后向断言、单词边界、Unicode 属性类、flags、surrogate escape 和未知转义返回请求错误。`regex_converter` 共享字符与转义规范化逻辑：regex 使用完整匹配，JSON Schema `pattern` 保留搜索匹配。非法候选或表达式分别使用 `InvalidChoice` / `InvalidRegex`；不可继续的生成前缀沿用 `ConstraintDeadEnd`。
 
-Both share the existing compilation cache and matcher. The cache identity of choice is built from
-the deduplicated literal set and does not depend on token segmentation; full matching and the JSON
-Schema search use different entry identities. The runtime, sampling, and speculative backends keep
-consuming the same mask contract.
+两者共用现有编译缓存和 matcher。Choice 的缓存身份按去重后的字面量集合构造，不依赖 token 切分；完整匹配和 JSON Schema 搜索使用不同的入口身份。运行时、采样和 speculative 后端继续消费同一 mask 合同。
 
-A raw grammar is not injected into the prompt automatically. The constraint owns the candidate
-space; the user prompt owns the task and the meaning of the fields.
+原始 grammar 不自动注入 prompt。约束负责候选空间，用户 prompt 负责任务和字段含义。
 
-### 4.2 JSON and schema execution contract
+### 4.2 JSON 与 Schema 的执行合同
 
-`json_object` compiles to a language whose root is an object; it is not an arbitrary JSON scalar.
-`json_schema` uses the root type the user explicitly gives, which can be an object, an array, or
-another supported type.
+`json_object` 编译为根对象语言；不是任意 JSON scalar。`json_schema` 使用用户明确给出的根类型，可以是对象、数组或其他受支持类型。
 
-`src/text/json_schema.cpp` validates the source schema, and `src/text/schema_composition.cpp`
-reduces the supported compositions to a compilable schema graph while keeping source locations. The
-vendor owns the string automata, the JSON / Qwen parameter representations, and grammar
-construction. The supported scope is:
+`src/text/json_schema.cpp` 校验源 schema，`schema_composition.cpp` 将支持的组合归约为可编译的 schema 图，并保留源位置。Vendor 负责字符串自动机、JSON / Qwen 参数表示和 grammar 构造。支持范围如下：
 
-| Category | Semantics |
+| 类别 | 语义 |
 |---|---|
-| Basic types | object, array, string, integer, number, boolean, null; a type array expands by the assertions applicable to each branch |
-| Objects | properties, required, additionalProperties (boolean or sub-schema); required names must be declared in properties; declared fields are generated in a deterministic order |
-| Arrays | homogeneous items, or positional prefixItems, trailing items, minItems/maxItems; the draft-07 items array and additionalItems reduce to the same positional contract |
-| Strings | minLength/maxLength and pattern can be used together, and several patterns intersect; format is not supported yet |
-| Numbers | integer and number support minimum/maximum/exclusive bounds; integer ranges reduce to signed 64-bit, and bounds may be converted from fractional values; a bounded number uses an int64 integer or a finite binary64 representation of at most 17 significant digits; multipleOf is not supported yet |
-| Finite values | const, enum; integer literals are limited to signed 64-bit; candidates are filtered by the supported sibling assertions, including type, range, string, object/array, and logical composition |
-| Composition | anyOf is a union after distributing the common assertions; oneOf requires proving that the branches are mutually exclusive; allOf supports intersection of types, ranges, strings, object fields/required/additionalProperties, per-position array and trailing rules, and local references |
-| References | in-document `$ref`, `$defs`/definitions, including recursion and 2020-12 sibling assertions next to a reference; external documents are never fetched |
-| Annotations | title, description, default, examples, `$comment`, readOnly/writeOnly, deprecated, and similar are kept as descriptive information and are not sampling assertions |
+| 基本类型 | object、array、string、integer、number、boolean、null；类型数组按各分支适用的断言展开 |
+| 对象 | properties、required、additionalProperties（boolean 或子 schema）；required 名称须在 properties 中声明；声明字段按确定顺序生成 |
+| 数组 | 同质 items 或位置 prefixItems、尾部 items、minItems/maxItems；draft-07 的 items 数组与 additionalItems 归约到同一位置合同 |
+| 字符串 | minLength/maxLength 与 pattern 可同时使用，多个 pattern 取交集；format 暂不支持 |
+| 数值 | integer 和 number 支持 minimum/maximum/exclusive bounds；整数区间归约到 signed 64-bit，上下界可由小数折算；有界 number 使用 int64 整数及最多 17 位有效数字的有限 binary64 表示；multipleOf 暂不支持 |
+| 有限值 | const、enum；整数字面量限 signed 64-bit；按同级受支持断言筛选候选，包括类型、范围、字符串、对象/数组及逻辑组合 |
+| 组合 | anyOf 与共同断言分配后取并集；oneOf 要证明分支互斥；allOf 支持类型、范围、字符串、对象字段/required/additionalProperties、数组逐位置及尾部规则、本地引用的交集 |
+| 引用 | 文档内 `$ref`、`$defs`/definitions，包括递归与 2020-12 的引用同级断言；不获取外部文档 |
+| 注释 | title、description、default、examples、`$comment`、readOnly/writeOnly、deprecated 等保留为描述信息，不作为采样断言 |
 
-Validation traverses only schema positions; business objects inside const/enum stay values.
-Composition reduction memoizes by node and intersection, and recursion stays represented as a
-reference graph. Object intersection applies properties and additionalProperties per branch: a
-closed object in one branch cannot be reopened by a property that another branch adds. If, after
-merging required, some field can never appear, the whole object branch is unsatisfiable.
+检查只遍历 schema 位置，const/enum 中的业务对象保留为值。组合归约按节点与交集记忆化，递归仍表示为引用图。对象交集逐分支应用 properties 与 additionalProperties：一个分支的封闭对象不能被另一个分支新增的属性重新打开。Required 合并后若某字段不可能出现，整个对象分支不可满足。
 
-prefixItems constrains only the positions that actually appear; the length is determined by
-minItems/maxItems. items applies only after the prefix of the same schema object. When a position is
-false or its intersection is unsatisfiable, the array can end before that position. Only when the
-minimum length requirement crosses that position is the array branch unsatisfiable. Per-position
-intersection keeps each branch's original prefix length and trailing rule.
+prefixItems 只约束已经出现的位置，长度由 minItems/maxItems 决定；items 只作用于同一 schema 对象的前缀之后。位置为 false 或交集不可满足时，数组可以在该位置前结束。只有最低长度要求跨过该位置时，数组分支才不可满足。逐位置交集保留每个分支原有的前缀长度及尾部规则。
 
-A bounded number constrains both the generated decimal value and the value after protocol parsing
-and reserialization. The compiler compares the range by decimal digits and exponent, and tightens
-the floating-point generation language by the rounding boundaries of publishable binary64 values;
-integers keep an exact int64 path. Decimals support scientific notation, and common magnitudes also
-allow ordinary decimal notation, with at most 17 significant digits. A mathematically empty range is
-reported as unsatisfiable; a non-empty range without a publishable value is reported as unsupported.
-Numeric assertions or const/enum values in the schema that JSON parsing would round are refused at
-the source input stage; annotation fields and non-strict tools are not subject to this restriction.
+有界 number 同时约束生成的十进制值和协议解析、重新序列化后的值。编译器以十进制数位和指数比较区间，按可发布 binary64 值的舍入边界收紧浮点生成语言；整数保留精确 int64 路径。小数支持科学计数法，常见数量级也允许普通小数写法，最多 17 位有效数字。数学空区间返回不可满足；非空区间没有可发布值时返回不支持。Schema 中会被 JSON 解析舍入的数值断言或 const/enum 值在源输入阶段拒绝；注释字段及非 strict 工具不应用此限制。
 
-After the common assertions are merged, oneOf proves branch exclusivity by type domains, finite
-value sets, or the finite values of a common required discriminator. Type-domain reasoning includes
-that integer is a subdomain of number; combinations that cannot be proven return unsupported.
+oneOf 在合并共同断言后，以类型域、有限值集合或共同必填 discriminator 的有限值证明分支互斥。类型域判定包含 integer 是 number 的子域；无法证明的组合返回不支持。
 
-An empty schema means any JSON value. Without `$schema`, 2020-12 semantics apply; the supported
-subset of explicit draft-07 is also accepted. Draft-07 sibling assertions next to `$ref` return
-unsupported; use allOf to express the intersection explicitly. A root `$id` serves only as the
-document identity; nested `$id` is currently refused. A boolean sub-schema is interpreted by its
-position, for example additionalProperties=false.
+空 schema 表示任意 JSON 值。未指定 `$schema` 时采用 2020-12 语义，也接受显式 draft-07 的受支持子集。Draft-07 的 `$ref` 同级断言返回不支持，可用 allOf 明确表达交集。根节点 `$id` 只作为文档身份，嵌套 `$id` 当前拒绝。布尔子 schema 按所在位置解释，例如 additionalProperties=false。
 
-Specific rules:
+具体规则：
 
-- Standard defaults are interpreted according to the schema. For example, an omitted
-  additionalProperties must not be silently changed to false because of the library's internal
-  strict_mode. The protocol's `strict` and the library's compilation option of the same name are
-  handled separately.
-- A `oneOf` whose exclusivity cannot be implemented is refused, not downgraded to anyOf.
-- XML excludes and schema pattern/length combinations must hold together; when the intersection
-  cannot be compiled, unsupported is returned.
-- Conditionals/dependencies, uniqueItems, contains, multipleOf, patternProperties/propertyNames,
-  minProperties/maxProperties, unevaluated*, and other assertions outside the basic contract above
-  are refused explicitly.
-- Unrecognized assertion keywords and combinations that would be ignored return an error located by
-  JSON Pointer. There is no relaxed route that "compiles successfully and only prints a warning".
-- The `any_order` option, which would lose required/duplicate-key semantics, is not enabled. The
-  generated language may use a deterministic property order, and the output value must still satisfy
-  the schema.
+- 标准缺省值按 schema 解释。例如未写 additionalProperties 时不能因为库的内部 strict_mode 就擅自改成 false。协议的 `strict` 与库的同名编译选项分别处理。
+- `oneOf` 无法实现排他性时拒绝，不降为 anyOf。
+- XML excludes 与 schema pattern/长度等组合必须同时成立；无法编译交集时返回不支持。
+- 条件/依赖、uniqueItems、contains、multipleOf、patternProperties/propertyNames、minProperties/maxProperties、unevaluated* 等不在上述基础合同中的断言明确拒绝。
+- 未识别的断言关键字和会被忽略的组合返回定位到 JSON Pointer 的错误。没有“编译成功但仅打印警告”的放宽路线。
+- 不启用会丢失 required/重复 key 语义的 `any_order` 选项。生成语言可以使用确定的属性顺序，输出值仍必须满足 schema。
 
-The schema semantics of `pattern` is a match against the string value and must not reuse the
-matching mode of the full-text regex entry. Length counts decoded Unicode characters, and the
-escaped form does not change the length of a value; control characters, quotes, and backslashes in
-JSON strings must be legally escaped. A finite const/enum whose candidates are empty after
-filtering, a recursive definition with obviously no generating branch, and similar cases return
-unsatisfiable at compilation or at the initial mask check instead of removing the constraint.
+`pattern` 的 schema 语义是对字符串值的匹配，不能直接套用全文 regex 入口的匹配方式。长度按解码后的 Unicode 字符计数，转义形式不改变值的长度；JSON 字符串的控制字符、引号和反斜杠必须合法转义。Finite const/enum 候选筛选后为空、递归定义明显无生成分支等，在编译或初始 mask 检查处返回不可满足，而不是移除该约束。
 
-JSON uses the compact `,` / `:` separators and the declared field order. The string-length and
-pattern grammars use canonical JSON escaping; a continuation must be a prefix in this generated
-language. `pattern` searches the string value and supports character classes, groups, alternatives,
-repetition, and `^` / `$` at the two ends of a top-level alternative. The dot and whitespace classes
-follow ECMAScript character sets; backreferences, zero-width assertions, Unicode property classes,
-surrogate escapes, and unrecognized escapes return unsupported; Unicode characters may be written
-directly.
+纯字符串长度约束使用 JSON 标量的计数重复，结束引号与重复体在同一规则中。编译器将可确定单元边界的重复体规整为字节 DFA，按 token 所需的重复额度预计算稠密位图或稀疏集合，包含 UTF-8 和转义的中间状态；动态计数仍由 parser 历史拥有，参与同一套回退。不同长度上限共享重复体，规则数和位图桶数不按上限展开。跨出字符串并消费后续语法的 token 保留精确匹配。Pattern、长度和工具结束标记排除的组合继续使用约束交集自动机。
 
-Composition compilation has explicit limits: one reduction performs at most 16384 intersection
-merges; finite-value recursive checking goes at most 256 deep; the explicit length bound of a
-string-automaton intersection is at most 8192 Unicode characters, and the intersection result has at
-most 65536 states. Exceeding a limit returns unsupported. Direct filtering of finite enumerations
-and plain length constraints keep their own paths and do not build a string intersection automaton.
+JSON 使用紧凑的 `,` / `:` 分隔符及声明字段顺序。字符串长度与 pattern grammar 使用规范的 JSON 转义；continuation 须属于这一生成语言的前缀。`pattern` 按字符串值做搜索，支持字符类、分组、分支、重复以及顶层分支两端的 `^` / `$`。点号和空白类遵循 ECMAScript 字符集合；反向引用、零宽断言、Unicode 属性类、surrogate escape 和未识别转义返回不支持，Unicode 字符可以直接书写。
 
-These rules are the contract shared by response schemas and strict tool parameters. The supported
-scope may be extended later; each extension adds both the semantics and independent verification,
-without changing the runtime structure.
+组合编译有明确上限：一次归约最多 16384 次交集合并；有限值递归检查深度最多 256；字符串自动机交集的显式长度界限最多 8192 个 Unicode 字符，交集结果最多 65536 个状态。超限返回不支持。有限枚举直接筛选、单纯长度约束沿用各自路径，不为它们构造字符串交集自动机。
 
-### 4.3 Tool constraints
+这些规则是响应 schema 与 strict 工具参数共用的合同。允许后续扩展支持范围，每项扩展同时补齐语义和独立验证；不需要改变运行时结构。
 
-Tool constraints split into three independent choices: the basic structure (envelope, names), the
-per-tool strict parameter schema, and the call selection and count. `ToolChoice` owns Auto/None/
-Required, optional `allowed_names`, `parallel`, and Automatic/Basic; the three HTTP protocols map
-their fields onto this common contract.
+### 4.3 工具约束
 
-The default Basic enables structural constraints for requests with tools, including plain Auto with
-non-strict tools. The model chooses content or a tool call by itself; once it enters a call, the
-function name and the envelope are constrained. Explicit Automatic enforces only the requirements
-the request states, such as strict, `allowed_names`, Required, None, or `parallel=false`; plain Auto
-with non-strict tools may generate freely.
+工具约束分为三个独立选择：封装/名称等基础结构、逐工具 strict 参数 schema、调用选择与数量。`ToolChoice` 拥有 Auto/None/Required、可选的 allowed_names、parallel 和 Automatic/Basic；三个 HTTP 协议将其字段映射到这个共同合同。
 
-The non-strict basic parameter language allows any order and any representable parameter name; it
-does not close the parameter set by properties and does not enforce required or parameter value
-assertions. Complex root schemas and open objects do not trigger the strict compiler. Parameter
-values keep the existing normalization hints; a repeated parameter takes the last value and keeps
-the field position of its first occurrence, so every key appears once in the published object.
-Strict parameters keep generating in declared order and forbid repetition.
+默认 Basic 对有工具的请求启用结构约束，包括普通 Auto + 非 strict。模型自行选择正文或工具调用；一旦进入调用，函数名和封装受约束。显式 Automatic 只执行请求提出的 strict、allowed_names、Required、None 或 parallel=false 等要求，普通 Auto + 非 strict 可以自由生成。
 
-Auto allows zero or more calls; Required at least one; `parallel=false` sets the upper bound to one.
-OpenAI named maps to Required + a single name + `parallel=false`; Anthropic named uses a single name
-and honors `disable_parallel_tool_use`. None keeps the prompt declarations and forbids generating
-`<tool_call>`; combined with a content constraint, the content constraint owns the output language.
-On an enforcing family, every selection keeps the complete declarations and cache marker positions
-and is never implemented by editing the prompt's tool list; a non-enforcing family follows
-[§2.3](#23-model-family-scope).
+非 strict 的基础参数语言允许任意顺序及可表示的参数名；不根据 properties 封闭参数集合，不强制 required 或参数值断言。复杂根 schema 与开放对象不会触发 strict 编译器。每次调用的顶层参数名必须唯一，按名称字节精确比较；不同调用可以复用名字。静态 grammar 约束封装和编码，请求独占的名称状态在采样前收紧位图，阻止重复参数头闭合。严格参数继续按声明顺序生成并禁止重复。
 
-Under Auto, ordinary content may precede the tool sequence; Required starts with a call directly.
-After entering the call sequence, only further calls and EOS are allowed; calls are separated by a
-single newline. The final `arguments_json` of each strict tool satisfies its parameter schema.
+参数编码在准备阶段由共享合同确定。非 strict 中明确允许 string 的类型提示沿用 raw string 表示；明确不含 string 的类型提示使用 JSON 值编码。Basic 只要求后者具有合法 JSON 语法，允许与类型提示不匹配的 JSON 值，例如 integer 提示下的 `"tomorrow"`。裸文本 `tomorrow`、空块或 `True` 不属于 JSON 编码，不进行补引号、空参数省略或布尔大小写转换。未知名称或无法确定类型的参数使用缓冲归一化：在当前参数结束后去除外围格式空白，合法 JSON 保留原文，其他文本转为 JSON 字符串。
 
-When JSON output is also specified, Auto chooses between JSON content and the tool sequence and does
-not mix the two outputs in one turn; even with `constraints=Automatic`, the tool branch still uses
-the basic envelope constraint. Required / named generate calls this turn, and after the tool results
-are committed the next turn may switch to Auto to generate JSON. The supplied JSON schema is still
-validated every turn.
+Auto 允许零到多次调用；Required 至少一次；parallel=false 将上限设为一次。OpenAI named 映射为 Required + 单名称 + parallel=false；Anthropic named 使用单名称并遵守 disable_parallel_tool_use。None 保留 prompt 声明并禁止生成 `<tool_call>`；与正文约束组合时由正文约束拥有输出语言。所有选择都保留完整声明与缓存标记位置，不通过删改 prompt 工具列表实现。
 
-The combination builds only one CompiledGrammar and one matcher; the thinking envelope lies outside
-the union. The OutputSession selects the publication branch at the first content character of the
-formal commit: the JSON start characters and `<tool_call>` are disjoint. The JSON branch bypasses
-tool parsing, so a `<tool_call>` inside a string stays as written. Preview/discard does not change
-the branch; a continuation initializes it from the existing content prefix.
+Auto 的普通正文可在工具序列之前，Required 直接开始调用。进入调用序列后只允许后续调用与 EOS；调用间使用单个换行。每个 strict 工具的最终 `arguments_json` 满足其参数 schema。
 
-The Qwen tool syntax uses the existing `<tool_call>`, `<function=...>`, and `<parameter=...>`
-representation. The Frontend builds two products from the same parsed tool definitions: the
-generation grammar and the output value decoding contract, so the two sides never interpret types
-separately.
+同时指定 JSON 输出时，Auto 在 JSON 正文和工具序列之间选择，本轮不混合两种输出；即使 `constraints=Automatic`，工具分支仍使用基础封装约束。Required / named 本轮生成调用，工具结果提交后的下一轮可改用 Auto 生成 JSON。每轮仍校验提供的 JSON schema。
 
-The physical text of strict parameters uses explicit framing. The following shows a string parameter
-in escaped form:
+组合只建立一个 CompiledGrammar 和 matcher，thinking 封装位于并集之外。OutputSession 在正式提交的首个正文字符处选择发布分支：JSON 的起始字符与 `<tool_call>` 不相交。JSON 分支绕过工具解析，因此字符串内的 `<tool_call>` 保持原样。Preview/discard 不改变分支；continuation 根据已存在的正文前缀初始化。
+
+Qwen 工具语法采用现有 `<tool_call>`、`<function=...>`、`<parameter=...>` 表示。Frontend 从同一份已解析工具定义构造两项产物：生成 grammar 和输出值解码合同，避免两边分别解释类型。
+
+严格参数的物理文本采用明确的 framing。下面用转义形式表示一个字符串参数：
 
 ```text
-<parameter=city>\nShanghai\n</parameter>
+<parameter=city>\n上海\n</parameter>
 ```
 
-The two `\n` above are actual framing newlines. Decoding removes only this pair of newlines; leading
-and trailing whitespace of the string itself is preserved. Numbers, booleans, objects, and arrays
-use valid JSON value text; nested values remain constrained by the schema.
+上例中的两个 `\n` 是实际 framing 换行。解码只去掉这一对换行，字符串自身的前导/尾随空白保留。数字、布尔、对象和数组使用合法 JSON 值文本；nested 值继续按 schema 约束。
 
-The choice between a Qwen raw string and a JSON value must be unambiguous. A pure string parameter
-uses a raw string; a type union without string uses a JSON value. When the same raw parameter
-includes string and other types and the model format cannot determine the branch, the strict
-combination is refused at preparation; the existing "interpret everything as string whenever string
-is allowed" rule must not be used to claim that the other branches are also enforced correctly.
+Qwen raw string 与 JSON 值的选择必须无歧义。纯字符串参数使用 raw string；不含 string 的类型联合使用 JSON 值。包含 string 与其他类型的同一 raw 参数若无法从模型格式确定分支，在准备阶段拒绝严格组合；现有“只要允许 string 就都按 string 解释”不能用于宣称其他分支也已正确执行。
 
-The parameter end delimiter of a raw string is `\n</parameter>`, and this text cannot appear in the
-value. The grammar and the parser use the same delimiter rule, and strict output generates only
-losslessly representable values; when a value required by const/enum or similar cannot be
-represented, an explicit error is returned and the value is not modified. A string's pattern/length
-and the delimiter exclusion hold together. The surrounding framing has no optional whitespace, so
-the value's whitespace is never classified outside the schema. Nested JSON uses the template's `, `
-/ `: ` separators, including in const/enum objects; integer is limited to signed 64-bit, and number
-uses a finite binary64-parsable representation.
+Raw string 的参数结束分隔符是 `\n</parameter>`，这段文本不能出现在值中。Grammar 与 parser 使用相同的分隔符规则，严格输出只生成可无损表示的值；const/enum 等要求的值无法表示时返回明确错误，不修改值。字符串的 pattern/长度与分隔符排除同时成立。外围 framing 没有可选空白，避免把值的空白划到 schema 之外。strict 嵌套 JSON 使用模板的 `, ` / `: ` 分隔符，包括 const/enum 对象；integer 限 signed 64-bit，number 使用有限 binary64 可解析表示。
 
-The parameter root of a tool must reduce to type=object, possibly through a local `$ref` or a
-supported allOf composition. The strict route uses the declared finite parameter names and property
-order: it requires additionalProperties=false; a root that is still const/enum/anyOf/oneOf after
-reduction returns unsupported. Ordinary JSON responses support additionalProperties as defined in
-the table above. Duplicate names in the tool definitions are refused at preparation. Tool names are
-validated by the tool contract (non-empty and unique) and by the protocol's name rules; there is no
-separate output-side length bound.
+工具参数根节点须归约为 type=object，可经本地 $ref 或受支持的 allOf 组合。严格路线采用声明的有限参数名与属性顺序：要求 additionalProperties=false；归约后仍为根 const/enum/anyOf/oneOf 时返回不支持。普通 JSON 响应支持表中定义的 additionalProperties。工具定义中的重复名称在准备阶段拒绝。
 
-The structured events of a constrained tool come from completely parsed and committed calls. Tool
-results are parsed and published at the terminal state; on truncation, completed calls and the
-actual interruption reason are kept, and an unfinished call produces no `arguments_json`.
+工具输出由已提交的文本增量驱动：识别声明中的完整函数头后发布 ToolCallStart；参数转码过程中发布 ToolArgumentsDelta；模型调用封装闭合后发布 Complete 的 ToolCallEnd。每个调用的增量拼接与聚合 arguments_json 字节一致。截断产生 Incomplete 的调用和原始 JSON 前缀，保留实际中断原因，不补齐引号、括号或伪造可执行参数。协议 ID 归 Serve 所有。
 
-On a constrained route, a complete call that the grammar confirmed but the parser cannot interpret
-under the same contract is an implementation inconsistency and must not fall back to ordinary
-content to hide it. Free-generation routes keep the existing malformed-text handling.
+RawString 参数增量 JSON 转义并保留 framing 内的值；JsonValue 参数按 JSON 词法跟踪引号和转义，保留数值字面量和成员顺序。JSON 编码复用工具值的可发布数值域和 Unicode scalar 规则，避免生成 `1e999` 或未配对 surrogate 后才在解码时失败。两者无需等待完整参数即可发布。BufferedNormalize 只缓冲当前参数，不能凭 `{`、`[`、`"` 开头提前决定输出类型；已发布的参数字节不再改写。未知类型的大参数仍可能存在参数级输出延迟。
 
-Implementation ownership: `tool_contract` parses the declarations and selects the current contract;
-`tool_grammar` compiles the contract into the model language; `tool_call_parser` decodes committed
-text by the same parameter encoding rules (all under `src/models/qwen3_5/frontend/`). Compiled
-grammars use the Frontend's shared budget and cold-compilation limit. The identity of a non-strict
-grammar uses only the names and the envelope/call policy; the schema normalization hints stay in the
-per-request contract and do not enter the semantics of the shared grammar. A continuation can
-advance up to the first unfinished call; a raw assistant prefix containing completed calls is
-refused, so historical calls are never republished.
+自由生成只在有效工具头确认前保留正文回退；确认后的畸形结构、重复参数和 JsonValue 编码错误产生请求级 InvalidToolOutput。Basic 或 strict 的正常受约束输出若与 decoder 不一致，属于内部合同违规，不归类为普通模型输出错误。两者均在稳定提交边界中止该 sequence 并结算对应错误；物理资源可以正常清理时不影响同批其他请求。长度、上下文容量或取消导致的截断是 Incomplete，不是格式错误。
 
-## 5. Thinking, content, and continuation
+实现所有权：`tool_contract` 解析声明并确定参数编码；`tool_grammar` 构造互斥的已知名称与开放名称分支；`tool_name_constraint` 维护可回滚的顶层名称集合；`tool_call_parser` 解码已提交文本。静态 matcher 和名称状态由 GrammarSession 协调同一组 lookahead/accept/confirm/discard 操作。每个 speculative 位置先求两者的合法集合，再推进 draft；不能事后过滤整批静态位图。候选检查消费 token 的全部 bytes，包括同一 token 内跨越参数或调用边界的情况。正文 JSON 与 thinking 中的工具标记不改变名称状态。
 
-### 5.1 Shared output envelope
+Compiled grammar 沿用 Frontend 的共享预算与冷编译限制。Basic 缓存身份包含参数名和编码布局；其余 schema 提示保留在请求合同中。词表 bytes 和边界候选索引按 compiler 共享，已见名称不进入共享缓存。Continuation 同时初始化 matcher、名称状态与 decoder；可以推进到第一个未完成调用，包含已完成调用的 raw assistant 前缀被拒绝。已有参数在该调用初始化时只发布一次，随后追加新增字节；这些前缀字节不计入新生成 token。
 
-The Frontend owns the Qwen output-phase rules, and the grammar and the OutputSession's publication
-decoding use the same rules. The runtime does not guess whether thinking has ended with a separate
-set of independent booleans.
+## 5. Thinking、正文与 continuation
 
-For constrained Chat:
+### 5.1 共享的输出封装
 
-- if the prompt is already in the content phase, the content grammar starts directly;
-- if the prompt is still in thinking, free reasoning is allowed, followed by the model's agreed
-  close sequence, and then the content or tool rules;
-- early EOS inside that reasoning branch must be forbidden, otherwise a JSON request could "complete
-  normally" with nothing but thinking.
+Frontend 拥有 Qwen 的输出阶段规则，grammar 和 OutputSession 的发布解码使用同一份规则。运行时不另外用一套独立布尔变量猜测 thinking 是否已经结束。
 
-The constrained route uses Qwen's existing canonical reasoning close, `"\n</think>\n\n"`
-(`kCanonicalReasoningCloseSerialization`). The end marker and its fixed separating newlines are the
-model envelope, not user content. The grammar and the decoder recognize this framing together; after
-it, the content bytes are published as they are, with no unbounded stripping of leading whitespace.
+对 constrained Chat：
 
-Free reasoning must not reach a different close spelling that lets the decoder and the matcher enter
-different phases. The model envelope rules compose at the token-byte level and support both closes
-that cross token boundaries and a single token that contains the end of the close sequence together
-with the start of the content.
+- prompt 已处于正文阶段：直接开始正文 grammar。
+- prompt 仍处于 thinking：允许自由 reasoning，随后匹配模型约定的关闭序列，再进入正文或工具规则。
+- 必须限制该 reasoning 分支中的提前 EOS，否则可能只生成思考而“正常完成”一个 JSON 请求。
 
-For example, if the user grammar requires the content to start with one space, the space after the
-canonical framing belongs to the content and must be kept. JSON mode uses the same boundary and does
-not rely separately on "JSON may ignore whitespace" to avoid the problem.
+受约束路线采用 Qwen 已有的 canonical reasoning close：`\n</think>\n\n`。结束标记及其固定分隔换行是模型封装，不是用户正文。grammar 与 decoder 共同识别这段 framing；结束后正文 bytes 按原样发布，不再无界裁掉前导空白。
 
-Only constrained requests use this exact framing. In
-`src/models/qwen3_5/frontend/output_session.cpp`, `find_reasoning_close` and `reasoning_close_size`
-switch to the canonical serialization when the request has a grammar; free (unconstrained)
-generation keeps the fork's tolerant boundary scan, which accepts `</think>` followed by format
-whitespace or by the implicit end of the turn.
+自由 reasoning 不得通过另一种提前关闭拼写让 decoder 与 matcher 进入不同阶段。模型封装规则在 token bytes 层组合，既支持跨 token 边界，也支持一枚 token 同时包含关闭序列末尾和正文开始。
 
-With a content constraint, tool-marker extraction is disabled, and a legal `<tool_call>` string in
-the content is published as content. Chat content/tool constraints are not combined with
-`output.raw=true` or with options that publish special-token text; a raw token/text grammar is
-published under its all-newly-added-text contract and hides the terminating EOS.
+例如用户 grammar 要求正文以一个空格开头，canonical framing 之后的这个空格属于正文，必须保留。JSON 模式也使用同样的边界，无须单独依赖“JSON 可忽略空白”规避问题。
 
-### 5.2 Thinking budget and forced control
+有正文约束时不启用工具标记提取，正文里合法的 `<tool_call>` 字符串仍作为正文发布。Chat 的正文/工具约束不与 `output.raw=true` 或发布 special-token 文本的选项并用；原始 token/text grammar 按其全部新增文本合同发布，同时隐藏终止 EOS。
 
-The existing thinking budget is kept. Before execution, `model_token_budget_remaining()` bounds the
-length the current round may produce, and the control string is injected after committed rounds.
+### 5.2 Thinking budget 与 forced control
 
-Fixed control tokens advance through the same matcher's preview/commit: first the control string and
-the close boundary are checked, and the matcher and decoder state are confirmed only after the
-Program appends successfully. A control string does not call the sampler and does not consume the
-sampling RNG; it counts toward the total output budget under the existing contract.
+沿用现有 thinking budget。执行前通过 `model_token_budget_remaining()` 限定本轮可产出的长度，控制串在已提交轮次之后注入。
 
-The grammar does not add a second thinking token count. Phase transitions inside lookahead can be
-undone; the formal budget advances only through real commits.
+固定 control tokens 通过同一 matcher 的 preview/commit 推进：先检查控制串及关闭边界，Session 确认追加完成后才确认 matcher 与 decoder 状态。控制串不调用 sampler，不消耗 sampling RNG，沿现有合同计入总输出预算。
+
+不为 grammar 单独增加第二份 thinking token 计数。Lookahead 的阶段变换可以撤销；正式预算仍只由真实提交推进。
 
 ### 5.3 ContinueFinalAssistant
 
-The product allows continuing when thinking is closed and the final assistant message is plain text.
-Constrained mode keeps this capability: the matcher first accepts the provided prefix of that
-content and then constrains the new suffix.
+当前产品允许在 thinking 关闭、末条 assistant 为纯文本时续写。约束模式保留这一能力：matcher 先接受这条正文的已提供前缀，再约束新后缀。
 
-The prefix is determined by the source regions and message layout the Frontend already has for the
-template rendering. The Frontend must confirm that this sequence is exactly the content the caller
-wants to continue; when the template changes the content or inserts a content wrapper it cannot
-explain, request preparation fails, rather than guessing from the user string or a token length.
+前缀使用 Frontend 对模板渲染结果已有的来源 region 和消息布局确定。需要确认这段序列就是调用者要续接的正文；模板改变内容、插入无法解释的正文包装时，请求准备报错，不仅凭用户字符串或 token 长度猜测。
 
-Initialization is a byte-prefix operation: a BPE token of the prompt may contain bytes outside the
-content start, so the whole prompt token sequence is never fed into the matcher. This initialization
-belongs to the request start, consumes no generation budget or RNG, and happens exactly once: a
-request's matcher lives in its OutputSession for its whole life, and restoring model state from the
-context cache never re-runs it.
+初始化采用字节前缀操作：prompt 的 BPE token 可能包含正文起点之外的字节，不把整个 prompt token 序列送进 matcher。该初始化属于请求起点，不消耗生成预算或 RNG，也不在 Replay 中重复执行。
 
-The result publishes only the newly generated suffix. The completeness contract applies to "provided
-content + new suffix"; for example, the prefix `{"name":` and the suffix `"Shanghai"}` together form
-a complete object, and the suffix alone need not be JSON.
+结果仅发布新生成后缀。完整性合同作用于“已提供正文 + 新后缀”；例如前缀 `{"name":` 与后缀 `"上海"}` 合成完整对象，后缀本身无需独立为 JSON。
 
-Raw token/text input has no assistant source semantics, so the grammar starts from the newly added
-text. Ordinary prefix reuse, session continuation, and ContinueFinalAssistant are different
-concepts; a cache hit by itself never initializes a matcher that is already halfway through.
+原始 token/text 输入没有 assistant 来源语义，grammar 从新增文本开始。普通 prefix reuse、session continuation 与 ContinueFinalAssistant 是不同概念；缓存命中本身不会初始化一个已走到中间的 matcher。
 
-## 6. Matcher transactions and lifetime
+## 6. Matcher 事务与生命周期
 
-### 6.1 Request-owned state
+### 6.1 请求拥有状态
 
-The matcher belongs to the OutputSession and follows the Request from waiting through
-materialization, prefill, and decode to its terminal state. Only the Engine worker advances the
-matcher of an active request. The matcher created at preparation is handed over after submit and is
-never modified again by the consumer or the compiling thread.
+Matcher 属于 OutputSession，随 Request 从等待、resident、paused 到终态。只有 Engine worker 推进活跃请求的 matcher。准备阶段创建的 matcher 在 submit 后移交，不被 consumer 或编译线程继续修改。
 
-The CompiledGrammar is shared; matchers, decoders, and temporary previews are never shared between
-requests. A lane, KV row, or compact row is only the current execution mapping and must not serve as
-the identity of grammar state.
+CompiledGrammar 共享；matcher、decoder 与临时预览均不跨请求共享。Lane、KV row、compact row 只是当前执行映射，不能作为 grammar 状态身份。
 
-### 6.2 Three operations
+### 6.2 三种操作
 
-| Operation | Creates temporary state | When it becomes formal state |
+| 操作 | 是否产生临时状态 | 何时成为正式状态 |
 |---|---|---|
-| Lookahead for mask construction | Temporarily accepts drafts and rolls back at the end | Never commits by itself |
-| Output preview | Accepts the actually produced prefix and previews the decoder, EOS, and budget | After a successful Program commit |
-| Forced-control preview | Accepts the fixed control string and previews the phase change | After a successful Program append |
+| 构造 mask 的 lookahead | 临时接受 draft，结束时回退 | 永不自行提交 |
+| 输出 preview | 接受实际 produced 前缀，同时预览 decoder、EOS 与预算 | Session 接受 commit receipt 并采用逻辑状态后 |
+| forced control preview | 接受固定控制串，预览阶段变化 | Session 返回 ControlComplete 后 |
 
-The implementation uses a mark/rollback transaction within one call and does not deep-copy the whole
-matcher history every round. Lookahead always returns to the baseline; an output preview may leave
-the matcher in a provisional state, a commit confirms only the advance already made, and a discard
-returns to the mark.
+实现使用一次调用内的 mark/rollback 事务，不每轮深拷贝整个 matcher 历史。Lookahead 始终回到基线；输出 preview 可以将 matcher 暂留在 provisional 状态，commit 时只确认已完成的推进，discard 时回到 mark。
 
-Preview and lookahead are mutually exclusive: the next round's mask must not start while an
-uncommitted preview exists. Every token acceptance, structural check, and allocation that can fail
-happens in the preview; the matcher commit after Program success is an allocation-free confirmation
-without grammar checks.
+preview 与 lookahead 互斥，不能在已有未提交 preview 时开始下一轮 mask。所有可能失败的 token 接受、结构检查和所需分配在 preview 完成；模型提交被接受之后的 matcher commit 是无分配、无语法检查的确认操作。
 
-When one token crosses the boundary between the model framing and the content, the transaction
-records the complete state change caused by that token. It must not roll back by "the number of
-tokens sent to JSON" alone and thereby miss boundary-matching progress.
+当一个 token 跨越模型 framing 与正文边界，事务记录的是该 token 引起的完整状态变化。不能只按“送给 JSON 的 token 数”回退，从而漏掉边界匹配进度。
 
-### 6.3 Alignment with PendingBatch
+### 6.3 对齐现有 PendingBatch
 
-Ordinary successful rows still follow the rule: a nonterminal row accepts everything produced; a
-terminal row may accept only a non-empty prefix. A cancelled row accepts zero tokens. Switching
-between thinking and content is not terminal, and per-position constraints must let the remaining
-tokens of the round continue normally.
+普通成功行仍满足：nonterminal 接受全部 produced；terminal 可以只接受一个非空前缀。取消行接受零 token。切换 thinking/content 不是 terminal，逐位置约束必须让本轮剩余 token 正常继续。
 
 ```text
-the Program produces a PendingBatch
-  → preview the real output of every row and fix the accepted prefix
-  → the Program commits the same prefix of KV/GDN, ledger, RNG/penalty state
-  → confirm the matcher, decoder, and budget for that prefix
-  → publish user events
+Session 从 ResultReady 产生 owning PendingBatch
+  → 对每行预览真正输出，确定 accepted prefix
+  → Executor 接受该前缀的物理 commit，Session 采用 ledger 与原生前沿
+  → 确认该前缀的 matcher、decoder 与预算
+  → 发布用户事件
 ```
 
-If a preview fails, every unconfirmed matcher preview of the batch is restored first, and the
-Program's PendingBatch is aborted under the existing transaction. If the Program commit fails, the
-grammar state is not confirmed and nothing of the round is published.
+如果 preview 失败，所有该批未确认的 matcher preview 先恢复，Session 的 PendingBatch 按现有事务中止。模型 commit 接受失败时不确认语法状态，不发布本轮内容。
 
-### 6.4 Request lifetime, context cache, and release
+### 6.4 抢占、恢复与释放
 
-The fork has no request preemption: the Engine runs a startup-fixed one to eight active requests
-with bounded FIFO ingress, and an admitted request stays resident until it finishes. There is
-therefore no pause, Snapshot, or Replay of an active request, and a matcher never has to survive
-one. A request keeps the same matcher for its whole life, and the next round's mask is always built
-from the matcher's committed state.
+暂停只发生在稳定提交边界，正式 matcher 留在同一个 Request 中。Snapshot 或 Replay 恢复物理状态后，下一轮 mask 从保留状态生成。Replay 不调用 grammar accept、output preview 或 forced-control 发布。
 
-The context cache (prefix reuse, retained checkpoints, and Host restore) stores and restores only
-model state, never matchers. Restoring model state for a new request, or rebuilding it from a
-checkpoint, does not call grammar accept, output preview, or forced-control publication; the
-request's matcher starts from its own initialization ([§5.3](#53-continuefinalassistant)).
+请求结束时释放 matcher 及请求引用；编译缓存可以继续保留 compiled grammar。普通前缀缓存只保存原有模型状态，不保存可变 matcher。
 
-When the request ends, its matcher and its request references are released; the compilation cache
-may keep retaining the compiled grammar.
+XGrammar 当前 Earley 实现保留解析历史，`max_rollback_tokens` 参数已不能当作内存上限。NInfer 只请求有限 lookahead/preview 回退，但不据此宣称 matcher 内存为 O(K)。活跃解析状态按请求输出长度及 grammar 复杂度增长；不每轮 fork 整段历史，也不随意删除仍被解析状态引用的旧 chart。
 
-XGrammar's current Earley implementation retains parse history, so the `max_rollback_tokens`
-parameter can no longer serve as a memory bound. NInfer requests only bounded lookahead/preview
-rollback, but does not claim from that an O(K) matcher memory. Active parse state grows with the
-request's output length and the grammar's complexity; the history is not forked every round, and old
-charts still referenced by the parse state are never deleted arbitrarily.
+## 7. 位图与采样数据合同
 
-## 7. Bitmask and sampling data contract
+### 7.1 布局
 
-### 7.1 Layout
-
-Let V be the token domain, B the number of rows in the batch, and K the maximum draft count. Each
-position of the bitmask stores `ceil(V/32)` 32-bit words, and bit 1 means allowed.
+记 token domain 为 V，本批行数为 B，最大 draft 数为 K。位图每位置保存 `ceil(V/32)` 个 32-bit word，bit 1 表示允许。
 
 ```text
-mask[region, position, word]
+mask[row, position, word]
 word = token_id / 32
 bit  = token_id % 32
 ```
 
-An ordinary position needs one mask; K proposals need at most K+1, including the bonus when all are
-accepted. Each row carries its real proposal extent; the valid length must not be inferred from the
-fixed stride.
+一个普通位置需要一行；K 个 proposal 最多需要 K+1 行，包括全接受时的 bonus。每行携带真实 proposal extent，不能根据固定 stride 推断有效长度。
 
-Within a word, the least significant bit corresponds to the smaller token ID, and the bits of the
-last word beyond V are cleared. The logical position under the fixed stride is `region × (K+1) +
-position`; the vocabulary dimension of the mask uses the token domain, not the physical padded width
-of the logits.
+word 使用最低位对应较小 token ID 的约定，末个 word 超出 V 的位清零。固定 stride 的逻辑位置为 `row × (K+1) + position`；mask 的词表维度不使用 logits 的物理 padding 宽度。
 
-The draft list the provider receives contains only new proposals, not the anchor of the target
-verify input. Position 0 is based on the frontier of the request's committed output; the Program's
-current physical execution frontier can be one token behind the accepted ledger, and that already
-accepted anchor must not be fed into the matcher again.
+DecisionNeeded 携带的 draft 列表只包含新 proposal，不包含 target verify 输入中的 anchor。位置0基于请求已提交输出的 frontier；当前模型的物理 execution frontier 可以比 accepted ledger 少一个 token，这个已接受 anchor 不能再次送入 matcher。
 
-At startup capacity planning, a sampling (non-CausalScoring) Program allocates pinned Host and
-Device mask buffers with fixed addresses, holding `max_concurrency + 1` regions of `(K+1)` positions
-× `ceil(V/32)` words, where K is the planned draft window (zero without a speculative backend).
-Decode row r owns region r; the prefill lane owns the dedicated region at index `max_concurrency`.
-Prefill and decode do not share a region: the fork's chunked prefill does not synchronize between
-non-final chunks, so prefill and decode mask staging are not mutually exclusive. DFlash/DFlash2
-additionally get pinned Host draft IDs and a ready event
-(`src/models/qwen3_5/program/grammar_masks.cpp`, `planning/startup.cpp`). Mask capacity is part of
-the Device/Host resource statement, and no Device allocation is created per schema at run time.
+RankProgram 在启动容量规划中为所选 backend 和最大 B 分配 pinned Host mask、Device mask、逐位置状态以及 DFlash 所需 Host draft IDs/event。逻辑区可按互斥的 prefill/decode 阶段共享。掩码容量计入 Device/Host 资源说明，运行中不按 schema 新建 Device allocation。
 
-A fully unconstrained batch does not call the provider, passes no mask, and runs no mask-checking
-kernel. In a mixed batch, unconstrained rows use an explicit disabled descriptor, and no all-ones
-full-vocabulary bitmask is materialized.
+纯无约束 batch 不请求决策输入、不传 mask，也不执行 mask 检查 kernel。混合 batch 中，无约束行使用显式 disabled 描述，不物化全词表的全1位图。
 
-### 7.2 Per-position state
+### 7.2 每位置状态
 
-| State | Meaning | GPU consumption |
+| 状态 | 含义 | GPU 消费 |
 |---|---|---|
-| Unconstrained | The row has no grammar constraint | Original sampling route |
-| Ready | The current prefix is legal and an allowed mask has been generated | Applied before candidate filtering |
-| DeadEnd | This hypothetical prefix has no legal next token | Becomes a request failure only when verification actually reaches this position |
-| Unreachable | An earlier draft was already grammatically illegal or EOS was already accepted; further lookahead is meaningless | A safe placeholder is used and does not affect the final commit |
+| Unconstrained | 本行没有语法约束 | 原有采样路线 |
+| Ready | 当前前缀合法且已生成 allowed mask | 在候选筛选前应用 |
+| DeadEnd | 此假设前缀没有合法下一 token | 只有验证实际到达该位置才形成请求失败 |
+| Unreachable | 前面的 draft 已语法非法或已接受 EOS，后续无合法推演意义 | 使用安全占位，不影响最终提交 |
 
-`Unreachable` does not mean that the kernel never reads that column: existing batched candidate
-construction may precompute several columns. Every field that a fixed buffer exposes to reads must
-be valid; the placeholder distribution never enters the visible accepted prefix.
+`Unreachable` 不意味着 kernel 不会读取这一列：已有批量候选构造可能预计算多列。固定 buffer 的所有被读取字段都必须有效；占位分布不进入可见接受前缀。
 
-The implementation expresses an unconstrained row with a nullable `SamplingMask`, Ready with packed
-words, and records DeadEnd positions in a Host bit set. The device columns of DeadEnd/Unreachable
-are filled with safe placeholders; the Program checks by the actually licensed extent whether a
-DeadEnd was passed, and hands the result to the Engine as a PendingBatch single-row failure. The
-failed row does not commit placeholder tokens; the other rows commit normally.
+实现用 nullable `SamplingMask` 表达无约束行，packed words 表达 Ready，Host 位集记录 DeadEnd 位置。
+DeadEnd/Unreachable 的 device 列填入安全占位；Session 按实际 licensed extent 检查是否经过 DeadEnd，
+通过 PendingBatch 单行失败交给 Engine。失败行不提交占位 token，其余行正常提交。
 
-The predicted position of the first illegal draft is itself still Ready and holds the mask of the
-legal prefix before it. What is illegal is the proposal token, not the target distribution used to
-reject it.
+第一处非法 draft 所在的预测位置本身仍为 Ready，拥有其之前合法前缀的 mask。非法的是 proposal token，不是用来拒绝它的 target 分布。
 
-If a lookahead prefix can be accepted but can no longer produce any token, its next position is
-marked DeadEnd. If the target rejected an earlier draft leading to that state, the request continues
-normally; the whole request must not be ended while the CPU fills masks.
+若某个 lookahead 前缀可被接受，但无法再产生 token，标记其下一位置为 DeadEnd。Target 如果更早拒绝了通往该状态的 draft，请求继续正常执行；不能在 CPU 填 mask 时直接结束整个请求。
 
-### 7.3 Ordinary sampling
+### 7.3 普通采样
 
-The logits are read over the vocabulary and the existing presence/frequency penalties are applied.
-Illegal tokens take no part in argmax, top-k, or the subsequent probability normalization. Legal
-candidates are sampled under the existing temperature, min-p, top-p, tie-break, and counter-based
-RNG contracts.
+在词表上读取 logits，并应用现有 presence/frequency penalty。非法 token 不参加 argmax、top-k 或后续概率归一化。合法候选沿既有 temperature、min-p、top-p、tie-break 和 counter-based RNG 合同采样。
 
-Mask consumption is fused into the existing argmax/candidate construction, covering multi-block and
-fallback paths. Filtering only the already selected top 20 does not satisfy this contract; a legal
-token can rank below the original 20th place.
+Mask 消费融合进已有 argmax/候选构造，覆盖 multi-block 与 fallback。只把已选 top20 再过滤不满足此合同；合法 token 可以在原始第20名之后。
 
-When there are fewer real legal candidates than top-k, the support uses the actual count. Negative
-infinity entries used to fill the sorting capacity must not be treated as samplable tokens. An empty
-mask and non-finite model values are reported separately; generation never continues through token 0
-or NaN.
+真实合法候选少于 top-k 时，support 使用实际数量。不能把用于补齐排序容量的负无穷项当作可采样 token。空 mask 与非有限模型数值分别报告，不能通过 token 0 或 NaN 继续生成。
 
-The fork's Qwen3.5 targets publish no per-token log-probability reports (startup refuses
-`token_logprobs` for Qwen3.5; see [serving](../serving.md#per-token-log-probabilities)), so the
-constrained sampler and token log-probability reports never coexist.
+### 7.4 P、Q 和历史
 
-### 7.4 P, Q, and history
+位置 i 的目标分布由 `committed prefix + draft[0:i]` 决定：对应 grammar 状态、penalty 历史和模型 logits 必须使用同一假设前缀。
 
-The target distribution at position i is determined by `committed prefix + draft[0:i]`: the matching
-grammar state, penalty history, and model logits must all use the same hypothetical prefix.
+若令经过 penalty 的 logit 为 z、合法集合为 A，则先在 `v∈A` 上选取现有 top-k 候选 C。正温度时以 `exp(z_v/T - max_C(z/T))` 计算权重，再按既有 min-p、top-p 顺序截断并归一化为 p；greedy 则取 A 中最大 z，平局选较小 token ID。这一定义同时用于普通采样和每个 speculative target 位置。
 
-Let z be the penalized logit and A the legal set. First the existing top-k candidates C are selected
-over `v∈A`. With a positive temperature, the weights are `exp(z_v/T - max_C(z/T))`, which are then
-truncated by the existing min-p and top-p order and normalized to p; greedy takes the largest z in
-A, breaking ties toward the smaller token ID. This definition applies both to ordinary sampling and
-to every speculative target position.
+GBNF/JSON 等不拥有 RNG。Mask 的生成、临时回退和编译不消耗采样随机数。既有按 seed、logical position、purpose 划分的 RNG 继续使用，compact row 改变不会重置请求随机流。
 
-GBNF/JSON and similar own no RNG. Mask generation, temporary rollback, and compilation consume no
-sampling random numbers. The existing RNG partitioned by seed, logical position, and purpose
-continues to be used, and a compact-row change never resets a request's random stream.
+### 7.5 Prefill、ordinary、control 与 Replay
 
-### 7.5 Prefill, ordinary, and control
-
-| Execution point | Mask and matcher behavior |
+| 执行位置 | Mask 与 matcher 行为 |
 |---|---|
-| Intermediate prefill chunk | Produces no new output; takes no mask and does not advance the matcher |
-| Prefill finalization | A prefill step that can reach the prompt frontier (`cursor + prefill_chunk >= prompt_tokens`) synchronizes the device before rewriting the pinned sources, fills the prefill region, and copies a masked `SamplingConfig` from the pinned `PrefillRoundHost` into the lane's `sampling_config` slot before the first token is sampled; the bitmask checked at preparation may be reused |
-| Exact prefix hit | The zero-suffix path `sample_from_hidden()` reads the same lane `sampling_config` slot, so it uses this request's mask and never reuses the cache creator's sampling choice |
-| Ordinary decode | The worker first fills the one mask of each constrained row in its decode region, uploads it, and then runs the existing whole graph; every request may have a different grammar |
-| Forced control | No sampling; matcher preview per [§5](#5-thinking-content-and-continuation), committed with the physical append |
-| Context-cache restore | Executes no output constraint and accepts no history; the first new output after the restore takes the normal mask route |
+| 中间 prefill chunk | 不生成新输出，不取 mask、不推进 matcher |
+| Prefill finalization | 在真正采样首 token 前提供初始 mask；可复用准备阶段检查所得位图 |
+| Exact prefix hit | `sample_from_hidden()` 使用同一请求 mask，不能复用缓存创建者的采样选择 |
+| Ordinary decode | Engine 响应当前一行的 DecisionNeeded；rank 上传 mask 后执行采样，每个请求可有不同 grammar |
+| Forced control | 不采样；按第5节做 matcher preview，并随物理追加提交 |
+| Replay | 不执行输出约束，不重复接受历史；恢复后的第一个新输出重新走正常 mask 路线 |
 
-For ordinary graphs containing constrained rows, mask addresses and row descriptors use stable
-buffers; the graph topology distinguishes only the limited consumer routes that are truly necessary,
-and does not vary with grammar content or per-request output length. Intermediate prefill does not
-pay the matching cost of a first-token mask in advance.
+对于包含受约束行的 ordinary 图，mask 地址和行描述使用稳定 buffers；图拓扑只区分确有必要的有限消费者路线，不随 grammar 内容或每请求输出长度变化。中间 prefill 不为预先生成的首 token mask 重复付出匹配成本。
 
 ## 8. Speculative decoding
 
-### 8.1 Per-position mask lookahead
+### 8.1 逐位置 mask 推演
 
 ```text
-mark = the matcher's current committed position
+mark = matcher 当前已提交位置
 for i in 0..K:
-    mask[i] = the set of next tokens allowed by the current state
-    if the set is empty: mark DeadEnd and stop further lookahead
-    if i == K: stop; the current one is the bonus mask
-    if draft[i] is not in mask[i]: stop; mark later positions Unreachable
-    temporarily accept draft[i]
-    if EOS has been accepted: mark later positions Unreachable and stop
-rollback to mark
+    mask[i] = 当前状态允许的下一 token 集合
+    若集合为空：标记 DeadEnd，停止后续推演
+    若 i == K：结束，当前行为 bonus mask
+    若 draft[i] 不在 mask[i]：停止，之后标为 Unreachable
+    临时接受 draft[i]
+    若已接受 EOS：之后标为 Unreachable，停止
+rollback 到 mark
 ```
 
-Lookahead advances only along the actual chain of the proposals. Different requests are looked ahead
-independently; NInfer's current backends use bounded-length chains, and no general tree planner is
-introduced.
+Lookahead 只能沿 proposal 的实际链推进。不同请求独立推演；当前 NInfer 的后端使用有限长度 chain，不引入通用 tree planner。
 
-One constrained token lookahead covers the reasoning/content/tool rules; rolling back only the
-innermost JSON matcher while keeping an outer state that has already switched is not allowed.
+一次受约束 token 推演包含 reasoning/content/tool 规则，不能仅让最内层 JSON matcher 回退而保留外层已切换的状态。
 
-### 8.2 Acceptance distribution
+### 8.2 接受分布
 
-The implementation uses a target-only constraint; proposals use each backend's original
-distribution:
+实现采用 target-only constraint，proposal 使用各后端的原有分布：
 
-| Backend | Proposal distribution | Positive-temperature acceptance |
+| 后端 | Proposal 分布 | 正温度接受 |
 |---|---|---|
-| MTP | Greedy, one-hot q | p(draft); after rejection, sample the residual |
-| DFlash | Greedy, one-hot q | Same as above |
-| DFlash2 | The actual sparse q over 16 candidates | min(1, p(draft)/q(draft)); after rejection, sample the positive part of p-q |
+| MTP | Greedy、one-hot q | p(draft)，拒绝后取残差 |
+| DFlash | Greedy、one-hot q | 同上 |
+| DFlash2 | 16候选的实际稀疏 q | min(1,p(draft)/q(draft))，拒绝后取正部 p-q |
 
-p is the normalized target distribution after applying the grammar and the existing sampling
-transforms. q is the distribution that actually generated the draft; q is never modified
-retroactively at verification, and the old q is never used after replacing a draft ID.
+p 是施加 grammar 及现有采样变换后的归一化 target 分布。q 是实际生成该 draft 的分布；不在验证时追溯修改 q，也不替换 draft ID 后继续使用旧 q。
 
-A greedy target selects the argmax among the legal candidates; the unconstrained argmax already
-produced by the target forward must not be reused as the final answer of a constrained row. Purely
-unconstrained rows may still use the original fast path.
+Greedy target 选择合法候选中的 argmax；不能复用 target forward 已经生成的无约束 argmax 作为受约束行的最终答案。纯无约束行仍可使用原有快路。
 
-After all proposals are accepted, the bonus is sampled from the target p of their complete prefix.
-The first rejection produces a correction and ends the round; only the next round generates masks
-from the actual history including the correction.
+全部 proposal 接受后，bonus 从其完整前缀对应的 target p 采样。首次拒绝后产生 correction，本轮结束；下一轮才根据 correction 的实际历史生成 mask。
 
-### 8.3 An illegal proposal must still go through rejection
+### 8.3 非法 proposal 仍须执行 rejection
 
-If d_i is illegal, p(d_i)=0. That position keeps the real proposal and q and goes through the
-original rejection; it is not deleted and treated as an ordinary bonus.
+若 d_i 非法，p(d_i)=0。这一位置保留真实 proposal 和 q，走原 rejection；不把它删掉后当作普通 bonus。
 
-For example:
+例如：
 
 ```text
 p(a)=0.5, p(b)=0.5, p(x)=0
 q(a)=0.5, q(b)=0,   q(x)=0.5
 ```
 
-In the correct algorithm, proposal a is accepted, proposal x is rejected and b is chosen from the
-residual, giving 0.5 each. If x were deleted and a bonus drawn from p, the result would become
-a=0.75, b=0.25. DFlash2 must keep the former behavior.
+正确算法中，proposal a 被接受，proposal x 被拒绝并从残差选择 b，结果各0.5。若删掉 x 后从 p 抽 bonus，结果变成 a=0.75、b=0.25。DFlash2 必须保持前一种行为。
 
-After EOS has been temporarily accepted, the terminated matcher is not called again. A fixed-width
-GPU unit may precompute extra columns; the final OutputSession terminates at EOS, and later
-candidates, grammar progress, penalties, and model state do not enter the commit. If those columns
-are optimized away on the GPU in the future, their acceptance semantics must be equivalent.
+EOS 已被临时接受之后，不再调用 terminated matcher。固定宽度 GPU unit 可以预计算额外列；最终 OutputSession 在 EOS 处终止，后续候选、grammar 进度、penalty 和模型状态不进入提交。若未来在 GPU 上优化掉这些列，其接受语义必须等价。
 
 ### 8.4 MTP
 
-MTP's drafts for the current round return to the Host with the previous round's egress and are kept
-in the sequence (`mtp_drafts`). The Forward stage runs the target forward with these drafts; the
-Finish stage completes acceptance, MTP state alignment, and the next round's proposal. The next
-round's proposal stays unconstrained. The first token, extent=0, and the tail of the output budget
-use their own valid row counts.
+Qwen3.5 与 Qwen4Exp 均在当前 decode unit 生成 proposal，随后执行 target verify 和 acceptance。
+轮间不保存下一轮 draft 列表。稳定状态的 Main frontier 为 F，MTP history frontier 为
+max(F−1,0)；本轮从已保存的 target conditioning 与已确认 anchor 开始生成草稿。
 
-## 9. Speculative CPU/GPU timing
+约束只影响 target 分布。Proposal 的 ID、extent 与 q 保持原有数学定义；extent=0 和混合
+有效长度按行处理。实际接受 A 个输入后，按 target conditioning 重建所需 MTP history，
+然后在物理退役时释放本轮临时数据。
 
-### 9.1 Two-stage execution
+## 9. 决策消息、设备执行与提交
 
-Every decode unit of MTP, DFlash, and DFlash2 consists of a Forward and a Finish stage. Graph and
-eager execution use the same native calls; constrained, unconstrained, and mixed batches use the
-same two-stage graphs, held in two graph families (`speculative_forward_graphs` and
-`speculative_finish_graphs`).
+### 9.1 当前轮的数据交接
 
-| Stage | MTP | DFlash / DFlash2 |
-|---|---|---|
-| Forward | Upload the round's inputs, run the target forward | Upload inputs, append the draft context, generate drafts, D2H the draft IDs, ready event, target forward |
-| CPU mask | Use the draft IDs already in the sequence | Wait for the draft-ready event of the Forward stage and read the pinned IDs |
-| Finish | Acceptance, MTP state alignment, next-round proposal, egress | Acceptance, egress |
+RankProgram 在草稿 ID 可读取时发出 `DecisionNeeded`。Session 转发 ticket、stage 和
+owning draft 列表；Engine 使用该 ticket 冻结的 Request/row 映射调用 OutputSession 的
+lookahead，生成 owning `DecisionInput`。其中只有受约束行，包含逐位置 words 和 dead bits。
 
-The Engine passes a mask provider that borrows the batch's OutputSessions and maps compact rows to
-requests. The Program uses it synchronously on the worker call stack for lookahead, mask filling,
-and rollback; the provider's borrow ends when decode returns. `Program::decode()` returns a
-PendingBatch, after which the Engine still performs the preview, the Program commit, and the output
-commit.
-
-### 9.2 Submission and dependencies
-
-Before Forward, the Program binds the Device mask address, stride, and per-row enable state in the
-sampling configuration. The CPU fills the content after Forward is submitted and then uploads the
-masks on the same compute stream; Finish is ordered after the upload.
-
-The DFlash Forward graph records an external event (`cudaEventRecordExternal`, through
-`CudaCompletionEvent::record_external` in `src/core/device.h`) after the draft D2H, and then
-continues with the target forward. The CPU only needs to wait for that event to read the round's
-drafts, so mask computation can overlap the target forward. Eager execution records an ordinary CUDA
-event at the same point. MTP drafts are already on the Host, so masks can be computed as soon as
-Forward is submitted.
-
-```mermaid
-flowchart LR
-    subgraph A["DFlash Forward Graph"]
-        P["Context append, proposal"] --> D["D2H draft IDs, ready event"]
-        D --> T["Target forward"]
-    end
-    D --> C["CPU waits for drafts, builds masks"]
-    C --> U["H2D masks"]
-    T --> U
-    U --> B["Finish Graph: acceptance, egress"]
-    B --> E["preview → commit → publish"]
-```
-
-An unconstrained batch submits both stages back to back and skips the CPU wait and mask processing.
-DFlash's small draft copy and event stay inside the fixed Forward graph. A mixed batch keeps the
-same membership, and the masks of unconstrained rows are marked disabled.
-
-Graphs are captured per exact B and per the actual topology of each stage. DFlash Forward keeps the
-draft-context profiles; DFlash Finish does not depend on context length and has one profile per B.
-MTP Finish aligns and proposes over the context, so it uses the same context profiles as MTP
-Forward, captured as separate Finish executables. Schema content, request IDs, and mask bytes are
-all execution inputs. Startup validates profile coverage, applies every profile update once, and
-warms the graphs in Forward→Finish pairs.
-
-### 9.3 Ownership and lifetime
-
-The Program holds both graph families, the pinned draft IDs, the Host/Device masks, and the ready
-event. A graph is destroyed before the events and buffers it references. Repeated launches, profile
-updates, and cleanup after construction failure follow the same lifetime.
-
-From the unit's admission until the PendingBatch is consumed, membership, sequences, block tables,
-and buffers stay stable. Target logits, hidden states, ReplaySSM records, and proposal data are kept
-until their respective last consumers; the temporary workspaces of the two stages each use the arena
-from its start independently. The Host mask stays valid until its H2D completes, and the Device mask
-is kept until Finish ends. DFlash2's q and candidate IDs always stay on the GPU.
-
-When CPU lookahead fails, the matcher's temporary state is restored first; the Program drains the
-GPU work already submitted before releasing the unit. DFlash pending features update the context by
-the actually committed prefix, and the next round's MTP drafts follow the existing commit and
-invalidation rules.
-
-## 10. Errors, termination, and single-row failure
-
-### 10.1 Request preparation errors
-
-An invalid grammar, unsupported schema assertion, conflicting feature combination, illegal token
-reference, or invalid continuation prefix returns a request error before entering the execution
-queue. Schema errors distinguish content from tool-parameter sources; reduction diagnostics map back
-to the source schema, and the protocol layer completes the original field path, including the
-Responses namespace and Anthropic `input_schema`.
-
-Runtime integrity errors are not wrapped as user schema errors. For example, a corrupted row
-membership, a matcher that cannot roll back, or a GPU physical commit that cannot complete follows
-the existing boundary that makes the Engine unavailable.
-
-### 10.2 No legal token at a reachable position
-
-If the CPU already knows that the next ordinary position is DeadEnd, the request can end directly
-without committing a meaningless sample. For DFlash or speculative lookahead, the actual
-verification path must decide whether DeadEnd is reached.
-
-For that, the PendingBatch carries an explicit per-row result (`PendingBatch::constraint_failed`)
-that distinguishes normal production from a request-level constraint failure. The Engine turns it
-into `CommitDecision{.terminal = true, .failed = true}`; the failed row commits zero tokens this
-round, and the Program reclaims the row with its zero-acceptance release semantics
-(`CommitDisposition::FailedReleased`, `src/runtime/contract/execution.h`). The Engine completes the
-request with `RequestErrorKind::ConstraintDeadEnd` ("output constraint has no valid next token"),
-counted separately from user cancellation. The other normal rows finish this batch's commit.
-
-Even if the failed row internally verified several drafts, this round's uncommitted result is not
-published; output committed earlier is kept. The failed row consumes no public generation budget
-this round and does not update the formal matcher. This extension only adds the per-row result
-discrimination and does not change the nonterminal/terminal accepted-prefix rules of successful
-rows.
-
-Non-finite logits, illegal indices, or inconsistent mask/position metadata on the device are
-implementation or numerical errors and must not be uniformly interpreted as "the user grammar has no
-solution". Every path avoids normalizing over an all-negative-infinity support.
-
-### 10.3 Normal completion and explicit interruption
-
-Normal termination uses the Frontend's explicit EOS set; the matcher opens EOS only when the output
-language allows ending and is terminated after accepting EOS. EOS is not published as ordinary text
-and keeps the existing StopToken completion semantics.
-
-Terminal observation distinguishes whether the constraint was enabled, whether the content is
-complete, and whether the request ended normally through EOS. For example, a complete JSON that
-stops exactly at the length limit can be recorded as complete content, but the finish reason stays
-the length limit; the finish reason must not be rewritten as an ordinary stop.
-
-Guaranteed content/tool constraint requests require these model termination rules and refuse extra
-stop strings, custom stop token IDs, and options that publish EOS text. Raw grammars use the same
-completion convention. Users can interrupt through the generation limit or cancellation; the result
-is then explicitly incomplete, and streaming receivers identify it by the existing finish/error
-events.
-
-A request with no token budget keeps the existing behavior; empty output is never automatically
-marked as a successfully completed schema. A grammar that can accept the empty string may allow EOS
-as the first generated token.
-
-On normal completion, constrained content stays complete UTF-8. When a length interruption falls in
-the middle of a multi-byte character, the existing display-level terminal handling applies, but the
-result is only a truncated display and is not claimed to belong to the complete grammar language.
-
-## 11. External interfaces
-
-Every entry point maps onto the owning request of [§3](#3-request-input-and-compilation); no
-third-party object or executable callback is exposed to users. On a non-enforcing family the
-constraint-bearing entries are refused as described in [§2.3](#23-model-family-scope).
-
-| Entry point | Supported capabilities |
-|---|---|
-| Public Engine Generation | Content constraints and tool policy; raw token input can also use a direct grammar |
-| CLI (`apps/cli`) | `--grammar-file`, `--json-schema-file`, `--json-object`, `--regex`, repeated `--choice`; the content constraint options are mutually exclusive |
-| Inference benchmark (`ninfer_bench`) | The same constraint options, plus `--concurrency` and `--mixed-constraints` (constraints on alternate requests; requires a constraint and concurrency of at least 2) |
-| OpenAI Chat | `response_format` json_object/json_schema; tool strict and `tool_choice` |
-| OpenAI Responses | `text.format` json_object/json_schema; tool strict and `tool_choice` |
-| Anthropic Messages | JSON Schema in `output_config.format`; tool definitions, strict, and `tool_choice` use the common tool contract |
-| NInfer HTTP extensions | `structured_outputs` with exactly one of `grammar`, `regex`, or `choice`, for direct language constraints with no standard protocol field; top-level `tool_constraints` = `basic` (default) or `auto`, mapping to Basic/Automatic of [§4.3](#43-tool-constraints) |
-
-A content constraint has only one source. Specifying both a standard response format and a NInfer
-extension is an error. The HTTP extensions explicitly use NInfer's own contract and do not claim to
-be OpenAI/Anthropic standard fields; no duplicate aliases are added, and the aliases `grammar`,
-`guided_json`, `guided_regex`, `guided_choice`, and `guided_grammar` are rejected
-(`parse_structured_outputs` in `src/serve/request_validation.cpp`).
-
-An explicit JSON Schema response request enforces its supported assertions. The protocol's strict
-flag is not a switch for "ignore some keywords". A tool with strict=false keeps the existing
-non-strict parameter semantics of [§4.3](#43-tool-constraints); the two uses are handled separately.
-
-No hidden system message is inserted into the prompt automatically. Tool definitions are given to
-the model under the existing template behavior; when the prompt must explain the meaning of response
-fields, the caller provides it. On an enforcing family, the choice of constraint itself does not
-change the existing prompt cache identity.
-
-## 12. Performance and observability
-
-### 12.1 Cost model
-
-The capacity of one mask buffer copy is:
+普通采样使用相同消息，draft 列表为空。无约束 batch 直接推进；混合 batch 不为无约束行
+构造全词表全1位图。Matcher 和可调用回调均不进入 RankProgram。
 
 ```text
-(max_concurrency + 1) × (K+1) × ceil(V/32) × 4 bytes
+Rank proposal / target forward
+  → 草稿可读：DecisionNeeded(ticket, stage, drafts)
+  → Engine：matcher lookahead → owning DecisionInput
+  → Rank：上传位图 → sampling / acceptance → ResultReady
+  → Session PendingBatch → Engine output preview
+  → commit receipt → Session 逻辑采用 → OutputSession commit → 发布
+  → DeviceRetired → CommitComplete 与 frame 释放
 ```
 
-The extra region belongs to the prefill lane ([§7.1](#71-layout)). With V=262144, one position is 32
-KiB; with max_concurrency=8 and K=15 a copy is 9 × 16 × 32 KiB = 4.5 MiB. The Host and Device copies
-are allocated separately, plus a small amount of position state and draft IDs. This is a capacity
-estimate, not a transfer time.
+### 9.2 Graph 与完成依赖
 
-Core optimization choices: vocabulary and compilation reuse; per-request matcher advancement; no
-full-output replay each round; preallocated mask buffers; direct bitmask consumption on the GPU;
-speculative CPU masks overlapping the target forward; constrained and unconstrained batches sharing
-the two-stage execution.
+原生 RankProgram 按数学依赖组织 Main、proposal、采样/acceptance 和 history commit 的
+Graph。每个阶段继续使用 exact-B、稳定 buffers 和所属 Op 的上下文更新合同；grammar
+内容、请求 ID、mask bytes 都是执行输入。
 
-The masks of the rows are generated sequentially on the worker. Ordinary decode prepares masks
-before sampling; speculative decode prepares them after Forward is submitted. Compilation threads
-and active matcher advancement each hold their own objects.
+草稿回传完成事件与 target forward 的最后完成事件分开，允许 Host lookahead 与已经提交的
+设备工作重叠。`poll()` 查询就绪状态，尚未就绪时返回；它不在调用栈上等待 matcher 回调。
+位图准备可以早于 target forward 完成，但对应采样必须排在位图上传之后。
 
-Drafts stay unconstrained, which can lower the acceptance rate of constrained workloads. Report the
-actual accepted length and total time; the target constraint is never relaxed to recover the
-acceptance rate. Jump-forward and dynamically skipping deterministic grammar strings are not part of
-this design's basic execution contract.
+真正提交 H2D 后才发 `DecisionConsumed`，由 Engine 记录上传字节数。接收 `supply()`
+不等于已经上传。草稿、位图及输出都关联同一个 ticket、frame generation 和冻结的行顺序。
 
-### 12.2 Statistics
+### 9.3 所有权与存活期
 
-`GenerationResult::constraint` (`ConstraintObservation`) is present when a matcher was enabled and
-records the formally committed state: `branch` is undecided/content/tools, `complete` means the
-current language allows ending, and `terminated` means EOS has been accepted. A continuation prefix
-participates in both states. Complete content that stops at the output limit can have complete=true
-and terminated=false, and the finish reason keeps its value.
+RankProgram 持有 Graph、pinned IDs、Host/Device mask 和完成事件；Graph 先于其引用的
+buffers 和 events 销毁。Host mask 在 H2D 完成前不可覆盖，Device mask 保留到采样或验证
+结束。DFlash2 的 q 和 candidate IDs 保持在设备中。
 
-The same object records the compilation cache access (hit/built/waited), the number of positions for
-which a mask was actually computed, and the mask H2D bytes of successful submissions. When
-`phase_timings` is enabled, it also records the CPU seconds of OutputSession preparation,
-mask/lookahead/rollback, and matcher accept/discard. Rolled-back lookahead is still work paid for,
-and work counts are not rolled back. All three HTTP entry points (OpenAI Chat, OpenAI Responses, and
-Anthropic Messages) and `ninfer_bench` enable these phase timings.
+ResultReady 之后仍保留 target hidden、verify records 和提交所需数据。commit receipt
+确认有序接受，Session 才采用逻辑前沿并允许输出发布；frame 和来源 leases 到 DeviceRetired
+才回收。CommitComplete 补齐包括物理提交在内的真实时间观测，取消和失败行也遵守该退休边界。
 
-The DFlash draft-ready wait is a sub-interval of the existing device wait. The Program records it
-once per batch, and the Engine's global cumulative counter (`constraint_draft_wait_ns` in the
-host-work statistics) is the only total; the per-request `constraint_draft_wait_exposed_seconds` in
-the engine timing (`GenerationEngineTiming`, `include/ninfer/types.h`) is the wait this request
-experienced and must not be summed across requests of the same batch.
+DFlash 延迟消费的 target features 属于 residency 的持久存储，直到下一轮上下文追加或
+normalize 完成；它们不随一轮 frame 提前释放。MTP history 对齐在本轮提交中完成。
+CPU lookahead 失败时先回退 matcher 的临时状态，再 discard 对应生成事务；已提交的设备
+读者完成后才释放其资源。
 
-HTTP aggregate results, the SSE terminal state, the `request_done` log, and the benchmark JSON use
-the same constraint representation. The Prometheus `/metrics` endpoint
-(`src/serve/server_metrics.cpp`) aggregates the request/cache/work counts when a request settles,
-including cancellations and length interruptions; preparation failures and execution exceptions
-still go through the existing error counts. It renders:
+## 10. 错误、终止和单行失败
 
-| Metric | Labels | Content |
-|---|---|---|
-| `ninfer:constraint_requests_total` | `outcome` = `terminated`, `complete_interrupted`, `incomplete_interrupted` | Settled constrained requests by termination state |
-| `ninfer:constraint_branch_total` | `branch` = `undecided`, `content`, `tools` | Settled constrained requests by committed output branch |
-| `ninfer:constraint_cache_total` | `result` = `hit`, `built`, `waited` | Grammar compilation cache access |
-| `ninfer:constraint_mask_positions_total` | none | Evaluated constrained prediction positions |
-| `ninfer:constraint_mask_upload_bytes_total` | none | Submitted token-mask payload bytes |
-| `ninfer:constraint_prepare_seconds_sum` | none | Constraint preparation, including compilation |
-| `ninfer:constraint_mask_seconds_sum` | none | CPU mask work, including rolled-back lookahead |
-| `ninfer:constraint_matcher_seconds_sum` | none | Matcher accept and discard work |
-| `ninfer:constraint_draft_wait_seconds_sum` | none | Constrained DFlash wait for Host-visible drafts, once per batch, read from the Engine global counter |
+### 10.1 请求准备错误
 
-The phase-second sums are non-zero only for requests that collected phase timings. Metric labels use
-fixed enums and never contain grammar/schema content.
+无效 grammar、未支持 schema 断言、冲突功能组合、非法 token 引用、无效 continuation 前缀，在进入执行队列前返回请求错误。Schema 错误区分正文与工具参数来源；归约诊断映射回源 schema，协议层再补齐原始字段路径，包括 Responses namespace 与 Anthropic input_schema。
 
-Input prepare and the constraint prepare inside submit are timed separately, and the total prepare
-includes both; the request queue wait starts when the grammar is ready and the request enters the
-waiting queue. The submit entry time is still used for the pending deadline and publication order.
-In the end-to-end composition of the first token, the preparation interval inside submit is counted
-only once and must not be both added to prepare and left unchanged in the subsequent wait/execution
-intervals.
+Runtime integrity 错误不被包装成用户 schema 错误。例如 row membership 错乱、matcher 无法回退、GPU 物理提交无法完成，继续沿 Engine 不可用的既有边界处置。
 
-CPU mask work time may overlap the GPU forward, and matcher work is already included in the existing
-Host time; these breakdowns are not added to the total wall time again. Mask uploads record bytes;
-no CUDA event or device synchronization is added for statistics. The compiled-cache quota limits
-only retained compilation results.
+### 10.2 可达位置无合法 token
 
-## 13. End-to-end walkthroughs
+若 CPU 已知普通下一位置 DeadEnd，可以直接结束该请求，不提交无意义采样。DFlash 或 speculative lookahead 则须由实际验证路径判定是否达到 DeadEnd。
 
-### 13.1 GBNF and ordinary sampling
+为此 PendingBatch 增加明确的单行结果状态，区分正常产出与请求级约束失败。失败行本轮提交零 token，使用 Session 的零接受提交及退役语义回收该行；Engine 按 error 完成请求，与用户 cancellation 分开统计。其余正常行继续完成本批提交。
 
-The user supplies `root ::= "status=" ("ok" | "error") "\n"`. The CLI reads the source text, and the
-Frontend compiles it and initializes the matcher. The first token's mask allows every token whose
-complete bytes can match a prefix of this rule; the GPU selects from the legal set. After generating
-`status=ok\n`, EOS is allowed and the request ends normally. All content bytes are published as they
-are.
+即使该失败行在内部已经验证过几个 draft，本轮也不发布这段未提交结果；此前已提交的输出保留。失败行不消耗本轮公开生成预算，不更新正式 matcher。这个扩展只增加单行结果判别，不改变成功行的 nonterminal/terminal accepted-prefix 规则。
 
-### 13.2 Exact prefix hit with two different schemas
+设备端遇到非有限 logits、非法索引或不一致的 mask/position metadata 属实现或数值错误，不能统一解释为“用户 grammar 无解”。所有路径都避免对全负无穷支持集归一化。
 
-A and B use the same prompt and require an object field and a finite enumeration, respectively. Each
-can reuse compilation resources; the two matchers start from their own origins. When both requests
-hit the same model prefix, `sample_from_hidden()` still reads this request's mask from the lane's
-`sampling_config` slot. The hidden state in the old cache carries no output choice of the old
-request.
+### 10.3 正常完成与显式中断
 
-### 13.3 MTP rejects an illegal field value
+正常结束使用 Frontend 明确的 EOS 集合；matcher 只有在输出语言允许结束时开放 EOS，接受 EOS 后 terminated。EOS 不作为普通文本发布，保持既有 StopToken 完成语义。
 
-The current grammar allows only `ok/error`, and the Host draft gives another value. The CPU
-generates a legal mask at its predicted position and marks later positions Unreachable. The GPU's
-constrained p is 0 for that draft, and one-hot rejection produces a correction. The OutputSession
-accepts only the really committed prefix and the correction, and the next round looks ahead again.
+终态观测区分 constraint 是否启用、正文是否已完整、是否已按 EOS 正常结束。例如完整 JSON 恰好在长度上限处停止，可以记录内容完整，但 finish reason 仍为长度限制；不能把结束原因重写为普通 stop。
 
-### 13.4 DFlash2 stochastic rejection
+受保证的正文/工具约束请求要求启用这些模型终止规则，拒绝额外 stop strings、自定义 stop token IDs 和发布 EOS 文本的选项。原始 grammar 使用同一完成约定。用户可以通过生成上限或取消中断；对应结果明确为不完整，流式接收者按既有 finish/error 事件识别。
 
-Use the a/b/x distribution of §8. The proposals and the real q are produced on the GPU first; the
-CPU mask forbids x, and the target forward overlaps the mask work. When the GPU meets x, it still
-uses q to compute the residual and selects b. x is never cut into an ordinary bonus, and the final
-distribution is 0.5 each.
+无 token 预算的请求保持现有行为，不能把空输出自动标为成功完成 schema。一个能接受空串的 grammar 可以允许 EOS 成为第一个生成 token。
 
-### 13.5 Thinking, exact whitespace, and control strings
+正常完成时受约束正文保持完整 UTF-8。长度中断恰好落在多字节字符中间时，沿用现有展示层的终态处理，但结果仅为截断展示，不宣称其仍属于完整 grammar 语言。
 
-The request requires the content to start with a space, and the model is currently in thinking. The
-grammar contains the canonical close and the content rules; the space after the close framing
-belongs to the content and is kept. If the budget runs out, the fixed control string is injected
-after a complete round; its matcher preview contains the whole string and is not limited by K+1. A
-forced close and a natural close enter the same content state.
+## 11. 对外接口
 
-### 13.6 Strict tool and whitespace strings
+所有入口映射到第3节的 owning 请求，不把第三方对象或可执行回调暴露给用户。
 
-The tool `lookup(city:string, days:integer)` is selected by a named choice. The generated language
-constrains the tool name, the required parameters, and the parameter types. city uses the canonical
-framing, and spaces and newlines in the value are preserved; days is a JSON integer. The parser
-produces the argument JSON under the same contract. If a required const value contains the raw
-parameter end delimiter that cannot be represented, preparation returns a representation-unsupported
-error.
-
-### 13.7 Assistant continuation across the request lifetime
-
-The final assistant content is `{"name":`. The Frontend confirms the exact rendered content region
-and initializes the matcher. The request's prompt hits a retained prefix in the context cache, which
-restores only model state; the matcher is not touched by the restore and does not accept the prefix
-a second time. The request stays resident until it finishes (there is no preemption), generating
-`"Shang`, then `hai"}`, and EOS over successive rounds from the same matcher. The public result is
-only the new suffix, and prefix plus suffix satisfy the schema.
-
-### 13.8 Unreachable errors and cancellation in a mixed batch
-
-The batch contains constrained and free-generation requests. The hypothetical suffix of one draft
-reaches DeadEnd, but the target rejects at an earlier position, so that request commits its
-correction normally. Another row actually reaches DeadEnd; it commits zero tokens this round and
-returns the request error, while the other rows keep committing. A cancelled row also commits zero
-tokens, but its terminal classification is cancellation. All temporary matcher states are handled by
-each row's result and are never bound to a reused lane.
-
-## 14. Design verification basis
-
-Verification is organized around the following contracts, not by the number of internal files:
-
-| Dimension | Independent basis and key scenarios |
+| 入口 | 支持能力 |
 |---|---|
-| Language and tokenizer | Enumerated results of known small grammars; cross-token punctuation, UTF-8, control tokens, shared-prefix choice |
-| JSON Schema | An independent schema validator checks the promised subset; semantics of composition and references; error locations of unsupported assertions |
-| Sampling | A small-vocabulary FP64 oracle computes penalty, mask, top-k, and normalization; legal candidates outside the original top 20, insufficient support, and empty sets |
-| Speculative probability | Independent p/q and residuals; one-hot and real sparse q; illegal proposals, bonus, rejection at each position, and the counterexample of §8 |
-| State transactions | Lookahead has no persistent side effects; preview/discard; EOS prefix; forced control; cancellation and single-row failure in mixed batches |
-| Request lifecycle | First token, exact hit, ContinueFinalAssistant, context-cache restore; the matcher agrees with the really committed prefix |
-| Final protocol results | JSON, exact GBNF bytes, the thinking boundary, tool arguments, stream termination and truncation |
-| Model-family scope | Flash-Next refuses explicit content constraints and unenforceable tool requirements with the error kinds of §2.3 |
-| Performance | Cold/hot compilation, ordinary/MTP/DFlash/DFlash2, mixed batches; CPU work, extra waits, accepted length, TTFT, and throughput |
+| 公共 Engine Generation | 正文约束与工具策略；原始 token 输入也可使用直接 grammar |
+| CLI | `--grammar-file`、`--json-schema-file`、`--json-object`、`--regex`、重复的 `--choice`；互斥选择正文约束 |
+| OpenAI Chat | `response_format` 的 json_object/json_schema；工具 strict 与 tool_choice |
+| OpenAI Responses | `text.format` 的 json_object/json_schema；工具 strict 与 tool_choice |
+| Anthropic Messages | `output_config.format` 的 JSON Schema；工具定义、strict 和 tool_choice 使用共同工具合同 |
+| NInfer HTTP 扩展 | `structured_outputs` 中的 grammar、regex、choice，用于没有标准协议字段的直接语言约束 |
 
-Different numerical routes of the real model are not required to produce identical logits or
-token-by-token outputs. Sampling mathematics uses an independent oracle; model routes are verified
-by structure, transactions, and protocol results. Performance comparisons use the same model,
-constraint, sampling configuration, and comparable workloads, and disclose each route's gains and
-costs.
+正文约束只允许一个来源。标准 response format 与 NInfer 扩展同时指定时返回错误。HTTP 扩展明确使用 NInfer 自己的合同，不宣称为 OpenAI/Anthropic 标准字段；不增加 guided_* 等重复别名。
 
-## 15. Relationship to the existing implementation and references
+一个显式 JSON Schema 响应请求执行其受支持断言。协议中的 strict 标志不作为“允许忽略部分关键字”的开关。工具 strict=false 则按第4节保留现有非严格参数语义，两种用途区分处理。
 
-This design reuses the worker, request ownership, PendingBatch, and publication order of the [Engine
-architecture](engine-architecture.md), and the context-cache, retention, and Host-restore contracts
-of [resource scheduling and context cache](resource-scheduling-and-context-cache.md); the fork has
-no request preemption. [DFlash](dflash.md) and the existing Sampling/Speculative Ops keep owning the
-proposals and the mathematical execution.
+不自动向 prompt 插入隐藏 system 消息。工具定义按现有模板行为提供给模型；需要在 prompt 中说明响应字段含义时，由调用者提供。约束的选择本身不改变已有 prompt cache 身份。
 
-The constraint execution contract concentrates on the mask data flow, constrained sampling, the
-call-scoped provider, matcher transactions, and the single-row constraint failure. Artifacts, weight
-binding, model formulas, and KV/GDN cache identity carry no request constraint configuration.
+## 12. 性能与观测
 
-This feature supersedes three earlier fork paths, which are removed:
+### 12.1 成本模型
 
-- prompt-guided JSON `response_format`, which appended a JSON instruction (and any schema) to the
-  prompt and tolerant-cleaned the output; JSON formats are now enforced by the constraint;
-- the prompt-appended `tool_choice:"required"` directive; tool requirements are now enforced by the
-  tool constraint;
-- the `OutputOptions::tool_name_max_length` bound; tool names are validated by the tool contract
-  (non-empty and unique) and the protocol's name rules, with no separate output-side length bound.
+位图单份容量为：
 
-The fixed source and local changes of XGrammar are described in the [vendor
-notes](../../third_party/xgrammar/README.ninfer.md).
+```text
+B × (K+1) × ceil(V/32) × 4 bytes
+```
 
-Main references: [XGrammar C++ compiler](../../third_party/xgrammar/include/xgrammar/compiler.h),
-[matcher](../../third_party/xgrammar/include/xgrammar/matcher.h),
-[EBNF/GBNF](https://xgrammar.mlc.ai/docs/latest/defining_structures/ebnf_grammar.html), [engine
-integration](https://xgrammar.mlc.ai/docs/latest/using_xgrammar/engine_integration.html).
+V=262144 的示例中，一行32 KiB；B=8、K=15 时4 MiB。Host/Device 分别占用，另加少量位置状态和 draft IDs。这里是容量估算，不是实际传输耗时。
+
+核心优化选择：词表和编译复用；按请求推进 matcher；没有每轮完整输出重放；mask buffer 预分配；GPU 中直接消费位图；speculative CPU mask 与 target forward 重叠；约束与无约束共享原生执行阶段。
+
+各行 mask 在 worker 上顺序生成。普通 decode 在采样前准备 mask；speculative decode 在 Forward 提交后准备。编译线程与活跃 matcher 推进分别持有自己的对象。
+
+Draft 保持不受约束，可能降低 constrained workload 的接受率。报告实际 accepted length 与总耗时；不会为了恢复接受率而放宽 target 约束。Jump-forward 和动态跳过确定性 grammar 字符串不属于本设计的基础执行合同。
+
+### 12.2 统计
+
+`GenerationResult::constraint` 在启用 matcher 时存在，记录正式提交状态：`branch` 为 undecided/content/tools，`complete` 表示当前语言允许结束，`terminated` 表示已接受 EOS。Continuation 前缀参与这两个状态。完整内容在输出上限处停止时可为 complete=true、terminated=false，finish reason 保持原值。
+
+同一对象记录编译缓存 hit/built/waited、实际求 mask 的位置数及成功提交的 mask H2D 字节数。启用 `phase_timings` 时还记录 OutputSession 准备、mask/lookahead/rollback、matcher accept/discard 的 CPU 秒数。被回退的推演仍是已付出的工作，不回退工作计数。三个 HTTP 入口和 inference bench 均开启这些时间观测。
+
+Device wait 及其 `constraint_draft_wait_exposed_seconds` 子项只记录实际阻塞等待。
+事件轮询期间不把整个 submit 到 ResultReady 的墙钟时间记为阻塞等待；普通异步路径该项可以为零。
+完整生成延迟与每轮墙钟单独计量，Host 提交、轮询、matcher 和结果处理按实际执行区间累计。
+
+HTTP 聚合结果、SSE 终态、request_done 日志与 benchmark JSON 使用相同的 constraint 表示。Prometheus 的请求/缓存/工作计数在请求结算时汇总，包含取消与长度中断；准备失败和执行异常仍走原错误计数。Draft wait 从 Engine 全局计数读取。指标标签使用固定枚举，不包含 grammar/schema 内容。
+
+输入 prepare 与 submit 内的 constraint prepare 分别计时，总 prepare 包含两者；请求 queue wait 从语法就绪、进入 waiting queue 开始。提交入口时刻仍用于 pending deadline 和 publication order。首 token 的端到端组合中，submit 内准备区间只能计一次，不能既加入 prepare 又原样留在其后的等待/执行区间中。
+
+CPU mask work time 可能与 GPU forward 重叠，matcher work 已包含于现有 Host 时间；这些细分值不再加到总 wall time。Mask 上传记录字节数，不为统计增加 CUDA event 或 device synchronization。Compiled cache quota 只限制保留的编译结果。
+
+## 13. 全链路推演
+
+### 13.1 GBNF 与普通采样
+
+用户提供 `root ::= "status=" ("ok" | "error") "\n"`。CLI 读取源文本，Frontend 编译并初始化 matcher。首 token 的 mask 允许任何完整 bytes 能匹配该规则前缀的 token；GPU 从合法集合选择。生成 `status=ok\n` 后允许 EOS，正常结束。所有正文 bytes 原样发布。
+
+### 13.2 Exact prefix hit 与两个不同 schema
+
+A/B 使用相同 prompt，分别要求对象字段和有限枚举。编译资源可以各自复用；两个 matcher 从各自起点开始。两请求都命中同一份模型前缀时，`sample_from_hidden()` 仍读取本请求 mask。旧缓存中的 hidden 不携带旧请求的输出选择。
+
+### 13.3 MTP 拒绝非法字段值
+
+当前 grammar 只允许 `ok/error`，Host draft 给出另一个值。CPU 在其预测位置生成合法 mask，后续标为 Unreachable。GPU 的 constrained p 对该 draft 为0，按 one-hot rejection 产生 correction。OutputSession 只接受真正提交的前缀和 correction，下一轮重新推演。
+
+### 13.4 DFlash2 随机拒绝
+
+使用第8节的 a/b/x 分布。Proposal 与真实 q 先在 GPU 产生；CPU mask 禁止 x，target forward 与 mask 工作重叠。GPU 遇到 x 时仍使用 q 计算残差，选 b。没有把 x 截成普通 bonus，最终分布各0.5。
+
+### 13.5 Thinking、精确空白与控制串
+
+请求要求正文以空格开头，模型当前在 thinking。Grammar 包含 canonical close 和正文规则；关闭 framing 后的那个空格属于正文并保留。若预算耗尽，固定 control 串在完整轮次后注入；其 matcher preview 包含整段串，不受 K+1 限制。强制关闭和自然关闭进入同一正文状态。
+
+### 13.6 Strict 工具与空白字符串
+
+工具 `lookup(city:string, days:integer)` 被 named choice 选中。生成语言限制工具名、必填参数和参数类型。city 使用规范 framing，值中的空格与换行被保留；days 为 JSON integer。Parser 按同一合同产生参数 JSON。若要求的 const 值包含无法表示的 raw 参数结束符，准备阶段返回表示不支持。
+
+### 13.7 Assistant continuation 与抢占
+
+末条 assistant 正文为 `{"name":`。Frontend 确认渲染出的精确正文区域，初始化 matcher。生成 `"上` 后请求被暂停；matcher 与该请求保留。Replay 重建模型历史不再次接受前缀；恢复后继续生成 `海"}` 与 EOS。公开结果仅是新后缀，前缀与后缀拼接满足 schema。
+
+### 13.8 混合 batch 的不可达错误与取消
+
+本批有受约束及自由生成请求。某个 draft 的假设后缀到达 DeadEnd，但 target 在更早位置拒绝，该请求正常提交 correction。另一行实际到达 DeadEnd，则本轮零提交并返回该请求错误，其余行继续提交。被取消行也零提交，但终态分类为取消。所有临时 matcher 状态均按各自行结果处理，不绑定在复用的 lane 上。
+
+## 14. 设计验证依据
+
+验证围绕以下合同组织，不按内部文件数量建立测试：
+
+| 维度 | 独立依据与关键场景 |
+|---|---|
+| 语言与 tokenizer | 已知小 grammar 的枚举结果；跨 token 标点、UTF-8、控制 token、共享前缀 choice |
+| JSON Schema | 独立 schema validator 检查所承诺子集；组合与引用的语义，不支持断言的错误定位 |
+| 采样 | 小词表 FP64 oracle 计算 penalty、mask、top-k、归一化；合法候选在原top20之外、support不足与空集合 |
+| Spec 概率 | 独立 p/q 与残差；one-hot 和真实稀疏 q；非法 proposal、bonus、各位置拒绝和第8节反例 |
+| 状态事务 | Lookahead 无持久副作用；preview/discard；EOS前缀；forced control；取消与混合 batch 单行失败 |
+| 请求生命周期 | 首 token、exact hit、ContinueFinalAssistant、Snapshot/Replay；matcher与真实提交前缀一致 |
+| 最终协议结果 | JSON、GBNF精确bytes、thinking边界、工具arguments、流式结束与截断 |
+| 性能 | 冷/热编译、普通/MTP/DFlash/DFlash2、混合batch；CPU工作、额外等待、接受长度、TTFT与吞吐 |
+
+真实模型不同数值路线不要求 logits 或逐 token 输出完全相等。采样数学用独立 oracle；模型路线用结构、事务和协议结果验证。性能比较使用同一模型、约束、采样配置及可比工作负载，公开各路线的收益与成本。
+
+## 15. 与现有实现的关系及参考
+
+本设计复用 [Engine 架构](engine-architecture.md)的 worker、请求所有权、PendingBatch 和发布顺序，以及[资源调度与上下文缓存](resource-scheduling-and-context-cache.md)的抢占恢复合同。[DFlash](dflash.md)和现有 Sampling/Speculative Ops 继续拥有 proposal 与数学执行。
+
+约束执行合同集中在 owning 决策消息、mask 数据流、受约束采样、matcher 事务和单行约束失败。Artifact、权重绑定、模型公式和 KV/GDN 缓存身份不承担请求约束配置。
+
+XGrammar 的固定来源与本地改动见 [vendor 说明](../../third_party/xgrammar/README.ninfer.md)。
+
+主要参考：[XGrammar C++ compiler](../../third_party/xgrammar/include/xgrammar/compiler.h)、[matcher](../../third_party/xgrammar/include/xgrammar/matcher.h)、[EBNF/GBNF](https://xgrammar.mlc.ai/docs/latest/defining_structures/ebnf_grammar.html)、[引擎接入](https://xgrammar.mlc.ai/docs/latest/using_xgrammar/engine_integration.html)。

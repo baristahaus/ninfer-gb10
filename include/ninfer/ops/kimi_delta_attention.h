@@ -4,7 +4,6 @@
 #include "core/device.h"
 #include "core/tensor.h"
 
-#include <cuda_runtime.h>
 #include <cstddef>
 #include <cstdint>
 
@@ -41,44 +40,37 @@ namespace ninfer::ops {
  * lower_bound is finite in [-5,0]; scale is 1/sqrt(128). Inputs/out are non-overlapping.
  * State input/output may be disjoint or exactly alias; no other operand overlaps state.
  *
- * The independent oracle evaluates the complete recurrence naively in FP64 from the represented
- * BF16 inputs and FP32 parameters/state, with no private staging or output rounding. Recurrent
- * FP32 SIMT and chunked BF16/TF32 MMA are private arithmetic profiles qualified directly against
- * that oracle. Running and published state stay FP32; the output epilogue rounds once to BF16.
- * Q/K normalization, activated gates, triangular solves, residuals and accumulators stay FP32;
- * chunked decay-weighted Q/K operands have private BF16 storage. Chunked state prediction and
- * small matrix products use TF32 MMA; Q readout and state updates use BF16 MMA with FP32
- * accumulators. State snapshots and Delta stay FP32, converting only their BF16 MMA operands.
- * Transcendental approximations and reduction association are implementation details.
+ * Running and published state remain FP32; output storage is BF16. Results approximate the
+ * complete recurrence over the represented inputs.
  *
  * workspace supplies the capacity query above and is scoped to the call; the Op allocates no
  * device storage. execution supplies the stream and physical SM count for launch decomposition.
- * Chunked execution supports partial final chunks. This overload publishes state after all T
- * tokens into the same state storage.
+ * This overload publishes state after all T tokens into the same state storage.
  */
 void kimi_delta_attention(const Tensor& q, const Tensor& k, const Tensor& v, const Tensor& g,
                           const Tensor& beta, const Tensor& A_log, const Tensor& dt_bias,
-                          float lower_bound, float scale, WorkspaceArena& workspace, Tensor& state,
-                          Tensor& out, DeviceExecutionView execution);
+                          float lower_bound, float scale, MemoryArena& workspace, Tensor& state,
+                          Tensor& out, CudaExecutionView execution);
 
 /** Distinct-state form of the same mathematical contract; exact state alias is also allowed. */
 void kimi_delta_attention(const Tensor& q, const Tensor& k, const Tensor& v, const Tensor& g,
                           const Tensor& beta, const Tensor& A_log, const Tensor& dt_bias,
-                          float lower_bound, float scale, WorkspaceArena& workspace,
+                          float lower_bound, float scale, MemoryArena& workspace,
                           const Tensor& state_in, Tensor& state_out, Tensor& out,
-                          DeviceExecutionView execution);
+                          CudaExecutionView execution);
 
 /**
  * Scratch-free one-token update for B independent state-pool slots, using the same head mapping.
  * q/k BF16 [128,Hqk,1,B], v/g/out BF16 [128,Hv,1,B], beta BF16 [Hv,1,B],
  * A_log FP32 [Hv], dt_bias FP32 [128,Hv], states FP32 [128,128,Hv,Slots], device I32 slots [B].
- * B is in [1,8]. Caller-provided active slots are valid and distinct. Each row reads and writes
- * its selected state. Inputs, out, selectors and state do not overlap.
+ * State slots have dense [128,128,Hv] and explicit 16-byte-aligned nb[3]; other operands are
+ * contiguous. B is in [1,8]. Caller-provided active slots are valid and distinct. Each row reads
+ * and writes its selected state. Inputs, out, selectors and state do not overlap.
  */
 void kimi_delta_attention_batch_update(const Tensor& q, const Tensor& k, const Tensor& v,
                                        const Tensor& g, const Tensor& beta, const Tensor& A_log,
                                        const Tensor& dt_bias, float lower_bound, float scale,
                                        Tensor& states, const Tensor& slots, Tensor& out,
-                                       cudaStream_t stream);
+                                       CudaExecutionView execution);
 
 } // namespace ninfer::ops

@@ -27,12 +27,6 @@ constexpr std::array kShapes{
 
 Q4Launch select_q4_a16_launch(std::int32_t n, std::int32_t k, std::int32_t t) {
     if (t <= 0) throw std::invalid_argument("q4 linear: T must be positive");
-    // Flash-Next optimized proposal head truncated to a 128-row-aligned prefix
-    // (--proposal-head-rows). Same kernels as the full head; the launch grid
-    // is derived from the runtime row count.
-    if (k == 2560 && n % 128 == 0 && n > 0 && n <= 147456) {
-        return select_q4_n147456_k2560(t);
-    }
     for (const auto& entry : kShapes) {
         if (entry.n == n && entry.k == k) return entry.select(t);
     }

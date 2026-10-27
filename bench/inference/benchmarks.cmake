@@ -1,14 +1,9 @@
 # End-to-end product benchmark: public Engine API and native .ninfer artifacts only.
 add_executable(ninfer_bench
   "${CMAKE_CURRENT_LIST_DIR}/ninfer_bench.cpp"
-  "${CMAKE_CURRENT_LIST_DIR}/ninfer_bench_support.cpp")
+  "${CMAKE_CURRENT_LIST_DIR}/options.cpp"
+  "${CMAKE_CURRENT_LIST_DIR}/report.cpp")
 ninfer_internal_includes(ninfer_bench)
 target_include_directories(ninfer_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_compile_definitions(ninfer_bench PRIVATE NINFER_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
-target_link_libraries(ninfer_bench PRIVATE ninfer_engine ninfer::json CUDA::cudart)
-
-# The bench owns the measured-region scope; the core definition does not propagate
-# through ninfer_engine's private link.
-if(NINFER_PERFORMANCE_TRACE)
-  target_compile_definitions(ninfer_bench PRIVATE NINFER_PERFORMANCE_TRACE=1)
-endif()
+target_link_libraries(ninfer_bench PRIVATE ninfer_engine ninfer_product_config
+  ninfer_product_prompt_input ninfer::json CUDA::cudart)

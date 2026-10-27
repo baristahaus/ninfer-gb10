@@ -4,7 +4,7 @@
 
 namespace ninfer::models::qwen3_8_flash_next::detail::NINFER_QWEN38_FLASH_NEXT_RUNTIME_NS {
 
-DFlashPersistentState::DFlashPersistentState(DeviceSpan backing,
+DFlashPersistentState::DFlashPersistentState(MemorySpan backing,
                                              const DFlashPersistentLayout& layout,
                                              CyclicKVCache& local_state)
     : local(local_state), full(backing, layout.full),

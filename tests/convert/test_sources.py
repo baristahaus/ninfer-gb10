@@ -3,8 +3,8 @@ from __future__ import annotations
 import struct
 
 import pytest
-import torch
 from safetensors.torch import save_file
+import torch
 
 from tools.convert.sources.safetensors import SafetensorsSource
 from tools.convert.sources.compressed_tensors import (
@@ -12,6 +12,31 @@ from tools.convert.sources.compressed_tensors import (
     matrix_source,
 )
 from tools.convert.sources.logical import select_rows
+from tools.convert.sources.modelopt_nvfp4 import ModelOptNvfp4
+
+
+def test_source_failure_does_not_publish_conversion(tmp_path):
+    from tools.convert.model import Model, Parameter
+    from tools.convert.pipeline import convert
+    from tools.convert.recipe import Recipe
+    from tools.convert.sources.logical import LogicalSource
+
+    def read(begin, end):
+        if begin >= 32:
+            raise OSError("source read failed")
+        return torch.ones(end - begin, dtype=torch.bfloat16)
+
+    model = Model({"text": {"config": {}}})
+    model.add(Parameter("w", (8, 16), LogicalSource((8, 16), "fault", read)))
+    with pytest.raises(ValueError, match="source read failed"):
+        convert(
+            model,
+            Recipe(model),
+            tmp_path / "failed.ninfer",
+            device="cpu",
+            rows_per_chunk=2,
+        )
+    assert not list(tmp_path.iterdir())
 
 
 def test_nvfp4_source_preserves_words_and_decodes_independently(tmp_path):
@@ -59,24 +84,6 @@ def test_nvfp4_source_preserves_words_and_decodes_independently(tmp_path):
         assert source.values(16, 16).numel() == 0
 
 
-def test_sharded_checkpoint_without_index_maps_every_shard(tmp_path):
-    first = torch.arange(6, dtype=torch.float32).reshape(2, 3)
-    second = torch.arange(4, dtype=torch.float32)
-    save_file({"a.weight": first}, str(tmp_path / "model-00001-of-00002.safetensors"))
-    save_file({"b.weight": second}, str(tmp_path / "model-00002-of-00002.safetensors"))
-    with SafetensorsSource(tmp_path) as store:
-        assert store.has("a.weight") and store.has("b.weight")
-        assert torch.equal(store.read_flat("a.weight").reshape(2, 3), first)
-        assert torch.equal(store.read_flat("b.weight", 1, 3), second[1:3])
-
-
-def test_sharded_checkpoint_without_index_rejects_a_duplicated_tensor(tmp_path):
-    save_file({"a.weight": torch.zeros(2)}, str(tmp_path / "model-00001-of-00002.safetensors"))
-    save_file({"a.weight": torch.ones(2)}, str(tmp_path / "model-00002-of-00002.safetensors"))
-    with pytest.raises(ValueError, match="appears in"):
-        SafetensorsSource(tmp_path)
-
-
 def test_row_fp8_source_and_reordered_encoded_rows(tmp_path):
     codes = torch.tensor([[0x38, 0xB8, 0x40], [0x30, 0xB0, 0x80]], dtype=torch.uint8)
     scales = torch.tensor([[2.0], [0.5]], dtype=torch.bfloat16)
@@ -97,3 +104,31 @@ def test_row_fp8_source_and_reordered_encoded_rows(tmp_path):
         words = reordered.read_encoded(0, 2)
         assert torch.equal(words.codes, codes.flip(0))
         assert torch.equal(words.scales, scales.flatten().flip(0))
+
+
+def test_modelopt_preserves_words_and_converts_multiplier_to_divisor(tmp_path):
+    codes = torch.tensor(
+        [[0x10, 0x32, 0x54, 0x76, 0x98, 0xBA, 0xDC, 0xFE]], dtype=torch.uint8
+    )
+    scales = torch.tensor([[0x40]], dtype=torch.uint8)
+    save_file(
+        {
+            "proj.weight": codes,
+            "proj.weight_scale": scales.view(torch.float8_e4m3fn),
+            "proj.weight_scale_2": torch.tensor(0.375),
+            "proj.input_scale": torch.tensor(0.125),
+        },
+        str(tmp_path / "model.safetensors"),
+    )
+    with SafetensorsSource(tmp_path) as store:
+        source = ModelOptNvfp4(store).matrix("proj", (1, 16))
+        words = source.read_encoded(0, 1)
+        assert torch.equal(words.codes, codes) and torch.equal(words.scales, scales)
+        assert words.weight_divisor == struct.pack("<f", 1 / 0.375)
+        assert source.input_divisor() == struct.pack("<f", 8.0)
+        expected = torch.tensor(
+            [0, 0.5, 1, 1.5, 2, 3, 4, 6, -0.0, -0.5, -1, -1.5, -2, -3, -4, -6],
+            dtype=torch.float64,
+        )
+        expected *= 2.0 / struct.unpack("<f", words.weight_divisor)[0]
+        assert torch.equal(source.values(), expected)

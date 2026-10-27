@@ -92,11 +92,11 @@ Json timings_json(const CompletionTimings& timings) {
 CompletionTimings outcome_timings(const GenerationOutcome& outcome) {
     return make_completion_timings(
         static_cast<std::uint32_t>(std::max(0, outcome.prompt_tokens)),
-        outcome.metrics.prefix_cache_hit_tokens,
+        outcome.stats.reused_prompt_tokens,
         static_cast<std::uint32_t>(std::max(0, outcome.completion_tokens)),
-        outcome.metrics.prompt_wall_seconds * 1000.0,
-        outcome.metrics.generation_wall_seconds * 1000.0, outcome.metrics.speculative_draft_tokens,
-        outcome.metrics.speculative_accepted_tokens);
+        outcome.stats.timings.prompt_wall_seconds * 1000.0,
+        outcome.stats.timings.generation_wall_seconds * 1000.0,
+        outcome.stats.speculative.drafted_tokens, outcome.stats.speculative.accepted_tokens);
 }
 
 CompletionTimings observation_timings(std::uint32_t prompt_tokens, std::uint32_t cached_tokens,
@@ -131,11 +131,14 @@ const char* finish_reason(ninfer::FinishReason reason) {
 }
 
 const char* finish_reason(const GenerationOutcome& outcome) {
-    const bool interrupted = outcome.finish_reason == ninfer::FinishReason::OutputLimit ||
-                             outcome.finish_reason == ninfer::FinishReason::ContextCapacity ||
-                             outcome.finish_reason == ninfer::FinishReason::Cancelled;
-    return !interrupted && !outcome.tool_calls.empty() ? "tool_calls"
-                                                       : finish_reason(outcome.finish_reason);
+    const bool completed = outcome.finish_reason == ninfer::FinishReason::StopToken ||
+                           outcome.finish_reason == ninfer::FinishReason::None;
+    return completed && std::any_of(outcome.tool_calls.begin(), outcome.tool_calls.end(),
+                                    [](const auto& call) {
+                                        return call.status == ToolCallStatus::Complete;
+                                    })
+               ? "tool_calls"
+               : finish_reason(outcome.finish_reason);
 }
 
 std::vector<ToolCall>
@@ -154,9 +157,9 @@ Json tool_calls_json(const std::vector<ToolCall>& calls, bool include_index) {
     Json output = Json::array();
     for (std::size_t index = 0; index < calls.size(); ++index) {
         const ToolCall& call = calls[index];
-        Json value = {{"id", call.id},
-                      {"type", "function"},
-                      {"function", Json{{"name", call.name}, {"arguments", call.arguments_json}}}};
+        Json value           = {{"id", call.id},
+                                {"type", "function"},
+                                {"function", Json{{"name", call.name}, {"arguments", call.arguments_json}}}};
         if (include_index) { value["index"] = static_cast<int>(index); }
         output.push_back(std::move(value));
     }
@@ -177,7 +180,7 @@ CompletionUsage usage_from(const GenerationOutcome& outcome) {
     return CompletionUsage{
         .prompt_tokens     = outcome.prompt_tokens,
         .completion_tokens = outcome.completion_tokens,
-        .cached_tokens     = static_cast<int>(outcome.metrics.prefix_cache_hit_tokens),
+        .cached_tokens     = static_cast<int>(outcome.stats.reused_prompt_tokens),
         .reasoning_tokens  = outcome.reasoning_tokens,
     };
 }
@@ -187,105 +190,6 @@ Json base_payload(const OpenAIChatResponseIdentity& identity, const char* object
                 {"object", object},
                 {"created", identity.created},
                 {"model", identity.model}};
-}
-// A tokenizer piece is raw bytes, so one token can end inside a multi-byte character. The spec's
-// `token` field is documented lossy text: anything that is not a complete, in-range UTF-8 sequence
-// becomes the replacement character here, and `bytes` carries the exact bytes for clients that need
-// them. Rejecting overlong forms and surrogates matters because the JSON writer refuses to dump text
-// it considers invalid, which would fail the whole response over one token.
-std::string lossy_token_text(std::string_view piece) {
-    static constexpr std::string_view kReplacement = "\xEF\xBF\xBD";
-    std::string text;
-    text.reserve(piece.size());
-    for (std::size_t index = 0; index < piece.size();) {
-        const unsigned char lead = static_cast<unsigned char>(piece[index]);
-        std::size_t width        = 0;
-        if (lead < 0x80U) { width = 1; }
-        else if ((lead & 0xE0U) == 0xC0U) { width = 2; }
-        else if ((lead & 0xF0U) == 0xE0U) { width = 3; }
-        else if ((lead & 0xF8U) == 0xF0U) { width = 4; }
-        bool complete = width != 0 && index + width <= piece.size();
-        for (std::size_t follow = 1; complete && follow < width; ++follow) {
-            complete = (static_cast<unsigned char>(piece[index + follow]) & 0xC0U) == 0x80U;
-        }
-        const unsigned char second =
-            complete && width > 1 ? static_cast<unsigned char>(piece[index + 1]) : 0U;
-        if (complete) {
-            // Reject what a conforming encoder never produces: overlong two- and four-byte forms,
-            // out-of-range four-byte forms, and UTF-16 surrogates.
-            complete = !(width == 2 && lead < 0xC2U) &&
-                       !(width == 3 && lead == 0xEDU && second >= 0xA0U) &&
-                       !(width == 4 && (lead > 0xF4U || (lead == 0xF0U && second < 0x90U) ||
-                                        (lead == 0xF4U && second > 0x8FU)));
-        }
-        if (complete) {
-            text.append(piece.substr(index, width));
-            index += width;
-        } else {
-            text += kReplacement;
-            // One replacement per malformed sequence, not per byte: the piece describes one token, so
-            // a truncated tail is one unknown character. Its exact bytes travel in `bytes`.
-            ++index;
-            for (std::size_t follow = 1; follow < width && index < piece.size(); ++follow) {
-                if ((static_cast<unsigned char>(piece[index]) & 0xC0U) != 0x80U) { break; }
-                ++index;
-            }
-        }
-    }
-    return text;
-}
-
-// The spec's `bytes` is an array of unsigned byte values, which also keeps a piece that splits a
-// multi-byte character exactly recoverable even though `token` is lossy.
-Json bytes_array(std::string_view piece) {
-    Json bytes = Json::array();
-    for (const char byte : piece) {
-        bytes.push_back(static_cast<unsigned int>(static_cast<unsigned char>(byte)));
-    }
-    return bytes;
-}
-
-// One reported vocabulary entry. `top_logprobs` belongs to a generated position only: OpenAI's
-// alternative entries carry token, logprob and bytes and nothing nested, so an alternative is built
-// without the field rather than with an empty list inside it.
-Json logprob_entry(std::string_view piece, float logprob, bool report_alternatives) {
-    Json entry{{"token", lossy_token_text(piece)},
-               {"logprob", static_cast<double>(logprob)},
-               {"bytes", bytes_array(piece)}};
-    if (report_alternatives) { entry["top_logprobs"] = Json::array(); }
-    return entry;
-}
-
-// The text a vocabulary id contributes. A missing entry means an id outside the Engine's own token
-// domain reached a report, which the reporting Op cannot produce; the empty piece then shows up as a
-// visibly wrong response rather than silently borrowing another token's text.
-std::string_view piece_for(const GenerationOutcome& outcome, ninfer::TokenId token) {
-    const auto found = outcome.token_pieces.find(token);
-    return found == outcome.token_pieces.end() ? std::string_view{}
-                                               : std::string_view(found->second);
-}
-
-// choices[].logprobs for a completed request: one entry per generated token, in order. The reported
-// alternatives are the Engine's leading ranks truncated to what the request asked for. Each entry's
-// text is resolved from the id it names, never from its position, because an alternative is a
-// different vocabulary id with its own piece.
-Json logprobs_object(const GenerationOutcome& outcome, int reported_top_logprobs) {
-    Json content = Json::array();
-    for (const auto& report : outcome.token_logprobs) {
-        Json entry = logprob_entry(piece_for(outcome, report.token), report.logprob, true);
-        const int reported = reported_top_logprobs < static_cast<int>(report.top.size())
-                                 ? reported_top_logprobs
-                                 : static_cast<int>(report.top.size());
-        for (int rank = 0; rank < reported; ++rank) {
-            entry["top_logprobs"].push_back(logprob_entry(
-                piece_for(outcome, report.top[rank].token), report.top[rank].logprob, false));
-        }
-        // A forced control span is a certainty by construction, not a sample. It still occupies its
-        // position so the array stays aligned with the generated tokens.
-        if (report.injected) { entry["injected"] = true; }
-        content.push_back(std::move(entry));
-    }
-    return Json{{"content", std::move(content)}, {"refusal", nullptr}};
 }
 
 Json stream_choice(Json delta, Json finish_reason = nullptr) {
@@ -335,8 +239,7 @@ OpenAIChatResponseIdentity make_openai_chat_response_identity(std::string model)
 }
 
 std::string make_chat_completion_response(const OpenAIChatResponseIdentity& identity,
-                                          const GenerationOutcome& outcome,
-                                          int reported_top_logprobs) {
+                                          const GenerationOutcome& outcome) {
     Json message = {{"role", "assistant"}, {"content", outcome.text}, {"refusal", nullptr}};
     const bool has_tool_calls = !outcome.tool_calls.empty();
     // vLLM/SGLang-compatible reasoning_content preserves the Engine's Reasoning/Content split.
@@ -347,21 +250,15 @@ std::string make_chat_completion_response(const OpenAIChatResponseIdentity& iden
         message["tool_calls"] = tool_calls_json(calls, false);
     }
 
-    // Reports describe every generated token, including reasoning and forced control spans, so they
-    // travel with the choice even when the message carries tool calls instead of text.
-    Json logprobs = outcome.token_logprobs.empty()
-                        ? Json(nullptr)
-                        : logprobs_object(outcome, reported_top_logprobs);
-
     Json payload       = base_payload(identity, "chat.completion");
     payload["choices"] = Json::array({Json{{"index", 0},
                                            {"message", std::move(message)},
-                                           {"logprobs", std::move(logprobs)},
+                                           {"logprobs", nullptr},
                                            {"finish_reason", Json(finish_reason(outcome))}}});
     payload["usage"]   = usage_json(usage_from(outcome));
     payload["timings"] = timings_json(outcome_timings(outcome));
-    if (outcome.constraint)
-        payload["constraint"] = product::constraint_observation_json(outcome.constraint);
+    if (outcome.stats.constraint)
+        payload["constraint"] = product::constraint_observation_json(outcome.stats.constraint);
     return payload.dump();
 }
 
@@ -460,15 +357,35 @@ std::string OpenAIChatStream::content_delta(const std::string& text) {
     return chunk(identity_, Json{{"content", text}}, nullptr, include_usage_, live_timings_json());
 }
 
-std::string OpenAIChatStream::tool_call_progress(std::size_t cumulative_bytes) {
-    if (!started_ || finished_ || cumulative_bytes == 0) {
-        throw std::logic_error("invalid OpenAI Chat tool-call progress state");
-    }
-    Json payload                  = base_payload(identity_, "chat.completion.chunk");
-    payload["choices"]            = Json::array({stream_choice(Json::object())});
-    payload["tool_call_progress"] = Json{{"bytes", cumulative_bytes}};
-    if (include_usage_) { payload["usage"] = nullptr; }
-    return event(std::move(payload));
+std::vector<std::string> OpenAIChatStream::tool_start(const ninfer::ToolCallStart& value) {
+    if (!started_ || finished_) throw std::logic_error("invalid Chat tool start state");
+    content_started_ = true;
+    tools_.start(value);
+    return {chunk(
+        identity_,
+        Json{{"tool_calls",
+              Json::array({Json{{"index", value.index},
+                                {"id", new_openai_chat_tool_call_id()},
+                                {"type", "function"},
+                                {"function", Json{{"name", value.name}, {"arguments", ""}}}}})}},
+        nullptr, include_usage_, live_timings_json())};
+}
+
+std::vector<std::string> OpenAIChatStream::tool_arguments(const ninfer::ToolArgumentsDelta& value) {
+    if (!started_ || finished_) throw std::logic_error("invalid Chat tool delta state");
+    tools_.append(value);
+    if (value.text.empty()) return {};
+    return {chunk(
+        identity_,
+        Json{{"tool_calls", Json::array({Json{{"index", value.index},
+                                              {"function", Json{{"arguments", value.text}}}}})}},
+        nullptr, include_usage_, live_timings_json())};
+}
+
+std::vector<std::string> OpenAIChatStream::tool_end(const ninfer::ToolCallEnd& value) {
+    if (!started_ || finished_) throw std::logic_error("invalid Chat tool end state");
+    tools_.end(value);
+    return {};
 }
 
 std::vector<std::string> OpenAIChatStream::finish(const GenerationOutcome& outcome) {
@@ -479,7 +396,7 @@ std::vector<std::string> OpenAIChatStream::finish(const GenerationOutcome& outco
     require_prefix(outcome.reasoning, reasoning_, "reasoning");
     require_prefix(outcome.text, content_, "content");
 
-    const Json constraint     = product::constraint_observation_json(outcome.constraint);
+    const Json constraint     = product::constraint_observation_json(outcome.stats.constraint);
     const Json final_timings  = timings_json(outcome_timings(outcome));
     const Json output_timings = timings_per_token_ ? final_timings : Json(nullptr);
     std::vector<std::string> events;
@@ -497,18 +414,10 @@ std::vector<std::string> OpenAIChatStream::finish(const GenerationOutcome& outco
                                include_usage_, output_timings));
     }
 
-    if (!outcome.tool_calls.empty()) {
-        const std::vector<ToolCall> calls = materialize_tool_calls(outcome.tool_calls);
-        events.push_back(chunk(identity_, Json{{"tool_calls", tool_calls_json(calls, true)}},
-                               nullptr, include_usage_, output_timings));
-        events.push_back(chunk(identity_, Json::object(), finish_reason(outcome), include_usage_,
-                               include_usage_ ? Json(nullptr) : final_timings,
-                               include_usage_ ? Json(nullptr) : constraint));
-    } else {
-        events.push_back(chunk(identity_, Json::object(), finish_reason(outcome.finish_reason),
-                               include_usage_, include_usage_ ? Json(nullptr) : final_timings,
-                               include_usage_ ? Json(nullptr) : constraint));
-    }
+    tools_.verify(outcome.tool_calls);
+    events.push_back(chunk(identity_, Json::object(), finish_reason(outcome), include_usage_,
+                           include_usage_ ? Json(nullptr) : final_timings,
+                           include_usage_ ? Json(nullptr) : constraint));
     if (include_usage_) {
         events.push_back(usage_chunk(identity_, usage_from(outcome), final_timings, constraint));
     }

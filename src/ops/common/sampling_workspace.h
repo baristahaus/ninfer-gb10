@@ -63,7 +63,7 @@ struct SamplingWorkspaceLayout {
     std::int32_t partial_stride = 0;
     bool multiblock             = false;
 
-    [[nodiscard]] SamplingWorkspace bind(DeviceSpan backing) const {
+    [[nodiscard]] SamplingWorkspace bind(MemorySpan backing) const {
         if (!multiblock) { return {}; }
         return {
             static_cast<unsigned long long*>(partial_keys.bind(backing).data),

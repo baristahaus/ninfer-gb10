@@ -332,6 +332,17 @@ std::uint64_t ContextMachineCostModel::transfer_ns(ContextTransferDirection dire
     return std::max(operation_limited, bandwidth_limited);
 }
 
+std::uint64_t ContextMachineCostModel::prefill_ns(PrefillWork work) const noexcept {
+    std::uint64_t result = saturating_product(prefill.chunk_ns, work.chunks);
+    result = saturating_add(result, q32_product_ns(prefill.token_ns_q32, work.tokens));
+    result =
+        saturating_add(result, q32_product_ns(prefill.attention_pair_ns_q32, work.attention_pairs));
+    result = saturating_add(result, saturating_product(prefill.vision_item_ns, work.vision_items));
+    result =
+        saturating_add(result, q32_product_ns(prefill.vision_patch_ns_q32, work.vision_patches));
+    return result;
+}
+
 std::uint64_t ContextMachineCostModel::transfer_batches_ns(
     std::span<const TransferBatchWork> batches) const noexcept {
     constexpr std::size_t kPhaseCount =
@@ -359,17 +370,6 @@ std::uint64_t ContextMachineCostModel::transfer_batches_ns(
         }
     }
     return total;
-}
-
-std::uint64_t ContextMachineCostModel::prefill_ns(PrefillWork work) const noexcept {
-    std::uint64_t result = saturating_product(prefill.chunk_ns, work.chunks);
-    result = saturating_add(result, q32_product_ns(prefill.token_ns_q32, work.tokens));
-    result =
-        saturating_add(result, q32_product_ns(prefill.attention_pair_ns_q32, work.attention_pairs));
-    result = saturating_add(result, saturating_product(prefill.vision_item_ns, work.vision_items));
-    result =
-        saturating_add(result, q32_product_ns(prefill.vision_patch_ns_q32, work.vision_patches));
-    return result;
 }
 
 PricedMaterializationMachineWork
@@ -433,7 +433,7 @@ std::uint64_t price_checkpoint_recovery_work(
 std::uint64_t price_context_transfer_requirements(
     const ContextMachineCostModel& model,
     std::span<const ContextTransferRequirement> requirements) noexcept {
-    CoalescedTransferWork coalesced{};
+    std::array<TransferWork, 3> coalesced{};
     for (const ContextTransferRequirement& requirement : requirements) {
         const std::size_t index = direction_index(requirement.direction);
         if (index >= coalesced.size()) { return std::numeric_limits<std::uint64_t>::max(); }

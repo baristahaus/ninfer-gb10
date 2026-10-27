@@ -1,5 +1,4 @@
 #pragma once
-#include <filesystem>
 #include "models/qwen3_8_flash_next/impl/runtime/instance.h"
 // Qwen3.8 family runtime implementation; instantiated only by exact variants.
 
@@ -90,8 +89,6 @@ struct SequencePlanningInputs {
     ContextCacheOptions context_cache;
     // Report a target-model log probability for every published generated token. Fixed at load.
     bool token_logprobs = false;
-    // Batched MTP round capture path; empty disables capture. Fixed at load.
-    std::filesystem::path mtp_capture_path;
 };
 
 } // namespace ninfer::models::qwen3_8_flash_next::detail::NINFER_QWEN38_FLASH_NEXT_RUNTIME_NS
@@ -116,7 +113,6 @@ struct SequencePlanImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT> {
     int device          = 0;
     ContextCacheOptions context_cache;
     bool token_logprobs = false;
-    std::filesystem::path mtp_capture_path;
     NINFER_QWEN38_FLASH_NEXT_RUNTIME_NS::PersistentLayout persistent;
     NINFER_QWEN38_FLASH_NEXT_RUNTIME_NS::WorkspacePlan workspace;
     std::size_t graph_allowance_bytes    = 0;

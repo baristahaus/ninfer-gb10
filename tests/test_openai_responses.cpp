@@ -5,6 +5,7 @@
 #include "serve/generation_service.h"
 #include "serve/openai_responses.h"
 #include "serve/translate.h"
+#include "serve_tool_stream_fixture.h"
 
 #include <nlohmann/json.hpp>
 
@@ -99,13 +100,13 @@ StoredOpenAIResponse stored_parent(OpenAIResponseContext context) {
 
 GenerationOutcome sample_outcome() {
     GenerationOutcome outcome;
-    outcome.text                            = "answer";
-    outcome.reasoning                       = "thought";
-    outcome.prompt_tokens                   = 11;
-    outcome.completion_tokens               = 7;
-    outcome.reasoning_tokens                = 3;
-    outcome.finish_reason                   = ninfer::FinishReason::StopToken;
-    outcome.metrics.prefix_cache_hit_tokens = 4;
+    outcome.text                       = "answer";
+    outcome.reasoning                  = "thought";
+    outcome.prompt_tokens              = 11;
+    outcome.completion_tokens          = 7;
+    outcome.reasoning_tokens           = 3;
+    outcome.finish_reason              = ninfer::FinishReason::StopToken;
+    outcome.stats.reused_prompt_tokens = 4;
     return outcome;
 }
 
@@ -152,12 +153,15 @@ int test_basic_request_and_resolution() {
                           resolved.generation.messages[0].content[0].text == "be concise" &&
                           resolved.generation.messages[1].content[0].text == "hello",
                       "instructions and current input composed in model order");
-    failures +=
-        check(resolved.session_key == "resp_current" &&
-                  resolved.cache_hints.session_key == "resp_current" &&
-                  resolved.cache_hints.retention == ninfer::CacheRetentionHint::LiveSession &&
-                  resolved.cache_hints.update_session_index,
-              "stored root response receives one live Engine session");
+    failures += check(resolved.session_key == "resp_current" &&
+                          resolved.cache_hints.session_key == "resp_current" &&
+                          resolved.cache_hints.update_session_index,
+                      "stored root response receives one live Engine session");
+    const OpenAIResponsesResolvedPrompt unstored =
+        resolve_openai_responses_prompt(request.prompt, store, "resp_unstored", false);
+    failures += check(!unstored.session_key && !unstored.cache_hints.session_key &&
+                          !unstored.cache_hints.update_session_index,
+                      "store=false root must not create or advance a named Engine session");
     return failures;
 }
 
@@ -294,6 +298,90 @@ int test_typed_items_and_cache_markers() {
                           translated.context_cache.markers[1].kind ==
                               ninfer::PromptCacheMarkerKind::SharedStablePrefix,
                       "Responses breakpoints become shared Engine part boundaries");
+    return failures;
+}
+
+int test_prompt_cache_policy_after_history_resolution() {
+    using Location = ninfer::PromptCacheMarkerLocation;
+    using Evidence = ninfer::SharedCandidateEvidence;
+    OpenAIResponsesStore store(8, 1ULL << 20);
+    const Json initial_body{
+        {"model", "m"},
+        {"input",
+         Json::array(
+             {Json{{"role", "user"},
+                   {"content",
+                    Json::array({Json{{"type", "input_text"},
+                                      {"text", "stable material"},
+                                      {"prompt_cache_breakpoint", Json{{"mode", "explicit"}}}},
+                                 Json{{"type", "input_text"}, {"text", "first question"}}})}}})}};
+    const auto initial = parse_openai_responses_create_request(initial_body, limits());
+    const auto first   = resolve_openai_responses_prompt(initial.prompt, store, "resp_first", true);
+    const auto first_prompt = to_prompt_input(first.generation, ResolvedPromptSemantics{}, {});
+    int failures            = 0;
+    failures +=
+        check(first_prompt.context_cache.markers.size() == 2 &&
+                  first_prompt.context_cache.markers[0].location == Location::MessagePartBoundary &&
+                  first_prompt.context_cache.markers[0].after_message_part_count == 1 &&
+                  first_prompt.context_cache.markers[0].evidence == Evidence::ExplicitBoundary &&
+                  first_prompt.context_cache.markers[1].location == Location::MessagePartBoundary &&
+                  first_prompt.context_cache.markers[1].after_message_part_count == 2 &&
+                  first_prompt.context_cache.markers[1].after_message_count == 1 &&
+                  first_prompt.context_cache.markers[1].evidence == Evidence::DefaultAutomatic,
+              "Responses chooses the final source part after assembling input");
+    failures += check(initial.prompt.input_turns.size() == 1 &&
+                          !initial.prompt.input_turns[0].cache_boundary_after &&
+                          initial.prompt.input_turns[0].content[0].cache_boundary_after &&
+                          !initial.prompt.input_turns[0].content[1].cache_boundary_after,
+                      "automatic writes do not modify the input history retained for storage");
+
+    auto stored_turns = initial.prompt.input_turns;
+    stored_turns.push_back(text_turn(ninfer::ChatRole::Assistant, "first answer"));
+    store.put(stored_parent(append_openai_response_context({}, std::move(stored_turns))));
+    Json followup_body{{"model", "m"},
+                       {"previous_response_id", "resp_parent"},
+                       {"instructions", "updated instruction"},
+                       {"input", "next question"}};
+    const auto followup = parse_openai_responses_create_request(followup_body, limits());
+    const auto second =
+        resolve_openai_responses_prompt(followup.prompt, store, "resp_second", true);
+    const auto second_prompt = to_prompt_input(second.generation, ResolvedPromptSemantics{}, {});
+    failures += check(
+        second_prompt.context_cache.markers.size() == 2 &&
+            second_prompt.context_cache.markers[0].location == Location::MessagePartBoundary &&
+            second_prompt.context_cache.markers[0].after_message_count == 2 &&
+            second_prompt.context_cache.markers[0].evidence == Evidence::ExplicitBoundary &&
+            second_prompt.context_cache.markers[1].location == Location::MessagePartBoundary &&
+            second_prompt.context_cache.markers[1].after_message_part_count == 1 &&
+            second_prompt.context_cache.markers[1].after_message_count == 4 &&
+            second_prompt.context_cache.markers[1].evidence == Evidence::DefaultAutomatic,
+        "previous_response_id preserves explicit history and caches only the new implicit tail");
+    const auto parent       = store.get("resp_parent");
+    const auto parent_turns = flatten_openai_response_context(parent->context);
+    failures +=
+        check(parent_turns.size() == 2 && !parent_turns[0].cache_boundary_after &&
+                  parent_turns[0].content[0].cache_boundary_after &&
+                  parent_turns[0].content[0].cache_boundary_after->evidence ==
+                      Evidence::ExplicitBoundary &&
+                  !parent_turns[0].content[1].cache_boundary_after &&
+                  !parent_turns[1].cache_boundary_after &&
+                  !parent_turns[1].content[0].cache_boundary_after &&
+                  !followup.prompt.input_turns[0].cache_boundary_after &&
+                  !followup.prompt.input_turns[0].content[0].cache_boundary_after,
+              "resolving a continuation does not inject automatic markers into stored history");
+
+    followup_body["prompt_cache_options"] = Json{{"mode", "explicit"}};
+    const auto explicit_request = parse_openai_responses_create_request(followup_body, limits());
+    const auto explicit_result =
+        resolve_openai_responses_prompt(explicit_request.prompt, store, "resp_explicit", true);
+    const auto explicit_prompt =
+        to_prompt_input(explicit_result.generation, ResolvedPromptSemantics{}, {});
+    failures += check(
+        explicit_prompt.context_cache.markers.size() == 1 &&
+            explicit_prompt.context_cache.markers[0].location == Location::MessagePartBoundary &&
+            explicit_prompt.context_cache.markers[0].after_message_count == 2 &&
+            !explicit_prompt.context_cache.allow_engine_automatic_shared_prefixes,
+        "explicit Responses mode keeps historical explicit markers without a new implicit write");
     return failures;
 }
 
@@ -538,15 +626,6 @@ int test_tools_and_effective_subset() {
                           !disabled.prompt.generation.uses_tools(),
                       "tool_choice none disables generation tools without deleting their echo");
 
-    Json required         = body;
-    required["tool_choice"] = "required";
-    const OpenAIResponsesCreateRequest required_request =
-        parse_openai_responses_create_request(required, limits());
-    failures += check(required_request.prompt.generation.tool_choice.mode == ToolChoiceMode::Required &&
-                          required_request.prompt.generation.uses_tools() &&
-                          required_request.tool_choice == "required",
-                      "tool_choice required is accepted, enables tools, and is echoed on the wire");
-
     const Json ordered = Json::parse(
         R"({"model":"m","input":"probe","tools":[{"type":"function","name":"probe","parameters":{"type":"object","properties":{"zeta":{"type":"string"},"alpha":{"type":"integer"}}}}]})");
     const OpenAIResponsesCreateRequest ordered_request =
@@ -624,11 +703,14 @@ int test_namespace_tools() {
     stream_request.stream                       = true;
     OpenAIResponsesEventStream stream("resp_namespace_stream", 1, stream_request, {});
     (void)stream.start();
+    auto tool_events                           = emit_tools(stream, outcome.tool_calls);
     const OpenAIResponsesStreamFinish streamed = stream.finish(outcome);
-    bool saw_added                             = false;
-    bool saw_done                              = false;
-    bool saw_item_done                         = false;
-    for (const std::string& wire : streamed.events_before_terminal) {
+    tool_events.insert(tool_events.end(), streamed.events_before_terminal.begin(),
+                       streamed.events_before_terminal.end());
+    bool saw_added     = false;
+    bool saw_done      = false;
+    bool saw_item_done = false;
+    for (const std::string& wire : tool_events) {
         const Json event = parse_event(wire);
         if (event.at("type") == "response.output_item.added" &&
             event.at("item").at("type") == "function_call") {
@@ -813,11 +895,10 @@ int test_previous_response_call_graph() {
 
     const OpenAIResponsesResolvedPrompt disposable =
         resolve_openai_responses_prompt(request.prompt, store, "resp_disposable", false);
-    failures +=
-        check(disposable.session_key == "responses-session" &&
-                  disposable.cache_hints.retention == ninfer::CacheRetentionHint::Disposable &&
-                  !disposable.cache_hints.update_session_index,
-              "store=false consumes parent session without advancing it");
+    failures += check(disposable.session_key == "responses-session" &&
+                          disposable.cache_hints.session_key == "responses-session" &&
+                          !disposable.cache_hints.update_session_index,
+                      "store=false consumes parent session without advancing it");
 
     Json partial     = reordered_body;
     partial["input"] = Json::array(
@@ -912,6 +993,7 @@ int test_response_object() {
               "truncation lost a completed call or hid the incomplete response");
     OpenAIResponsesEventStream stream("resp_partial_stream", 123, request, runtime);
     (void)stream.start();
+    (void)emit_tools(stream, tools.tool_calls);
     const auto finish   = stream.finish(tools);
     const auto terminal = parse_event(stream.terminal(finish.response));
     failures += check(terminal.at("type") == "response.incomplete" &&
@@ -929,8 +1011,8 @@ int test_sse_sequence_and_failures() {
     wire.insert(wire.end(), next.begin(), next.end());
     next = encoder.content_delta("ans");
     wire.insert(wire.end(), next.begin(), next.end());
-    auto outcome       = sample_outcome();
-    outcome.constraint = ninfer::ConstraintObservation{
+    auto outcome             = sample_outcome();
+    outcome.stats.constraint = ninfer::ConstraintObservation{
         .branch = ninfer::ConstraintOutputBranch::Content, .complete = true, .terminated = true};
     OpenAIResponsesStreamFinish finish = encoder.finish(outcome);
     wire.insert(wire.end(), finish.events_before_terminal.begin(),
@@ -1010,6 +1092,10 @@ int test_input_tokens_uses_shared_state_path() {
     failures += check(resolved.generation.tools.size() == 1 &&
                           resolved.generation.tools[0].name == "mcp__clock__now",
                       "input token counting uses the namespace tool translation path");
+    const auto counted_prompt = to_prompt_input(resolved.generation, ResolvedPromptSemantics{}, {});
+    failures += check(counted_prompt.context_cache.markers.empty() &&
+                          !counted_prompt.context_cache.allow_engine_automatic_shared_prefixes,
+                      "input token counting does not create automatic cache writes");
     failures += check(nlohmann::json::parse(make_openai_response_input_tokens_body(9)) ==
                           nlohmann::json{{"object", "response.input_tokens"}, {"input_tokens", 9}},
                       "input token count response shape");
@@ -1084,6 +1170,7 @@ int main() {
     failures += test_basic_request_and_resolution();
     failures += test_budgets_and_nonsemantic_hints();
     failures += test_typed_items_and_cache_markers();
+    failures += test_prompt_cache_policy_after_history_resolution();
     failures += test_contiguous_assistant_items();
     failures += test_response_output_history_round_trip();
     failures += test_assistant_item_boundaries_and_errors();

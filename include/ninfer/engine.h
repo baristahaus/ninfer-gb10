@@ -77,12 +77,6 @@ public:
     // Artifact-tokenizer raw-text encoding. No chat template or implicit special token is added.
     [[nodiscard]] std::vector<TokenId> tokenize_text(std::string_view text) const;
 
-    // The text each token id contributes, in order: the artifact tokenizer's raw bytes for one
-    // token. Concatenating the pieces reproduces the sequence's text, but one piece can begin or end
-    // inside a multi-byte character, which is why a per-token probability report pairs with its own
-    // piece rather than with the cleaned assistant text.
-    [[nodiscard]] std::vector<std::string> token_pieces(std::span<const TokenId> tokens) const;
-
     // Returns log p(tokens[i] | tokens[0..i)) for i in [first_target,tokens.size()).
     [[nodiscard]] std::vector<float> score_tokens(std::vector<TokenId> tokens,
                                                   std::uint32_t first_target);
@@ -108,17 +102,18 @@ public:
                               const CancellationView& cancellation = {});
 
     [[nodiscard]] const EngineOptions& options() const;
+    [[nodiscard]] const EngineDescription& description() const;
+    [[nodiscard]] const StartupReport& startup_report() const;
+    [[nodiscard]] EngineSnapshot snapshot() const;
+    // The LoadSummary recorded at construction: architecture, weight formats, transfer and byte
+    // totals, and the resolved context machine cost.
     [[nodiscard]] LoadSummary load_summary() const;
-    [[nodiscard]] MemorySummary memory_summary() const;
-    // SP-4: per-expert activation counts accumulated by the MoE routing stages since
-    // construction, one entry per routed-expert MoE layer in execution order. The query
-    // synchronizes the device and returns one consistent snapshot.
-    [[nodiscard]] MoeActivationProfile moe_activation_profile() const;
+    // Monotonic execution counters, boundary-consistent gauges and last decision observations.
+    // Consumers derive interval counters by subtracting two snapshots.
     [[nodiscard]] RuntimeStats runtime_stats() const;
-    [[nodiscard]] MediaCacheSummary media_cache_summary() const;
     [[nodiscard]] bool is_available() const;
 
-    void reset_memory_peaks() noexcept;
+    void reset_measurement_peaks();
 
 #if defined(NINFER_ENGINE_FAULT_INJECTION)
     // Test-only fault injection: the next worker unit rethrows the armed exception before

@@ -1,11 +1,11 @@
 #pragma once
+// Master-generation primitives. Cache hints come from the restructured layer.
+#include "ops/common/cuda/memory.cuh"
 
-#include <cuda_pipeline.h>
-#include <cuda_runtime.h>
 
 namespace ninfer::ops {
-
-enum class Cache { ca, cg };
+#include <cuda_pipeline.h>
+#include <cuda_runtime.h>
 
 template <class V, class T>
 __device__ __forceinline__ V load_vec(const T* ptr) {

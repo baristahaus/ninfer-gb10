@@ -1,38 +1,44 @@
 #pragma once
 
 #include "core/dtype.h"
+#include "core/memory.h"
 
 #include <cstdint>
 
 namespace ninfer {
 
 enum class QType : std::uint16_t {
-    Q4_G64_FP16         = 0,
-    Q5_G64_FP16         = 1,
-    Q6_G64_FP16         = 2,
-    Q8_G32_FP16         = 3,
-    BF16                = 4,
-    FP32                = 5,
-    INT32               = 6,
-    NVFP4                = 7,
-    FP8_E4M3FN_ROW_BF16 = 8,
-    FP8_E4M3FN = 9,
-    EXL3                = 10,
-    MXFP8                = 11,
+    Q4_G64_FP16                  = 0,
+    Q5_G64_FP16                  = 1,
+    Q6_G64_FP16                  = 2,
+    Q8_G32_FP16                  = 3,
+    BF16                         = 4,
+    FP32                         = 5,
+    INT32                        = 6,
+    NVFP4                        = 7,
+    FP8_E4M3FN_ROW_BF16          = 8,
+    NF4_G16_E4M3FN               = 9,
+    FP8_E4M3FN_BLOCK128X128_BF16 = 10,
+    // Raw E4M3FN payload with no per-row or per-block scale plane; the Flash-Next PLE table.
+    FP8_E4M3FN                   = 11,
+    EXL3                         = 12,
+    MXFP8                        = 13,
 };
 
 enum class QuantLayout : std::uint16_t {
-    RowSplit            = 0,
-    Contiguous          = 1,
-    BlockScaleK16M128x4 = 2,
-    RowScale            = 3,
-    ExpertBlockScaleK16M128x4 = 4,
-    Exl3ExpertBank      = 5,
-    DenseBlockScaleK32Mxfp8 = 6,
-    BlockScaleK16       = 7,
+    RowSplit                   = 0,
+    Contiguous                 = 1,
+    BlockScaleK16M128x4        = 2,
+    RowScale                   = 3,
+    RowPagedG16_4K             = 4,
+    BatchedBlockScaleK16M128x4 = 5,
+    BlockScaleM128K128         = 6,
+    Exl3ExpertBank      = 12,
+    DenseBlockScaleK32Mxfp8 = 13,
 };
 
 struct Weight {
+    Device device;
     const void* payload            = nullptr;
     std::uint64_t payload_bytes    = 0;
     std::uint64_t high_plane_bytes = 0;

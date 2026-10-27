@@ -68,19 +68,19 @@ std::size_t bf16_gdn_norm_gating_capacity_workspace_bytes(std::int32_t heads,
 
 void bf16_gdn_gating_execute_plan(const Bf16GdnGatingPlan& plan, const Tensor& x,
                                   const Weight& a_weight, const Weight& b_weight,
-                                  const Tensor& A_log, const Tensor& dt_bias, WorkspaceArena& ws,
-                                  Tensor& g, Tensor& beta, DeviceExecutionView execution);
+                                  const Tensor& A_log, const Tensor& dt_bias, MemoryArena& ws,
+                                  Tensor& g, Tensor& beta, CudaExecutionView execution);
 void bf16_gdn_gating_execute_candidate(Bf16GdnGatingScheduleId schedule, const Tensor& x,
                                        const Weight& a_weight, const Weight& b_weight,
                                        const Tensor& A_log, const Tensor& dt_bias,
-                                       WorkspaceArena& ws, Tensor& g, Tensor& beta,
-                                       DeviceExecutionView execution);
+                                       MemoryArena& ws, Tensor& g, Tensor& beta,
+                                       CudaExecutionView execution);
 void bf16_gdn_gating_dispatch(const Tensor& x, const Weight& a_weight, const Weight& b_weight,
-                              const Tensor& A_log, const Tensor& dt_bias, WorkspaceArena& ws,
-                              Tensor& g, Tensor& beta, DeviceExecutionView execution);
+                              const Tensor& A_log, const Tensor& dt_bias, MemoryArena& ws,
+                              Tensor& g, Tensor& beta, CudaExecutionView execution);
 void bf16_gdn_norm_gating_dispatch(const Tensor& x, const Tensor& norm_weight, float eps, Tensor& h,
                                    const Weight& a_weight, const Weight& b_weight,
-                                   const Tensor& A_log, const Tensor& dt_bias, WorkspaceArena& ws,
-                                   Tensor& g, Tensor& beta, DeviceExecutionView execution);
+                                   const Tensor& A_log, const Tensor& dt_bias, MemoryArena& ws,
+                                   Tensor& g, Tensor& beta, CudaExecutionView execution);
 
 } // namespace ninfer::ops::detail

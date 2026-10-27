@@ -8,7 +8,6 @@ struct StartupFeatures {
     bool vision                    = false;
     SpeculativeBackend speculative = SpeculativeBackend::None;
     ProposalHead proposal_head     = ProposalHead::Full;
-    std::uint32_t proposal_head_rows = 0;
 
     bool operator==(const StartupFeatures&) const = default;
 
@@ -30,7 +29,6 @@ struct StartupFeatures {
         .vision        = options.enable_vision,
         .speculative   = options.speculative.backend,
         .proposal_head = options.speculative.proposal_head,
-        .proposal_head_rows = options.speculative.proposal_head_rows,
     };
 }
 

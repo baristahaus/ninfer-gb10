@@ -94,7 +94,7 @@ bool overlaps(const Range& lhs, const Range& rhs) {
 
 void require_finish_nonoverlap(const Tensor& x, const Weight& projection_weight,
                                const Tensor& base_kernel, const Tensor& finish_delta,
-                               const Tensor& residual, const WorkspaceArena& workspace) {
+                               const Tensor& residual, const MemoryArena& workspace) {
     const std::size_t code_bytes =
         static_cast<std::size_t>(kHidden) * static_cast<std::size_t>(x.ne[0]);
     const std::size_t scale_bytes = static_cast<std::size_t>(kHidden) *
@@ -121,7 +121,7 @@ void require_finish_nonoverlap(const Tensor& x, const Weight& projection_weight,
 void require_nonoverlap(const Tensor& residual, const Tensor& norm_weight,
                         const Tensor& base_kernel, const Weight& kernel_projection_weight,
                         const Tensor& prepared, const Tensor& finish_delta,
-                        const WorkspaceArena& workspace) {
+                        const MemoryArena& workspace) {
     constexpr std::size_t kWeightBytes =
         static_cast<std::size_t>(kCoefficientRows) * kHidden * sizeof(std::uint16_t);
     const std::array<Range, 7> ranges{{
@@ -156,7 +156,7 @@ std::size_t rmsnorm_dynamic_grouped_conv_prepare_workspace_capacity_bytes(
 void rmsnorm_dynamic_grouped_conv_prepare(const Tensor& residual, const Tensor& norm_weight,
                                           float eps, const Tensor& base_kernel,
                                           const Weight& kernel_projection_weight, Tensor& prepared,
-                                          Tensor& finish_delta, WorkspaceArena& workspace,
+                                          Tensor& finish_delta, MemoryArena& workspace,
                                           cudaStream_t stream) {
     const std::int32_t batch_size = residual.ne[2];
     const std::int32_t width      = residual.ne[1];
@@ -196,7 +196,7 @@ std::size_t linear_dynamic_grouped_conv_add_workspace_capacity_bytes(std::int32_
 
 void linear_dynamic_grouped_conv_add(const Tensor& x, const Weight& projection_weight,
                                      const Tensor& base_kernel, const Tensor& finish_delta,
-                                     Tensor& residual, WorkspaceArena& workspace,
+                                     Tensor& residual, MemoryArena& workspace,
                                      cudaStream_t stream) {
     const std::int32_t input_rows = x.ne[0];
     const std::int32_t batch_size = x.ne[2];

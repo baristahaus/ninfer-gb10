@@ -53,7 +53,7 @@ struct FlashNextQsaWeights {
 [[nodiscard]] std::size_t flash_next_query_gate_workspace_capacity_bytes(std::int32_t tokens);
 void flash_next_project_query_gate(const Tensor& input, const Weight& query_gate,
                                    Tensor& query, Tensor& gate,
-                                   WorkspaceArena& workspace, cudaStream_t stream,
+                                   MemoryArena& workspace, cudaStream_t stream,
                                    Bf16GemmContext* bf16_gemm = nullptr);
 
 void flash_next_expand_text_positions(const Tensor& positions, Tensor& mrope_positions,
@@ -75,7 +75,7 @@ void flash_next_qsa(const Tensor& input, const Tensor& cache_positions,
                     const Tensor& table_rows, const FlashNextQsaWeights& weights,
                     PagedKVBatchLayerView cache, CausalAttentionExecutionEnvelope envelope,
                     Tensor& destination,
-                    WorkspaceArena& workspace, cudaStream_t stream,
+                    MemoryArena& workspace, cudaStream_t stream,
                     Bf16GemmContext* bf16_gemm = nullptr,
                     FlashNextQsaIndexControl index_control = {});
 

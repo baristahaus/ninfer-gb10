@@ -34,9 +34,9 @@ Fp8A8Workspace allocate_fp8_a8_workspace(Arena& arena, std::int32_t tokens,
     if (input_rows <= 0 || (input_rows % 32) != 0) {
         throw std::invalid_argument("fp8 A8 workspace: invalid K");
     }
-    const DeviceSpan codes =
+    const MemorySpan codes =
         arena.alloc_bytes(fp8_a8_checked_bytes(tokens, static_cast<std::size_t>(input_rows)), 256);
-    const DeviceSpan scales = arena.alloc_bytes(fp8_a8_checked_bytes(tokens, sizeof(float)), 256);
+    const MemorySpan scales = arena.alloc_bytes(fp8_a8_checked_bytes(tokens, sizeof(float)), 256);
     return {static_cast<std::uint8_t*>(codes.data), static_cast<float*>(scales.data)};
 }
 

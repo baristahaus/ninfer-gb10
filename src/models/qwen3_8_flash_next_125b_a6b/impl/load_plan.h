@@ -66,14 +66,8 @@ struct PlePlan {
     artifact::ParameterReference key_norm;
     artifact::ParameterReference query_norm;
     artifact::ParameterReference value_projection;
-    // Vendor FP8 recipes carry a separate table-scale object; the NVFP4 recipe's
-    // scale_2 word lives in the table payload, and this reference stays unset.
     artifact::ParameterReference embedding_scale;
     artifact::ParameterReference embedding_table;
-    bool nvfp4_table = false;
-    // The NVFP4 table's trailing FP32 scale_2 word (multiplier role); zero when
-    // the vendor FP8 recipe's separate scale object is bound instead.
-    float ple_scale2 = 0.0F;
 };
 
 struct TextLayerPlan {
@@ -151,7 +145,9 @@ struct BindingPlan {
 struct ArtifactLoadPlan {
     BindingPlan bindings;
     artifact::MappedRange ple_table;
-    artifact::MaterializationPlan materialization;
+    // Device-resident tensor objects the plan bound; callers turn them into PlacementRequests.
+    std::vector<artifact::ObjectHandle> device_objects;
+    artifact::PreparedResources materialization;
 };
 
 ArtifactLoadPlan plan_artifact(artifact::Binder& binder,

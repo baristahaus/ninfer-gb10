@@ -120,10 +120,10 @@ hf download neroued/Qwen3.6-35B-A3B-NInfer \
 ./build/apps/ninfer models/qwen3_6_35b_a3b.ninfer \
   --prompt "Explain prefill and decode in three sentences." \
   --max-context 32768 \
-  --max-new 8192 \
+  --max-tokens 8192 \
   --kv-dtype fp8 \
   --spec mtp --draft-tokens 3 \
-  --lm-head-draft
+  --proposal-head optimized
 ```
 
 For DFlash, the measured block-8 configuration uses seven draft tokens:
@@ -132,10 +132,10 @@ For DFlash, the measured block-8 configuration uses seven draft tokens:
 ./build/apps/ninfer models/qwen3_6_35b_a3b.ninfer \
   --prompt "Explain prefill and decode in three sentences." \
   --max-context 32768 \
-  --max-new 8192 \
+  --max-tokens 8192 \
   --kv-dtype fp8 \
   --spec dflash --draft-tokens 7 \
-  --lm-head-draft
+  --proposal-head optimized
 ```
 
 `--draft-tokens` accepts `1..5` for MTP and `1..15` for DFlash. The DFlash value `7` is the
@@ -156,18 +156,17 @@ For images, videos, and structured chat history, see the
   --kv-capacity 240000 \
   --max-concurrency 2 \
   --kv-dtype fp8 \
-  --device-state-slots 2 \
-  --host-state-slots 8 \
-  --host-kv-mib 8192 \
+  --extra-state-slots 2 \
   --spec mtp --draft-tokens 3 \
-  --lm-head-draft \
+  --proposal-head optimized \
   --preserve-thinking
 ```
 
-Each request has a 240,000-token logical ceiling. The shared 240,000-token Device KV pool admits
-two active requests when their combined completion reservations fit; either request may use the
-full pool while running alone. Two extra Device checkpoint slots, eight pinned Host State slots,
-and 8 GiB of pinned Host KV retain reusable continuations under resource pressure.
+Each request has a 240,000-token logical ceiling. The shared 240,000-token Device KV pool grows
+with resident execution; resource pressure can pause a request for later Snapshot or Replay
+recovery. Either request may use the full pool while running alone. Two extra Device StateImages
+and the default shared pinned Host budget (8 GiB plus eight model StateImages) retain state, KV
+and pause snapshots.
 
 See the [HTTP serving guide](https://github.com/Neroued/ninfer/blob/master/docs/serving.md) for the
 API surface and the [resource scheduling reference](https://github.com/Neroued/ninfer/blob/master/docs/maintainer/resource-scheduling-and-context-cache.md)
@@ -294,7 +293,7 @@ These are single-sample results under the stated NInfer evaluation profile, not 
 
 - NInfer executes on one RTX 5090 and one CUDA device, with a startup-fixed capacity of 1–8 active
   requests per Engine.
-- It does not provide large-scale or preemptive continuous batching, priority/QoS scheduling,
+- It does not provide large-scale continuous batching, priority/QoS scheduling,
   multi-GPU execution, CPU/GPU offload, or distributed serving.
 - Context allocation is subject to GPU memory and the selected KV-cache type.
 - NInfer does not execute generated tool calls.

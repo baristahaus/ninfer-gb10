@@ -1,61 +1,63 @@
+# Restored Flash-Next generation ops: launchers, low-level kernels and the
+# no-counterpart public wrappers. Shared semantic ops (sampling, rmsnorm, rope,
+# argmax, residual_add, ...) stay owned by the restructured ops layer; Flash-Next
+# call sites adapt to those APIs. HyperConnection and PLE kernels live in
+# gated_residual/ and ple/ in the restructured layer; the master-generation
+# launcher duplicates are not built.
+
+set(NINFER_OPS_DIR "${CMAKE_CURRENT_LIST_DIR}")
+
+# Low-level CUDA kernels for the restored ops.
+foreach(_f IN ITEMS
+    prepare_ragged_prefix.cuh prepare_masked_block.cuh vision_pos_embed.cuh)
+  if(EXISTS "${NINFER_OPS_DIR}/kernel/${_f}")
+    target_sources(ninfer_ops PRIVATE "${NINFER_OPS_DIR}/kernel/${_f}")
+  endif()
+endforeach()
+
+# Launchers for ops without a restructured-layer counterpart.
+foreach(_f IN ITEMS
+    prepare_ragged_prefix.cu prepare_masked_block.cu vision_pos_embed.cu gdn_gating.cu)
+  if(EXISTS "${NINFER_OPS_DIR}/launcher/${_f}")
+    target_sources(ninfer_ops PRIVATE "${NINFER_OPS_DIR}/launcher/${_f}")
+  endif()
+endforeach()
+
+# Master-generation target-logprobs overload (top-rank egress for the Flash-Next MTP parity
+# reports) beside the restructured reduction route. The MTP round advance and the scatter the
+# Flash-Next family programs call have no restructured-layer counterpart.
 target_sources(ninfer_ops PRIVATE
-  "${CMAKE_CURRENT_LIST_DIR}/weight_input.cpp"
-  "${CMAKE_CURRENT_LIST_DIR}/common/device_info.cu"
-  "${CMAKE_CURRENT_LIST_DIR}/launcher/add_bias.cu"
-  "${CMAKE_CURRENT_LIST_DIR}/launcher/argmax.cu"
-  "${CMAKE_CURRENT_LIST_DIR}/launcher/cast.cu"
-  "${CMAKE_CURRENT_LIST_DIR}/launcher/causal_conv1d.cu"
-  "${CMAKE_CURRENT_LIST_DIR}/launcher/embed_gather.cu"
-  "${CMAKE_CURRENT_LIST_DIR}/launcher/gdn_gating.cu"
-  "${CMAKE_CURRENT_LIST_DIR}/launcher/gelu.cu"
-  "${CMAKE_CURRENT_LIST_DIR}/launcher/l2norm.cu"
-  "${CMAKE_CURRENT_LIST_DIR}/launcher/layer_norm.cu"
-  "${CMAKE_CURRENT_LIST_DIR}/launcher/mtp_pack.cu"
-  "${CMAKE_CURRENT_LIST_DIR}/launcher/mtp_round.cu"
-  "${CMAKE_CURRENT_LIST_DIR}/launcher/speculative_round.cu"
-  "${CMAKE_CURRENT_LIST_DIR}/launcher/position.cu"
-  "${CMAKE_CURRENT_LIST_DIR}/launcher/prepare_ragged_prefix.cu"
-  "${CMAKE_CURRENT_LIST_DIR}/launcher/prepare_masked_block.cu"
-  "${CMAKE_CURRENT_LIST_DIR}/launcher/residual_add.cu"
-  "${CMAKE_CURRENT_LIST_DIR}/launcher/rmsnorm.cu"
-  "${CMAKE_CURRENT_LIST_DIR}/launcher/rmsnorm_pack_tail.cu"
-  "${CMAKE_CURRENT_LIST_DIR}/launcher/rope.cu"
-  "${CMAKE_CURRENT_LIST_DIR}/launcher/sampling.cu"
-  "${CMAKE_CURRENT_LIST_DIR}/launcher/scalar.cu"
-  "${CMAKE_CURRENT_LIST_DIR}/launcher/scatter.cu"
-  "${CMAKE_CURRENT_LIST_DIR}/launcher/sigmoid_gate_mul.cu"
-  "${CMAKE_CURRENT_LIST_DIR}/launcher/silu_and_mul.cu"
-  "${CMAKE_CURRENT_LIST_DIR}/launcher/target_logprobs.cu"
-  "${CMAKE_CURRENT_LIST_DIR}/launcher/vision_pos_embed.cu"
-  "${CMAKE_CURRENT_LIST_DIR}/wrapper/add_bias.cpp"
-  "${CMAKE_CURRENT_LIST_DIR}/wrapper/argmax.cpp"
-  "${CMAKE_CURRENT_LIST_DIR}/wrapper/cast.cpp"
-  "${CMAKE_CURRENT_LIST_DIR}/wrapper/causal_conv1d_silu.cpp"
-  "${CMAKE_CURRENT_LIST_DIR}/wrapper/embedding.cpp"
-  "${CMAKE_CURRENT_LIST_DIR}/wrapper/gdn_gating.cpp"
-  "${CMAKE_CURRENT_LIST_DIR}/wrapper/gelu.cpp"
-  "${CMAKE_CURRENT_LIST_DIR}/wrapper/l2norm.cpp"
-  "${CMAKE_CURRENT_LIST_DIR}/wrapper/layer_norm.cpp"
-  "${CMAKE_CURRENT_LIST_DIR}/wrapper/mtp_pack.cpp"
-  "${CMAKE_CURRENT_LIST_DIR}/wrapper/mtp_round.cpp"
-  "${CMAKE_CURRENT_LIST_DIR}/wrapper/speculative_round.cpp"
-  "${CMAKE_CURRENT_LIST_DIR}/wrapper/position.cpp"
-  "${CMAKE_CURRENT_LIST_DIR}/wrapper/prepare_ragged_prefix.cpp"
-  "${CMAKE_CURRENT_LIST_DIR}/wrapper/prepare_masked_block.cpp"
-  "${CMAKE_CURRENT_LIST_DIR}/wrapper/residual_add.cpp"
-  "${CMAKE_CURRENT_LIST_DIR}/wrapper/rmsnorm.cpp"
-  "${CMAKE_CURRENT_LIST_DIR}/wrapper/rmsnorm_pack_tail.cpp"
-  "${CMAKE_CURRENT_LIST_DIR}/wrapper/rope.cpp"
-  "${CMAKE_CURRENT_LIST_DIR}/wrapper/sampling.cpp"
-  "${CMAKE_CURRENT_LIST_DIR}/wrapper/scalar.cpp"
-  "${CMAKE_CURRENT_LIST_DIR}/wrapper/scatter.cpp"
-  "${CMAKE_CURRENT_LIST_DIR}/wrapper/sigmoid_mul.cpp"
-  "${CMAKE_CURRENT_LIST_DIR}/wrapper/silu_mul.cpp"
-  "${CMAKE_CURRENT_LIST_DIR}/wrapper/target_logprobs.cpp"
-  "${CMAKE_CURRENT_LIST_DIR}/wrapper/vision_pos_embed.cpp"
+  "${NINFER_OPS_DIR}/wrapper/target_logprobs.cpp"
+  "${NINFER_OPS_DIR}/launcher/target_logprobs.cu"
+  "${NINFER_OPS_DIR}/kernel/target_logprobs.cuh"
+  "${NINFER_OPS_DIR}/wrapper/mtp_round.cpp"
+  "${NINFER_OPS_DIR}/launcher/mtp_round.cu"
+  "${NINFER_OPS_DIR}/wrapper/scatter.cpp"
+  "${NINFER_OPS_DIR}/launcher/scatter.cu"
+  "${NINFER_OPS_DIR}/wrapper/speculative_round.cpp"
+  "${NINFER_OPS_DIR}/launcher/speculative_round.cu"
+  "${NINFER_OPS_DIR}/wrapper/mtp_pack.cpp"
+  "${NINFER_OPS_DIR}/launcher/mtp_pack.cu"
+  "${NINFER_OPS_DIR}/wrapper/position.cpp"
+  "${NINFER_OPS_DIR}/launcher/position.cu"
+  "${NINFER_OPS_DIR}/wrapper/argmax.cpp"
+  "${NINFER_OPS_DIR}/launcher/argmax.cu")
+
+# Public wrappers for the same no-counterpart ops.
+foreach(_f IN ITEMS
+    prepare_ragged_prefix.cpp prepare_masked_block.cpp vision_pos_embed.cpp
+    gdn_gating.cpp)
+  target_sources(ninfer_ops PRIVATE "${NINFER_OPS_DIR}/wrapper/${_f}")
+endforeach()
+
+# Restored Flash-Next BF16 bank kernels (expert-major grouped GEMM/GEMV routes).
+file(GLOB _ninfer_fn_bf16_sources "${NINFER_OPS_DIR}/linear/bf16/flash_next/*.cu")
+target_sources(ninfer_ops PRIVATE ${_ninfer_fn_bf16_sources})
+# Master-generation HyperConnection entry points (stream and stream+Bf16GemmContext forms); the
+# Flash-Next family and its qualification tests call these directly.
+target_sources(ninfer_ops PRIVATE
+  "${NINFER_OPS_DIR}/launcher/hyperconnection.cu"
+  "${NINFER_OPS_DIR}/launcher/flash_next_ple.cu"
+  "${NINFER_OPS_DIR}/launcher/flash_next_ple_stage.cu"
+  "${NINFER_OPS_DIR}/linear_attention/flash_next_gdn.cu"
 )
-
-target_sources(ninfer_ops PRIVATE "${CMAKE_CURRENT_LIST_DIR}/launcher/hyperconnection.cu")
-
-target_sources(ninfer_ops PRIVATE "${CMAKE_CURRENT_LIST_DIR}/launcher/flash_next_ple.cu")
-target_sources(ninfer_ops PRIVATE "${CMAKE_CURRENT_LIST_DIR}/launcher/flash_next_ple_stage.cu")

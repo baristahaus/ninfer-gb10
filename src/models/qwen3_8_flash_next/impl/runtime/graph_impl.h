@@ -14,7 +14,7 @@ void run_prepared(Context& state, DecodeGraphExecutable* executable, Body&& body
         if (!executable->ready()) {
             throw std::logic_error("decode graph was not prepared at load time");
         }
-        executable->launch(state.execution.device.stream);
+        executable->launch(state.execution.device.stream());
     } else {
         nvtx::ScopedRange eager_range(nvtx::Name::DecodeEager, nvtx::Category::Decode);
         body();
@@ -24,7 +24,7 @@ void run_prepared(Context& state, DecodeGraphExecutable* executable, Body&& body
 template <class Context, class Body>
 void capture_graph(Context& state, DecodeGraphDefinition& definition, Body&& body) {
     state.execution.work.reset();
-    definition.capture(state.execution.device.stream, body);
+    definition.capture(state.execution.device.stream(), body);
 }
 
 } // namespace

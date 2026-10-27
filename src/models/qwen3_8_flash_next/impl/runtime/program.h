@@ -3,6 +3,7 @@
 // Qwen3.8 family runtime implementation; instantiated only by exact variants.
 
 #include "core/arena.h"
+#include "core/buffer.h"
 #include "core/gdn_replay_records.h"
 #include "core/host_kv_arena.h"
 #include "ninfer/ops/gdn_replay.h"
@@ -16,7 +17,6 @@
 #include "models/qwen3_8_flash_next/impl/runtime/dflash_context.h"
 #include "models/qwen3_8_flash_next/impl/runtime/host_kv_extent_store.h"
 #include "models/qwen3_8_flash_next/impl/runtime/logical_kv_store.h"
-#include "models/qwen3_8_flash_next/impl/runtime/mtp_capture.h"
 #include "models/qwen3_8_flash_next/impl/runtime/state_image_store.h"
 #include "models/qwen3_8_flash_next/impl/runtime/prefix_identity.h"
 #include "models/qwen3_8_flash_next/impl/runtime/resource_projection.h"
@@ -663,9 +663,9 @@ public:
     const std::size_t graph_allowance_bytes;
     const WorkspacePlan workspace_plan;
 
-    DeviceArena persistent;
-    DeviceArena workspace_storage;
-    WorkspaceArena work;
+    MemoryArena persistent;
+    MemoryArena workspace_storage;
+    MemoryArena work;
     std::unique_ptr<ops::Bf16GemmContext> bf16_gemm;
     std::unique_ptr<qwen3_8_flash_next::DecoderState> decoder;
     std::unique_ptr<HostKVArena> host_kv_arena;
@@ -684,9 +684,6 @@ public:
     std::optional<ops::GdnReplayFoldPlan> replay_fold;
     std::optional<DFlashPersistentState> dflash;
     qwen3_8_flash_next::RoundState io;
-    // Batched MTP round capture, opened when the engine was loaded with a capture path.
-    std::unique_ptr<qwen3_8_flash_next::detail::MtpCaptureSink> mtp_capture;
-    std::uint64_t mtp_capture_round = 0;
     Tensor prefill_hidden;
     std::optional<Tensor> mtp_prefill_hidden;
     std::optional<Tensor> flash_decode_ple;

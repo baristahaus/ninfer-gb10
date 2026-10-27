@@ -21,16 +21,11 @@ def describe(objects):
             continue
         bindings[name] = {"object": name}
         if obj["layout"] == "expert_block_scale_k16_m128x4_v1":
-            input_divisors = name + "_input_divisors"
-            weight_divisors = name + "_weight_divisors"
-            if input_divisors in names:
-                uses.append({"parameter": name, "input": name + "/input", "activation_policy": "AllowA4",
-                             "auxiliaries": {"activation_divisor": {"object": input_divisors}}})
-            elif weight_divisors in names:
-                uses.append({"parameter": name, "input": name + "/input", "activation_policy": "AllowA16",
-                             "auxiliaries": {"weight_divisor": {"object": weight_divisors}}})
-            else:
-                raise ValueError(f"{name}: missing bank divisors")
-        elif len(obj["shape"]) >= 2 and obj["format"] != "fp8_e4m3fn" and obj["layout"] != "block_scale_k16_v1":
+            auxiliary = name + "_input_divisors"
+            if auxiliary not in names:
+                raise ValueError(f"{name}: missing activation divisors")
+            uses.append({"parameter": name, "input": name + "/input", "activation_policy": "AllowA4",
+                         "auxiliaries": {"activation_divisor": {"object": auxiliary}}})
+        elif len(obj["shape"]) >= 2 and obj["format"] != "fp8_e4m3fn":
             uses.append({"parameter": name, "input": name + "/input", "activation_policy": "A16Only"})
     return {"components": components, "bindings": bindings, "uses": uses}

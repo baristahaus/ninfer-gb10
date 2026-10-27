@@ -19,8 +19,7 @@
 //   res-rows-again same rows as res-rows, now resident (sanity: must match res-rows)
 //
 // Build (no libcuda link needed):
-//   nvcc -O3 -std=c++17 -arch=sm_120a tools/gb10/file_page_probe.cu -o file_page_probe
-//   (RTX 5090 box; use sm_121a on GB10)
+//   nvcc -O3 -std=c++17 -arch=sm_121a tools/gb10/file_page_probe.cu -o file_page_probe
 
 #include <cuda_runtime.h>
 

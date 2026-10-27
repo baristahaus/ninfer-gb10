@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Unified-memory probe: builds tools/gb10/memory_probe.cu for the local device's arch and runs it. Writes
+# Unified-memory probe: builds tools/gb10/memory_probe.cu for sm_121a and runs it. Writes
 # profiles/bench/gb10/probe/summary.md, which report.sh includes.
 # Needs no model. When ART is set (in the environment or tools/gb10/config.local.sh) and names
 # the Flash-Next artifact, it also copies 64 MiB of each decode-path weight class out of it and
@@ -30,8 +30,7 @@ else
 fi
 
 echo "[gb10] building memory probe" >&2
-ARCH=${NINFER_CUDA_ARCH:-$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader,nounits | head -1 | tr -d .)a}
-"$NVCC" -O3 -std=c++17 -arch="sm_${ARCH}" tools/gb10/memory_probe.cu -o "$dir/memory_probe"
+"$NVCC" -O3 -std=c++17 -arch=sm_121a tools/gb10/memory_probe.cu -o "$dir/memory_probe"
 echo "[gb10] running memory probe" >&2
 "$dir/memory_probe" "${samples[@]}" "$@" | tee "$dir/summary.md"
 echo "[gb10] summary: $dir/summary.md" >&2

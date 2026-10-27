@@ -77,7 +77,7 @@ DecoderStateLayout plan_decoder_state(LayoutBuilder& builder, const DecoderState
     return layout;
 }
 
-PagedKVCache::PagedKVCache(DeviceSpan backing, const PagedKVCacheLayout& layout)
+PagedKVCache::PagedKVCache(MemorySpan backing, const PagedKVCacheLayout& layout)
     : pages_(backing, layout.pages), execution_tables_(backing, layout.execution_tables, pages_),
       layers_(layout.layers), max_context_(layout.max_context), kv_heads_(layout.kv_heads),
       layer_storage_(layout.layer_storage), auxiliary_planes_(layout.auxiliary_planes) {
@@ -126,10 +126,10 @@ PagedKVLayerView PagedKVCache::layer_view(std::uint32_t layer, Tensor block_tabl
         .k_scale_pages = layer_storage_.key.has_scale() ? pages_.plane(k_scale_index) : Tensor(),
         .v_scale_pages = layer_storage_.value.has_scale() ? pages_.plane(v_scale_index) : Tensor(),
         .block_table   = block_table,
-        .auxiliary_pages = std::move(auxiliary),
         .head_dim        = layer_storage_.head_dim,
         .num_kv_heads    = kv_heads_,
         .storage         = layer_storage_.storage,
+        .auxiliary_pages = std::move(auxiliary),
     };
 }
 
@@ -141,10 +141,10 @@ PagedKVBatchLayerView PagedKVCache::batch_layer_view(std::uint32_t layer) const 
         .k_scale_pages   = direct.k_scale_pages,
         .v_scale_pages   = direct.v_scale_pages,
         .block_tables    = execution_tables_.matrix(),
-        .auxiliary_pages = direct.auxiliary_pages,
         .head_dim        = direct.head_dim,
         .num_kv_heads    = direct.num_kv_heads,
         .storage         = direct.storage,
+        .auxiliary_pages = direct.auxiliary_pages,
     };
 }
 
@@ -152,7 +152,7 @@ std::size_t DecoderStateLayout::kv_payload_bytes() const noexcept {
     return text_kv.payload_bytes() + (mtp_kv ? mtp_kv->payload_bytes() : 0);
 }
 
-DecoderState::DecoderState(DeviceSpan backing, const DecoderStateLayout& layout)
+DecoderState::DecoderState(MemorySpan backing, const DecoderStateLayout& layout)
     : text_kv(backing, layout.text_kv) {
     if (layout.mtp_kv) { mtp_kv.emplace(backing, *layout.mtp_kv); }
 }

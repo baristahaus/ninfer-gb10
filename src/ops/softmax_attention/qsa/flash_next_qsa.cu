@@ -1,10 +1,4 @@
 #include "ninfer/ops/flash_next_qsa.h"
-#include <atomic>
-
-extern std::atomic<int> ninfer_mtp_phase;
-extern std::atomic<int> ninfer_moe_parity_window;
-#include <cstdio>
-#include <cstdlib>
 
 #include "ops/flash_next_work.h"
 
@@ -1588,7 +1582,7 @@ std::size_t flash_next_query_gate_workspace_capacity_bytes(std::int32_t tokens) 
 
 void flash_next_project_query_gate(const Tensor& input, const Weight& query_gate,
                                    Tensor& query, Tensor& gate,
-                                   WorkspaceArena& workspace, cudaStream_t stream,
+                                   MemoryArena& workspace, cudaStream_t stream,
                                    Bf16GemmContext* bf16_gemm) {
     const int tokens = input.ne[1];
     if (input.dtype != DType::BF16 || !input.is_contiguous() || input.ne[0] != 2560 ||
@@ -1599,8 +1593,8 @@ void flash_next_project_query_gate(const Tensor& input, const Weight& query_gate
     }
     require_weight(query_gate, 12288, 2560,
                    "flash_next_project_query_gate: invalid packed weight",
-                   WeightFormats::Bf16Fp8OrMxfp8);
-    if (tokens == 1 && (fp8_row_weight(query_gate) || query_gate.qtype == QType::BF16)) {
+                   WeightFormats::Bf16OrFp8);
+    if (tokens == 1) {
         if (fp8_row_weight(query_gate)) {
             detail::flash_next::launch_fp8_query_gate_decode(input, query_gate, query, gate,
                                                              stream);
@@ -1626,7 +1620,7 @@ void flash_next_qsa(const Tensor& input, const Tensor& cache_positions,
                     const Tensor& table_rows, const FlashNextQsaWeights& weights,
                     PagedKVBatchLayerView cache, CausalAttentionExecutionEnvelope envelope,
                     Tensor& destination,
-                    WorkspaceArena& workspace, cudaStream_t stream,
+                    MemoryArena& workspace, cudaStream_t stream,
                     Bf16GemmContext* bf16_gemm,
                     FlashNextQsaIndexControl index_control) {
     NINFER_PERF_SCOPE(index_control.reused_indices != nullptr ? "qsa.reuse" : "qsa.select",
@@ -1688,20 +1682,23 @@ void flash_next_qsa(const Tensor& input, const Tensor& cache_positions,
         cache.auxiliary_pages[0].ne[0] != kIndexDim ||
         cache.auxiliary_pages[1].dtype != DType::I32 ||
         cache.auxiliary_pages[1].ne[0] != 3) {
-        throw std::invalid_argument("flash_next_qsa: invalid auxiliary cache geometry");
+        std::ostringstream message;
+        message << "flash_next_qsa: invalid auxiliary cache geometry: count="
+                << cache.auxiliary_pages.size();
+        for (const auto& page : cache.auxiliary_pages) {
+            message << " [dtype=" << static_cast<int>(page.dtype) << " shape=[" << page.ne[0]
+                    << ',' << page.ne[1] << ',' << page.ne[2] << ',' << page.ne[3] << "]]";
+        }
+        throw std::invalid_argument(message.str());
     }
     require_weight(weights.query_gate, 12288, 2560,
-                   "flash_next_qsa: invalid packed query/gate weight", WeightFormats::Bf16Fp8OrMxfp8);
-    require_weight(weights.key, 512, 2560, "flash_next_qsa: invalid key weight",
-                   WeightFormats::Bf16Fp8OrMxfp8);
-    require_weight(weights.value, 512, 2560, "flash_next_qsa: invalid value weight",
-                   WeightFormats::Bf16Fp8OrMxfp8);
+                   "flash_next_qsa: invalid packed query/gate weight", WeightFormats::Bf16OrFp8);
+    require_weight(weights.key, 512, 2560, "flash_next_qsa: invalid key weight");
+    require_weight(weights.value, 512, 2560, "flash_next_qsa: invalid value weight");
     require_weight(weights.output, 2560, 6144, "flash_next_qsa: invalid output weight",
-                   WeightFormats::Bf16Fp8OrMxfp8);
-    require_weight(weights.index_query, 512, 2560, "flash_next_qsa: invalid index query weight",
-                   WeightFormats::Bf16Fp8OrMxfp8);
-    require_weight(weights.index_key, 128, 2560, "flash_next_qsa: invalid index key weight",
-                   WeightFormats::Bf16Fp8OrMxfp8);
+                   WeightFormats::Bf16OrFp8);
+    require_weight(weights.index_query, 512, 2560, "flash_next_qsa: invalid index query weight");
+    require_weight(weights.index_key, 128, 2560, "flash_next_qsa: invalid index key weight");
     auto scope = workspace.scope();
     Tensor query = workspace.alloc(DType::BF16, {6144, tokens});
     Tensor gate = workspace.alloc(DType::BF16, {6144, tokens});
@@ -1734,60 +1731,9 @@ void flash_next_qsa(const Tensor& input, const Tensor& cache_positions,
     rmsnorm(query_heads, weights.query_norm, 1.0e-6F, true, normalized_query_heads, stream);
     rmsnorm(key_heads, weights.key_norm, 1.0e-6F, true, normalized_key_heads, stream);
     rope(rope_view, 64, kTheta, normalized_query_heads, normalized_key_heads, stream);
-    if (const char* dd = std::getenv("NINFER_MTP_DUMP")) {
-        static std::atomic<int> qsa_dump_n{0};
-        if (ninfer_moe_parity_window.load(std::memory_order_relaxed) != 0 &&
-                qsa_dump_n.fetch_add(1) == 0) {
-            auto qdump = [&](const char* nm, const void* p, std::size_t by) {
-                std::string path = std::string(dd) + "/" + nm + ".bin";
-                if (FILE* f = fopen(path.c_str(), "wb"); f != nullptr) {
-                    void* host = std::malloc(by);
-                    CUDA_CHECK(cudaMemcpyAsync(host, p, by, cudaMemcpyDeviceToHost, stream));
-                    CUDA_CHECK(cudaStreamSynchronize(stream));
-                    fwrite(host, 1, by, f);
-                    std::fclose(f);
-                    std::free(host);
-                }
-            };
-            qdump("q_nq", normalized_query.data, normalized_query.bytes());
-            qdump("q_nk", normalized_key.data, normalized_key.bytes());
-            qdump("q_gate", gate.data, gate.bytes());
-            qdump("q_value", value.data, value.bytes());
-            auto wdump = [&](const char* nm, const Weight& w) {
-                std::fprintf(stderr, "[qsadump] %s qtype=%d bytes=%zu n=%d k=%d\n",
-                             nm, static_cast<int>(w.qtype), w.payload_bytes, w.n, w.k);
-                const void* wptr = w.qdata != nullptr ? w.qdata : w.payload;
-                if (wptr != nullptr && w.payload_bytes > 0) {
-                    qdump(("w_" + std::string(nm) + "_q").c_str(), wptr, w.payload_bytes);
-                }
-            };
-            wdump("query_gate", weights.query_gate);
-            wdump("key", weights.key);
-            wdump("value", weights.value);
-            wdump("output", weights.output);
-            qdump("w_query_norm", weights.query_norm.data, weights.query_norm.bytes());
-            qdump("w_key_norm", weights.key_norm.data, weights.key_norm.bytes());
-        }
-    }
     if (fp8_cache) {
         hadamard_rows_kernel<<<tokens * kQueryHeads, 32, 0, stream>>>(
             static_cast<__nv_bfloat16*>(normalized_query.data), tokens * kQueryHeads);
-        if (const char* hd = std::getenv("NINFER_MTP_DUMP")) {
-            static std::atomic<int> had_dump{0};
-            if (ninfer_moe_parity_window.load(std::memory_order_relaxed) != 0 &&
-                had_dump.fetch_add(1) == 0) {
-                std::string path = std::string(hd) + "/q_hq.bin";
-                if (FILE* f = fopen(path.c_str(), "wb"); f != nullptr) {
-                    void* host = std::malloc(normalized_query.bytes());
-                    CUDA_CHECK(cudaMemcpyAsync(host, normalized_query.data, normalized_query.bytes(),
-                                               cudaMemcpyDeviceToHost, stream));
-                    CUDA_CHECK(cudaStreamSynchronize(stream));
-                    fwrite(host, 1, normalized_query.bytes(), f);
-                    std::fclose(f);
-                    std::free(host);
-                }
-            }
-        }
     }
     Tensor index_key = workspace.alloc(DType::BF16, {128, tokens});
     linear(input, weights.index_key, index_key, stream, bf16_gemm);
@@ -1937,27 +1883,6 @@ void flash_next_qsa(const Tensor& input, const Tensor& cache_positions,
         dispatch_split(indices, static_cast<float*>(partial_maximum.data),
                        static_cast<float*>(partial_denominator.data),
                        static_cast<float*>(partial_numerator.data), num_splits);
-        if (const char* dd = std::getenv("NINFER_MTP_DUMP"); dd != nullptr && indices == nullptr) {
-            static std::atomic<int> split_dump{0};
-            if (ninfer_moe_parity_window.load(std::memory_order_relaxed) != 0 &&
-                    split_dump.fetch_add(1) == 0) {
-                auto sdump = [&](const char* nm, const void* p, std::size_t by) {
-                    std::string path = std::string(dd) + "/" + nm + ".bin";
-                    if (FILE* f = fopen(path.c_str(), "wb"); f != nullptr) {
-                        void* host = std::malloc(by);
-                        CUDA_CHECK(cudaMemcpyAsync(host, p, by, cudaMemcpyDeviceToHost, stream));
-                        CUDA_CHECK(cudaStreamSynchronize(stream));
-                        fwrite(host, 1, by, f);
-                        std::fclose(f);
-                        std::free(host);
-                    }
-                };
-                sdump("sp_max", partial_maximum.data, partial_maximum.bytes());
-                sdump("sp_den", partial_denominator.data, partial_denominator.bytes());
-                sdump("sp_num", partial_numerator.data, partial_numerator.bytes());
-                std::fprintf(stderr, "[qsa-split] num_splits=%d tokens=%d\n", num_splits, tokens);
-            }
-        }
         reduce_selected_attention_splits_kernel<<<dim3(kQueryHeads / kReduceHeadsPerBlock, tokens),
                                                   kReduceHeadsPerBlock * 32, 0, stream>>>(
             static_cast<const float*>(partial_maximum.data),
@@ -2148,60 +2073,8 @@ void flash_next_qsa(const Tensor& input, const Tensor& cache_positions,
     }
     Tensor attention_heads = attention.view({kHeadDim, kQueryHeads, tokens});
     Tensor gate_heads = gate.view({kHeadDim, kQueryHeads, tokens});
-    if (const char* dd = std::getenv("NINFER_MTP_DUMP")) {
-        if (ninfer_moe_parity_window.load(std::memory_order_relaxed) != 0) {
-            static std::atomic<int> tail_dump{0};
-            if (tail_dump.fetch_add(1) == 0) {
-                auto tdump = [&](const char* nm, const void* p, std::size_t by) {
-                    std::string path = std::string(dd) + "/" + nm + ".bin";
-                    if (FILE* f = fopen(path.c_str(), "wb"); f != nullptr) {
-                        void* host = std::malloc(by);
-                        CUDA_CHECK(cudaMemcpyAsync(host, p, by, cudaMemcpyDeviceToHost, stream));
-                        CUDA_CHECK(cudaStreamSynchronize(stream));
-                        fwrite(host, 1, by, f);
-                        std::fclose(f);
-                        std::free(host);
-                    }
-                };
-                tdump("t_attention", attention.data, attention.bytes());
-                tdump("t_gate", gate.data, gate.bytes());
-            }
-        }
-    }
     sigmoid_mul(gate_heads, attention_heads, stream);
-    if (const char* gd = std::getenv("NINFER_MTP_DUMP")) {
-        static std::atomic<int> gated_dump{0};
-        if (ninfer_moe_parity_window.load(std::memory_order_relaxed) != 0 &&
-            gated_dump.fetch_add(1) == 0) {
-            std::string path = std::string(gd) + "/t_gated.bin";
-            if (FILE* f = fopen(path.c_str(), "wb"); f != nullptr) {
-                void* host = std::malloc(attention.bytes());
-                CUDA_CHECK(cudaMemcpyAsync(host, attention.data, attention.bytes(),
-                                           cudaMemcpyDeviceToHost, stream));
-                CUDA_CHECK(cudaStreamSynchronize(stream));
-                fwrite(host, 1, attention.bytes(), f);
-                std::fclose(f);
-                std::free(host);
-            }
-        }
-    }
     linear(attention, weights.output, destination, stream, bf16_gemm);
-    if (const char* gd = std::getenv("NINFER_MTP_DUMP")) {
-        static std::atomic<int> dest_dump{0};
-        if (ninfer_moe_parity_window.load(std::memory_order_relaxed) != 0 &&
-            dest_dump.fetch_add(1) == 0) {
-            std::string path = std::string(gd) + "/t_dest.bin";
-            if (FILE* f = fopen(path.c_str(), "wb"); f != nullptr) {
-                void* host = std::malloc(destination.bytes());
-                CUDA_CHECK(cudaMemcpyAsync(host, destination.data, destination.bytes(),
-                                           cudaMemcpyDeviceToHost, stream));
-                CUDA_CHECK(cudaStreamSynchronize(stream));
-                fwrite(host, 1, destination.bytes(), f);
-                std::fclose(f);
-                std::free(host);
-            }
-        }
-    }
     CUDA_CHECK(cudaGetLastError());
 }
 

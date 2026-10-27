@@ -4,10 +4,10 @@ This document defines the repository-wide rules for admitting, specifying, ownin
 qualifying, and measuring NInfer Ops. An **Op** is a semantic execution contract. A CUDA
 **kernel** is one implementation, or one stage of an implementation, of an Op.
 
-Repository-wide product scope, numerical principles, and evidence requirements remain in
-[`AGENTS.md`](../../AGENTS.md). When this document and a concrete Op contract differ about that
-Op's represented inputs, formula, supported domain, or observable effects, the contract in
-`include/ninfer/ops/` is the concrete authority and the inconsistency must be resolved.
+Repository-wide product scope and engineering policies are defined in [`AGENTS.md`](../../AGENTS.md).
+This document owns Op qualification and performance-evidence rules. When it and a concrete Op
+contract differ about that Op's represented inputs, formula, supported domain, or observable effects,
+the contract in `include/ninfer/ops/` is the concrete authority and the inconsistency must be resolved.
 
 ## 1. Scope and authorities
 
@@ -34,6 +34,40 @@ Do not add current source inventories, target geometry tables, private route thr
 migration steps, profiler command lines, or test-tool output schemas here. A family reference may
 specialize these rules but must not redefine them. Remove a migration document after its target
 state becomes the implementation and active contract.
+
+### 1.1 Design intent
+
+The Op layer should be predictable to read and pleasant to extend. A maintainer should be able to
+find the mathematical contract, implementation selector, tuned shape policy, and reusable kernel
+without reconstructing the history of the model that first needed them.
+
+- **Give every computation a clear home.** Organize source by computational family and algorithm
+  subfamily. Related independent Ops can live together; sharing a model call sequence alone does
+  not establish a family.
+- **Separate three decisions.** An Op boundary defines observable mathematics and effects; a
+  family groups related maintenance; a kernel library owns reusable computation. Neither a
+  directory nor a CUDA launch count determines the public boundary.
+- **Keep small work small.** A simple Op may fit in one CUDA source. Add files and layers when
+  they separate meaningful responsibilities, shared implementations, or compilation units.
+- **Make implementation selection easy to find.** Keep tuned choices in a selector or shape
+  policy. Launchers apply the chosen implementation's resource and tail rules. Do not scatter
+  another set of tuning decisions through the call chain.
+- **Share computation, keep tuning private.** GEMM bodies, output mappings and epilogues can be
+  shared. Each Op owns its selected schedules, shape policies and tuning cutoffs, including when
+  their current values happen to match another Op. Optimizing one Op must not silently retune its
+  siblings.
+- **Keep interfaces about use.** Explain the formula, represented operands, effects and required
+  execution resources. Keep tuning history, exact shape inventories and test implementation out
+  of public comments. Short comments that state a necessary invariant are preferable to repeated
+  explanations of what a function or file is named.
+- **Preserve useful specialization.** Explicit formats, geometries and algorithms are welcome.
+  A new use belongs in an existing semantic family when its actual computation fits. Do not add
+  model-labelled copies, universal configuration objects, virtual backends or generic Op graphs.
+
+For example, a row-segmented matrix projection belongs to Linear even when its outputs are called
+query, gate or index key by a model. Projection fused with convolution and history publication has
+additional semantics and belongs with that algorithm. Several such Ops can form a GDN or QSA
+subfamily without becoming one model-layer execution entry.
 
 ## 2. Op admission and semantic boundary
 
@@ -69,7 +103,7 @@ Classify a proposed model-callable computation in this order:
 2. If its complete transformation cannot be defined from explicit arguments and metadata, it
    belongs to model or product schedule.
 3. If it decides call order, lifecycle, frontier, commit, rollback, or request policy, it belongs
-   to Program, schedule, or runtime.
+   to Session, RankProgram, model schedule, or runtime according to ownership.
 4. If it is only a partial step beneath a complete transformation, it is a private implementation
    detail of the enclosing Op.
 5. Otherwise, admit it as an Op.
@@ -84,10 +118,9 @@ boundary is not semantically closed.
 
 ### 2.1 Boundaries outside the Op layer
 
-Program, model schedule, and runtime policy own model topology, call order, weight-role and state
-instance selection, prompt chunking, multimodal spans, generated-token transactions,
-prefix/frontier/commit/rollback policy, persistent state lifetime, CUDA Graph variants, and
-publication of product statistics.
+Session owns logical state selection, prompt windows, multimodal spans, generated-token transactions,
+and prefix/frontier policy. RankProgram and model execution compose topology, call order, physical
+state reads/writes and CUDA Graph variants. Runtime owns scheduling and publication policy.
 
 Core owns model-independent storage and execution mechanisms: tensor and weight views, checked
 layouts, arenas, physical cache containers, CUDA Graph lifetime, and raw host/device or
@@ -174,34 +207,17 @@ namespace ninfer::ops
 They are execution-layer interfaces, not a public product ABI. A header may group closely related
 operations or overloads; do not create empty families to force one function per file.
 
-Each semantic Op or closely related overload group has one authoritative contract comment using
-the applicable fields:
+Each semantic Op or closely related overload group has one authoritative comment. Its length
+follows the contract's complexity; there is no mandatory list of section headings. For example:
 
 ```cpp
 /**
- * Op: <semantic operation name>
+ * x[i] = x[i] + y[i].
  *
- * Math / indexing:
- *   <complete formula, algorithm, probability process, or index mapping>
- *
- * Logical shapes:
- *   <symbols, semantic axes, valid ranges, and layout interpretation>
- *
- * Supported domain:
- *   <dtype, numeric format, storage layout, geometry, and semantic variants>
- *
- * Numeric:
- *   <logical decode, output representation, epsilon, masking, ties, and observable boundaries>
- *
- * Effects:
- *   <outputs, old/new state, in-place writes, valid regions, and alias rules>
- *
- * Workspace:
- *   <caller-owned transient scratch requirement or none>
- *
- * Execution:
- *   <execution envelope and stream/capture requirements or none>
+ * x/y are same-shaped, contiguous, non-overlapping BF16 tensors.
+ * Updates x in place and preserves y. Empty tensors perform no device work.
  */
+void residual_add(const Tensor& y, Tensor& x, CudaExecutionView execution);
 ```
 
 The contract must be sufficient to write an independent implementation and oracle. A name such as
@@ -211,6 +227,14 @@ mapping and valid region; a stochastic contract defines its probability process 
 
 A contract may cite the authoritative tensor-format or layout reference instead of duplicating a
 registered encoding, but it still identifies the accepted format and interpretation.
+
+Keep necessary shape relationships, finite semantic capacities, dtype/layout/alignment, alias
+rules, observable numerical boundaries, valid regions, state effects and resource requirements.
+State when support is limited to registered weight geometries; the implementation's shape catalog
+owns the exact geometry list. Kernel choices for particular shapes and extents are private.
+Qualification recipes and oracle implementation belong in tests and the qualification rules below,
+not in each interface comment. Do not repeat a tensor's description in both prose and parameter
+tags, or repeat a complete formula for a capacity query or closely related overload.
 
 The contract describes behavior shared by every implementation. It must not freeze:
 
@@ -225,61 +249,129 @@ The contract describes behavior shared by every implementation. It must not free
 Workspace sizing helpers and related overloads refer to the same contract rather than repeating
 its formula.
 
-## 4. Implementation ownership
+## 4. Implementation organization
 
-Every Op follows one responsibility chain:
+Organize implementations under `src/ops/<family>/` and meaningful algorithm subdirectories.
+Entries, selectors, launchers and kernels belong to their semantic family; do not create
+global `wrapper/`, `launcher/`, or `kernel/` directories.
 
-```text
-semantic contract
-       |
-       v
-wrapper: validation, workspace scope, finite dispatch
-       |
-       v
-launcher: private CUDA launch policy
-       |
-       v
-kernel: device implementation
-```
+### 4.1 Responsibilities and selection
 
-The default horizontal layout uses `src/ops/{wrapper,launcher,kernel}`. A semantically closed family
-with several routes or stages may instead own a vertical `src/ops/<category>/<family>/` subtree.
-Physical layout does not change the contract boundary or dependency direction. Do not create empty
-source layers merely to mirror this model.
+| Part | Responsibility |
+|---|---|
+| Semantic entry | Validate and interpret operands; scope caller workspace; invoke the implementation. |
+| Selector | Choose an implementation from format, geometry, extent, semantic variant, envelope and device facts. |
+| Shape policy | Own a particular geometry's tuned instances and selection boundaries. |
+| Launcher | Bind arguments, instantiate templates, calculate grid/block/shared memory, handle launch limits and errors. |
+| Kernel | Compute values and state effects, move data, synchronize and write outputs. |
 
-### 4.1 Wrapper
+These are responsibilities, not a requirement for five files. Use `select_*` for implementation
+selection, `*_dispatch` for format/geometry routing, and `launch_*` for submitting a selected
+implementation. A single-stage selector can return a typed launcher. A multi-stage selector can
+return a small family-private Plan containing the selected stages and resource facts. Pass resolved
+choices to allocation and launch instead of repeating the same selection downstream. Capacity
+queries and execution must consume the same selection and allocation rules.
 
-The wrapper owns:
+Runtime selection depends on actual operands and execution facts, never target keys, artifact names,
+converter fields, model roles, model execution phases or arbitrary registry strings. A launcher may
+specialize full tiles versus tails and obey CUDA grid limits; performance policy belongs in the
+selector. Device-resident per-row lengths stay Device inputs under the Op's capture contract.
 
-- semantic dtype, rank, shape, layout, alignment, scalar, configuration, and state validation;
-- the call-scoped workspace scope;
-- finite implementation selection from semantic variant, format, geometry, extent, state dtype,
-  execution envelope, and supported device capability;
-- invocation of the selected launcher or a composed fallback.
+### 4.2 Implementation examples
 
-The wrapper must not dispatch on target key, artifact tensor name, converter field, model weight
-role, Program phase, or arbitrary registry string. It does not own persistent state, allocate
-hidden device memory, capture graphs, or choose model call order.
+- **Compact Op:** [elementwise](../../src/ops/elementwise/sources.cmake) keeps each small Op's
+  entry, selection, launch and private kernels together in one `.cu`. Use an anonymous namespace
+  for local implementation. Extract a `.cuh` only when there is an actual template-sharing or
+  source-size reason; do not create forwarding headers and empty plan types.
+- **Templated family:** [RMSNorm](../../src/ops/normalization/rmsnorm/sources.cmake) has semantic entries,
+  operand validation, one dispatch owner, launch bindings and shared kernel bodies. Ordinary,
+  offset and gated mathematical forms share appropriate reductions and epilogues. Tuned dimension
+  and workload cutoffs live in dispatch, not in the launch bindings.
+- **Large family:** [Linear](../../src/ops/linear/sources.cmake) keeps computation and template
+  launch support in `kernels/<format>/`. Ordinary Linear owns `projection/`; LinearSplit owns
+  [split/](../../src/ops/linear/split/sources.cmake). Each has its own entry, format dispatch, shape
+  policies and launch bindings. Their contraction templates are shared, while selected schedules
+  and cutoffs remain private even when identical. Distinct fused Ops follow the same ownership
+  rule. Activation preparation and reduction stages remain private to the Op.
+- **Multi-stage Op:** [Sampling](../../src/ops/sampling/sources.cmake) gives sampling and acceptance
+  their own entries and plans while sharing distribution kernels. [MoE](../../src/ops/moe/sources.cmake)
+  gives routing, routed SwiGLU and complete routed/shared MoE separate semantic entries and
+  private shape policies. The complete Op composes shared kernel mechanisms without requiring
+  intermediate public calls or outputs. Grouping, scratch maps and stage launchers stay private.
+- **Algorithm subfamily:** GDN controls, fused input convolution, recurrence and replay belong
+  together within [LinearAttention](../../src/ops/linear_attention/sources.cmake). QSA preparation,
+  indexing, sparse attention and tail handling form a [SoftmaxAttention subfamily](../../src/ops/softmax_attention/qsa/sources.cmake).
+  Shared views connect independent Op interfaces. Model call order and persistent-state ownership
+  remain outside these subtrees; pure projections belong to Linear.
 
-### 4.2 Launcher
+New weight geometries extend the corresponding projection catalog and shape policy. A new
+contraction pipeline extends the format's kernel library. A new mathematical fusion first gets an
+explicit semantic boundary and then reuses suitable kernels at their output boundary. Do not make
+different Ops share a tuning table or include a sibling's private shape policy.
 
-The launcher owns private launch declarations and host definitions, grid/block/shared-memory
-policy, template instantiation, and launch-error handling. Launcher headers are private:
-contract headers, models, product code, permanent tests, and public benchmarks do not include
-them.
+### 4.3 Shared computation and compilation
 
-### 4.3 Kernel and common facilities
+Private launch headers, selectors and kernel templates are not included by models, contract
+headers, product code, mathematical qualification tests or public benchmarks. The owning suite
+may use the contract-specified execution as an exact-equivalence reference described in §6.1.
+Every kernel assumption has a matching admission or launch predicate. An Op never infers it from
+model identity.
 
-The kernel layer owns `__global__` functions and Op-local `__device__` computation. A kernel may
-encode exact shape, format, SM capability, tiling, padding, and alignment assumptions. Every
-assumption has a matching wrapper or launcher predicate and is never inferred from model identity.
+`src/ops/common/` owns the shared implementation foundation:
 
-`src/ops/common/` and category-private common code contain narrow zero-cost arithmetic, memory,
-warp, and MMA facilities. They are not a second semantic catalog and are not included by models.
+- `numeric/`: scalar arithmetic, explicit approximation profiles, represented-value conversions
+  and vector types;
+- `cuda/`: memory instructions, reductions and ordering, MMA, asynchronous pipelines and
+  shared-memory storage;
+- `quant/`: packed-format decoding, encoding and explicit scale/rounding profiles;
+- `host/`: operand checks, represented-weight validation and launch resource configuration;
+- `cpu/`: ISA-specific vector conversions, reductions and packed-weight decoding; included only
+  by compilation units built for that ISA.
 
-A family may share private launch or computation bodies across related Ops. Each owning Op still
-defines its output mapping, observable fusion boundary, validation, and dispatch; sharing does not
-create a model-callable private backend.
+Keep small companion facilities together: vector types with conversions, cache policy and swizzles
+with memory operations, and asynchronous copy with its synchronization. Split a header for a real
+dependency boundary, independent use or substantial implementation size, not for each helper.
+
+These facilities depend only on core, CUDA and other shared facilities, never on an Op family.
+Include the specific facility directly. Do not add a family-local forwarding `math` or `utils`
+header, duplicate a generic primitive, or put selected schedules and tuning cutoffs in this layer.
+Core remains the authority for storage types, layout contracts and codebooks. Device codecs must
+keep format interpretation separate from matrix-tile or paged-cache addressing. Quantization
+profiles with different scale bounds, divisors or rounding boundaries remain explicit.
+
+Family kernel libraries own reusable algorithms, tile assembly, output mappings and epilogues.
+When several routes share a computation, place it in that library rather than making one route
+depend on a sibling's private implementation.
+For example, an E4M3 conversion belongs to shared numeric/format support; a GEMM pipeline belongs
+to Linear. Sharing either does not introduce a model-callable private backend or an intermediate
+numerical boundary. The consuming Op chooses its arithmetic profile and tuned implementation.
+
+Preserve per-shape compilation units and explicit template ownership. File organization must not
+silently change RDC mode, architecture, compiler precision options or device-link ownership.
+
+### 4.4 Execution-target ownership
+
+The build selects one native execution target; see [Build system](build-system.md). Keep the
+mathematical interface and caller-owned resources independent of that selection. A small portable
+Op stays in its existing source. Split only where target-specific dispatch, instantiation or launch
+requirements need independent ownership; not every family needs platform subdirectories.
+
+Within an affected Op, `rtx5090/` and `dgx_spark/` own their private shape catalogs, schedules and
+launch bindings. CMake includes the selected source manifest. Shared kernel templates, codecs,
+operand contracts and mathematical oracles remain outside those directories when useful to both.
+Each target owns its tuning independently. The compiled Op defines its supported inputs;
+workspace queries and execution use the same admission rules and report unsupported calls there.
+
+Keep a compatible implementation shared until a target actually needs independent selection or
+launch policy. Creating target directories must not remove an existing supported route. Workspace
+layout consumes the selected implementation's scratch extents; public interfaces remain independent
+of platform selection.
+
+For small compile-time differences, explicitly include `core/platform.h` and use its target or
+capability macros according to the fact being tested. Keep substantial selectors in target-owned
+sources rather than scattering preprocessor branches across kernels. Hardware reference values
+for benchmarks live in `bench/common/roofline.h`; executed arithmetic and tuning decisions remain
+with the affected Op/benchmark. A missing hardware reference leaves the derived utilization empty.
 
 ## 5. State, workspace, naming, and dependencies
 
@@ -298,15 +390,34 @@ supported native overload, checking its parent geometry, format, layout and shap
 [`weight_input.h`](../../include/ninfer/ops/weight_input.h). Model execution composes the prepared
 Ops; resource queries and execution check their applicable contracts.
 
-Program owns persistent state instances and lifetime; core owns model-independent physical
-containers; an Op owns only the documented reads, writes, outputs, and state transition of one
-call.
+Session's context directory owns logical state identities, allocations and retention. RankProgram
+owns the fixed physical backing and its execution lifetime; Core owns model-independent storage
+mechanisms. An Op owns only the documented reads, writes, outputs, and state transition of one call.
+
+CUDA entries receive the `CudaExecutionView` propagated from the owning `DeviceContext`.
+Validate operand residency with the family's existing shape/layout checks, including active
+optional planes and workspace. Thin overloads delegate to that complete validation. Private
+launchers may receive the extracted stream; a composing Op forwards the execution view.
+Raw device pointers in explicit CUDA descriptors belong to that same execution device and remain
+the caller's lifetime responsibility. No entry infers execution from an operand or queries CUDA
+pointer attributes on the launch path.
+
+CPU entries receive `CpuExecutionView` from the owning fixed `CpuExecutor` and borrow CPU tensors,
+native weight banks and caller scratch until synchronous return. Select ISA implementations using
+the bound workers' common features. Keep advanced ISA flags local to kernel compilation units;
+the caller-side entry and selection remain baseline C++. Workers neither allocate storage nor
+call CUDA. RankProgram and its MoE schedule own CPU/GPU handoff and overlap; an Op or CPU executor
+does not own this model schedule.
 
 ### 5.2 Workspace
 
-Caller-owned `WorkspaceArena&` or an explicit caller-owned scratch view is the transient workspace
+Caller-owned `MemoryArena&` or an explicit caller-owned scratch view is the transient workspace
 boundary. An Op may suballocate within its call scope, but it must not allocate hidden device
-memory, retain a scratch pointer, or own the arena.
+memory, retain a scratch pointer, or own the arena. The arena borrows its backing allocation;
+its capacity and cursor do not confer ownership or completion.
+For CUDA entries, even a zero-capacity arena carries the execution device. Zero scratch means
+no allocation, not an unlocated workspace. Absent optional tensors and explicitly supported
+zero-work inputs follow the individual Op's contract and need no backing.
 
 An entry with statically zero scratch omits both the arena argument and a sizing query. A
 scratch-capable entry accepts caller-owned workspace and exposes one authoritative capacity query
@@ -316,10 +427,21 @@ The query returns the minimum high-water capacity sufficient for every legal ext
 interval. An exact-call query uses equal interval endpoints. Invalid profiles and intervals throw;
 zero is reserved for a legal route that requires no caller-owned global scratch.
 
+Capacity queries consume host-visible geometry and explicit hardware facts such as SM count.
+They do not require a stream or a synthetic execution view. Planned tensors have no residency;
+binding to a real backing span supplies it.
+
+Account for route transitions and nonmonotone regions when computing the interval maximum. An
+upper-endpoint query suffices only for a region whose allocation is known to be nondecreasing.
+
 Capacity is measured from a 256-byte-aligned Op-local cursor, includes internal alignment gaps, and
 excludes trailing padding. The sizing query and execution share the same route facts and allocation
 recipe. A composed Op reports its complete public scratch requirement rather than exposing private
 child requirements.
+
+Scratch regions may share storage when their device lifetimes do not overlap. Keep the last-reader
+and synchronization requirements beside the layout and affected launch or kernel code; preserve
+them when separating stages or compilation units.
 
 Ending the host workspace scope does not end device use. Kernels that consume a suballocation must
 be submitted on the declared stream before the scope is released, and reuse relies on stream
@@ -351,18 +473,17 @@ depend on artifact provenance or model binding concepts.
 Enforce the boundary in code and build ownership:
 
 - contract headers include only required core, CUDA host, and peer semantic contract types;
-- `src/ops/**` does not include model, Program, schedule, product, or artifact-provenance headers;
+- `src/ops/**` does not include model, Session, RankProgram, schedule, product, or artifact-provenance headers;
 - model execution includes contract headers, never private launcher, kernel, common, codec, or plan
   headers;
 - `ninfer_ops` does not link a model implementation;
 - core and artifact do not link Ops or models;
 - explicit source lists give every implementation one build and link owner.
 
-The owning family registers its implementation in `src/ops/<family>/sources.cmake`; Linear
-delegates to one explicit manifest per numeric format. A family manifest includes its wrappers
-even when they live in the horizontal `wrapper/` directory. Ordinary sources contribute to
-`ninfer_ops`; the three NVFP4 sources requiring non-RDC compilation contribute to
-`ninfer_nvfp4_non_rdc` from their owning manifests. Shape files retain their `.cpp` or `.cu`
+The owning family registers its implementation in `src/ops/<family>/sources.cmake`; large families
+delegate to explicit local manifests for their kernel library and semantic implementations.
+Ordinary sources contribute to `ninfer_ops`; NVFP4 sources requiring non-RDC compilation contribute
+to `ninfer_ops_non_rdc` from their owning manifests. Shape files retain their `.cpp` or `.cu`
 language and separate translation units. See [Build system](build-system.md) for the target policy.
 
 ## 6. Qualification
@@ -370,6 +491,12 @@ language and separate translation units. See [Build system](build-system.md) for
 Semantic Op tests live under `tests/ops/` and invoke the public contract independently of model call
 order. They link the Op layer and required core libraries rather than a model implementation. Commands and
 common reporting behavior belong in [`tests/README.md`](../../tests/README.md).
+
+A suite is owned by a semantic Op or closely related overloads. Group executable entry points
+by useful family boundaries; split files for substantial fixtures, oracles or case catalogues,
+not for every helper. Keep one non-overlapping default CTest set. Metadata-only case declaration
+and filtering precede device initialization and fixture construction. Cases have stable IDs and
+selection-independent input recipes; a stateful or Graph sequence is one selectable case.
 
 ### 6.1 Oracle
 
@@ -391,9 +518,9 @@ state. For such mathematical contracts, another GPU route, generated model outpu
 implementation parity is supplementary evidence, not the mathematical oracle.
 
 When the contract instead requires exact equivalence to a specified execution, that execution is
-the reference. ReplaySSM record/fold must preserve the corresponding snapshot outputs and committed
-state bit for bit. Compare the same initial state, physical block, inputs, and arithmetic policy;
-for each committed prefix, select the corresponding snapshot from that same block. Re-running a
+the reference. ReplaySSM record/fold must preserve the specified snapshot or recurrent outputs and
+committed state bit for bit. Compare the same initial state, physical block, inputs, and arithmetic
+policy; for each committed prefix, select the corresponding snapshot from that same block. Re-running a
 shorter projection can choose different arithmetic and is not an equivalent reference. Check raw
 record copies, untouched state, invalid tails, and zero-commit effects according to their contracts.
 A separate FP64 recurrence does not establish this equivalence and is not required for its acceptance.
@@ -424,8 +551,17 @@ and `b+1` where valid, and a representative interior extent for each route. Othe
 declared finite domains and relevant boundaries. Do not build a redundant Cartesian product when
 one case establishes several dimensions.
 
+Prune redundant sweeps by the independent risk they cover. Keep numerical stress histories,
+state/alias/stride/page boundaries, and each compiled CPU arithmetic route. Cheap finite-domain
+metadata checks can remain exhaustive. Reuse represented fixtures and parallelize independent
+oracle outputs without changing their accumulation order. Large independent-output computations
+may sample fixed output coordinates while evaluating their complete formula and retaining full
+checks of exact effects, valid writes, untouched regions and guards. Do not truncate a recurrent
+history to reduce oracle cost.
+
 When CUDA Graph capture/replay is part of the public execution contract, qualify the captured
-public Op and its observable effects against the same oracle.
+public Op and its observable effects against the same oracle, including changed inputs or metadata
+at the captured addresses.
 
 Keep schedule composition, persistent-state lifetime, and end-to-end behavior in model or product
 integration tests. Private candidates, plan choices, launcher symbols, filenames, and source
@@ -434,16 +570,22 @@ organization are not qualification subjects.
 ### 6.3 Acceptance criteria
 
 Exact outputs and regions compare every observable bit or byte. Each approximate output or state
-uses a suite-owned named criterion for its real arithmetic or quantization profile; tests do not
-define per-case tolerance overrides.
+uses a suite-owned named criterion for its public numerical policy or representation; tests do not
+define per-case tolerance overrides. Private arithmetic, algorithm selection, target, or a history
+of selected routes must not select a stricter or looser criterion. State storage dtype alone does
+not prescribe the precision of its internal updates. For Linear-family Ops, `A16Only`, `AllowA8`,
+and `AllowA4` select the A16, A8, and A4 criteria respectively, regardless of which arithmetic the implementation
+chooses. A permissive policy retains its criterion when a route uses higher precision. Input
+recipes and sampling are separate from that choice; tests must not inspect selectors or infer
+precision from T to select a criterion.
 
 A floating-point criterion states its non-finite policy. Elementwise work uses a pointwise bound.
 Reductions and matrix or attention computations use a normwise bound with a finite gross
 pointwise-error cap so cancellation does not require strict elementwise agreement and isolated
 corruption cannot hide in an aggregate norm.
 
-Different production routes use different criteria only when their arithmetic or quantization
-profiles differ materially. Widening a criterion requires a numerical reason and requalification
+Different public numerical policies or represented formats may require different criteria.
+Widening a criterion requires a numerical reason and requalification
 of its complete affected domain; one failing implementation is not sufficient justification.
 
 ## 7. Performance evidence
@@ -457,12 +599,12 @@ A long-lived Op benchmark calls the public contract and, when applicable, its pu
 capacity query. It does not include private implementation headers, call private launchers, expose
 candidate or kernel forcing, or duplicate candidate legality and production dispatch tables.
 
-The Gated DeltaNet benchmark is an explicit exception: `--running` measures the public Op and
-uses its workspace capacity query, while `--breakdown` may call the selected production
-`prepare` and `recurrence` stage launchers with their private workspace layout. `--force-chunked`
-and `--recurrent-only` may force those production routes at matching prefill extents to measure
-their crossover; `--chunked-only` measures the same chunked route with pre-normalized BF16 Q/K.
-These controls qualify the production prefill decomposition and do not change decode or ReplaySSM.
+The Gated DeltaNet benchmark is an explicit exception: alongside public Op measurements, it may
+call the selected production `prepare` and `recurrence` stage launchers with their private
+workspace layout, or force recurrent and chunked routes at matching prefill extents to measure
+their crossover. It may also measure the chunked route with pre-normalized BF16 Q/K. These
+controls qualify the production prefill decomposition and do not change decode or ReplaySSM;
+their command-line interface is defined in [`bench/README.md`](../../bench/README.md).
 
 Candidate comparison is task-local development work. A temporary sweep may call private launchers
 and encode the exact overlapping candidate domains needed for a decision. Measure candidates under
@@ -546,7 +688,7 @@ temporary sweep and its private entry points are then removed as described above
 
 An Op-scoped performance claim ends at the public Op boundary. Exact formats, layouts, shapes, and
 extents can be constructed directly by the Op benchmark; they do not authorize loading a model
-artifact or invoking a model, Program, Engine, or whole-round benchmark. Product-route evidence is
+artifact or invoking a model, Engine, or whole-round benchmark. Product-route evidence is
 required only when the requested deliverable explicitly makes an end-to-end claim and includes
 that product route in scope.
 
@@ -575,8 +717,8 @@ rewritten:
    aliasing, state, randomness, and workspace before selecting CUDA organization;
 4. keep Text/MTP `T` semantic and positive unless the contract declares a capacity, while preserving
    the declared domains of other axes;
-5. place validation and dispatch in the wrapper, launch policy in the launcher, device computation
-   in kernels, and only narrow reusable primitives in common facilities;
+5. place the entry, selector, launch bindings and kernels with their owning family; use the compact,
+   templated or large-family organization appropriate to the computation;
 6. keep persistent state, graph lifecycle, and schedule policy outside the Op;
 7. qualify every affected public entry and reachable production profile directly against the
    independent oracle;

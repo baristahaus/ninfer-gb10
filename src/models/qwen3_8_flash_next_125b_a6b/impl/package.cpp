@@ -25,9 +25,14 @@ LoadPlan::LoadPlan(LoadPlan&&) noexcept            = default;
 LoadPlan& LoadPlan::operator=(LoadPlan&&) noexcept = default;
 LoadPlan::~LoadPlan()                              = default;
 
-artifact::MaterializationPlan& LoadPlan::materialization() {
+artifact::PreparedResources& LoadPlan::materialization() {
     if (!impl_) { throw std::logic_error("Flash-Next load plan is empty"); }
     return impl_->plan.materialization;
+}
+
+std::vector<artifact::ObjectHandle>& LoadPlan::device_objects() {
+    if (!impl_) { throw std::logic_error("Flash-Next load plan is empty"); }
+    return impl_->plan.device_objects;
 }
 
 LoadedModel::LoadedModel(std::unique_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {}

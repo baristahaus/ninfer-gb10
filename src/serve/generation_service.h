@@ -5,70 +5,43 @@
 
 #include "ninfer/engine.h"
 #include "serve/request.h"
-#include "serve/serve_options.h"
+#include "product/config/options.h"
 
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <functional>
-#include <atomic>
 #include <memory>
 #include <optional>
 #include <string>
-#include <string_view>
-#include <span>
-#include <unordered_map>
 #include <vector>
 
 namespace ninfer::serve {
 
 struct RequestLifetime;
 struct RequestCapacity;
-struct ResolvedPromptSemantics;
-
-struct GenerationMetrics {
-    double prepare_seconds         = 0.0;
-    double ttft_seconds            = 0.0;
-    double vision_seconds          = 0.0;
-    double prefill_seconds         = 0.0;
-    double decode_seconds          = 0.0;
-    double prompt_wall_seconds     = 0.0;
-    double generation_wall_seconds = 0.0;
-    double total_seconds           = 0.0;
-    ninfer::GenerationEngineTiming engine_timing;
-
-    SpeculativeBackend speculative_backend    = SpeculativeBackend::None;
-    std::uint32_t speculative_draft_window    = 0;
-    std::uint64_t speculative_rounds          = 0;
-    std::uint64_t speculative_draft_tokens    = 0;
-    std::uint64_t speculative_accepted_tokens = 0;
-    std::uint64_t speculative_fallback_steps  = 0;
-    std::vector<std::uint64_t> speculative_accepted_per_position;
-    std::uint32_t prefix_cache_hit_tokens     = 0;
-    ninfer::PrefixReusePath prefix_reuse_path = ninfer::PrefixReusePath::Root;
-    ninfer::MaterializationDiagnostics materialization;
-};
 
 struct GenerationOutcome {
     std::string text;
     std::string reasoning;
+    std::vector<ninfer::TokenId> generated_token_ids;
     std::vector<ninfer::GeneratedToolCall> tool_calls;
-    // Per-token probability reports, empty unless the Engine was loaded with --token-logprobs, plus
-    // the tokenizer piece for every vocabulary id that appears in them - a report's own token and
-    // each of its alternatives. Keyed by id rather than by generated position on purpose: the
-    // alternatives of a position are other vocabulary ids, and their text has nothing to do with the
-    // position at which they were scored.
-    std::vector<ninfer::GeneratedTokenLogprob> token_logprobs;
-    std::unordered_map<ninfer::TokenId, std::string> token_pieces;
     ninfer::ToolCallParseDiagnostics tool_call_parse;
-    int prompt_tokens     = 0;
-    int completion_tokens = 0;
-    int reasoning_tokens  = 0;
-    ninfer::ThinkingBudgetStats thinking;
-    std::optional<ninfer::ConstraintObservation> constraint;
+    int prompt_tokens                  = 0;
+    int completion_tokens              = 0;
+    int reasoning_tokens               = 0;
     ninfer::FinishReason finish_reason = ninfer::FinishReason::OutputLimit;
     std::optional<std::string> matched_stop_string;
-    GenerationMetrics metrics;
+    RequestStats stats;
+    double service_prepare_seconds = 0.0;
+};
+
+// A transport may report an interrupted stream through a callback or is_cancelled().
+// Generation still settles through Engine cancellation and returns its actual work statistics.
+class ClientDisconnected final : public std::exception {
+public:
+    [[nodiscard]] const char* what() const noexcept override { return "client disconnected"; }
 };
 
 struct StreamSink {
@@ -77,7 +50,9 @@ struct StreamSink {
     std::function<void(const ninfer::GenerationTimingObservation& timing)> on_timing;
     std::function<void(const std::string& delta_text)> on_content;
     std::function<void(const std::string& delta_text)> on_reasoning;
-    std::function<void(std::size_t cumulative_bytes)> on_tool_call_progress;
+    std::function<void(const ninfer::ToolCallStart&)> on_tool_start;
+    std::function<void(const ninfer::ToolArgumentsDelta&)> on_tool_arguments;
+    std::function<void(const ninfer::ToolCallEnd&)> on_tool_end;
     std::function<bool()> is_cancelled;
 };
 
@@ -100,8 +75,9 @@ struct PreparedRequest {
     std::vector<std::string> tool_schema_params;
     ninfer::GenerationHandle generation;
     ninfer::ResolvedSamplingParameters sampling;
-    double prepare_seconds     = 0.0;
-    double acquisition_seconds = 0.0;
+    // Service input acquisition/bookkeeping; Engine timings own prompt and constraint preparation.
+    double service_prepare_seconds = 0.0;
+    double acquisition_seconds     = 0.0;
     PromptPreparationStats preparation;
     int prompt_tokens    = 0;
     bool enable_thinking = true;
@@ -113,25 +89,22 @@ struct PreparedRequest {
 
 class GenerationService {
 public:
-    explicit GenerationService(ServeOptions options, StartupObserver startup_observer = {});
+    explicit GenerationService(product::ServeOptions options,
+                               StartupObserver startup_observer = {});
 
-    [[nodiscard]] const ServeOptions& options() const noexcept { return options_; }
+    [[nodiscard]] const product::ServeOptions& options() const noexcept { return options_; }
 
     // Engine owns the once-normalized startup configuration. Serving diagnostics must use this
-    // value instead of reinterpreting optional defaults from ServeOptions.
+    // value instead of reinterpreting optional defaults from product::ServeOptions.
     [[nodiscard]] const ninfer::EngineOptions& engine_options() const { return engine_->options(); }
 
-    [[nodiscard]] ninfer::LoadSummary load_summary() const { return engine_->load_summary(); }
+    [[nodiscard]] const EngineDescription& description() const { return engine_->description(); }
 
-    [[nodiscard]] ninfer::MemorySummary memory_summary() const { return engine_->memory_summary(); }
+    [[nodiscard]] const StartupReport& startup_report() const { return engine_->startup_report(); }
 
-    [[nodiscard]] ninfer::RuntimeStats runtime_stats() const { return engine_->runtime_stats(); }
+    [[nodiscard]] EngineSnapshot snapshot() const { return engine_->snapshot(); }
 
     [[nodiscard]] bool is_available() const { return engine_->is_available(); }
-
-    [[nodiscard]] ninfer::MediaCacheSummary media_cache_summary() const {
-        return engine_->media_cache_summary();
-    }
 
     [[nodiscard]] ninfer::ModelSamplingDefaults sampling_defaults() const {
         return engine_->sampling_defaults();
@@ -150,13 +123,6 @@ public:
                           std::function<bool()> is_cancelled = {});
 
     void warmup();
-
-    // Shutdown drain. After begin_drain, new requests fail with 503 service_unavailable while
-    // running ones continue; after cancel_running, every running request is cancelled at its next
-    // Engine boundary and also fails with 503 ("server is shutting down").
-    void begin_drain() noexcept { draining_.store(true, std::memory_order_release); }
-
-    void cancel_running() noexcept { cancelling_.store(true, std::memory_order_release); }
 
 private:
     enum class CacheParticipation : std::uint8_t {
@@ -177,14 +143,9 @@ private:
     [[nodiscard]] std::shared_ptr<RequestLifetime>
     acquire_request_lifetime(DeadlinePolicy deadline_policy) const;
 
-    [[nodiscard]] ResolvedPromptSemantics prompt_semantics(const GenerationRequest& request) const;
-
-    ServeOptions options_;
+    product::ServeOptions options_;
     std::unique_ptr<ninfer::Engine> engine_;
-    bool output_constraints_ = false;
     std::shared_ptr<RequestCapacity> request_capacity_;
-    std::atomic<bool> draining_{false};
-    std::atomic<bool> cancelling_{false};
 };
 
 } // namespace ninfer::serve

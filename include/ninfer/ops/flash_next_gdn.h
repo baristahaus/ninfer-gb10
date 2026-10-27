@@ -39,14 +39,14 @@ struct FlashNextGdnWeights {
 void flash_next_gdn(const Tensor& input, const FlashNextGdnWeights& weights,
                     const Tensor& convolution_state_in, Tensor& convolution_state_out,
                     const Tensor& recurrent_state_in, Tensor& recurrent_state_out,
-                    Tensor& destination, WorkspaceArena& workspace,
-                    DeviceExecutionView execution, Bf16GemmContext* bf16_gemm = nullptr);
+                    Tensor& destination, MemoryArena& workspace,
+                    CudaExecutionView execution, Bf16GemmContext* bf16_gemm = nullptr);
 
 // One-token exact-B selected-slot transition used by ordinary decode.
 void flash_next_gdn_batch_update(const Tensor& input, const FlashNextGdnWeights& weights,
                                  Tensor& convolution_states, Tensor& recurrent_states,
                                  const Tensor& source_slots, const Tensor& destination_slots,
-                                 Tensor& destination, WorkspaceArena& workspace,
+                                 Tensor& destination, MemoryArena& workspace,
                                  cudaStream_t stream);
 
 // The previous round's commits still to be folded into this layer's states: rows is device I32
@@ -66,7 +66,7 @@ void flash_next_gdn_replay_record(const Tensor& input, const FlashNextGdnWeights
                                   Tensor& convolution_states, Tensor& recurrent_states,
                                   const Tensor& valid_columns, const Tensor& source_slots,
                                   GdnReplayRecordLayer records, Tensor& destination,
-                                  WorkspaceArena& workspace, cudaStream_t stream,
+                                  MemoryArena& workspace, cudaStream_t stream,
                                   const FlashNextGdnPendingFold* pending = nullptr);
 
 } // namespace ninfer::ops

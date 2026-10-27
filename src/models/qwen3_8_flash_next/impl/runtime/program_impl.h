@@ -1,9 +1,9 @@
 #include "models/qwen3_8_flash_next/impl/runtime/instance.h"
-#include "models/qwen3_8_flash_next/impl/runtime/mtp_capture.h"
 #include "models/qwen3_8_flash_next/impl/runtime/program.h"
 #include "models/qwen3_8_flash_next/impl/runtime/rebuild_work.h"
 
 #include "core/nvtx.h"
+#include "core/buffer.h"
 #include "models/qwen3_8_flash_next/impl/runtime/diagnostics.h"
 #include "core/startup.h"
 #include "models/qwen3_8_flash_next/impl/runtime/schedule.h"
@@ -22,7 +22,6 @@
 
 #include <algorithm>
 #include <array>
-#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -34,10 +33,6 @@
 #include <string>
 #include <type_traits>
 #include <utility>
-
-// Defined at global scope in ops/launcher/hyperconnection.cu; gates the
-// NINFER_MTP_DUMP first-round dump sites.
-extern std::atomic<int> ninfer_mtp_phase;
 
 namespace ninfer::models::qwen3_8_flash_next::detail::NINFER_QWEN38_FLASH_NEXT_RUNTIME_NS {
 namespace {
@@ -757,7 +752,7 @@ void instantiate_graph_family(DecodeGraphFamily& family, const char* label, Devi
             }
             topology.installed_profile = profile_index;
         }
-        topology.executable.upload(device.stream);
+        topology.executable.upload(device.stream());
         device.synchronize();
     };
 
@@ -772,7 +767,7 @@ void instantiate_graph_family(DecodeGraphFamily& family, const char* label, Devi
                     DecodeGraphProfile& profile = family.profiles[i];
                     prepare(profile.min_execution_frontier, profile.batch_size);
                     device.synchronize();
-                    topology.executable.launch(device.stream);
+                    topology.executable.launch(device.stream());
                     device.synchronize();
                     continue;
                 }
@@ -803,8 +798,8 @@ ProgramImplCore::ProgramImplCore(const LoadedModelData& model_in, const Sequence
       kv_payload_bytes(plan.persistent.kv_payload_bytes),
       graph_allowance_bytes(plan.graph_allowance_bytes), workspace_plan(plan.workspace),
       persistent(plan.persistent.bytes), workspace_storage(plan.workspace.capacity),
-      work(DeviceSpan{workspace_storage.base(), plan.workspace.general_capacity}),
-      bf16_gemm(Variant::flash_next ? std::make_unique<ops::Bf16GemmContext>(device_in.stream)
+      work(MemorySpan{workspace_storage.base(), plan.workspace.general_capacity, device.device()}),
+      bf16_gemm(Variant::flash_next ? std::make_unique<ops::Bf16GemmContext>(device_in.stream())
                                     : nullptr),
       continuation_states(continuation_capacity), continuation_slots(continuation_capacity),
       shared_prefix_states(shared_prefix_capacity), shared_prefix_slots(shared_prefix_capacity),
@@ -833,9 +828,9 @@ ProgramImplCore::ProgramImplCore(const LoadedModelData& model_in, const Sequence
                             sizeof(qwen3_8_flash_next::DFlashDecodeEgress))
                       : std::nullopt),
       context_source_ready_(device_in), context_completion_(device_in),
-      context_transfer_timers_{CudaEventTimer(device_in, device_in.transfer_stream),
-                               CudaEventTimer(device_in, device_in.transfer_stream),
-                               CudaEventTimer(device_in, device_in.transfer_stream)} {
+      context_transfer_timers_{CudaEventTimer(device_in, device_in.transfer_stream()),
+                               CudaEventTimer(device_in, device_in.transfer_stream()),
+                               CudaEventTimer(device_in, device_in.transfer_stream())} {
     if (model.weight_bytes == 0) {
         throw std::invalid_argument("Qwen3.8 model view has no owning weight arena");
     }
@@ -860,7 +855,7 @@ ProgramImplCore::ProgramImplCore(const LoadedModelData& model_in, const Sequence
          workspace_plan.vision->general_capacity_bytes != workspace_plan.general_capacity)) {
         throw std::invalid_argument("Qwen3.8 workspace plan does not match startup features");
     }
-    const DeviceSpan backing = persistent.alloc_bytes(plan.persistent.bytes, 256);
+    const MemorySpan backing = persistent.alloc_bytes(plan.persistent.bytes, 256);
     if (!plan.context_cache.max_private_continuations || !plan.context_cache.max_shared_prefixes) {
         throw std::logic_error("Qwen3.8 context cache options are not normalized");
     }
@@ -997,14 +992,6 @@ ProgramImplCore::ProgramImplCore(const LoadedModelData& model_in, const Sequence
 
     io = qwen3_8_flash_next::RoundState(backing, plan.persistent.round);
     io.report_token_logprobs = plan.token_logprobs;
-    if (!plan.mtp_capture_path.empty()) {
-        if (speculative_backend != SpeculativeBackend::Mtp) {
-            throw std::invalid_argument("--mtp-capture requires --spec mtp");
-        }
-        mtp_capture = qwen3_8_flash_next::detail::MtpCaptureSink::open(
-            plan.mtp_capture_path, plan.draft_window, TextConfig::token_domain,
-            plan.token_logprobs ? ops::kMaxReportedLogprobRanks : 0);
-    }
     if (io.report_token_logprobs && speculative_backend == SpeculativeBackend::DFlash) {
         // The DFlash verify schedule publishes tokens this report does not cover, so one report per
         // generated token could not hold. The 125B-A6B instance selects no DFlash companion; rejecting
@@ -1039,7 +1026,7 @@ ProgramImplCore::ProgramImplCore(const LoadedModelData& model_in, const Sequence
         if (model.ple_table == nullptr) {
             throw std::logic_error("Flash-Next MTP rounds require the PLE table");
         }
-        ple_gather_stage.emplace(*model.ple_table, model.ple_nvfp4);
+        ple_gather_stage.emplace(*model.ple_table);
     }
 #endif
     if (plan.persistent.flash_ple_records) {
@@ -1104,15 +1091,15 @@ ProgramImplCore::ProgramImplCore(const LoadedModelData& model_in, const Sequence
     }
     if (io.dflash_prefill) {
         CUDA_CHECK(cudaMemsetAsync(io.dflash_prefill->produced_count.data, 0,
-                                   io.dflash_prefill->produced_count.bytes(), device.stream));
+                                   io.dflash_prefill->produced_count.bytes(), device.stream()));
     }
-    CUDA_CHECK(cudaMemsetAsync(io.rope_delta.data, 0, io.rope_delta.bytes(), device.stream));
+    CUDA_CHECK(cudaMemsetAsync(io.rope_delta.data, 0, io.rope_delta.bytes(), device.stream()));
     if (io.mtp) {
         CUDA_CHECK(
-            cudaMemsetAsync(io.mtp->position.data, 0, io.mtp->position.bytes(), device.stream));
+            cudaMemsetAsync(io.mtp->position.data, 0, io.mtp->position.bytes(), device.stream()));
     }
-    CUDA_CHECK(cudaMemsetAsync(token_counts.data, 0, token_counts.bytes(), device.stream));
-    CUDA_CHECK(cudaMemsetAsync(sampling_config.data, 0, sampling_config.bytes(), device.stream));
+    CUDA_CHECK(cudaMemsetAsync(token_counts.data, 0, token_counts.bytes(), device.stream()));
+    CUDA_CHECK(cudaMemsetAsync(sampling_config.data, 0, sampling_config.bytes(), device.stream()));
     device.synchronize();
     if (use_cuda_graph) {
         StartupPhaseScope graph_phase(startup_observer, StartupPhase::CudaGraphPrepare);
@@ -1125,8 +1112,8 @@ ProgramImplCore::ProgramImplCore(const LoadedModelData& model_in, const Sequence
 }
 
 ProgramImplCore::~ProgramImplCore() noexcept {
-    if (device.transfer_stream != nullptr) { (void)cudaStreamSynchronize(device.transfer_stream); }
-    if (device.stream != nullptr) { (void)cudaStreamSynchronize(device.stream); }
+    if (device.transfer_stream() != nullptr) { (void)cudaStreamSynchronize(device.transfer_stream()); }
+    if (device.stream() != nullptr) { (void)cudaStreamSynchronize(device.stream()); }
 }
 
 std::vector<float> ProgramImplCore::causal_score(PreparedPromptData&& prompt,
@@ -1179,14 +1166,14 @@ std::vector<float> ProgramImplCore::causal_score(PreparedPromptData&& prompt,
     std::uint32_t staged_columns = 0;
 
     try {
-        state = state_store->reserve_reset(device.stream);
+        state = state_store->reserve_reset(device.stream());
         if (!state) { throw std::bad_alloc(); }
         address = text_kv_addresses->create_active(entitlement, 0);
         if (!address) { throw std::bad_alloc(); }
         if (text_kv_addresses->bound_row(*address) != 0) {
             throw std::logic_error("causal score did not bind the unique Main KV row");
         }
-        text_kv_addresses->materialize_to_tokens(*address, predictor_count, device.stream);
+        text_kv_addresses->materialize_to_tokens(*address, predictor_count, device.stream());
 
         const std::int32_t state_slot = state_store->physical_slot(*state);
         const auto flush              = [&] {
@@ -1201,13 +1188,13 @@ std::vector<float> ProgramImplCore::causal_score(PreparedPromptData&& prompt,
             Tensor target_ids  = work.alloc(DType::I32, {columns});
             Tensor logprobs    = work.alloc(DType::FP32, {columns});
             Tensor hidden      = score_hidden->slice(1, 0, columns);
-            ops::linear(hidden, model.output_head, logits, device.stream);
+            ops::linear(hidden, model.output_head, logits, device.stream());
             CUDA_CHECK(cudaMemcpyAsync(target_ids.data, staged_targets.data(), target_ids.bytes(),
-                                       cudaMemcpyHostToDevice, device.stream));
+                                       cudaMemcpyHostToDevice, device.stream()));
             ops::target_logprobs(logits, target_ids, TextConfig::token_domain, logprobs, nullptr,
-                                 nullptr, device.stream);
+                                 nullptr, device.stream());
             CUDA_CHECK(cudaMemcpyAsync(score_logprobs_host->data(), logprobs.data, logprobs.bytes(),
-                                       cudaMemcpyDeviceToHost, device.stream));
+                                       cudaMemcpyDeviceToHost, device.stream()));
             device.synchronize();
             const auto* host = static_cast<const float*>(score_logprobs_host->data());
             output.insert(output.end(), host, host + staged_columns);
@@ -1260,7 +1247,7 @@ std::vector<float> ProgramImplCore::causal_score(PreparedPromptData&& prompt,
                 Tensor destination = score_hidden->slice(
                     1, static_cast<std::int32_t>(staged_columns), static_cast<std::int32_t>(count));
                 CUDA_CHECK(cudaMemcpyAsync(destination.data, source.data, source.bytes(),
-                                           cudaMemcpyDeviceToDevice, device.stream));
+                                           cudaMemcpyDeviceToDevice, device.stream()));
                 for (std::uint32_t column = 0; column < count; ++column) {
                     staged_targets.push_back(prompt.token_ids[selected + column + 1U]);
                 }
@@ -4665,7 +4652,7 @@ ProgramImplCore::reserve_materialization(AdmissionCandidate&& plan, PreparedProm
                 throw std::logic_error("Vision prefill has no startup workspace plan");
             }
             request.prefill->vision = std::make_unique<schedule::VisionPrefillSession>(
-                device, model, DeviceSpan{workspace_storage.base(), workspace_storage.capacity()},
+                device, model, MemorySpan{workspace_storage.base(), workspace_storage.capacity(), device.device()},
                 *workspace_plan.vision, request.prefill->prompt, *request.prefill->vision_plan,
                 vision_handoff_peak_bytes);
         }
@@ -5026,7 +5013,7 @@ void ProgramImplCore::prepare_materialization(MaterializationTransaction& transa
             transaction.reserved_state_count == 0) {
             throw std::logic_error("root materialization destination is not reserved");
         }
-        state_store->activate_reset(transaction.reserved_states[0], device.stream);
+        state_store->activate_reset(transaction.reserved_states[0], device.stream());
     }
 
     KVAddressSpaceHandle text_address;
@@ -5169,8 +5156,8 @@ void ProgramImplCore::prepare_materialization(MaterializationTransaction& transa
         std::optional<StateImageTransfer> restore =
             host_state_fork_destination
                 ? state_store->begin_host_fork(*host_state_restore, *host_state_fork_destination,
-                                               device.transfer_stream)
-                : state_store->begin_host_to_device(*host_state_restore, device.transfer_stream);
+                                               device.transfer_stream())
+                : state_store->begin_host_to_device(*host_state_restore, device.transfer_stream());
         if (!restore) { throw std::bad_alloc(); }
         transaction.state_restore.emplace(std::move(*restore));
         stop_context_transfer_timer(runtime::ContextResourceClass::State);
@@ -5257,7 +5244,7 @@ void ProgramImplCore::prepare_prefix_forks(MaterializationTransaction& transacti
             text_kv_pages->physical_pool().copy_page(
                 text_kv_addresses->prefix_fork_tail_source(*transaction.text_prefix_fork),
                 text_kv_addresses->prefix_fork_tail_destination(*transaction.text_prefix_fork),
-                device.transfer_stream);
+                device.transfer_stream());
             stop_context_transfer_timer(runtime::ContextResourceClass::MainKV);
             transaction.transfer_timer_mask |=
                 1U << context_resource_index(runtime::ContextResourceClass::MainKV);
@@ -5291,7 +5278,7 @@ void ProgramImplCore::prepare_prefix_forks(MaterializationTransaction& transacti
                 backend_kv_addresses->prefix_fork_tail_source(*transaction.backend_prefix_fork),
                 backend_kv_addresses->prefix_fork_tail_destination(
                     *transaction.backend_prefix_fork),
-                device.transfer_stream);
+                device.transfer_stream());
             stop_context_transfer_timer(runtime::ContextResourceClass::BackendKV);
             transaction.transfer_timer_mask |=
                 1U << context_resource_index(runtime::ContextResourceClass::BackendKV);
@@ -5301,7 +5288,7 @@ void ProgramImplCore::prepare_prefix_forks(MaterializationTransaction& transacti
     }
 
     if (copied_tail) {
-        context_completion_.record(device.transfer_stream);
+        context_completion_.record(device.transfer_stream());
         transaction.prefix_tail_submitted = true;
         transaction.transfer_submitted    = true;
     } else {
@@ -5337,7 +5324,7 @@ void ProgramImplCore::enqueue_materialization_transfers(MaterializationTransacti
                 pages.physical_pool().copy_from_host(
                     source,
                     std::span<const DeviceKVPageHandle>(destinations.data() + begin, end - begin),
-                    device.transfer_stream);
+                    device.transfer_stream());
                 begin = end;
             }
             stop_context_transfer_timer(resource);
@@ -5353,7 +5340,7 @@ void ProgramImplCore::enqueue_materialization_transfers(MaterializationTransacti
     const bool any = transaction.state_restore.has_value() || !transaction.text_restores.empty() ||
                      !transaction.backend_restores.empty();
     if (any) {
-        context_completion_.record(device.transfer_stream);
+        context_completion_.record(device.transfer_stream());
         transaction.transfer_submitted = true;
     } else if (transaction.plan && transaction.plan->impl_ &&
                (transaction.plan->impl_->text_prefix_fork_required ||
@@ -5464,7 +5451,7 @@ void ProgramImplCore::publish_materialization_transfers(MaterializationTransacti
             host_kv_extents->device_sources(*backup, source);
             start_context_transfer_timer(resource);
             pages.physical_pool().copy_to_host(source, host_kv_extents->writable_view(*backup),
-                                               device.transfer_stream);
+                                               device.transfer_stream());
             stop_context_transfer_timer(resource);
             transaction.transfer_timer_mask |= 1U << context_resource_index(resource);
             submitted = true;
@@ -5476,7 +5463,7 @@ void ProgramImplCore::publish_materialization_transfers(MaterializationTransacti
                     runtime::ContextResourceClass::BackendKV);
         }
         if (submitted) {
-            context_completion_.record(device.transfer_stream);
+            context_completion_.record(device.transfer_stream());
             transaction.retained_tail_backup_submitted = true;
             transaction.transfer_submitted             = true;
         }
@@ -5821,7 +5808,7 @@ void ProgramImplCore::prepare_pressure_work(MaterializationTransaction::Pressure
                 pressure_state_source(action, sequence, shared);
             if (!source) { throw std::logic_error("pressure State transfer has no source"); }
             std::optional<StateImageTransfer> transfer =
-                state_store->begin_device_to_host(*source, device.transfer_stream);
+                state_store->begin_device_to_host(*source, device.transfer_stream());
             if (!transfer) { throw std::bad_alloc(); }
             change.transfer.emplace(std::move(*transfer));
         }
@@ -5884,7 +5871,7 @@ void ProgramImplCore::prepare_pressure_work(MaterializationTransaction::Pressure
         }
         host_kv_extents->device_sources(*reserved, change.sources);
         pages.physical_pool().copy_to_host(
-            change.sources, host_kv_extents->writable_view(*reserved), device.transfer_stream);
+            change.sources, host_kv_extents->writable_view(*reserved), device.transfer_stream());
         change.backup.emplace(std::move(*reserved));
     };
     const SequenceKVBundle* kv = sequence != nullptr ? (sequence->kv ? &*sequence->kv : nullptr)
@@ -6346,7 +6333,7 @@ ProgramImplCore::progress_materialization_transaction(runtime::CancellationFlagV
                     });
             }
         } catch (...) {
-            (void)cudaStreamSynchronize(device.transfer_stream);
+            (void)cudaStreamSynchronize(device.transfer_stream());
             for_each_pending_pressure(
                 [&](MaterializationTransaction::PressureWork& work) { abort_pressure_work(work); });
             throw;
@@ -6359,7 +6346,7 @@ ProgramImplCore::progress_materialization_transaction(runtime::CancellationFlagV
         pressure_transition.phase = copies_submitted ? PressureTransitionPhase::CopiesInFlight
                                                      : PressureTransitionPhase::CopyPublication;
         if (copies_submitted) {
-            context_completion_.record(device.transfer_stream);
+            context_completion_.record(device.transfer_stream());
             out.status = runtime::ContextTransactionStatus::InProgress;
             return out;
         }
@@ -7371,7 +7358,7 @@ StartResult ProgramImplCore::start_request(MaterializationTransaction& transacti
         if (destination && *destination < max_concurrency) {
             // Startup may have queued work before a later check failed. Complete it before its
             // pages, state slots or lane return to the pools.
-            (void)cudaStreamSynchronize(device.stream);
+            (void)cudaStreamSynchronize(device.stream());
             const std::uint32_t lane = *destination;
             if (active_continuations[lane] < continuation_capacity) {
                 clear_lane_best_effort(active_sequence(lane), requests[lane]);
@@ -8321,12 +8308,12 @@ void ProgramImplCore::enqueue_active_capture_transfers(ActiveCaptureTransaction&
         transaction.transfer_submitted) {
         throw std::logic_error("active capture transfer batch is not enqueueable");
     }
-    context_source_ready_.record(device.stream);
-    context_source_ready_.wait(device.transfer_stream);
+    context_source_ready_.record(device.stream());
+    context_source_ready_.wait(device.transfer_stream());
     if (transaction.state_placement == qwen3_8_flash_next::CaptureStatePlacement::HostSnapshot) {
         start_context_transfer_timer(runtime::ContextResourceClass::State);
         std::optional<StateImageTransfer> snapshot =
-            state_store->begin_device_to_host(transaction.source_state, device.transfer_stream);
+            state_store->begin_device_to_host(transaction.source_state, device.transfer_stream());
         if (!snapshot) {
             throw std::logic_error("selected Host capture has no prepared State target");
         }
@@ -8339,7 +8326,7 @@ void ProgramImplCore::enqueue_active_capture_transfers(ActiveCaptureTransaction&
             state_store->selectors(transaction.source_state, transaction.destination_state);
         start_context_transfer_timer(runtime::ContextResourceClass::State);
         state_images->copy_dflash_local(state_fork.source, state_fork.destination,
-                                        device.transfer_stream);
+                                        device.transfer_stream());
         stop_context_transfer_timer(runtime::ContextResourceClass::State);
         transaction.transfer_timer_mask |=
             1U << context_resource_index(runtime::ContextResourceClass::State);
@@ -8349,7 +8336,7 @@ void ProgramImplCore::enqueue_active_capture_transfers(ActiveCaptureTransaction&
         decoder->text_kv.page_pool().copy_page(
             text_kv_addresses->active_snapshot_tail_source(*transaction.text_snapshot),
             text_kv_addresses->active_snapshot_tail_destination(*transaction.text_snapshot),
-            device.transfer_stream);
+            device.transfer_stream());
         stop_context_transfer_timer(runtime::ContextResourceClass::MainKV);
         transaction.transfer_timer_mask |=
             1U << context_resource_index(runtime::ContextResourceClass::MainKV);
@@ -8360,13 +8347,13 @@ void ProgramImplCore::enqueue_active_capture_transfers(ActiveCaptureTransaction&
         backend_kv_cache()->page_pool().copy_page(
             backend_kv_addresses->active_snapshot_tail_source(*transaction.backend_snapshot),
             backend_kv_addresses->active_snapshot_tail_destination(*transaction.backend_snapshot),
-            device.transfer_stream);
+            device.transfer_stream());
         stop_context_transfer_timer(runtime::ContextResourceClass::BackendKV);
         transaction.transfer_timer_mask |=
             1U << context_resource_index(runtime::ContextResourceClass::BackendKV);
         ++transaction.operations.partial_tail_cow_pages;
     }
-    context_completion_.record(device.transfer_stream);
+    context_completion_.record(device.transfer_stream());
     transaction.transfer_enqueue_pending = false;
     transaction.transfer_submitted       = true;
 }
@@ -8472,13 +8459,13 @@ ActiveCaptureResult ProgramImplCore::publish_active_capture(ActiveCaptureTransac
     if (transaction.publish_shared) {
         shared_bundle = *sequence.kv;
         text_kv_addresses->commit_active_snapshot(std::move(*transaction.text_snapshot),
-                                                  device.stream);
+                                                  device.stream());
         transaction.text_snapshot.reset();
         SequenceKVBundle active_bundle{.text = *transaction.active_text_destination};
         transaction.active_text_destination.reset();
         if (transaction.backend_snapshot) {
             backend_kv_addresses->commit_active_snapshot(std::move(*transaction.backend_snapshot),
-                                                         device.stream);
+                                                         device.stream());
             transaction.backend_snapshot.reset();
             active_bundle.backend = *transaction.active_backend_destination;
             transaction.active_backend_destination.reset();
@@ -8745,8 +8732,8 @@ ProgramImplCore::progress_active_capture_transaction(runtime::CancellationFlagVi
             runtime::ContextResourceClass::MainKV,
             runtime::ContextResourceClass::BackendKV,
         };
-        context_source_ready_.record(device.stream);
-        context_source_ready_.wait(device.transfer_stream);
+        context_source_ready_.record(device.stream());
+        context_source_ready_.wait(device.transfer_stream());
         try {
             for (const runtime::ContextResourceClass resource : resources) {
                 bool has_copy = false;
@@ -8807,7 +8794,7 @@ ProgramImplCore::progress_active_capture_transaction(runtime::CancellationFlagVi
                 });
             }
         } catch (...) {
-            (void)cudaStreamSynchronize(device.transfer_stream);
+            (void)cudaStreamSynchronize(device.transfer_stream());
             for_each_pending_pressure([&](auto& work) { abort_pressure_work(work); });
             throw;
         }
@@ -8817,7 +8804,7 @@ ProgramImplCore::progress_active_capture_transaction(runtime::CancellationFlagVi
         pressure_transition.phase = copies_submitted ? PressureTransitionPhase::CopiesInFlight
                                                      : PressureTransitionPhase::CopyPublication;
         if (copies_submitted) {
-            context_completion_.record(device.transfer_stream);
+            context_completion_.record(device.transfer_stream());
             return ActiveCaptureResult{.status = runtime::ContextTransactionStatus::InProgress};
         }
     }
@@ -8892,8 +8879,8 @@ ProgramImplCore::progress_active_capture_transaction(runtime::CancellationFlagVi
         try {
             enqueue_active_capture_transfers(transaction);
         } catch (...) {
-            if (device.transfer_stream != nullptr) {
-                (void)cudaStreamSynchronize(device.transfer_stream);
+            if (device.transfer_stream() != nullptr) {
+                (void)cudaStreamSynchronize(device.transfer_stream());
             }
             abort_active_capture(transaction);
             transaction.published = true;
@@ -9077,7 +9064,7 @@ runtime::ExecutionTiming ProgramImplCore::append_forced_tokens(
             work.alloc(DType::I32, {checked_i32(static_cast<std::uint32_t>(row_major_tokens.size()),
                                                 "forced-token batch exceeds int32")});
         CUDA_CHECK(cudaMemcpyAsync(forced_ids.data, row_major_tokens.data(), forced_ids.bytes(),
-                                   cudaMemcpyHostToDevice, device.stream));
+                                   cudaMemcpyHostToDevice, device.stream()));
         for (std::size_t row = 0; row < members.size(); ++row) {
             const std::uint32_t lane = lanes[row];
             if (requests[lane].sampling_host.token_counts == nullptr) { continue; }
@@ -9085,7 +9072,7 @@ runtime::ExecutionTiming ProgramImplCore::append_forced_tokens(
                                              static_cast<std::int32_t>(row_stride));
             Tensor counts = token_counts.slice(1, static_cast<std::int32_t>(lane), 1)
                                 .view({TextConfig::token_domain});
-            ops::increment_token_counts(ids, counts, device.stream);
+            ops::increment_token_counts(ids, counts, device.execution_view());
         }
         work.reset();
     }
@@ -9141,7 +9128,7 @@ runtime::ExecutionTiming ProgramImplCore::append_forced_tokens(
                     backend_kv_addresses->bound_row(*sequence.kv->backend);
                 CUDA_CHECK(cudaMemcpyAsync(io.dflash_decode->ingress.data, dflash_host_ingress,
                                            sizeof(qwen3_8_flash_next::DFlashDecodeIngress),
-                                           cudaMemcpyHostToDevice, device.stream));
+                                           cudaMemcpyHostToDevice, device.stream()));
             }
 
             std::uint32_t cursor = base;
@@ -9344,7 +9331,7 @@ CommitResult ProgramImplCore::commit(PendingBatch&& pending,
                 qwen3_8_flash_next::detail::capture_committed_state(
                     speculative_backend == SpeculativeBackend::Mtp ? "mtp" : "ordinary",
                     state_images->linear(), state_store->physical_slot(sequence.state.read),
-                    lanes[row], sequence.execution_frontier, sequence.ledger, device.stream);
+                    lanes[row], sequence.execution_frontier, sequence.ledger, device.stream());
             }
 
             if (pending_kinds[row] != PendingKind::Begin || decisions[row].cancelled) { continue; }
@@ -9493,7 +9480,7 @@ AbortResult ProgramImplCore::abort(SequenceHandle sequence) noexcept {
     // A non-final prefill chunk returns without waiting for the device, so cancellation can arrive
     // while it still writes this lane's pages and state. A materialization admitted next restores
     // into freed pages and slots on the transfer stream, which does not wait for compute.
-    (void)cudaStreamSynchronize(device.stream);
+    (void)cudaStreamSynchronize(device.stream());
     if (!clear_lane_strict(state, request)) { return out; }
     state.deferred_fold.reset();
     out.timings     = request.timings;
@@ -9590,18 +9577,18 @@ void ProgramImplCore::fail_all_cleanup() noexcept {
     // Drain the compute stream before any lane or pool release: the failing unit's round
     // kernels (or the previous unit's) may still be in flight, writing the very pages the
     // cleanup below releases.
-    if (device.stream != nullptr) { (void)cudaStreamSynchronize(device.stream); }
+    if (device.stream() != nullptr) { (void)cudaStreamSynchronize(device.stream()); }
     pending_transaction_.reset();
     for (SequenceState& sequence : continuation_states) { sequence.deferred_fold.reset(); }
     if (auto* transaction = std::get_if<ActiveCaptureTransaction>(&context_transaction_)) {
-        if (transaction->transfer_submitted && device.transfer_stream != nullptr) {
-            (void)cudaStreamSynchronize(device.transfer_stream);
+        if (transaction->transfer_submitted && device.transfer_stream() != nullptr) {
+            (void)cudaStreamSynchronize(device.transfer_stream());
         }
         abort_active_capture(*transaction);
     }
     if (auto* transaction = std::get_if<MaterializationTransaction>(&context_transaction_)) {
-        if (transaction->transfer_submitted && device.transfer_stream != nullptr) {
-            (void)cudaStreamSynchronize(device.transfer_stream);
+        if (transaction->transfer_submitted && device.transfer_stream() != nullptr) {
+            (void)cudaStreamSynchronize(device.transfer_stream());
         }
         release_materialization_staging(*transaction);
     }
@@ -9819,7 +9806,7 @@ void ProgramImplCore::start_sequence(std::uint32_t lane, SequenceState& sequence
                 const StateImageSelectors selectors = state_store->begin_fork(selected, current);
                 if (speculative_backend == SpeculativeBackend::DFlash) {
                     state_images->copy_dflash_local(selectors.source, selectors.destination,
-                                                    device.stream);
+                                                    device.stream());
                 }
                 sequence.state =
                     ActiveStateBinding{.read = selected, .write = current, .fork_pending = true};
@@ -9938,7 +9925,7 @@ void ProgramImplCore::start_sequence(std::uint32_t lane, SequenceState& sequence
         }
         if (text_prefix_fork) {
             text_kv_addresses->commit_prefix_fork(std::move(*transaction.text_prefix_fork),
-                                                  device.stream);
+                                                  device.stream());
             transaction.text_prefix_fork.reset();
             if (!preserving_source) {
                 const KVAddressSpaceHandle source_address = sequence.kv->text;
@@ -9950,12 +9937,12 @@ void ProgramImplCore::start_sequence(std::uint32_t lane, SequenceState& sequence
             }
         } else {
             text_kv_addresses->commit_activation(std::move(*transaction.text_activation),
-                                                 device.stream);
+                                                 device.stream());
             transaction.text_activation.reset();
         }
         if (backend_prefix_fork) {
             backend_kv_addresses->commit_prefix_fork(std::move(*transaction.backend_prefix_fork),
-                                                     device.stream);
+                                                     device.stream());
             transaction.backend_prefix_fork.reset();
             if (!preserving_source) {
                 const KVAddressSpaceHandle source_address = *sequence.kv->backend;
@@ -9967,7 +9954,7 @@ void ProgramImplCore::start_sequence(std::uint32_t lane, SequenceState& sequence
             }
         } else if (transaction.backend_activation) {
             backend_kv_addresses->commit_activation(std::move(*transaction.backend_activation),
-                                                    device.stream);
+                                                    device.stream());
             transaction.backend_activation.reset();
         }
         transaction.prefix_forks_ready = false;
@@ -10002,7 +9989,7 @@ void ProgramImplCore::start_sequence(std::uint32_t lane, SequenceState& sequence
                     state_store->begin_fork(selected, destination);
                 if (speculative_backend == SpeculativeBackend::DFlash) {
                     state_images->copy_dflash_local(selectors.source, selectors.destination,
-                                                    device.stream);
+                                                    device.stream());
                 }
                 sequence.state = ActiveStateBinding{
                     .read = selected, .write = destination, .fork_pending = true};
@@ -10194,7 +10181,7 @@ void ProgramImplCore::start_sequence(std::uint32_t lane, SequenceState& sequence
                 backend_kv_addresses->bound_row(*sequence.kv->backend);
             CUDA_CHECK(cudaMemcpyAsync(io.dflash_decode->ingress.data, dflash_host_ingress,
                                        sizeof(qwen3_8_flash_next::DFlashDecodeIngress),
-                                       cudaMemcpyHostToDevice, device.stream));
+                                       cudaMemcpyHostToDevice, device.stream()));
         }
 
         staged.elapsed_seconds += std::chrono::duration<double>(Clock::now() - started).count();
@@ -10347,7 +10334,7 @@ runtime::ExecutionTiming ProgramImplCore::resolve_pending_raw(
         if (eager_fold) {
             replay_fold->execute(
                 std::span<const ops::GdnReplayFoldRow>(fold_rows.data(), lanes.size()),
-                device.stream);
+                device.stream());
 #ifdef NINFER_QWEN38_FLASH_NEXT
             if (!flash_ple_records || state_images->ple_store() == nullptr) {
                 throw std::logic_error("Flash-Next speculative PLE fold storage is unavailable");
@@ -10363,7 +10350,7 @@ runtime::ExecutionTiming ProgramImplCore::resolve_pending_raw(
             ops::flash_next_ple_replay_fold(
                 *flash_ple_records, *state_images->ple_store(),
                 std::span<const ops::FlashNextPleFoldRow>(ple_rows.data(), lanes.size()),
-                device.stream);
+                device.stream());
 #endif
         }
 
@@ -10392,11 +10379,11 @@ runtime::ExecutionTiming ProgramImplCore::resolve_pending_raw(
             }
             CUDA_CHECK(cudaMemcpyAsync(selector_tensor.data, hidden_selectors.data(),
                                        lanes.size() * sizeof(std::int32_t), cudaMemcpyHostToDevice,
-                                       device.stream));
+                                       device.stream()));
             ops::speculative_select_accepted_hidden(hidden, selector_tensor, selected,
-                                                    device.stream);
+                                                    device.stream());
             ops::scatter(selected, destinations, state_images->continuation_hidden_store(),
-                         device.stream);
+                         device.stream());
             if constexpr (Variant::flash_next) {
                 if (speculative_backend == SpeculativeBackend::Mtp && io.mtp_decode) {
                     if (!io.mtp_decode->target_mtp_hidden ||
@@ -10409,9 +10396,9 @@ runtime::ExecutionTiming ProgramImplCore::resolve_pending_raw(
                     Tensor mtp_selected =
                         io.mtp_decode->target_continuation_mtp_hidden->slice(1, 0, batch);
                     ops::speculative_select_accepted_hidden(mtp_hidden, selector_tensor,
-                                                            mtp_selected, device.stream);
+                                                            mtp_selected, device.stream());
                     ops::scatter(mtp_selected, destinations, *state_images->mtp_hidden_store(),
-                                 device.stream);
+                                 device.stream());
                 }
             }
         }
@@ -10649,7 +10636,7 @@ void ProgramImplCore::clear_execution_failure_lanes(std::span<const std::uint32_
     // cleanup aborts that transaction before releasing lanes, preserving the only safe order.
     if (has_context_transaction()) { return; }
     // The failed unit's kernels may still be in flight on these lanes' pages and state.
-    (void)cudaStreamSynchronize(device.stream);
+    (void)cudaStreamSynchronize(device.stream());
     for (const std::uint32_t lane : lanes) {
         if (lane >= max_concurrency || active_continuations[lane] >= continuation_capacity) {
             continue;
@@ -10848,7 +10835,7 @@ void ProgramImplCore::settle_deferred_folds() {
         ++spare;
     }
     const auto count = static_cast<std::size_t>(row_count);
-    replay_fold->execute(std::span<const ops::GdnReplayFoldRow>(rows.data(), count), device.stream);
+    replay_fold->execute(std::span<const ops::GdnReplayFoldRow>(rows.data(), count), device.stream());
 #ifdef NINFER_QWEN38_FLASH_NEXT
     if (!flash_ple_records || state_images->ple_store() == nullptr) {
         throw std::logic_error("Flash-Next deferred PLE fold storage is unavailable");
@@ -10863,7 +10850,7 @@ void ProgramImplCore::settle_deferred_folds() {
     }
     ops::flash_next_ple_replay_fold(
         *flash_ple_records, *state_images->ple_store(),
-        std::span<const ops::FlashNextPleFoldRow>(ple_rows.data(), count), device.stream);
+        std::span<const ops::FlashNextPleFoldRow>(ple_rows.data(), count), device.stream());
 #endif
     for (SequenceState& sequence : continuation_states) { sequence.deferred_fold.reset(); }
 }
@@ -11188,10 +11175,10 @@ void ProgramImplCore::materialize_sequence_kv(SequenceState& sequence, std::uint
     if (backend_tokens != 0 && !sequence.kv->backend) {
         throw std::logic_error("backend KV materialization requested without an allocation");
     }
-    text_kv_addresses->materialize_to_tokens(sequence.kv->text, main_tokens, device.stream);
+    text_kv_addresses->materialize_to_tokens(sequence.kv->text, main_tokens, device.stream());
     if (backend_tokens != 0) {
         backend_kv_addresses->materialize_to_tokens(*sequence.kv->backend, backend_tokens,
-                                                    device.stream);
+                                                    device.stream());
     }
 }
 
@@ -11296,7 +11283,7 @@ ProgramImplCore::mtp_kv_view(const SequenceState& sequence) const {
 
 void ProgramImplCore::set_device_i32(Tensor& tensor, std::int32_t value) {
     CUDA_CHECK(
-        cudaMemcpyAsync(tensor.data, &value, sizeof(value), cudaMemcpyHostToDevice, device.stream));
+        cudaMemcpyAsync(tensor.data, &value, sizeof(value), cudaMemcpyHostToDevice, device.stream()));
 }
 
 void ProgramImplCore::ordered_reset(SequenceState& sequence) {
@@ -11308,7 +11295,7 @@ void ProgramImplCore::ordered_reset(SequenceState& sequence) {
             throw std::logic_error("StateImage reset requires a private mutable destination");
         }
     }
-    state_store->reset_active(sequence.state.write, device.stream);
+    state_store->reset_active(sequence.state.write, device.stream());
     refresh_state_views(sequence);
     work.reset();
     set_device_i32(io.pos, 0);
@@ -11326,7 +11313,7 @@ void ProgramImplCore::prepare_graphs() {
 
     std::array<StateImageHandle, kMaximumConcurrency> capture_states{};
     for (std::uint32_t row = 0; row < max_concurrency; ++row) {
-        std::optional<StateImageHandle> state = state_store->reserve_reset(device.stream);
+        std::optional<StateImageHandle> state = state_store->reserve_reset(device.stream());
         if (!state) { throw std::bad_alloc(); }
         capture_states[row] = *state;
     }
@@ -11353,14 +11340,14 @@ void ProgramImplCore::prepare_graphs() {
                 addresses.create_active(1, static_cast<std::int32_t>(row));
             if (!allocation) { throw std::bad_alloc(); }
             allocations.push_back(*allocation);
-            addresses.materialize_to_tokens(*allocation, 1, device.stream);
+            addresses.materialize_to_tokens(*allocation, 1, device.stream());
 
             // Capture profiles exercise arbitrary context envelopes. Repeating each row's private
             // page across its temporary table keeps every dummy read/write address valid without
             // reserving C full contexts solely for graph construction.
             tables.publish_repeated(addresses.execution_row(*allocation).handle(),
                                     addresses.physical_page(*allocation, 0),
-                                    tables.logical_page_capacity(), device.stream);
+                                    tables.logical_page_capacity(), device.stream());
         }
     };
     reserve_capture_rows(decoder->text_kv, *text_kv_addresses, text_capture_allocations,
@@ -11389,7 +11376,7 @@ void ProgramImplCore::prepare_graphs() {
         }
         if (io.dflash_prefill) { controls.push_back(io.dflash_prefill->produced_count); }
         for (const Tensor& tensor : controls) {
-            CUDA_CHECK(cudaMemsetAsync(tensor.data, 0, tensor.bytes(), device.stream));
+            CUDA_CHECK(cudaMemsetAsync(tensor.data, 0, tensor.bytes(), device.stream()));
         }
     };
     const auto zero_capture_pages =
@@ -11400,7 +11387,7 @@ void ProgramImplCore::prepare_graphs() {
             for (std::uint32_t row = 0; row < batch_size; ++row) {
                 pages.push_back(addresses.physical_page(allocations[row], 0));
             }
-            cache.page_pool().zero_pages(pages, device.stream);
+            cache.page_pool().zero_pages(pages, device.stream());
         };
     const auto prepare_representative = [&](std::uint32_t frontier, std::uint32_t batch_size) {
         if (batch_size == 0 || batch_size > max_concurrency) {
@@ -11419,11 +11406,11 @@ void ProgramImplCore::prepare_graphs() {
                                batch_size);
         }
         for (std::uint32_t row = 0; row < batch_size; ++row) {
-            state_images->zero_slot(capture_state_slot(row), device.stream);
+            state_images->zero_slot(capture_state_slot(row), device.stream());
             if (dflash) {
                 const Tensor pending =
                     dflash->pending_features.slice(2, static_cast<std::int32_t>(row), 1);
-                CUDA_CHECK(cudaMemsetAsync(pending.data, 0, pending.bytes(), device.stream));
+                CUDA_CHECK(cudaMemsetAsync(pending.data, 0, pending.bytes(), device.stream()));
             }
         }
         set_device_i32(io.pos, checked_i32(frontier, "graph representative position"));
@@ -11484,7 +11471,7 @@ void ProgramImplCore::prepare_graphs() {
             }
             CUDA_CHECK(cudaMemcpyAsync(io.mtp_decode->ingress.data, mtp_host_ingress,
                                        sizeof(qwen3_8_flash_next::MtpDecodeIngress),
-                                       cudaMemcpyHostToDevice, device.stream));
+                                       cudaMemcpyHostToDevice, device.stream()));
             mtp_frame_rows = 0;
         }
         if (io.ordinary) {
@@ -11671,16 +11658,16 @@ void ProgramImplCore::prepare_graphs() {
     }
 
     clear_stable_controls();
-    state_images->zero_all(device.stream);
+    state_images->zero_all(device.stream());
     if (dflash) {
         CUDA_CHECK(cudaMemsetAsync(dflash->prefill_features.data, 0,
-                                   dflash->prefill_features.bytes(), device.stream));
+                                   dflash->prefill_features.bytes(), device.stream()));
         CUDA_CHECK(cudaMemsetAsync(dflash->prefill_positions.data, 0,
-                                   dflash->prefill_positions.bytes(), device.stream));
+                                   dflash->prefill_positions.bytes(), device.stream()));
         CUDA_CHECK(cudaMemsetAsync(dflash->pending_features.data, 0,
-                                   dflash->pending_features.bytes(), device.stream));
+                                   dflash->pending_features.bytes(), device.stream()));
     }
-    CUDA_CHECK(cudaMemsetAsync(token_counts.data, 0, token_counts.bytes(), device.stream));
+    CUDA_CHECK(cudaMemsetAsync(token_counts.data, 0, token_counts.bytes(), device.stream()));
     device.synchronize();
     for (std::uint32_t row = 0; row < max_concurrency; ++row) {
         if (!state_store->release(capture_states[row])) {
@@ -11720,13 +11707,13 @@ void ProgramImplCore::install_sampling(SequenceState& sequence, RequestControl& 
     };
     const bool penalties = request.sampling_host.presence_penalty != 0.0F ||
                            request.sampling_host.frequency_penalty != 0.0F;
-    if (penalties) { CUDA_CHECK(cudaMemsetAsync(counts.data, 0, counts.bytes(), device.stream)); }
+    if (penalties) { CUDA_CHECK(cudaMemsetAsync(counts.data, 0, counts.bytes(), device.stream())); }
     request.sampling_host.token_counts =
         penalties ? static_cast<std::int32_t*>(counts.data) : nullptr;
     Tensor config_lane = sampling_config.slice(1, static_cast<std::int32_t>(sequence.lane), 1);
     CUDA_CHECK(cudaMemcpyAsync(config_lane.data, &request.sampling_host,
                                sizeof(request.sampling_host), cudaMemcpyHostToDevice,
-                               device.stream));
+                               device.stream()));
 }
 
 void ProgramImplCore::copy_tail(SequenceState& sequence, const Tensor& source,
@@ -11735,7 +11722,7 @@ void ProgramImplCore::copy_tail(SequenceState& sequence, const Tensor& source,
         throw std::logic_error("target tail hidden has an invalid shape");
     }
     CUDA_CHECK(cudaMemcpyAsync(sequence.tail_hidden.data, source.data, sequence.tail_hidden.bytes(),
-                               cudaMemcpyDeviceToDevice, device.stream));
+                               cudaMemcpyDeviceToDevice, device.stream()));
     if (sequence.tail_mtp_hidden.data != nullptr) {
         if (mtp_source == nullptr || mtp_source->dtype != DType::BF16 ||
             mtp_source->ne[0] != 4 * TextConfig::hidden || mtp_source->ne[1] != 1) {
@@ -11743,17 +11730,17 @@ void ProgramImplCore::copy_tail(SequenceState& sequence, const Tensor& source,
         }
         CUDA_CHECK(cudaMemcpyAsync(sequence.tail_mtp_hidden.data, mtp_source->data,
                                    sequence.tail_mtp_hidden.bytes(), cudaMemcpyDeviceToDevice,
-                                   device.stream));
+                                   device.stream()));
     }
     sequence.tail_hidden_valid = true;
 }
 
 void ProgramImplCore::copy_round_token() {
     CUDA_CHECK(cudaMemcpyAsync(host_tokens, io.token.data, sizeof(TokenId), cudaMemcpyDeviceToHost,
-                               device.stream));
+                               device.stream()));
     if (io.report_token_logprobs) {
         CUDA_CHECK(cudaMemcpyAsync(host_report, io.report.data, sizeof(PrefillRoundReport),
-                                   cudaMemcpyDeviceToHost, device.stream));
+                                   cudaMemcpyDeviceToHost, device.stream()));
     }
 }
 
@@ -11807,7 +11794,7 @@ void ProgramImplCore::enqueue_dflash_context_append(std::span<const std::uint32_
     qwen3_8_flash_next::DFlashDecodeState& frame = *io.dflash_decode;
     CUDA_CHECK(cudaMemcpyAsync(frame.ingress.data, dflash_host_ingress,
                                sizeof(qwen3_8_flash_next::DFlashDecodeIngress),
-                               cudaMemcpyHostToDevice, device.stream));
+                               cudaMemcpyHostToDevice, device.stream()));
     const auto batch                = static_cast<std::int32_t>(lanes.size());
     Tensor active_lane_tensor       = frame.active_lanes.slice(0, 0, batch);
     Tensor state_destination_tensor = frame.state_destination_slots.slice(0, 0, batch);
@@ -11822,7 +11809,7 @@ void ProgramImplCore::enqueue_dflash_context_append(std::span<const std::uint32_
         work.alloc(DType::BF16, {DFlashConfig::feature_rows,
                                  static_cast<std::int32_t>(draft_window + 1U), batch});
     ops::prepare_ragged_prefix(dflash->pending_features, active_lane_tensor, device_starts,
-                               device_ends, features, positions, device_counts, device.stream);
+                               device_ends, features, positions, device_counts, device.stream());
 
     schedule::DFlashAppendContext state{
         {device, model, work, state_images->linear(), state_images->ple_store(),
@@ -11933,7 +11920,7 @@ ProgramImplCore::advance_prefill(SequenceState& sequence, RequestControl& reques
                 Tensor bridge_token = io.mtp->target_input_ids.slice(0, 0, 1);
                 const TokenId token = staged.prompt.token_ids[staged.base];
                 CUDA_CHECK(cudaMemcpyAsync(bridge_token.data, &token, sizeof(token),
-                                           cudaMemcpyHostToDevice, device.stream));
+                                           cudaMemcpyHostToDevice, device.stream()));
                 schedule::mtp_bridge_and_propose(schedule_state, bridge_token, previous_hidden,
                                                  bridge.position, bridge.rope_position, false);
             }
@@ -12101,7 +12088,7 @@ ProgramImplCore::advance_prefill(SequenceState& sequence, RequestControl& reques
         if (staged.prepare_mtp && staged.initial_mtp_extent != 0) {
             CUDA_CHECK(cudaMemcpyAsync(initial_drafts.data(), io.mtp->draft_tokens.data,
                                        staged.initial_mtp_extent * sizeof(TokenId),
-                                       cudaMemcpyDeviceToHost, device.stream));
+                                       cudaMemcpyDeviceToHost, device.stream()));
         }
         timing.begin_wait();
         device.synchronize();
@@ -12254,21 +12241,18 @@ ProgramImplCore::decode_ordinary_batch(std::span<const std::uint32_t> lanes,
                       sequence.ledger.end(), suffix.begin());
             std::vector<qwen3_8_flash_next::PleIds> ids(suffix_size);
             qwen3_8_flash_next::compute_ple_ids(suffix, ids);
-            auto* ple_bytes = static_cast<std::byte*>(flash_ple_host->data()) +
-                row * static_cast<std::size_t>(kPleStageBytesPerToken);
-            qwen3_8_flash_next::gather_ple_rows(
+            auto* ple_bytes = static_cast<std::byte*>(flash_ple_host->data()) + row * 2560U;
+            qwen3_8_flash_next::gather_ple_fp8(
                 *model.ple_table,
-                model.ple_nvfp4,
                 std::span<const qwen3_8_flash_next::PleIds>(ids).subspan(suffix_size - 1U, 1U),
-                std::span<std::byte>(ple_bytes, static_cast<std::size_t>(kPleStageBytesPerToken)));
+                std::span<std::byte>(ple_bytes, 2560U));
 #endif
             materialize_sequence_kv(sequence, frontier + 1, 0);
         }
 
 #ifdef NINFER_QWEN38_FLASH_NEXT
         CUDA_CHECK(cudaMemcpyAsync(flash_decode_ple->data, flash_ple_host->data(),
-                                   static_cast<std::size_t>(lanes.size()) * static_cast<std::size_t>(kPleStageBytesPerToken),
-                                   cudaMemcpyHostToDevice, device.stream));
+                                   lanes.size() * 2560U, cudaMemcpyHostToDevice, device.stream()));
 #endif
 
         schedule::OrdinaryBatchContext schedule_state{
@@ -12355,9 +12339,6 @@ runtime::BatchedGeneratedRound
 ProgramImplCore::decode_mtp_batch(std::span<const std::uint32_t> lanes,
                                   std::span<const runtime::RoundBudget> budgets,
                                   runtime::ExecutionTiming* failed_timing) {
-    // The NINFER_MTP_DUMP dump sites gate on this counter; raise it at the first MTP
-    // round so each dump site fires once on that round's tensors.
-    ninfer_mtp_phase.store(1, std::memory_order_release);
     nvtx::ScopedRange round_range(nvtx::Name::DecodeMtpRound, nvtx::Category::Mtp,
                                   static_cast<std::uint64_t>(lanes.size()));
     runtime::ExecutionTimingRecorder timing(runtime::ExecutionTimingPhase::Submit, failed_timing);
@@ -12502,7 +12483,7 @@ ProgramImplCore::decode_mtp_batch(std::span<const std::uint32_t> lanes,
                                            static_cast<std::uint64_t>(lanes.size()));
             CUDA_CHECK(cudaMemcpyAsync(io.mtp_decode->ingress.data, mtp_host_ingress,
                                        sizeof(qwen3_8_flash_next::MtpDecodeIngress),
-                                       cudaMemcpyHostToDevice, device.stream));
+                                       cudaMemcpyHostToDevice, device.stream()));
         }
         ingress_range.reset();
 
@@ -12547,8 +12528,6 @@ ProgramImplCore::decode_mtp_batch(std::span<const std::uint32_t> lanes,
         egress_range.emplace(nvtx::Name::DecodeMtpEgress, nvtx::Category::Mtp,
                              static_cast<std::uint64_t>(lanes.size()));
         const double seconds = std::chrono::duration<double>(Clock::now() - started).count();
-        const std::uint64_t capture_round =
-            mtp_capture != nullptr ? ++mtp_capture_round : 0;
         for (std::size_t row = 0; row < lanes.size(); ++row) {
             SequenceState& sequence       = active_sequence(lanes[row]);
             RequestControl& request       = requests[lanes[row]];
@@ -12571,32 +12550,6 @@ ProgramImplCore::decode_mtp_batch(std::span<const std::uint32_t> lanes,
             validate_licensed_tokens(row_tokens);
             const std::uint32_t pcur =
                 static_cast<std::uint32_t>(mtp_host_ingress->current_extents[row]);
-            if (mtp_capture != nullptr) {
-                const std::size_t report_base = static_cast<std::size_t>(row) * width;
-                mtp_capture->record(
-                    capture_round, lanes[row], base_E, pcur,
-                    std::span<const TokenId>(mtp_host_ingress->current_drafts.data() +
-                                                 static_cast<std::ptrdiff_t>(row) * draft_window,
-                                             draft_window),
-                    row_tokens,
-                    io.report_token_logprobs
-                        ? std::span<const float>(mtp_host_egress->token_logprobs.data() +
-                                                     report_base,
-                                                 width)
-                        : std::span<const float>{},
-                    io.report_token_logprobs
-                        ? std::span<const TokenId>(
-                              mtp_host_egress->top_ids.data() +
-                                  report_base * ops::kMaxReportedLogprobRanks,
-                              width * ops::kMaxReportedLogprobRanks)
-                        : std::span<const TokenId>{},
-                    io.report_token_logprobs
-                        ? std::span<const float>(
-                              mtp_host_egress->top_logprobs.data() +
-                                  report_base * ops::kMaxReportedLogprobRanks,
-                              width * ops::kMaxReportedLogprobRanks)
-                        : std::span<const float>{});
-            }
             if (pcur == 0) {
                 request.speculative_stats.fallback_steps += 1;
             } else {
@@ -12907,7 +12860,7 @@ runtime::ExecutionTiming ProgramImplCore::resolve_non_speculative_pending(
     if (request.pending.kind == PendingKind::Begin && terminal && sequence.state.fork_pending) {
         const StateImageSelectors selectors = state_selectors(sequence);
         timing.resume_submit();
-        state_images->copy_slot(selectors.source, selectors.destination, device.stream);
+        state_images->copy_slot(selectors.source, selectors.destination, device.stream());
         timing.begin_wait();
         device.synchronize();
         timing.end_wait();
@@ -12924,7 +12877,7 @@ runtime::ExecutionTiming ProgramImplCore::resolve_non_speculative_pending(
 
 MemorySummary ProgramImplCore::memory_summary() const noexcept {
     MemorySummary out;
-    out.device           = device.device;
+    out.device           = static_cast<int>(device.device().index());
     out.max_context      = capacity;
     out.kv_capacity      = kv_capacity;
     out.kv_cache         = kv_storage;

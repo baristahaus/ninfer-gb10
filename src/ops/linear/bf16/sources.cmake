@@ -1,14 +1,8 @@
-target_sources(ninfer_ops PRIVATE
-  "${CMAKE_CURRENT_LIST_DIR}/bf16_dispatch.cpp"
-  "${CMAKE_CURRENT_LIST_DIR}/shapes/n14336_k5120.cu"
-  "${CMAKE_CURRENT_LIST_DIR}/shapes/n5120_k6144.cu"
-  "${CMAKE_CURRENT_LIST_DIR}/shapes/n256_k5120.cu"
-)
-
+# Master-generation BF16 vendor route: the Bf16GemmContext implementation. The shared dispatch
+# and shape kernels stay owned by the restructured projection layer.
 target_sources(ninfer_ops PRIVATE
   "${CMAKE_CURRENT_LIST_DIR}/bf16_cublas.cpp"
-  "${CMAKE_CURRENT_LIST_DIR}/flash_next/bf16_dispatch.cpp"
-  "${CMAKE_CURRENT_LIST_DIR}/flash_next/bf16_gemv.cu"
-  "${CMAKE_CURRENT_LIST_DIR}/flash_next/bf16_small_t.cu"
-  "${CMAKE_CURRENT_LIST_DIR}/flash_next/bf16_gemm_mma.cu")
+)
 target_link_libraries(ninfer_ops PRIVATE CUDA::cublas)
+
+include("${CMAKE_CURRENT_LIST_DIR}/flash_next/sources.cmake")

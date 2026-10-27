@@ -46,8 +46,8 @@ Nvfp4A4Workspace allocate_nvfp4_a4_workspace(Arena& arena, std::int32_t tokens,
     // whichever layout the quantizer then writes.
     const std::size_t scale_bytes = nvfp4_a4_checked_bytes(
         nvfp4_a4_padded_tokens(tokens), static_cast<std::size_t>(input_rows) / 16);
-    const DeviceSpan codes  = arena.alloc_bytes(code_bytes, 256);
-    const DeviceSpan scales = arena.alloc_bytes(scale_bytes, 256);
+    const MemorySpan codes  = arena.alloc_bytes(code_bytes, 256);
+    const MemorySpan scales = arena.alloc_bytes(scale_bytes, 256);
     return {static_cast<std::uint8_t*>(codes.data), static_cast<std::uint8_t*>(scales.data),
             scale_bytes};
 }

@@ -15,8 +15,7 @@
 namespace ninfer::serve {
 
 void HttpServer::handle_count_tokens(const httplib::Request& req, httplib::Response& res) {
-    const std::string request_id = new_anthropic_request_id();
-    res.set_header("request-id", request_id);
+    const std::string request_id = res.get_header_value("request-id");
     try {
         const AnthropicCountTokensRequest request =
             parse_anthropic_count_tokens_request(parse_json_body(req));
@@ -37,13 +36,12 @@ void HttpServer::handle_count_tokens(const httplib::Request& req, httplib::Respo
 }
 
 void HttpServer::handle_messages(const httplib::Request& req, httplib::Response& res) {
-    const std::string request_id = new_anthropic_request_id();
-    res.set_header("request-id", request_id);
+    const std::string request_id = res.get_header_value("request-id");
 
     AnthropicMessagesRequest request;
     try {
         RequestLimits limits;
-        limits.default_max_tokens = options_.default_max_tokens;
+        limits.default_max_tokens = options_.launch.generation.max_tokens;
         request                   = parse_anthropic_messages_request(parse_json_body(req), limits);
     } catch (const ApiException& exception) {
         write_anthropic_error(res, exception.error(), request_id);
@@ -60,15 +58,19 @@ void HttpServer::handle_messages(const httplib::Request& req, httplib::Response&
     }
 
     const std::uint64_t req_id = ++request_seq_;
-    const RequestLogMetadata metadata{.model                  = request.model,
-                                      .stream                 = request.stream,
-                                      .output_tokens_explicit = request.output_tokens_explicit};
+    RequestLogMetadata metadata{.http_request_id        = request_id,
+                                .model                  = request.model,
+                                .stream                 = request.stream,
+                                .output_tokens_explicit = request.output_tokens_explicit};
     PreparedRequest prepared;
     try {
         prepared = service_->prepare(
             request.generation,
             request.stream ? GenerationConsumerMode::Streaming : GenerationConsumerMode::Aggregate,
-            {.phase_timings = true}, [&req] { return client_disconnected(req); });
+            {.constraint_timings = true,
+             .scheduling         = scheduling_observer(req_id, metadata.http_request_id),
+             .first_token        = first_token_observer()},
+            [&req] { return client_disconnected(req); });
     } catch (const ApiException& exception) {
         const ApiError error = normalize_anthropic_error(exception.error());
         record_request_rejected(make_request_rejection_log_context(
@@ -88,6 +90,7 @@ void HttpServer::handle_messages(const httplib::Request& req, httplib::Response&
 
     const AnthropicResponseIdentity identity =
         make_anthropic_response_identity(request_id, request.model);
+    metadata.response_id   = identity.message_id;
     const int input_tokens = prepared.prompt_tokens;
 
     auto lifecycle = begin_request(make_request_log_context(
@@ -133,7 +136,8 @@ void HttpServer::handle_messages(const httplib::Request& req, httplib::Response&
 
     try {
         auto stream  = std::make_shared<HttpGenerationStream>(std::move(prepared));
-        auto encoder = std::make_shared<AnthropicMessagesStream>(identity, input_tokens);
+        auto encoder = std::make_shared<AnthropicMessagesStream>(identity, input_tokens,
+                                                                 request.eager_tool_inputs);
 
         prepare_sse_response(res);
         res.set_chunked_content_provider(
@@ -175,6 +179,15 @@ void HttpServer::handle_messages(const httplib::Request& req, httplib::Response&
                     output.on_content = [&](const std::string& text) {
                         render_and_write(transport, [&] { return encoder->content_delta(text); });
                     };
+                    output.on_tool_start = [&](const ninfer::ToolCallStart& event) {
+                        render_and_write(transport, [&] { return encoder->tool_start(event); });
+                    };
+                    output.on_tool_arguments = [&](const ninfer::ToolArgumentsDelta& event) {
+                        render_and_write(transport, [&] { return encoder->tool_arguments(event); });
+                    };
+                    output.on_tool_end = [&](const ninfer::ToolCallEnd& event) {
+                        render_and_write(transport, [&] { return encoder->tool_end(event); });
+                    };
                     output.is_cancelled = [&] { return transport.poll(); };
 
                     outcome = service_->run(stream->prepared, &output);
@@ -203,6 +216,12 @@ void HttpServer::handle_messages(const httplib::Request& req, httplib::Response&
                 }
 
                 lifecycle->done(outcome);
+                if (outcome.finish_reason == ninfer::FinishReason::Cancelled ||
+                    stream->cancelled.load(std::memory_order_acquire)) {
+                    lifecycle->response_failure(
+                        make_client_disconnected_failure(RequestFailurePhase::Transport));
+                    return false;
+                }
                 std::vector<std::string> terminal;
                 try {
                     terminal = encoder->finish(outcome);

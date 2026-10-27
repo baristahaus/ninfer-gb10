@@ -76,8 +76,8 @@ void require_sequence_tensor(const Tensor& t, DType dtype, std::int32_t n0, std:
     }
 }
 
-void require_execution(DeviceExecutionView execution, const char* op) {
-    if (execution.multiprocessor_count <= 0) {
+void require_execution(CudaExecutionView execution, const char* op) {
+    if (execution.multiprocessor_count() <= 0) {
         throw std::invalid_argument(std::string(op) +
                                     ": execution multiprocessor count must be positive");
     }
@@ -101,8 +101,8 @@ std::size_t gdn_norm_gating_proj_workspace_capacity_bytes(std::int32_t heads,
 }
 
 void gdn_gating_proj(const Tensor& x, const Weight& a_weight, const Weight& b_weight,
-                     const Tensor& A_log, const Tensor& dt_bias, WorkspaceArena& ws, Tensor& g,
-                     Tensor& beta, DeviceExecutionView execution) {
+                     const Tensor& A_log, const Tensor& dt_bias, MemoryArena& ws, Tensor& g,
+                     Tensor& beta, CudaExecutionView execution) {
     constexpr const char* op  = "gdn_gating_proj";
     const std::int32_t tokens = x.ne[1];
     require_sequence_tensor(x, DType::BF16, 5120, tokens, op, "x");
@@ -118,8 +118,8 @@ void gdn_gating_proj(const Tensor& x, const Weight& a_weight, const Weight& b_we
 }
 
 void gdn_gating_proj(const Tensor& x, const Weight& ab_weight, const Tensor& A_log,
-                     const Tensor& dt_bias, WorkspaceArena& ws, Tensor& g, Tensor& beta,
-                     DeviceExecutionView execution) {
+                     const Tensor& dt_bias, MemoryArena& ws, Tensor& g, Tensor& beta,
+                     CudaExecutionView execution) {
     constexpr const char* op                = "gdn_gating_proj";
     const std::int32_t tokens               = x.ne[1];
     const GdnControlParentGeometry geometry = require_bf16_parent(ab_weight);
@@ -137,8 +137,8 @@ void gdn_gating_proj(const Tensor& x, const Weight& ab_weight, const Tensor& A_l
 
 void gdn_norm_gating_proj(const Tensor& x, const Tensor& norm_weight, float eps,
                           const Weight& a_weight, const Weight& b_weight, const Tensor& A_log,
-                          const Tensor& dt_bias, WorkspaceArena& ws, Tensor& h, Tensor& g,
-                          Tensor& beta, DeviceExecutionView execution) {
+                          const Tensor& dt_bias, MemoryArena& ws, Tensor& h, Tensor& g,
+                          Tensor& beta, CudaExecutionView execution) {
     constexpr const char* op  = "gdn_norm_gating_proj";
     const std::int32_t tokens = x.ne[1];
     if (!(eps > 0.0F) || !std::isfinite(eps)) {
@@ -161,8 +161,8 @@ void gdn_norm_gating_proj(const Tensor& x, const Tensor& norm_weight, float eps,
 
 void gdn_norm_gating_proj(const Tensor& x, const Tensor& norm_weight, float eps,
                           const Weight& ab_weight, const Tensor& A_log, const Tensor& dt_bias,
-                          WorkspaceArena& ws, Tensor& h, Tensor& g, Tensor& beta,
-                          DeviceExecutionView execution) {
+                          MemoryArena& ws, Tensor& h, Tensor& g, Tensor& beta,
+                          CudaExecutionView execution) {
     constexpr const char* op  = "gdn_norm_gating_proj";
     const std::int32_t tokens = x.ne[1];
     if (!(eps > 0.0F) || !std::isfinite(eps)) {

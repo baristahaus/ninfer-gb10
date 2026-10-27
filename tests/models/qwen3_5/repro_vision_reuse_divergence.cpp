@@ -135,8 +135,8 @@ void print(const char* label, const std::vector<ninfer::TokenId>& tokens) {
 int main() {
     const char* artifact = std::getenv("NINFER_TEST_ARTIFACT");
     if (!artifact || !*artifact) {
-        std::cout << "SKIP: supply NINFER_TEST_ARTIFACT\n";
-        return 77;
+        std::cerr << "NINFER_TEST_ARTIFACT must name the 27B .ninfer artifact\n";
+        return 2;
     }
     // Two fresh engines: the second has no knowledge of the first, so reused_prompt_tokens is 0
     // on both and the only difference between the two runs is the allow_prefix_reuse flag.

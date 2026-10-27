@@ -2,6 +2,7 @@
 #include "artifact/reader.h"
 #include "artifact/fixture.h"
 #include "core/weight_view.h"
+#include "core/nf4.h"
 
 #include <algorithm>
 #include <array>
@@ -22,11 +23,11 @@ void file_set_and_bindings() {
     require(bytes.size() == 528 &&
                 std::equal(bytes.begin(), bytes.end(), fixture.payload.begin() + 256),
             "cross-file parent bytes changed");
-    require(reader.read_range(7940, 0).empty(), "empty terminal range failed");
-    rejects([&] { (void)reader.read_range(7940, 1); }, "out-of-range read accepted");
+    require(reader.read_range(1344, 0).empty(), "empty terminal range failed");
+    rejects([&] { (void)reader.read_range(1344, 1); }, "out-of-range read accepted");
     rejects([&] { (void)reader.geometry(reader.find("unused")); },
             "unknown selected encoding accepted");
-    rejects([&] { (void)reader.read_range(7876, 64); }, "required missing part accepted");
+    rejects([&] { (void)reader.read_range(1280, 64); }, "required missing part accepted");
 
     Binder binder(reader);
     const auto full = binder.parameter("matrix", {2, 130});
@@ -46,40 +47,12 @@ void file_set_and_bindings() {
                 binder.use("row", "context").activation_policy == ActivationPolicy::AllowA8,
             "Use policy changed");
     (void)binder.resource("text", "tokenizer.json");
-    auto plan = std::move(binder).finish();
+    const std::array requests{PlacementRequest{full.binding.parts[0].object, Device::cuda(0)},
+                              PlacementRequest{row.binding.parts[0].object, Device::cuda(0)}};
+    auto plan = plan_materialization(reader, requests, std::move(binder).finish());
     require(plan.device_objects.size() == 1 && plan.device_capacity_bytes == 528 &&
-                plan.host_objects.size() == 1,
+                plan.resources.objects.size() == 1,
             "selected parent deduplication or residency failed");
-}
-
-void mapped_shards() {
-    Fixture fixture;
-    fixture.write();
-    MappedRange mapped;
-    {
-        Reader reader(fixture.entry);
-        mapped = reader.map_range(256, 528);
-    }
-    std::array<std::byte, 528> actual{};
-    mapped.copy(0, actual);
-    require(std::equal(actual.begin(), actual.end(), fixture.payload.begin() + 256),
-            "mapped parent crossing an unaligned shard boundary changed bytes");
-    // Page-cache advice never changes contents, including across a shard boundary.
-    mapped.advise_random();
-    mapped.prefetch(200, 160);
-    std::array<std::byte, 160> row{};
-    mapped.copy(200, row);
-    require(std::equal(row.begin(), row.end(), fixture.payload.begin() + 456),
-            "mapped PLE-width row crossing a shard boundary changed bytes");
-    rejects([&] { mapped.copy(400, row); }, "mapped read beyond range accepted");
-    rejects([&] { mapped.prefetch(400, 160); }, "mapped prefetch beyond range accepted");
-    const auto raw = weight_geometry(QType::FP8_E4M3FN, QuantLayout::Contiguous,
-                                    std::array<std::uint64_t, 2>{320001536, 160});
-    require(raw.bytes == 51200245760ULL, "PLE FP8 geometry changed");
-    const auto bank = weight_geometry(QType::NVFP4, QuantLayout::ExpertBlockScaleK16M128x4,
-                                     std::array<std::uint64_t, 3>{512, 1280, 2560});
-    require(bank.scale_offset == 838860800 && bank.divisor_offset == 943718400 &&
-            bank.bytes == 943720448, "expert bank planes changed");
 }
 
 void geometry_and_views() {
@@ -88,7 +61,7 @@ void geometry_and_views() {
     const auto* direct_bytes = reinterpret_cast<const std::byte*>(direct_words.data());
     const WeightParent direct_parent{weight_geometry(QType::BF16, QuantLayout::Contiguous,
                                                      std::array<std::uint64_t, 3>{2, 2, 3}),
-                                     direct_bytes};
+                                     Device::cpu(), direct_bytes};
     const WeightView direct_view{{2, 3}, {{&direct_parent, 3, 6}, {&direct_parent, 6, 9}}};
     const auto direct = native_weight(direct_view);
     require(direct.n == 2 && direct.k == 3 && direct.padded_shape[1] == 3 &&
@@ -98,7 +71,7 @@ void geometry_and_views() {
     Fixture fixture;
     WeightParent parent{weight_geometry(QType::Q5_G64_FP16, QuantLayout::RowSplit,
                                         std::array<std::uint64_t, 2>{2, 130}),
-                        fixture.payload.data() + 256};
+                        Device::cpu(), fixture.payload.data() + 256};
     const WeightView row{{1, 130}, {{&parent, 130, 260}}};
     const auto planes = weight_row_planes(row.parts.front());
     require(parent.geometry.bytes == 528 && planes.codes == parent.data + 128 &&
@@ -117,7 +90,7 @@ void geometry_and_views() {
     std::vector<std::byte> fp8(16896);
     WeightParent fp8_parent{weight_geometry(QType::FP8_E4M3FN_ROW_BF16, QuantLayout::RowScale,
                                             std::array<std::uint64_t, 2>{256, 64}),
-                            fp8.data()};
+                            Device::cpu(), fp8.data()};
     WeightView fp8_rows{{128, 64}, {{&fp8_parent, 0, 128 * 64}}};
     require(weight_row_planes(fp8_rows.parts.front()).scales == fp8.data() + 16384,
             "FP8 view recomputed the parent scale base");
@@ -125,9 +98,10 @@ void geometry_and_views() {
                                    "complete-parent ABI accepted an FP8 submatrix");
 
     std::vector<std::byte> nvfp4(4612);
+    const std::array divisors{2.0F};
     WeightParent nv_parent{weight_geometry(QType::NVFP4, QuantLayout::BlockScaleK16M128x4,
                                            std::array<std::uint64_t, 2>{128, 64}),
-                           nvfp4.data(), 2.0F};
+                           Device::cpu(), nvfp4.data(), divisors};
     require(weight_scale_offset(nv_parent.geometry, 31, 0) == 4096 + 496 &&
                 weight_scale_offset(nv_parent.geometry, 32, 0) == 4096 + 4,
             "NVFP4 parent swizzle origin was lost");
@@ -139,8 +113,80 @@ void geometry_and_views() {
     const auto query   = native_weight(complete, 3.0F);
     const auto context = native_weight(complete, 4.0F);
     require(query.weight_scale_divisor == 2 && query.input_scale_divisor == 3 &&
-                context.input_scale_divisor == 4 && nv_parent.weight_scale_divisor == 2,
+                context.input_scale_divisor == 4 && nv_parent.weight_divisors[0] == 2,
             "per-use native parameters changed the parent");
+
+    const auto paged = weight_geometry(QType::NF4_G16_E4M3FN, QuantLayout::RowPagedG16_4K,
+                                       std::array<std::uint64_t, 2>{46, 160});
+    require(paged.alignment == 4096 && paged.row_bytes == 90 && paged.rows_per_page == 45 &&
+                paged.page_count == 2 && paged.divisor_offset == 8192 && paged.bytes == 8196,
+            "NF4 paged geometry differs from its wire representation");
+    require(weight_paged_row_offset(paged, 44) == 3960 &&
+                weight_paged_row_offset(paged, 45) == 4096 &&
+                weight_scale_offset(paged, 45, 9) == 4185,
+            "NF4 lookup crossed a page or scale boundary incorrectly");
+    require(nf4_code_value(0) == -1 && nf4_code_value(7) == 0 && nf4_code_value(15) == 1 &&
+                std::bit_cast<std::uint32_t>(nf4_code_value(8)) == 0x3da2faff,
+            "NF4 codebook changed");
+    WeightParent paged_parent{paged, Device::cpu(), nvfp4.data(), divisors};
+    rejects<std::invalid_argument>([&] { (void)weight_row_planes({&paged_parent, 0, 160}); },
+                                   "paged lookup was exposed as constant-stride planes");
+    rejects<std::invalid_argument>([&] { (void)weight_paged_row_offset(paged, 46); },
+                                   "out-of-bounds paged row accepted");
+}
+
+void bank_geometry_and_views() {
+    const std::array<std::uint64_t, 3> shape{3, 256, 128};
+    const auto geometry =
+        weight_geometry(QType::NVFP4, QuantLayout::BatchedBlockScaleK16M128x4, shape);
+    require(geometry.code_bytes == 49152 && geometry.scale_offset == 49152 &&
+                geometry.scale_bytes == 6144 && geometry.divisor_offset == 55296 &&
+                geometry.divisor_count == 3 && geometry.bytes == 55308,
+            "NVFP4 bank planes or divisor count differ from the wire layout");
+    std::vector<std::byte> payload(geometry.bytes);
+    const std::array divisors{2.0F, 3.0F, 5.0F};
+    const WeightParent parent{geometry, Device::cpu(), payload.data(), divisors};
+    const auto second_up = native_weight({{128, 128}, {{&parent, 384 * 128, 512 * 128}}}, 7);
+    require(second_up.qdata == payload.data() + 24576 &&
+                second_up.scales == payload.data() + 52224 && second_up.weight_scale_divisor == 3 &&
+                second_up.input_scale_divisor == 7 && second_up.payload == payload.data() &&
+                second_up.payload_bytes == 55308 &&
+                second_up.layout == QuantLayout::BlockScaleK16M128x4,
+            "NVFP4 bank slice lost local planes, divisor or backing extent");
+    require(weight_scale_offset(geometry, 384 + 32, 5) == 52224 + 512 + 4 + 1,
+            "NVFP4 bank scale addressing lost the local tile origin");
+    rejects<std::invalid_argument>(
+        [&] { (void)native_weight({{128, 128}, {{&parent, 64 * 128, 192 * 128}}}); },
+        "NVFP4 accepted a view cutting a scale tile");
+    rejects<std::invalid_argument>(
+        [&] { (void)native_weight({{256, 128}, {{&parent, 128 * 128, 384 * 128}}}); },
+        "NVFP4 merged independent matrix divisor domains");
+    rejects<std::invalid_argument>(
+        [&] { (void)weight_geometry(QType::NVFP4, QuantLayout::BlockScaleK16M128x4, shape); },
+        "single-matrix NVFP4 layout accepted a bank");
+    auto invalid            = parent;
+    invalid.weight_divisors = std::span(divisors).first(1);
+    rejects<std::invalid_argument>(
+        [&] { (void)native_weight({{256, 128}, {{&invalid, 256 * 128, 512 * 128}}}); },
+        "NVFP4 accepted missing bank divisor metadata");
+
+    const auto fp8_geometry =
+        weight_geometry(QType::FP8_E4M3FN_BLOCK128X128_BF16, QuantLayout::BlockScaleM128K128,
+                        std::array<std::uint64_t, 3>{3, 256, 384});
+    require(fp8_geometry.code_bytes == 294912 && fp8_geometry.scale_bytes == 36 &&
+                fp8_geometry.bytes == 294948 && fp8_geometry.scale_block_rows == 128,
+            "block-scaled FP8 bank expanded its scale grid");
+    std::vector<std::byte> fp8_payload(fp8_geometry.bytes);
+    const WeightParent fp8{fp8_geometry, Device::cpu(), fp8_payload.data()};
+    const auto fp8_up = native_weight({{128, 384}, {{&fp8, 384 * 384, 512 * 384}}});
+    require(fp8_up.qdata == fp8_payload.data() + 147456 &&
+                fp8_up.scales == fp8_payload.data() + 294930 && fp8_up.scale_ne[0] == 3 &&
+                fp8_up.scale_ne[1] == 1 && fp8_up.scale_nb[0] == 2 && fp8_up.scale_nb[1] == 6 &&
+                weight_scale_offset(fp8_geometry, 383, 2) == 294928,
+            "block-scaled FP8 view selected a different expert or block row");
+    rejects<std::invalid_argument>(
+        [&] { (void)native_weight({{128, 384}, {{&fp8, 1 * 384, 129 * 384}}}); },
+        "block-scaled FP8 native view split a scale block");
 }
 
 void invalid_directories() {
@@ -184,84 +230,11 @@ void invalid_directories() {
 
 } // namespace
 
-void exl3_bank_geometry_and_validation() {
-    rejects<std::invalid_argument>(
-        [&] {
-            (void)weight_geometry(QType::EXL3, QuantLayout::Exl3ExpertBank,
-                                  std::array<std::uint64_t, 2>{256, 128});
-        },
-        "EXL3 geometry resolved from the shape alone");
-
-    Fixture fixture;
-    fixture.write();
-    Reader reader(fixture.entry);
-    const auto handle = reader.find("exl3_bank");
-    reader.validate_object(handle);
-    const auto& geometry = reader.geometry(handle);
-    require(geometry.format == QType::EXL3 &&
-                geometry.layout == QuantLayout::Exl3ExpertBank &&
-                geometry.bytes == 6404 && geometry.alignment == 256,
-            "EXL3 bank lost its format, layout, size or alignment");
-    const auto& bank = geometry.exl3;
-    require(bank.experts == 2 && bank.rows_per_expert == 128 && bank.codebook == 2,
-            "EXL3 bank expert count, row split or codebook was misresolved");
-    require(bank.trellis_extents.size() == 2 && bank.trellis_extents[0] == 2048 &&
-                bank.trellis_extents[1] == 3072 && bank.k2[0] == 2 && bank.k2[1] == 3,
-            "EXL3 bank extents or bitrates were misresolved");
-    require(bank.trellis_offset == 256 && bank.trellis_bytes == 5120 &&
-                bank.suh_offset == 5376 && bank.suh_bytes == 512 &&
-                bank.svh_offset == 5888 && bank.svh_bytes == 512,
-            "EXL3 bank plane offsets were misresolved");
-
-    Binder binder(reader);
-    rejects([&] { (void)binder.set_tier(handle, {0}, {1}); },
-            "tiered EXL3 bank was accepted before the SP-4 variable-extent change");
-
-    // A 3inst codebook cannot carry the odd rate: the mul1 requirement is a load check.
-    {
-        Fixture corrupted;
-        put_word(corrupted.payload, 1536 + 6400, 0, 4);
-        corrupted.write();
-        Reader bad(corrupted.entry);
-        rejects([&] { (void)bad.geometry(bad.find("exl3_bank")); },
-                "3inst codebook accepted an odd half-integer bitrate");
-    }
-    // An extent that disagrees with its entry's 2K is a load check.
-    {
-        Fixture corrupted;
-        put_word(corrupted.payload, 1536 + 12, 4, 1);  // expert 0: 2K = 4, extent stays 2048
-        corrupted.write();
-        Reader bad(corrupted.entry);
-        rejects([&] { (void)bad.geometry(bad.find("exl3_bank")); },
-                "EXL3 extent that disagrees with its bitrate was accepted");
-    }
-    // A directory entry with nonzero reserved bytes is not a directory.
-    {
-        Fixture corrupted;
-        corrupted.payload[1536 + 13] = std::byte{7};
-        corrupted.write();
-        Reader bad(corrupted.entry);
-        rejects([&] { (void)bad.geometry(bad.find("exl3_bank")); },
-                "EXL3 directory accepted nonzero reserved bytes");
-    }
-    // A truncated object whose planes cannot end at its declared bytes is a load check.
-    {
-        Fixture corrupted;
-        auto text       = corrupted.root;
-        text["objects"][4]["bytes"] = 6400;
-        corrupted.write(false, text.dump());
-        Reader bad(corrupted.entry);
-        rejects([&] { (void)bad.geometry(bad.find("exl3_bank")); },
-                "EXL3 object accepted a size its planes do not reach");
-    }
-}
-
 int main(int argc, char** argv) {
     try {
         file_set_and_bindings();
         geometry_and_views();
-        exl3_bank_geometry_and_validation();
-        mapped_shards();
+        bank_geometry_and_views();
         invalid_directories();
         // Optional production-writer fixture or explicitly selected real artifact.
         if (argc == 2) {

@@ -22,8 +22,8 @@ using namespace ninfer::test;
 
 Weight bf16_weight(const DeviceBuffer& storage, int rows, int columns) {
     Weight out{};
-    out.payload = out.qdata = storage.p;
-    out.payload_bytes = storage.bytes;
+    out.payload = out.qdata = storage.data();
+    out.payload_bytes = storage.size();
     out.qtype = QType::BF16;
     out.layout = QuantLayout::Contiguous;
     out.n = out.shape[0] = out.padded_shape[0] = rows;
@@ -43,7 +43,7 @@ int run() {
     constexpr int value = 6144;
     constexpr int convolution = 10240;
     const auto matrix = [](int rows, int columns) {
-        DeviceBuffer result(static_cast<std::size_t>(rows) * columns * sizeof(std::uint16_t));
+        DeviceBuffer result(ninfer::test::cuda_environment().context.device(), static_cast<std::size_t>(rows) * columns * sizeof(std::uint16_t));
         result.fill();
         return result;
     };
@@ -62,48 +62,48 @@ int run() {
     store_bf16(d_z, 0, 1.0F);
     store_bf16(d_output, 0, 1.0F);
 
-    DeviceBuffer d_a_log(48 * sizeof(float));
-    DeviceBuffer d_dt_bias(48 * sizeof(float));
+    DeviceBuffer d_a_log(ninfer::test::cuda_environment().context.device(), 48 * sizeof(float));
+    DeviceBuffer d_dt_bias(ninfer::test::cuda_environment().context.device(), 48 * sizeof(float));
     d_a_log.fill();
     d_dt_bias.fill();
-    DeviceBuffer d_conv(static_cast<std::size_t>(convolution) * 4 * sizeof(std::uint16_t));
+    DeviceBuffer d_conv(ninfer::test::cuda_environment().context.device(), static_cast<std::size_t>(convolution) * 4 * sizeof(std::uint16_t));
     d_conv.fill();
     store_bf16(d_conv, static_cast<std::size_t>(3) * convolution, 1.0F);
     store_bf16(d_conv, static_cast<std::size_t>(3) * convolution + qk, 1.0F);
     store_bf16(d_conv, static_cast<std::size_t>(3) * convolution + 2 * qk, 1.0F);
-    DeviceBuffer d_norm(128 * sizeof(std::uint16_t));
+    DeviceBuffer d_norm(ninfer::test::cuda_environment().context.device(), 128 * sizeof(std::uint16_t));
     d_norm.fill();
     store_bf16(d_norm, 0, 1.0F);
 
-    DeviceBuffer d_conv_state(static_cast<std::size_t>(convolution) * 3 * sizeof(std::uint16_t));
-    DeviceBuffer d_recurrent_state(static_cast<std::size_t>(128) * 128 * 48 * sizeof(float));
+    DeviceBuffer d_conv_state(ninfer::test::cuda_environment().context.device(), static_cast<std::size_t>(convolution) * 3 * sizeof(std::uint16_t));
+    DeviceBuffer d_recurrent_state(ninfer::test::cuda_environment().context.device(), static_cast<std::size_t>(128) * 128 * 48 * sizeof(float));
     d_conv_state.fill();
     d_recurrent_state.fill();
     GuardedDeviceBuffer d_destination(hidden * sizeof(std::uint16_t));
 
     ops::FlashNextGdnWeights weights{
-        .a_log = Tensor(d_a_log.p, DType::FP32, {48}),
-        .dt_bias = Tensor(d_dt_bias.p, DType::FP32, {48}),
-        .convolution = Tensor(d_conv.p, DType::BF16, {convolution, 4}),
+        .a_log = Tensor(d_a_log.data(), ninfer::test::cuda_environment().context.device(), DType::FP32, {48}),
+        .dt_bias = Tensor(d_dt_bias.data(), ninfer::test::cuda_environment().context.device(), DType::FP32, {48}),
+        .convolution = Tensor(d_conv.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {convolution, 4}),
         .a_projection = bf16_weight(d_a, 48, hidden),
         .b_projection = bf16_weight(d_b, 48, hidden),
         .query_key_value = bf16_weight(d_qkv, convolution, hidden),
         .output_gate = bf16_weight(d_z, value, hidden),
-        .norm = Tensor(d_norm.p, DType::BF16, {128}),
+        .norm = Tensor(d_norm.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {128}),
         .output = bf16_weight(d_output, hidden, value),
     };
-    Tensor input_tensor(d_input.p, DType::BF16, {hidden, 1});
-    Tensor conv_state(d_conv_state.p, DType::BF16, {convolution, 3});
-    Tensor recurrent_state(d_recurrent_state.p, DType::FP32, {128, 128, 48});
-    Tensor destination(d_destination.data(), DType::BF16, {hidden, 1});
-    WorkspaceArena workspace(ops::flash_next_gdn_workspace_capacity_bytes(1));
+    Tensor input_tensor(d_input.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {hidden, 1});
+    Tensor conv_state(d_conv_state.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {convolution, 3});
+    Tensor recurrent_state(d_recurrent_state.data(), ninfer::test::cuda_environment().context.device(), DType::FP32, {128, 128, 48});
+    Tensor destination(d_destination.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {hidden, 1});
+    MemoryArena workspace(ops::flash_next_gdn_workspace_capacity_bytes(1));
     int device = 0;
     CUDA_CHECK(cudaGetDevice(&device));
     int multiprocessors = 0;
     CUDA_CHECK(cudaDeviceGetAttribute(&multiprocessors, cudaDevAttrMultiProcessorCount, device));
     ops::flash_next_gdn(input_tensor, weights, conv_state, conv_state, recurrent_state,
                         recurrent_state, destination, workspace,
-                        DeviceExecutionView{nullptr, multiprocessors});
+                        cuda_environment().context.execution_view());
     cuda_synchronize();
 
     const auto bf16 = [](double value) {
@@ -190,14 +190,14 @@ int run_pending_fold(const PendingFoldCase& test) {
     DeviceBuffer d_a_log   = to_device(a_log);
     DeviceBuffer d_dt_bias = to_device(dt_bias);
     const ops::FlashNextGdnWeights weights{
-        .a_log           = Tensor(d_a_log.p, DType::FP32, {48}),
-        .dt_bias         = Tensor(d_dt_bias.p, DType::FP32, {48}),
-        .convolution     = Tensor(d_conv.p, DType::BF16, {convolution, 4}),
+        .a_log           = Tensor(d_a_log.data(), ninfer::test::cuda_environment().context.device(), DType::FP32, {48}),
+        .dt_bias         = Tensor(d_dt_bias.data(), ninfer::test::cuda_environment().context.device(), DType::FP32, {48}),
+        .convolution     = Tensor(d_conv.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {convolution, 4}),
         .a_projection    = bf16_weight(d_a, 48, hidden),
         .b_projection    = bf16_weight(d_b, 48, hidden),
         .query_key_value = bf16_weight(d_qkv, convolution, hidden),
         .output_gate     = bf16_weight(d_z, value, hidden),
-        .norm            = Tensor(d_norm.p, DType::BF16, {128}),
+        .norm            = Tensor(d_norm.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {128}),
         .output          = bf16_weight(d_output, hidden, value),
     };
 
@@ -212,12 +212,14 @@ int run_pending_fold(const PendingFoldCase& test) {
     LayoutBuilder record_builder;
     const GdnReplayRecordLayout record_layout = plan_gdn_replay_records(record_builder, spec);
     const std::size_t record_bytes            = record_builder.finish(256);
-    DeviceBuffer record_storage(record_bytes);
-    DeviceBuffer snapshot_storage(record_bytes);
+    DeviceBuffer record_storage(ninfer::test::cuda_environment().context.device(), record_bytes);
+    DeviceBuffer snapshot_storage(ninfer::test::cuda_environment().context.device(), record_bytes);
     record_storage.fill(0);
     snapshot_storage.fill(0xff);
-    const GdnReplayRecords records({record_storage.p, record_bytes}, record_layout);
-    const GdnReplayRecords snapshot({snapshot_storage.p, record_bytes}, record_layout);
+    const GdnReplayRecords records(
+        MemorySpan{record_storage.data(), record_bytes, record_storage.device()}, record_layout);
+    const GdnReplayRecords snapshot(
+        MemorySpan{snapshot_storage.data(), record_bytes, snapshot_storage.device()}, record_layout);
 
     LayoutBuilder state_builder;
     const LinearAttentionStatePoolLayout state_layout = plan_linear_attention_state_pool(
@@ -229,9 +231,10 @@ int run_pending_fold(const PendingFoldCase& test) {
                         .key_head_dim   = 128,
                         .slot_count     = slot_count,
                         .conv_dtype     = DType::BF16});
-    DeviceBuffer state_storage(state_builder.finish(256));
+    DeviceBuffer state_storage(ninfer::test::cuda_environment().context.device(), state_builder.finish(256));
     state_storage.fill(0);
-    LinearAttentionStatePool state_pool({state_storage.p, state_storage.bytes}, state_layout);
+    LinearAttentionStatePool state_pool(
+        MemorySpan{state_storage.data(), state_storage.size(), state_storage.device()}, state_layout);
     const auto layer_state  = state_pool.layer_view(static_cast<std::uint32_t>(tested_layer));
     Tensor conv_states      = layer_state.conv;
     Tensor recurrent_states = layer_state.recurrent;
@@ -241,13 +244,13 @@ int run_pending_fold(const PendingFoldCase& test) {
         for (std::size_t index = 0; index < recurrent_init.size(); ++index) {
             recurrent_init[index] = pattern(47U + static_cast<std::uint32_t>(index), 0.01F);
         }
-        CUDA_CHECK(cudaMemcpy(conv_states.data, conv_init.p, conv_states.bytes(),
+        CUDA_CHECK(cudaMemcpy(conv_states.data, conv_init.data(), conv_states.bytes(),
                               cudaMemcpyDeviceToDevice));
         CUDA_CHECK(cudaMemcpy(recurrent_states.data, recurrent_init.data(),
                               recurrent_states.bytes(), cudaMemcpyHostToDevice));
     }
 
-    WorkspaceArena workspace(
+    MemoryArena workspace(
         ops::flash_next_gdn_workspace_capacity_bytes(width * std::max(previous_rows, batch)));
     const auto record_round = [&](std::int32_t rows, const std::vector<std::int32_t>& slots,
                                   const std::vector<std::int32_t>& valid, std::uint32_t seed,
@@ -257,10 +260,10 @@ int run_pending_fold(const PendingFoldCase& test) {
             bf16_pattern_buffer(static_cast<std::size_t>(hidden) * width * rows, seed, 1.0F);
         DeviceBuffer d_valid = to_device(valid);
         DeviceBuffer d_slots = to_device(slots);
-        const Tensor input_tensor(input.p, DType::BF16, {hidden, width * rows});
-        const Tensor valid_tensor(d_valid.p, DType::I32, {rows});
-        const Tensor slot_tensor(d_slots.p, DType::I32, {rows});
-        Tensor destination_tensor(destination.p, DType::BF16, {hidden, width * rows});
+        const Tensor input_tensor(input.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {hidden, width * rows});
+        const Tensor valid_tensor(d_valid.data(), ninfer::test::cuda_environment().context.device(), DType::I32, {rows});
+        const Tensor slot_tensor(d_slots.data(), ninfer::test::cuda_environment().context.device(), DType::I32, {rows});
+        Tensor destination_tensor(destination.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {hidden, width * rows});
         ops::flash_next_gdn_replay_record(
             input_tensor, weights, conv_states, recurrent_states, valid_tensor, slot_tensor,
             records.layer(tested_layer, rows), destination_tensor, workspace, nullptr, pending);
@@ -268,13 +271,13 @@ int run_pending_fold(const PendingFoldCase& test) {
     };
 
     // Previous round: every record column written from the initial states.
-    DeviceBuffer previous_out(static_cast<std::size_t>(hidden) * width * previous_rows * 2);
+    DeviceBuffer previous_out(ninfer::test::cuda_environment().context.device(), static_cast<std::size_t>(hidden) * width * previous_rows * 2);
     record_round(previous_rows, test.previous_slots,
                  std::vector<std::int32_t>(static_cast<std::size_t>(previous_rows), width), 53U,
                  previous_out, nullptr);
     copy_gdn_replay_record_rows(records, snapshot, previous_rows, nullptr);
     cuda_synchronize();
-    const auto initial_states = from_device<std::uint8_t>(state_storage, state_storage.bytes);
+    const auto initial_states = from_device<std::uint8_t>(state_storage, state_storage.size());
 
     // Reference: fold, then record this round.
     std::vector<ops::GdnReplayFoldRow> fold_rows;
@@ -287,10 +290,10 @@ int run_pending_fold(const PendingFoldCase& test) {
     }
     const ops::GdnReplayFoldPlan fold_plan(records, state_pool.all_layers_view());
     fold_plan.execute(fold_rows, nullptr);
-    DeviceBuffer reference_out(static_cast<std::size_t>(hidden) * width * batch * 2);
+    DeviceBuffer reference_out(ninfer::test::cuda_environment().context.device(), static_cast<std::size_t>(hidden) * width * batch * 2);
     record_round(batch, test.sources, test.valid, 59U, reference_out, nullptr);
     const GdnReplayRecordLayer reference_layer = records.layer(tested_layer, batch);
-    const auto reference_states = from_device<std::uint8_t>(state_storage, state_storage.bytes);
+    const auto reference_states = from_device<std::uint8_t>(state_storage, state_storage.size());
     // The verify writes record columns [0, valid) of each row only; columns past valid keep
     // whatever the buffer held and are never read (folds read [0, commit), commit <= valid).
     const auto valid_columns = [&](const Tensor& plane) {
@@ -314,13 +317,13 @@ int run_pending_fold(const PendingFoldCase& test) {
 
     // Fused: restore the unfolded states and scribble over the live records, which this round
     // overwrites while the fold reads the snapshot.
-    CUDA_CHECK(cudaMemcpy(state_storage.p, initial_states.data(), initial_states.size(),
+    CUDA_CHECK(cudaMemcpy(state_storage.data(), initial_states.data(), initial_states.size(),
                           cudaMemcpyHostToDevice));
     record_storage.fill(0x7f);
     DeviceBuffer d_pending = to_device(device_rows);
-    const ops::FlashNextGdnPendingFold pending{Tensor(d_pending.p, DType::I32, {4, previous_rows}),
+    const ops::FlashNextGdnPendingFold pending{Tensor(d_pending.data(), ninfer::test::cuda_environment().context.device(), DType::I32, {4, previous_rows}),
                                                snapshot.layer(tested_layer, previous_rows)};
-    DeviceBuffer fused_out(reference_out.bytes);
+    DeviceBuffer fused_out(ninfer::test::cuda_environment().context.device(), reference_out.size());
     record_round(batch, test.sources, test.valid, 59U, fused_out, &pending);
 
     int failures           = 0;
@@ -336,18 +339,18 @@ int run_pending_fold(const PendingFoldCase& test) {
     const auto layer_bytes = [&](const std::vector<std::uint8_t>& all, const Tensor& tensor) {
         const auto offset =
             static_cast<std::size_t>(static_cast<const std::uint8_t*>(tensor.data) -
-                                     static_cast<const std::uint8_t*>(state_storage.p));
+                                     static_cast<const std::uint8_t*>(state_storage.data()));
         return std::vector<std::uint8_t>(all.begin() + static_cast<std::ptrdiff_t>(offset),
                                          all.begin() +
                                              static_cast<std::ptrdiff_t>(offset + tensor.bytes()));
     };
-    const auto fused_states = from_device<std::uint8_t>(state_storage, state_storage.bytes);
+    const auto fused_states = from_device<std::uint8_t>(state_storage, state_storage.size());
     expect_same(layer_bytes(reference_states, conv_states), layer_bytes(fused_states, conv_states),
                 "convolution states");
     expect_same(layer_bytes(reference_states, recurrent_states),
                 layer_bytes(fused_states, recurrent_states), "recurrent states");
-    expect_same(from_device<std::uint8_t>(reference_out, reference_out.bytes),
-                from_device<std::uint8_t>(fused_out, fused_out.bytes), "block output");
+    expect_same(from_device<std::uint8_t>(reference_out, reference_out.size()),
+                from_device<std::uint8_t>(fused_out, fused_out.size()), "block output");
     const GdnReplayRecordLayer fused_layer = records.layer(tested_layer, batch);
     expect_same(reference_conv, valid_columns(fused_layer.conv), "conv records");
     expect_same(reference_key, valid_columns(fused_layer.key), "key records");

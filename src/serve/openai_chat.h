@@ -5,6 +5,7 @@
 
 #include "serve/request.h"
 #include "serve/request_json.h"
+#include "serve/tool_stream_state.h"
 
 #include <nlohmann/json.hpp>
 
@@ -27,9 +28,6 @@ struct OpenAIChatRequest {
     // timings_per_token controls only cumulative timing snapshots on streamed output chunks.
     bool timings_per_token = false;
     bool return_progress   = false;
-    // Per-token probability reporting. The Engine must be loaded with --token-logprobs to answer it.
-    bool logprobs     = false;
-    int top_logprobs  = 0;
 };
 
 OpenAIChatRequest parse_chat_completion_request(const RequestJson& body,
@@ -43,8 +41,7 @@ struct OpenAIChatResponseIdentity {
 
 OpenAIChatResponseIdentity make_openai_chat_response_identity(std::string model);
 std::string make_chat_completion_response(const OpenAIChatResponseIdentity& identity,
-                                          const GenerationOutcome& outcome,
-                                          int reported_top_log_logprobs);
+                                          const GenerationOutcome& outcome);
 
 class OpenAIChatStream {
 public:
@@ -58,13 +55,16 @@ public:
     void note_timing(const ninfer::GenerationTimingObservation& timing);
     std::string reasoning_delta(const std::string& text);
     std::string content_delta(const std::string& text);
-    std::string tool_call_progress(std::size_t cumulative_bytes);
+    std::vector<std::string> tool_start(const ninfer::ToolCallStart& event);
+    std::vector<std::string> tool_arguments(const ninfer::ToolArgumentsDelta& event);
+    std::vector<std::string> tool_end(const ninfer::ToolCallEnd& event);
     std::vector<std::string> finish(const GenerationOutcome& outcome);
 
 private:
     nlohmann::json live_timings_json() const;
 
     OpenAIChatResponseIdentity identity_;
+    ToolStreamState tools_;
     std::string reasoning_;
     std::string content_;
     std::optional<ninfer::GenerationTimingObservation> live_timing_;

@@ -37,8 +37,8 @@ std::uint32_t explicit_page_groups(const KvCapacityPolicy& policy,
     if (policy.explicit_tokens == 0) {
         throw std::invalid_argument("explicit KV capacity must be positive");
     }
-    const std::uint64_t pages =
-        1ULL + (static_cast<std::uint64_t>(policy.explicit_tokens) - 1ULL) / curve.main_page_tokens;
+    const std::uint64_t pages = 1ULL + (static_cast<std::uint64_t>(policy.explicit_tokens) - 1ULL) /
+                                           curve.main_page_tokens;
     if (pages > std::numeric_limits<std::uint32_t>::max()) {
         throw std::overflow_error("explicit KV page count exceeds uint32");
     }
@@ -46,6 +46,31 @@ std::uint32_t explicit_page_groups(const KvCapacityPolicy& policy,
 }
 
 } // namespace
+
+std::vector<KvCapacityResolution>
+resolve_group_kv_capacity(const KvCapacityPolicy& policy,
+                          std::span<const RankCapacityOffer> offers) {
+    if (offers.empty()) throw std::invalid_argument("capacity negotiation requires owners");
+    std::uint32_t pages = UINT32_MAX;
+    const auto tokens   = offers.front().curve.main_page_tokens;
+    for (const auto& offer : offers) {
+        if (offer.curve.main_page_tokens != tokens)
+            throw std::invalid_argument("capacity owners disagree on logical page extent");
+        pages = std::min(
+            pages,
+            resolve_kv_capacity(policy, offer.curve, offer.available_bytes).main_page_groups);
+    }
+    std::vector<KvCapacityResolution> result;
+    for (const auto& offer : offers) {
+        const auto resolved = offer.curve.resolved_tokens(pages);
+        auto local = resolve_kv_capacity(KvCapacityPolicy::explicit_capacity(resolved), offer.curve,
+                                         offer.available_bytes);
+        local.mode = policy.mode;
+        local.automatic_headroom_bytes = policy.automatic_headroom_bytes;
+        result.push_back(local);
+    }
+    return result;
+}
 
 std::size_t SequenceCapacityCurve::reservation_bytes(std::uint32_t main_page_groups) const {
     validate_curve(*this);
@@ -67,7 +92,8 @@ std::uint32_t SequenceCapacityCurve::resolved_tokens(std::uint32_t main_page_gro
         main_page_groups > maximum_main_page_groups) {
         throw std::invalid_argument("Main KV page count is outside the target capacity curve");
     }
-    const std::uint64_t tokens = static_cast<std::uint64_t>(main_page_groups) * main_page_tokens;
+    const std::uint64_t tokens =
+        static_cast<std::uint64_t>(main_page_groups) * main_page_tokens;
     if (tokens > std::numeric_limits<std::uint32_t>::max()) {
         throw std::overflow_error("resolved KV token capacity exceeds uint32");
     }
@@ -127,16 +153,16 @@ KvCapacityResolution resolve_kv_capacity(const KvCapacityPolicy& policy,
     }
 
     return KvCapacityResolution{
-        .mode                                 = policy.mode,
+        .mode                                    = policy.mode,
         .main_page_groups                     = pages,
         .maximum_main_page_groups             = curve.maximum_main_page_groups,
-        .resolved_tokens                      = curve.resolved_tokens(pages),
-        .minimum_runtime_reservation_bytes    = curve.minimum_device_reservation_bytes,
+        .resolved_tokens                         = curve.resolved_tokens(pages),
+        .minimum_runtime_reservation_bytes       = curve.minimum_device_reservation_bytes,
         .bytes_per_additional_main_page_group = curve.bytes_per_additional_main_page_group,
-        .runtime_reservation_bytes            = reservation,
-        .available_after_weights_bytes        = available_runtime_bytes,
-        .automatic_headroom_bytes             = policy.automatic_headroom_bytes,
-        .planned_slack_bytes                  = available_runtime_bytes - reservation,
+        .runtime_reservation_bytes               = reservation,
+        .available_after_weights_bytes           = available_runtime_bytes,
+        .automatic_headroom_bytes                = policy.automatic_headroom_bytes,
+        .planned_slack_bytes                     = available_runtime_bytes - reservation,
     };
 }
 

@@ -9,6 +9,7 @@
 namespace ninfer::product {
 
 [[nodiscard]] inline SpeculativeBackend parse_speculative_backend(std::string_view value) {
+    if (value == "none") { return SpeculativeBackend::None; }
     if (value == "mtp") { return SpeculativeBackend::Mtp; }
     if (value == "dflash") { return SpeculativeBackend::DFlash; }
     if (value == "dflash2") { return SpeculativeBackend::DFlash2; }
@@ -30,21 +31,11 @@ namespace ninfer::product {
 }
 
 inline void validate_speculative_cli_options(const SpeculativeOptions& options) {
-    if (options.proposal_head_rows != 0 &&
-        (options.proposal_head != ProposalHead::Optimized || options.backend != SpeculativeBackend::Mtp)) {
-        throw std::invalid_argument(
-            "--proposal-head-rows requires --spec mtp with --lm-head-draft");
-    }
-    if (options.proposal_head_rows != 0 &&
-        (options.proposal_head_rows < 1024 || options.proposal_head_rows % 128 != 0)) {
-        throw std::invalid_argument(
-            "--proposal-head-rows must be 0 or a multiple of 128 of at least 1024");
-    }
     switch (options.backend) {
     case SpeculativeBackend::None:
         if (options.draft_tokens != 0 || options.proposal_head != ProposalHead::Full) {
-            throw std::invalid_argument(
-                "--draft-tokens and --lm-head-draft require --spec mtp|dflash|dflash2");
+            throw std::invalid_argument("nonzero drafts or an optimized proposal head require an "
+                                        "enabled speculative backend");
         }
         return;
     case SpeculativeBackend::Mtp:

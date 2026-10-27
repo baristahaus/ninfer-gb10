@@ -3,11 +3,9 @@
 
 #include <nlohmann/json.hpp>
 
-#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <limits>
-#include <random>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -15,11 +13,6 @@
 
 namespace ninfer::serve {
 namespace {
-
-std::uint64_t random_seed() {
-    static thread_local std::mt19937_64 rng(std::random_device{}());
-    return rng();
-}
 
 [[noreturn]] void invalid_sampling(std::string message, std::string param) {
     ApiError error;
@@ -37,8 +30,8 @@ std::uint64_t random_seed() {
 }
 
 ninfer::SamplingOverrides resolve_sampling_overrides(const SamplingParams& request,
-                                                     const ServeOptions& server) {
-    ninfer::SamplingOverrides sampling = server.sampling_overrides;
+                                                     const product::ServeOptions& server) {
+    ninfer::SamplingOverrides sampling = server.launch.generation.sampling;
     if (request.temperature) { sampling.temperature = static_cast<float>(*request.temperature); }
     if (request.top_p) { sampling.top_p = static_cast<float>(*request.top_p); }
     if (request.min_p) { sampling.min_p = static_cast<float>(*request.min_p); }
@@ -51,10 +44,10 @@ ninfer::SamplingOverrides resolve_sampling_overrides(const SamplingParams& reque
     }
     if (request.seed) {
         sampling.seed = *request.seed;
-    } else if (server.sampling_overrides.seed) {
-        sampling.seed = *server.sampling_overrides.seed;
+    } else if (server.launch.generation.sampling.seed) {
+        sampling.seed = *server.launch.generation.sampling.seed;
     } else {
-        sampling.seed = random_seed();
+        sampling.seed = product::random_sampling_seed();
     }
 
     const auto finite = [](const std::optional<float>& value) {
@@ -84,7 +77,6 @@ ninfer::SamplingOverrides resolve_sampling_overrides(const SamplingParams& reque
         (*sampling.frequency_penalty < -2.0F || *sampling.frequency_penalty > 2.0F)) {
         invalid_sampling("frequency_penalty must be in [-2,2]", "frequency_penalty");
     }
-    if (server.greedy) { sampling.temperature = 0.0F; }
     return sampling;
 }
 
@@ -102,7 +94,7 @@ std::string render_tool_definition(const ToolDefinition& tool) {
 } // namespace
 
 ResolvedPromptSemantics resolve_prompt_semantics(const GenerationRequest& request,
-                                                 const ServeOptions& server) {
+                                                 const product::ServeOptions& server) {
     using Json  = RequestJson;
     Json kwargs = request.chat_template_kwargs_json.empty()
                       ? Json::object()
@@ -144,8 +136,8 @@ ResolvedPromptSemantics resolve_prompt_semantics(const GenerationRequest& reques
     }
     kwargs.erase("reasoning_effort");
     ResolvedPromptSemantics result{
-        .enable_thinking           = thinking ? thinking : server.enable_thinking,
-        .preserve_thinking         = preserve ? preserve : server.preserve_thinking,
+        .enable_thinking   = thinking ? thinking : server.launch.generation.enable_thinking,
+        .preserve_thinking = preserve ? preserve : server.launch.generation.preserve_thinking,
         .chat_template_kwargs_json = kwargs.dump(),
     };
     if (effort) {
@@ -191,7 +183,6 @@ ninfer::PromptInput to_prompt_input(const GenerationRequest& request,
                                     const ResolvedPromptSemantics& semantics,
                                     const MediaAcquirer& acquire_media) {
     ninfer::PromptInput input;
-
     input.messages.reserve(request.messages.size());
     for (std::size_t turn_index = 0; turn_index < request.messages.size(); ++turn_index) {
         const ChatTurn& turn = request.messages[turn_index];
@@ -237,8 +228,7 @@ ninfer::PromptInput to_prompt_input(const GenerationRequest& request,
                 throw ApiException(std::move(error));
             }
             if (part.cache_boundary_after) {
-                const std::size_t message_position = input.messages.size() + 1U;
-                if (message_position > std::numeric_limits<std::uint32_t>::max() ||
+                if (turn_index >= std::numeric_limits<std::uint32_t>::max() ||
                     part_index >= std::numeric_limits<std::uint32_t>::max()) {
                     throw std::overflow_error("conversation cache boundary exceeds uint32");
                 }
@@ -255,7 +245,7 @@ ninfer::PromptInput to_prompt_input(const GenerationRequest& request,
                     });
                 } else {
                     input.context_cache.markers.push_back(ninfer::PromptCacheMarker{
-                        .after_message_count = static_cast<std::uint32_t>(message_position),
+                        .after_message_count = static_cast<std::uint32_t>(turn_index + 1U),
                         .kind                = part.cache_boundary_after->kind,
                         .evidence            = part.cache_boundary_after->evidence,
                         .location = ninfer::PromptCacheMarkerLocation::MessagePartBoundary,
@@ -285,28 +275,14 @@ ninfer::PromptInput to_prompt_input(const GenerationRequest& request,
     input.options.preserve_thinking         = semantics.preserve_thinking;
     input.options.chat_template_kwargs_json = semantics.chat_template_kwargs_json;
     input.options.add_vision_id             = false;
-    // A family that enforces tool choices keeps every declaration and its cache markers in the
-    // prompt, so a selection change never alters the prefix; the grammar applies the choice. A
-    // family without token constraints honors tool_choice none and an allowed_tools subset only by
-    // declaring just the selectable tools.
-    std::vector<const ToolDefinition*> tools;
-    if (semantics.output_constraints || request.uses_tools()) {
-        const auto& allowed = request.tool_choice.allowed_names;
-        tools.reserve(request.tools.size());
-        for (const ToolDefinition& tool : request.tools) {
-            if (semantics.output_constraints || !allowed ||
-                std::find(allowed->begin(), allowed->end(), tool.name) != allowed->end()) {
-                tools.push_back(&tool);
-            }
-        }
-    }
+    const auto& tools                       = request.tools;
     input.options.tool_jsons.reserve(tools.size());
     for (std::size_t index = 0; index < tools.size(); ++index) {
-        input.options.tool_jsons.push_back(render_tool_definition(*tools[index]));
-        if (tools[index]->cache_boundary_after) {
+        input.options.tool_jsons.push_back(render_tool_definition(tools[index]));
+        if (tools[index].cache_boundary_after) {
             input.context_cache.markers.push_back(ninfer::PromptCacheMarker{
-                .kind             = tools[index]->cache_boundary_after->kind,
-                .evidence         = tools[index]->cache_boundary_after->evidence,
+                .kind             = tools[index].cache_boundary_after->kind,
+                .evidence         = tools[index].cache_boundary_after->evidence,
                 .location         = ninfer::PromptCacheMarkerLocation::ToolBoundary,
                 .after_tool_count = static_cast<std::uint32_t>(index + 1U),
             });
@@ -318,26 +294,24 @@ ninfer::PromptInput to_prompt_input(const GenerationRequest& request,
 }
 
 ninfer::RequestOptions to_request_options(const GenerationRequest& request,
-                                          const ServeOptions& server,
+                                          const product::ServeOptions& server,
                                           const ResolvedPromptSemantics& semantics,
                                           bool allow_prefix_reuse) {
     ninfer::RequestOptions options;
-    options.constraint  = request.constraint;
-    options.tool_choice = request.tool_choice;
-    // Without token constraints the allowed subset is already the declared tool set.
-    if (!semantics.output_constraints) { options.tool_choice.allowed_names.reset(); }
+    options.constraint                        = request.constraint;
+    options.tool_choice                       = request.tool_choice;
     options.execution.requested_output_tokens = static_cast<std::uint32_t>(request.max_tokens);
     options.execution.allow_prefix_reuse      = allow_prefix_reuse;
     if (semantics.enable_thinking != false) {
-        options.execution.thinking.budget =
-            request.thinking_budget ? request.thinking_budget : server.default_thinking_budget;
+        options.execution.thinking.budget = request.thinking_budget
+                                                ? request.thinking_budget
+                                                : server.launch.generation.thinking_budget;
     }
     options.execution.sampling             = resolve_sampling_overrides(request.sampling, server);
     options.output.raw                     = false;
-    const bool tool_constraint = semantics.output_constraints && request.constrains_tools();
-    options.output.preserve_special_tokens = !request.constraint && !tool_constraint &&
+    options.output.preserve_special_tokens = !request.constraint && !request.constrains_tools() &&
                                              (request.uses_tools() || request.has_tool_history());
-    options.stop.include_model_defaults = !request.ignore_eos;
+    options.output.tool_name_max_length = static_cast<std::uint32_t>(request.tool_name_max_length);
     options.stop.strings.reserve(request.stop_strings.size() *
                                  (request.stop_strings_apply_to_reasoning ? 2U : 1U));
     for (const std::string& stop : request.stop_strings) {

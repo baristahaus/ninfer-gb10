@@ -1,6 +1,9 @@
 #pragma once
 
 #include "core/arena.h"
+#include "core/buffer.h"
+
+#include <cuda_runtime_api.h>
 #include "core/paged_kv_cache.h"
 #include "core/transfer_work.h"
 
@@ -12,22 +15,6 @@
 #include <vector>
 
 namespace ninfer {
-
-struct HostKVPlaneLayout {
-    std::size_t offset             = 0;
-    std::size_t page_payload_bytes = 0;
-    std::size_t head_payload_bytes = 0;
-
-    friend bool operator==(const HostKVPlaneLayout&, const HostKVPlaneLayout&) = default;
-};
-
-struct HostKVPageLayout {
-    KVPageGeometry geometry;
-    std::vector<HostKVPlaneLayout> planes;
-    std::size_t page_stride = 0;
-
-    friend bool operator==(const HostKVPageLayout&, const HostKVPageLayout&) = default;
-};
 
 [[nodiscard]] HostKVPageLayout plan_host_kv_page_layout(const KVPageGeometry& geometry);
 

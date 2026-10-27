@@ -76,7 +76,7 @@ attn_input_proj_workspace_capacity_bytes(QType parent_qtype, std::int32_t parent
 
 void attn_input_proj(const Tensor& x, const Weight& query_key_gate_value_weight, Tensor& q,
                      Tensor& gate, Tensor& k, Tensor& v, LinearPolicy policy,
-                     WorkspaceArena& workspace, cudaStream_t stream);
+                     MemoryArena& workspace, cudaStream_t stream);
 
 /**
  * Applies the A16-only single-parent Q/K/output-gate/V projection without transient workspace.

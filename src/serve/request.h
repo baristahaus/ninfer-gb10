@@ -45,7 +45,7 @@ private:
 
 // Server-side context needed while parsing/validating a request.
 struct RequestLimits {
-    int default_max_tokens = 8192;
+    std::uint32_t default_max_tokens = 8192;
 };
 
 enum class ContentKind {
@@ -172,14 +172,11 @@ struct GenerationRequest {
     std::string constraint_param;
     std::vector<ChatTurn> messages;
     std::vector<ToolDefinition> tools;
+    std::size_t tool_name_max_length = 64;
     ToolChoice tool_choice;
     std::vector<std::string> stop_strings;
     bool stop_strings_apply_to_reasoning = false;
-    // Benchmark/serving extension shared with vLLM, SGLang and llama.cpp: suppress the
-    // checkpoint's default stop tokens so generation runs to the requested token budget.
-    // Caller-supplied stop tokens and stop strings still apply.
-    bool ignore_eos = false;
-    int max_tokens                       = 0; // resolved budget; zero means immediate output limit
+    std::uint32_t max_tokens             = 0; // resolved budget; zero means immediate output limit
     std::optional<bool> enable_thinking;      // unset => use the server default
     std::optional<std::uint32_t> thinking_budget;
     std::optional<RequestedReasoningEffort> reasoning_effort;

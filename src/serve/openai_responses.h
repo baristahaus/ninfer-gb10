@@ -4,6 +4,7 @@
 // HTTP transport live in separate translation units; only wire-independent GenerationRequest is
 // passed to GenerationService.
 
+#include "serve/openai_common.h"
 #include "serve/openai_responses_store.h"
 #include "serve/request.h"
 #include "serve/request_json.h"
@@ -31,6 +32,7 @@ struct OpenAIResponsesFunctionIdentity {
 struct OpenAIResponsesPromptRequest {
     std::string model;
     GenerationRequest generation;
+    OpenAIPromptCachePolicy cache_policy;
     std::vector<ChatTurn> input_turns;
     std::vector<nlohmann::json> input_items;
     std::optional<std::string> instructions;
@@ -111,6 +113,9 @@ public:
     std::vector<std::string> start();
     std::vector<std::string> reasoning_delta(const std::string& text);
     std::vector<std::string> content_delta(const std::string& text);
+    std::vector<std::string> tool_start(const ninfer::ToolCallStart& event);
+    std::vector<std::string> tool_arguments(const ninfer::ToolArgumentsDelta& event);
+    std::vector<std::string> tool_end(const ninfer::ToolCallEnd& event);
     OpenAIResponsesStreamFinish finish(const GenerationOutcome& outcome);
     std::string terminal(const BuiltOpenAIResponse& response);
     std::string failed(const ApiError& error);

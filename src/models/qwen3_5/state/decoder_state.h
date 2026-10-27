@@ -2,15 +2,13 @@
 
 #include "core/layout.h"
 #include "core/paged_kv_cache.h"
+#include "models/common/context/storage.h"
 
 #include <cstddef>
 #include <cstdint>
 #include <optional>
 
 namespace ninfer::models::qwen3_5 {
-
-inline constexpr std::int32_t kKvInt8QuantGroup = 64;
-inline constexpr std::int32_t kKvFp8QuantGroup  = 256;
 
 struct DecoderStateSpec {
     std::uint32_t full_attention_layers     = 0;
@@ -36,6 +34,13 @@ struct PagedKVCacheLayout {
     [[nodiscard]] std::size_t payload_bytes() const noexcept { return pages.payload_bytes(); }
 };
 
+[[nodiscard]] PagedKVCacheLayout plan_paged_kv_cache(LayoutBuilder& builder, std::uint32_t layers,
+                                                     std::uint32_t capacity, std::int32_t kv_heads,
+                                                     std::int32_t head_dim, KvCacheStorage storage,
+                                                     std::int32_t table_rows,
+                                                     std::uint32_t physical_page_groups,
+                                                     PagedKVPlaneOrder plane_order);
+
 class PagedKVCache;
 
 class PagedKVCacheView {
@@ -57,7 +62,7 @@ private:
 
 class PagedKVCache {
 public:
-    PagedKVCache(DeviceSpan backing, const PagedKVCacheLayout& layout);
+    PagedKVCache(MemorySpan backing, const PagedKVCacheLayout& layout);
 
     PagedKVCache(const PagedKVCache&)            = delete;
     PagedKVCache& operator=(const PagedKVCache&) = delete;
@@ -68,17 +73,17 @@ public:
 
     [[nodiscard]] std::uint32_t layers() const noexcept { return layers_; }
 
-    [[nodiscard]] DeviceKVPagePool& page_pool() noexcept { return pages_; }
+    [[nodiscard]] context::DevicePageStorage& pages() noexcept { return pages_; }
 
-    [[nodiscard]] const DeviceKVPagePool& page_pool() const noexcept { return pages_; }
+    [[nodiscard]] const context::DevicePageStorage& pages() const noexcept { return pages_; }
 
-    [[nodiscard]] KVExecutionTablePool& execution_tables() noexcept { return execution_tables_; }
+    [[nodiscard]] context::ExecutionTableStorage& tables() noexcept { return execution_tables_; }
 
-    [[nodiscard]] const KVExecutionTablePool& execution_tables() const noexcept {
+    [[nodiscard]] const context::ExecutionTableStorage& tables() const noexcept {
         return execution_tables_;
     }
 
-    [[nodiscard]] PagedKVCacheView execution_view(const KVExecutionRowLease& row) const;
+    [[nodiscard]] PagedKVCacheView execution_view(std::int32_t row) const;
 
     [[nodiscard]] PagedKVBatchLayerView batch_layer_view(std::uint32_t layer) const;
 
@@ -86,8 +91,8 @@ private:
     friend class PagedKVCacheView;
     [[nodiscard]] PagedKVLayerView layer_view(std::uint32_t layer, Tensor block_table) const;
 
-    DeviceKVPagePool pages_;
-    KVExecutionTablePool execution_tables_;
+    context::DevicePageStorage pages_;
+    context::ExecutionTableStorage execution_tables_;
     std::uint32_t layers_      = 0;
     std::uint32_t max_context_ = 0;
     std::int32_t kv_heads_     = 0;
@@ -108,7 +113,7 @@ struct DecoderState {
     PagedKVCache text_kv;
     std::optional<PagedKVCache> mtp_kv;
 
-    DecoderState(DeviceSpan backing, const DecoderStateLayout& layout);
+    DecoderState(MemorySpan backing, const DecoderStateLayout& layout);
 
     [[nodiscard]] PagedKVCache* mtp_cache() noexcept;
     [[nodiscard]] const PagedKVCache* mtp_cache() const noexcept;

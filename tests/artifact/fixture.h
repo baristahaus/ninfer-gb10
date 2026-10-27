@@ -45,7 +45,7 @@ struct Fixture {
     Json root;
     std::vector<std::byte> payload;
 
-    Fixture() : payload(7940) {
+    Fixture() : payload(1344) {
         auto pattern = (std::filesystem::temp_directory_path() / "ninfer-artifact-XXXXXX").string();
         std::vector<char> buffer(pattern.begin(), pattern.end());
         buffer.push_back('\0');
@@ -82,21 +82,14 @@ struct Fixture {
                                            {"format", "future_format"},
                                            {"layout", "future_layout"},
                                            {"offset", 1280},
-                                           {"bytes", 64}},
-                                          {{"id", "exl3_bank"},
-                                           {"kind", "tensor"},
-                                           {"shape", {256, 128}},
-                                           {"format", "exl3"},
-                                           {"layout", "exl3_expert_bank"},
-                                           {"offset", 1536},
-                                           {"bytes", 6404}}})},
+                                           {"bytes", 64}}})},
             {"bindings",
                   {{"matrix", {{"object", "q5"}}},
                    {"row", {{"parts", Json::array({{{"object", "q5"}, {"range", {130, 260}}}})}}},
                    {"values", {{"object", "divisors"}}}}},
             {"uses", Json::array()},
             {"files", Json::array({{{"path", nullptr}, {"payload_bytes", 500}},
-                                        {{"path", "weights-second.bin"}, {"payload_bytes", 7376}},
+                                        {{"path", "weights-second.bin"}, {"payload_bytes", 780}},
                                         {{"path", "optional.bin"}, {"payload_bytes", 64}}})},
             {"metadata", {{"name", "unregistered-training-instance"}}}};
         for (int i = 0; i < 2; ++i) {
@@ -119,18 +112,6 @@ struct Fixture {
         }
         put_word(payload, 1024, 0x40000000, 4);
         put_word(payload, 1028, 0x40400000, 4);
-        // The EXL3 expert bank at payload offset 1536: two experts of [128, 128] with mixed
-        // bitrates 2K = {2, 3} and the mul1 codebook (required for the odd rate). Plane bytes
-        // are object-relative: directory 32 + padding to 256; extents 2048 and 3072 (each
-        // 256-byte aligned); suh 512; svh 512; the codebook id 2 in the final four bytes.
-        const std::uint64_t bank = 1536;
-        put_word(payload, bank + 0, 256, 8);            // expert 0: trellis offset
-        put_word(payload, bank + 8, 2048, 4);           // expert 0: extent bytes
-        put_word(payload, bank + 12, 2, 1);            // expert 0: 2K = 2
-        put_word(payload, bank + 16, 2304, 8);         // expert 1: trellis offset
-        put_word(payload, bank + 24, 3072, 4);        // expert 1: extent bytes
-        put_word(payload, bank + 28, 3, 1);           // expert 1: 2K = 3
-        put_word(payload, bank + 6400, 2, 4);         // codebook id: mul1
     }
 
     ~Fixture() {

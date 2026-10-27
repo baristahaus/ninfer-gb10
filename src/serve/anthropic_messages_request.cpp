@@ -3,8 +3,8 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <limits>
 #include <iterator>
+#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -838,7 +838,7 @@ void lower_tools(const Json& body, GenerationRequest& request) {
 }
 
 void parse_thinking(const Json& body, GenerationRequest& request, ParsePurpose purpose,
-                    int effective_max_tokens) {
+                    std::uint32_t effective_max_tokens) {
     if (!body.contains("thinking") || body.at("thinking").is_null()) { return; }
     const Json& thinking = body.at("thinking");
     if (!thinking.is_object() || !thinking.contains("type") || !thinking.at("type").is_string()) {
@@ -855,7 +855,8 @@ void parse_thinking(const Json& body, GenerationRequest& request, ParsePurpose p
         if (!budget || *budget < 1024) {
             bad_request("thinking.budget_tokens must be an integer of at least 1024", "thinking");
         }
-        if (purpose == ParsePurpose::Messages && *budget >= effective_max_tokens) {
+        if (purpose == ParsePurpose::Messages &&
+            static_cast<std::uint32_t>(*budget) >= effective_max_tokens) {
             bad_request("thinking.budget_tokens must be less than max_tokens", "thinking");
         }
         request.thinking_budget = static_cast<std::uint32_t>(*budget);
@@ -1005,7 +1006,7 @@ void apply_anthropic_prompt_cache_policy(const Json& body, GenerationRequest& re
 }
 
 void parse_common_prompt(const Json& body, GenerationRequest& request, ParsePurpose purpose,
-                         int effective_max_tokens) {
+                         std::uint32_t effective_max_tokens) {
     lower_tools(body, request);
     parse_system(body, request);
     parse_messages(body, request);
@@ -1037,6 +1038,7 @@ AnthropicMessagesRequest parse_anthropic_messages_request(const Json& body,
     require_object(body);
     AnthropicMessagesRequest result;
     result.model                           = parse_model(body);
+    result.generation.tool_name_max_length = kMaxToolNameLength;
     result.stream                          = optional_bool(body, "stream", false);
 
     const std::optional<int> max_tokens = optional_int(body, "max_tokens");
@@ -1055,6 +1057,15 @@ AnthropicMessagesRequest parse_anthropic_messages_request(const Json& body,
 
     parse_common_prompt(body, result.generation, ParsePurpose::Messages,
                         result.generation.max_tokens);
+    if (body.contains("tools") && body.at("tools").is_array()) {
+        for (const auto& tool : body.at("tools")) {
+            if (tool.contains("name") && tool.at("name").is_string() &&
+                tool.contains("eager_input_streaming") &&
+                tool.at("eager_input_streaming").is_boolean())
+                result.eager_tool_inputs[tool.at("name").get<std::string>()] =
+                    tool.at("eager_input_streaming").get<bool>();
+        }
+    }
     parse_generation_fields(body, result.generation);
     parse_structured_outputs(body, result.generation);
     return result;
@@ -1063,7 +1074,8 @@ AnthropicMessagesRequest parse_anthropic_messages_request(const Json& body,
 AnthropicCountTokensRequest parse_anthropic_count_tokens_request(const Json& body) {
     require_object(body);
     AnthropicCountTokensRequest result;
-    result.model = parse_model(body);
+    result.model                           = parse_model(body);
+    result.generation.tool_name_max_length = kMaxToolNameLength;
     parse_common_prompt(body, result.generation, ParsePurpose::CountTokens,
                         std::numeric_limits<int>::max());
     return result;

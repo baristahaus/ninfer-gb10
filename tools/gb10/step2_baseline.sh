@@ -14,7 +14,7 @@ require_binary "$BENCH_BIN"
 require_untraced_build
 
 log "building and running the memory bandwidth probe"
-if "$NVCC" -O3 -std=c++17 -arch="sm_${NINFER_CUDA_ARCH}" tools/hbm_bandwidth_probe.cu -o "$dir/hbm_bandwidth_probe" \
+if "$NVCC" -O3 -std=c++17 -arch=sm_121a tools/hbm_bandwidth_probe.cu -o "$dir/hbm_bandwidth_probe" \
     >"$dir/probe_build.log" 2>&1; then
     "$dir/hbm_bandwidth_probe" --peak-gbps 273 >"$dir/bandwidth.txt" 2>&1 || true
 else
@@ -89,12 +89,8 @@ tokenizer = AutoTokenizer.from_pretrained(sys.argv[1], local_files_only=True)
 ids = list(map(int, Path("bench/fixtures/qwen3_8_flash_next_context.ids").read_text().split()))
 Path(sys.argv[2]).write_text(json.dumps({str(n): tokenizer.decode(ids[:n]) for n in (1980, 2049, 8192, 65536)}))
 EOF
-    # Cold-prompt cases must not reuse prefixes (tools/bench/README.md). The 8k/64k prompts are
-    # long prefills on the Engine's device-default chunk (4096 on GB10), so a pair serializes:
-    # the second request is admitted only when the first completes (~48 s at 64k), which exceeds
-    # the default 30 s pending deadline and 503s the matrix. Widen the pending window for the
-    # matrix only; production flags keep their own choice.
-    start_server "$dir/server.log" --no-prefix-reuse --pending-timeout-ms 120000
+    # Cold-prompt cases must not reuse prefixes (tools/bench/README.md).
+    start_server "$dir/server.log" --no-prefix-reuse
     log "serving matrix (log: $dir/serving.log)"
     "$PYTHON" tools/bench/run_flash_next_serving.py --url "$BASE_URL" \
         --contexts "$dir/contexts.json" --output "$dir/serving.jsonl" >"$dir/serving.log" 2>&1

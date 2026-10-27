@@ -2445,9 +2445,7 @@ int32_t JSONSchemaConverter::GenerateString(const StringSpec& spec, const std::s
   if (spec.min_length != 0 || spec.max_length != -1) {
     XGRAMMAR_CHECK(excludes_.empty())
         << "string exclusions combined with length constraints are unsupported";
-    return Sequence({ByteString("\""),
-                     AddSubGrammar(JSONStringLength(spec.min_length, spec.max_length)),
-                     ByteString("\"")});
+    return AddSubGrammar(JSONStringLength(spec.min_length, spec.max_length));
   }
   // Default string
   return Sequence({ByteString("\""), RuleRef(kBasicStringSub)});
@@ -3488,6 +3486,12 @@ XMLToolCallingConverter::XMLToolCallingConverter(
 Grammar XMLToolCallingConverter::Convert(const SchemaSpecPtr& spec) {
   nested_object_level_ = 0;
   return JSONSchemaConverter::Convert(spec);
+}
+
+Grammar XMLToolCallingConverter::ConvertJSONValue() {
+  nested_object_level_ = 0;
+  AddBasicRules();
+  return GrammarNormalizer::Apply(builder_.Get(kBasicAny));
 }
 
 std::optional<std::string> XMLToolCallingConverter::GetRenderedJSONType(const SchemaSpecPtr& spec) {

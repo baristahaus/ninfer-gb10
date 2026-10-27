@@ -10,10 +10,6 @@ if [[ ! -f $GB10_CONFIG ]]; then
     echo "  cp tools/gb10/config.example.sh $GB10_CONFIG   # then edit ART and SERVE_ARGS" >&2
     exit 2
 fi
-# CUDA arch for probe and step builds: the local device's compute capability (120a on the
-# RTX 5090 box, 121a on GB10); NINFER_CUDA_ARCH overrides for cross-builds.
-NINFER_CUDA_ARCH=${NINFER_CUDA_ARCH:-$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader,nounits | head -1 | tr -d .)a}
-
 # A scalar setting passed in the environment (ART=..., KV_DTYPE=..., DRAFT_TOKENS=...) takes
 # precedence over the config file, whose plain assignments would otherwise overwrite it.
 # SERVE_ARGS is an array and comes from the config file only; it carries its own --kv-dtype and

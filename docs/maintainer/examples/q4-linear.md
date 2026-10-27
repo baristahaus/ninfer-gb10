@@ -1,27 +1,6 @@
 # Q4 Linear 性能报告：N=6144，K=5120
 
-## English clarification
-
-This document is written in Chinese. It comes from the original NInfer repository (Neroued).
-The Chinese text below is the normative text. This section maps the document in English.
-It is a clarification added on 2026-09-27. It is not normative.
-
-English title: "Q4 Linear performance report: N=6144, K=5120"
-
-This report records the full Linear Op performance of the current implementation for one shape.
-The measurement date is 2026-09-26 (a re-measurement after upstream's template unification). The target is an RTX 5090 with CUDA 13.1 and sm_120a.
-The report serves as a reference for evaluation and later tuning.
-
-Top-level sections:
-
-1. Measurement subject and conditions (测量对象与条件): the weight format, the math shape, the policy, the hardware, the timing entry, the cache and sampling rules.
-2. Final latency curve (最终耗时曲线): the T=1 to 128 curve plus the 512 and 1024 anchors.
-3. Logical bandwidth and Tensor Core utilization (逻辑带宽与 Tensor Core 利用率).
-4. Curve reading and verification (曲线解读与验证): the shape implementation, the GEMV and MMA design.
-5. Reproduction (复现): the exact build and run commands.
-
-Re-measured on 2026-09-26. This document records the complete Linear Op performance after this
-stage's template consolidation, as a reference for evaluating this shape and for later tuning.
+2026-09-26 重测。本文记录本阶段整理后的完整 Linear Op 性能，供评估该 shape 和后续调优参考。
 
 ## 测量对象与条件
 
@@ -50,7 +29,7 @@ stage's template consolidation, as a reference for evaluating this shape and for
 ## 逻辑带宽与 Tensor Core 利用率
 
 权重包含 `6144 × 5120 / 64 × 34 = 16,711,680` 字节的 code 和 scale。
-沿用 [Linear bench 指标定义](../linear-benchmark.md#5-数学工作量与-route-neutral-指标)：
+沿用 [Linear 指标定义](../linear-tuning.md#5-logical-metrics)：
 
 ```text
 model_bytes = 16,711,680 + 2 × 5120 × T + 2 × 6144 × T
@@ -98,7 +77,7 @@ T=1 的逻辑带宽为 **1069.4 GB/s，标称带宽利用率 59.68%**；采用 b
 
 ## 曲线解读与验证
 
-[shape 实现](../../../src/ops/linear/q4/shapes/n6144_k5120.cu) 在 GEMV、CTA 内 sliced-K 和普通 MMA
+[shape 实现](../../../src/ops/linear/projection/q4/shapes/n6144_k5120.cu) 在 GEMV、CTA 内 sliced-K 和普通 MMA
 之间选择；具体配置以源码为准。
 
 - T=1→2 从 15.648 升至 21.792 µs（+39.26%），是热区最大的相邻涨幅，
@@ -110,7 +89,7 @@ T=1 的逻辑带宽为 **1069.4 GB/s，标称带宽利用率 59.68%**；采用 b
   T=1024 为 **381.696 µs、168.78 TFLOP/s、80.57% TC 利用率**。
   本轮仅重测两个大 T 锚点，未重新测量 129～511 或其他大 T 交界。
 
-数值资格化复用本阶段已通过的 `ninfer_linear_q4_a16_test`：独立解码 packed Q4 code 与
+数值资格化使用 `ninfer_linear_projection_test --format q4`：独立解码 packed Q4 code 与
 FP16 scale，以 FP64 矩阵乘法为 oracle，按既有 A16 标准检查公开路线、代表性边界、输出 guard、
 输入保持和改变输入后的 CUDA Graph 重放。本次只刷新计时与文档，未重新运行数值测试。
 

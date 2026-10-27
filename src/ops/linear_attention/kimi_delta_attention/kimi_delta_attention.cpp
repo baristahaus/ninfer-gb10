@@ -1,10 +1,9 @@
+#include "ops/common/host/operands.h"
+#include "ops/linear_attention/kimi_delta_attention/plan.h"
 #include "ninfer/ops/kimi_delta_attention.h"
-
 #include "core/device.h"
 #include "ops/linear_attention/kimi_delta_attention/launch.h"
-
 #include <cuda_bf16.h>
-
 #include <cmath>
 #include <cstdint>
 #include <stdexcept>
@@ -27,38 +26,6 @@ struct BatchGeometry {
     std::int32_t batch;
 };
 
-void require_dtype(const Tensor& tensor, DType dtype, const char* name) {
-    if (tensor.dtype != dtype) {
-        throw std::invalid_argument(std::string("kimi_delta_attention: ") + name);
-    }
-}
-
-void require_shape(const Tensor& tensor, std::int32_t n0, std::int32_t n1, std::int32_t n2,
-                   std::int32_t n3, const char* name) {
-    if (tensor.ne[0] != n0 || tensor.ne[1] != n1 || tensor.ne[2] != n2 || tensor.ne[3] != n3) {
-        throw std::invalid_argument(std::string("kimi_delta_attention: invalid shape for ") + name);
-    }
-}
-
-void require_contiguous_nonnull(const Tensor& tensor, const char* name) {
-    if (!tensor.is_contiguous()) {
-        throw std::invalid_argument(std::string("kimi_delta_attention: ") + name +
-                                    " must be contiguous");
-    }
-    if (tensor.data == nullptr) {
-        throw std::invalid_argument(std::string("kimi_delta_attention: ") + name +
-                                    " data must be non-null");
-    }
-}
-
-bool overlaps(const Tensor& lhs, const Tensor& rhs) {
-    const auto lhs_begin = reinterpret_cast<std::uintptr_t>(lhs.data);
-    const auto rhs_begin = reinterpret_cast<std::uintptr_t>(rhs.data);
-    const auto lhs_end   = lhs_begin + lhs.bytes();
-    const auto rhs_end   = rhs_begin + rhs.bytes();
-    return lhs_begin < rhs_end && rhs_begin < lhs_end;
-}
-
 void require_control_parameters(float lower_bound, float scale) {
     if (!std::isfinite(lower_bound) || lower_bound < -5.0F || lower_bound > 0.0F) {
         throw std::invalid_argument("kimi_delta_attention: lower_bound must be in [-5,0]");
@@ -71,17 +38,20 @@ void require_control_parameters(float lower_bound, float scale) {
 
 Geometry validate(const Tensor& q, const Tensor& k, const Tensor& v, const Tensor& g,
                   const Tensor& beta, const Tensor& a_log, const Tensor& dt_bias, float lower_bound,
-                  float scale, const Tensor& state_in, const Tensor& state_out, const Tensor& out) {
-    require_dtype(q, DType::BF16, "q must be BF16");
-    require_dtype(k, DType::BF16, "k must be BF16");
-    require_dtype(v, DType::BF16, "v must be BF16");
-    require_dtype(g, DType::BF16, "g must be BF16");
-    require_dtype(beta, DType::BF16, "beta must be BF16");
-    require_dtype(out, DType::BF16, "out must be BF16");
-    require_dtype(a_log, DType::FP32, "A_log must be FP32");
-    require_dtype(dt_bias, DType::FP32, "dt_bias must be FP32");
-    require_dtype(state_in, DType::FP32, "ssm_state_in must be FP32");
-    require_dtype(state_out, DType::FP32, "ssm_state_out must be FP32");
+                  float scale, const Tensor& state_in, const Tensor& state_out, const Tensor& out,
+                  Device device) {
+    common::operand::dtype(q, DType::BF16, "kimi_delta_attention", "q must be BF16");
+    common::operand::dtype(k, DType::BF16, "kimi_delta_attention", "k must be BF16");
+    common::operand::dtype(v, DType::BF16, "kimi_delta_attention", "v must be BF16");
+    common::operand::dtype(g, DType::BF16, "kimi_delta_attention", "g must be BF16");
+    common::operand::dtype(beta, DType::BF16, "kimi_delta_attention", "beta must be BF16");
+    common::operand::dtype(out, DType::BF16, "kimi_delta_attention", "out must be BF16");
+    common::operand::dtype(a_log, DType::FP32, "kimi_delta_attention", "A_log must be FP32");
+    common::operand::dtype(dt_bias, DType::FP32, "kimi_delta_attention", "dt_bias must be FP32");
+    common::operand::dtype(state_in, DType::FP32, "kimi_delta_attention",
+                           "ssm_state_in must be FP32");
+    common::operand::dtype(state_out, DType::FP32, "kimi_delta_attention",
+                           "ssm_state_out must be FP32");
 
     const Geometry geometry{q.ne[1], v.ne[1], q.ne[2]};
     if (q.ne[0] != kStateDim) {
@@ -93,30 +63,41 @@ Geometry validate(const Tensor& q, const Tensor& k, const Tensor& v, const Tenso
             "kimi_delta_attention: require Hqk>=1, Hv>=Hqk, Hv%Hqk=0, and T>=1");
     }
 
-    require_shape(q, kStateDim, geometry.qk_heads, geometry.tokens, 1, "q");
-    require_shape(k, kStateDim, geometry.qk_heads, geometry.tokens, 1, "k");
-    require_shape(v, kStateDim, geometry.value_heads, geometry.tokens, 1, "v");
-    require_shape(g, kStateDim, geometry.value_heads, geometry.tokens, 1, "g");
-    require_shape(out, kStateDim, geometry.value_heads, geometry.tokens, 1, "out");
-    require_shape(beta, geometry.value_heads, geometry.tokens, 1, 1, "beta");
-    require_shape(a_log, geometry.value_heads, 1, 1, 1, "A_log");
-    require_shape(dt_bias, kStateDim, geometry.value_heads, 1, 1, "dt_bias");
-    require_shape(state_in, kStateDim, kStateDim, geometry.value_heads, 1, "ssm_state_in");
-    require_shape(state_out, kStateDim, kStateDim, geometry.value_heads, 1, "ssm_state_out");
+    common::operand::shape(q, {kStateDim, geometry.qk_heads, geometry.tokens, 1},
+                           "kimi_delta_attention", "q");
+    common::operand::shape(k, {kStateDim, geometry.qk_heads, geometry.tokens, 1},
+                           "kimi_delta_attention", "k");
+    common::operand::shape(v, {kStateDim, geometry.value_heads, geometry.tokens, 1},
+                           "kimi_delta_attention", "v");
+    common::operand::shape(g, {kStateDim, geometry.value_heads, geometry.tokens, 1},
+                           "kimi_delta_attention", "g");
+    common::operand::shape(out, {kStateDim, geometry.value_heads, geometry.tokens, 1},
+                           "kimi_delta_attention", "out");
+    common::operand::shape(beta, {geometry.value_heads, geometry.tokens, 1, 1},
+                           "kimi_delta_attention", "beta");
+    common::operand::shape(a_log, {geometry.value_heads, 1, 1, 1}, "kimi_delta_attention", "A_log");
+    common::operand::shape(dt_bias, {kStateDim, geometry.value_heads, 1, 1}, "kimi_delta_attention",
+                           "dt_bias");
+    common::operand::shape(state_in, {kStateDim, kStateDim, geometry.value_heads, 1},
+                           "kimi_delta_attention", "ssm_state_in");
+    common::operand::shape(state_out, {kStateDim, kStateDim, geometry.value_heads, 1},
+                           "kimi_delta_attention", "ssm_state_out");
 
-    require_contiguous_nonnull(q, "q");
-    require_contiguous_nonnull(k, "k");
-    require_contiguous_nonnull(v, "v");
-    require_contiguous_nonnull(g, "g");
-    require_contiguous_nonnull(beta, "beta");
-    require_contiguous_nonnull(a_log, "A_log");
-    require_contiguous_nonnull(dt_bias, "dt_bias");
-    require_contiguous_nonnull(state_in, "ssm_state_in");
-    require_contiguous_nonnull(state_out, "ssm_state_out");
-    require_contiguous_nonnull(out, "out");
+    common::operand::contiguous_nonnull(q, "kimi_delta_attention", "q", device);
+    common::operand::contiguous_nonnull(k, "kimi_delta_attention", "k", device);
+    common::operand::contiguous_nonnull(v, "kimi_delta_attention", "v", device);
+    common::operand::contiguous_nonnull(g, "kimi_delta_attention", "g", device);
+    common::operand::contiguous_nonnull(beta, "kimi_delta_attention", "beta", device);
+    common::operand::contiguous_nonnull(a_log, "kimi_delta_attention", "A_log", device);
+    common::operand::contiguous_nonnull(dt_bias, "kimi_delta_attention", "dt_bias", device);
+    common::operand::contiguous_nonnull(state_in, "kimi_delta_attention", "ssm_state_in", device);
+    common::operand::contiguous_nonnull(state_out, "kimi_delta_attention", "ssm_state_out", device);
+    common::operand::contiguous_nonnull(out, "kimi_delta_attention", "out", device);
 
     require_control_parameters(lower_bound, scale);
-    if (state_in.data != state_out.data && overlaps(state_in, state_out)) {
+    if (state_in.data != state_out.data &&
+        common::operand::overlaps(common::operand::range(state_in, "kimi_delta_attention"),
+                                  common::operand::range(state_out, "kimi_delta_attention"))) {
         throw std::invalid_argument(
             "kimi_delta_attention: state input/output may only be disjoint or exactly alias");
     }
@@ -127,18 +108,20 @@ BatchGeometry validate_batch_update(const Tensor& q, const Tensor& k, const Tens
                                     const Tensor& g, const Tensor& beta, const Tensor& a_log,
                                     const Tensor& dt_bias, float lower_bound, float scale,
                                     const Tensor& ssm_states, const Tensor& state_slots,
-                                    const Tensor& out) {
+                                    const Tensor& out, Device device) {
     constexpr std::int32_t kMaximumBatch = 8;
-    require_dtype(q, DType::BF16, "q must be BF16");
-    require_dtype(k, DType::BF16, "k must be BF16");
-    require_dtype(v, DType::BF16, "v must be BF16");
-    require_dtype(g, DType::BF16, "g must be BF16");
-    require_dtype(beta, DType::BF16, "beta must be BF16");
-    require_dtype(out, DType::BF16, "out must be BF16");
-    require_dtype(a_log, DType::FP32, "A_log must be FP32");
-    require_dtype(dt_bias, DType::FP32, "dt_bias must be FP32");
-    require_dtype(ssm_states, DType::FP32, "ssm_states must be FP32");
-    require_dtype(state_slots, DType::I32, "state_slots must be I32");
+    common::operand::dtype(q, DType::BF16, "kimi_delta_attention", "q must be BF16");
+    common::operand::dtype(k, DType::BF16, "kimi_delta_attention", "k must be BF16");
+    common::operand::dtype(v, DType::BF16, "kimi_delta_attention", "v must be BF16");
+    common::operand::dtype(g, DType::BF16, "kimi_delta_attention", "g must be BF16");
+    common::operand::dtype(beta, DType::BF16, "kimi_delta_attention", "beta must be BF16");
+    common::operand::dtype(out, DType::BF16, "kimi_delta_attention", "out must be BF16");
+    common::operand::dtype(a_log, DType::FP32, "kimi_delta_attention", "A_log must be FP32");
+    common::operand::dtype(dt_bias, DType::FP32, "kimi_delta_attention", "dt_bias must be FP32");
+    common::operand::dtype(ssm_states, DType::FP32, "kimi_delta_attention",
+                           "ssm_states must be FP32");
+    common::operand::dtype(state_slots, DType::I32, "kimi_delta_attention",
+                           "state_slots must be I32");
 
     const BatchGeometry geometry{q.ne[1], v.ne[1], q.ne[3]};
     if (q.ne[0] != kStateDim) {
@@ -150,32 +133,49 @@ BatchGeometry validate_batch_update(const Tensor& q, const Tensor& k, const Tens
                                     "Hv%Hqk=0, B=1..8, and W=1");
     }
 
-    require_shape(q, kStateDim, geometry.qk_heads, 1, geometry.batch, "q");
-    require_shape(k, kStateDim, geometry.qk_heads, 1, geometry.batch, "k");
-    require_shape(v, kStateDim, geometry.value_heads, 1, geometry.batch, "v");
-    require_shape(g, kStateDim, geometry.value_heads, 1, geometry.batch, "g");
-    require_shape(out, kStateDim, geometry.value_heads, 1, geometry.batch, "out");
-    require_shape(beta, geometry.value_heads, 1, geometry.batch, 1, "beta");
-    require_shape(a_log, geometry.value_heads, 1, 1, 1, "A_log");
-    require_shape(dt_bias, kStateDim, geometry.value_heads, 1, 1, "dt_bias");
+    common::operand::shape(q, {kStateDim, geometry.qk_heads, 1, geometry.batch},
+                           "kimi_delta_attention", "q");
+    common::operand::shape(k, {kStateDim, geometry.qk_heads, 1, geometry.batch},
+                           "kimi_delta_attention", "k");
+    common::operand::shape(v, {kStateDim, geometry.value_heads, 1, geometry.batch},
+                           "kimi_delta_attention", "v");
+    common::operand::shape(g, {kStateDim, geometry.value_heads, 1, geometry.batch},
+                           "kimi_delta_attention", "g");
+    common::operand::shape(out, {kStateDim, geometry.value_heads, 1, geometry.batch},
+                           "kimi_delta_attention", "out");
+    common::operand::shape(beta, {geometry.value_heads, 1, geometry.batch, 1},
+                           "kimi_delta_attention", "beta");
+    common::operand::shape(a_log, {geometry.value_heads, 1, 1, 1}, "kimi_delta_attention", "A_log");
+    common::operand::shape(dt_bias, {kStateDim, geometry.value_heads, 1, 1}, "kimi_delta_attention",
+                           "dt_bias");
     if (ssm_states.ne[0] != kStateDim || ssm_states.ne[1] != kStateDim ||
         ssm_states.ne[2] != geometry.value_heads || ssm_states.ne[3] <= 0) {
         throw std::invalid_argument("kimi_delta_attention: invalid shape for pooled ssm_states");
     }
-    require_shape(state_slots, geometry.batch, 1, 1, 1, "state_slots");
+    common::operand::shape(state_slots, {geometry.batch, 1, 1, 1}, "kimi_delta_attention",
+                           "state_slots");
 
-    require_contiguous_nonnull(q, "q");
-    require_contiguous_nonnull(k, "k");
-    require_contiguous_nonnull(v, "v");
-    require_contiguous_nonnull(g, "g");
-    require_contiguous_nonnull(beta, "beta");
-    require_contiguous_nonnull(a_log, "A_log");
-    require_contiguous_nonnull(dt_bias, "dt_bias");
-    require_contiguous_nonnull(ssm_states, "ssm_states");
-    require_contiguous_nonnull(state_slots, "state_slots");
-    require_contiguous_nonnull(out, "out");
+    common::operand::contiguous_nonnull(q, "kimi_delta_attention", "q", device);
+    common::operand::contiguous_nonnull(k, "kimi_delta_attention", "k", device);
+    common::operand::contiguous_nonnull(v, "kimi_delta_attention", "v", device);
+    common::operand::contiguous_nonnull(g, "kimi_delta_attention", "g", device);
+    common::operand::contiguous_nonnull(beta, "kimi_delta_attention", "beta", device);
+    common::operand::contiguous_nonnull(a_log, "kimi_delta_attention", "A_log", device);
+    common::operand::contiguous_nonnull(dt_bias, "kimi_delta_attention", "dt_bias", device);
+    common::operand::slotted_tensor(ssm_states, DType::FP32,
+                                    {128, 128, geometry.value_heads, ssm_states.ne[3]}, 3, 16,
+                                    "kimi_delta_attention", "ssm_states", device);
+    common::operand::contiguous_nonnull(state_slots, "kimi_delta_attention", "state_slots", device);
+    common::operand::contiguous_nonnull(out, "kimi_delta_attention", "out", device);
 
     require_control_parameters(lower_bound, scale);
+    const auto state_blocks = common::operand::blocks(ssm_states, "kimi_delta_attention");
+    for (const Tensor* operand : {&q, &k, &v, &g, &beta, &a_log, &dt_bias, &state_slots, &out}) {
+        if (common::operand::overlaps(state_blocks,
+                                      common::operand::range(*operand, "kimi_delta_attention")))
+            throw std::invalid_argument("kimi_delta_attention: operands overlap state storage");
+    }
+
     return geometry;
 }
 
@@ -210,54 +210,54 @@ std::size_t kimi_delta_attention_workspace_capacity_bytes(std::int32_t qk_heads,
     if (!kda::valid_heads(qk_heads, value_heads) || min_tokens <= 0 || max_tokens < min_tokens) {
         throw std::invalid_argument("kimi_delta_attention workspace: invalid heads or interval");
     }
-    return max_tokens < kda::kChunkedMinTokens
-               ? 0
-               : kda::chunked_workspace_bytes(value_heads, max_tokens);
+    return kda::recurrence_workspace_bytes(value_heads, max_tokens);
 }
 
 void kimi_delta_attention(const Tensor& q, const Tensor& k, const Tensor& v, const Tensor& g,
                           const Tensor& beta, const Tensor& a_log, const Tensor& dt_bias,
-                          float lower_bound, float scale, WorkspaceArena& workspace, Tensor& state,
-                          Tensor& out, DeviceExecutionView execution) {
+                          float lower_bound, float scale, MemoryArena& workspace, Tensor& state,
+                          Tensor& out, CudaExecutionView execution) {
     kimi_delta_attention(q, k, v, g, beta, a_log, dt_bias, lower_bound, scale, workspace, state,
                          state, out, execution);
 }
 
 void kimi_delta_attention(const Tensor& q, const Tensor& k, const Tensor& v, const Tensor& g,
                           const Tensor& beta, const Tensor& a_log, const Tensor& dt_bias,
-                          float lower_bound, float scale, WorkspaceArena& workspace,
+                          float lower_bound, float scale, MemoryArena& workspace,
                           const Tensor& state_in, Tensor& state_out, Tensor& out,
-                          DeviceExecutionView execution) {
-    namespace kda = detail::kimi_delta_attention;
-    const auto geometry =
-        validate(q, k, v, g, beta, a_log, dt_bias, lower_bound, scale, state_in, state_out, out);
+                          CudaExecutionView execution) {
+    if (workspace.device() != execution.device()) {
+        throw std::invalid_argument("kimi_delta_attention: workspace belongs to another device");
+    }
+    namespace kda       = detail::kimi_delta_attention;
+    const auto geometry = validate(q, k, v, g, beta, a_log, dt_bias, lower_bound, scale, state_in,
+                                   state_out, out, execution.device());
     const auto args =
         arguments(q, k, v, g, beta, a_log, dt_bias, lower_bound, scale, state_in, state_out, out);
-    if (geometry.tokens < kda::kChunkedMinTokens) {
-        kda::launch_recurrent(args, execution.stream);
+    const auto plan = kda::select_recurrence_plan(geometry.value_heads, geometry.tokens,
+                                                  execution.multiprocessor_count());
+    if (plan.route == kda::RecurrenceRoute::Recurrent) {
+        kda::launch_recurrent(args, execution.stream());
         return;
     }
-    if (execution.multiprocessor_count <= 0) {
-        throw std::invalid_argument("kimi_delta_attention: positive multiprocessor count required");
-    }
-    auto scope = workspace.scope();
-    const auto region =
-        workspace.alloc_bytes(kda::chunked_workspace_bytes(geometry.value_heads, geometry.tokens));
-    auto* packets = static_cast<kda::Chunk*>(region.data);
-    kda::launch_prepare(args, packets, execution.stream);
-    kda::launch_chunk_recurrence(args, packets, execution);
+    auto scope        = workspace.scope();
+    const auto region = workspace.alloc_bytes(plan.workspace_bytes);
+    auto* packets     = static_cast<kda::Chunk*>(region.data);
+    kda::launch_prepare(args, packets, execution.stream());
+    kda::launch_chunk_recurrence(args, packets, plan.value_tile, execution.stream());
 }
 
 void kimi_delta_attention_batch_update(const Tensor& q, const Tensor& k, const Tensor& v,
                                        const Tensor& g, const Tensor& beta, const Tensor& a_log,
                                        const Tensor& dt_bias, float lower_bound, float scale,
                                        Tensor& states, const Tensor& slots, Tensor& out,
-                                       cudaStream_t stream) {
+                                       CudaExecutionView execution) {
+    const auto stream   = execution.stream();
     const auto geometry = validate_batch_update(q, k, v, g, beta, a_log, dt_bias, lower_bound,
-                                                scale, states, slots, out);
+                                                scale, states, slots, out, execution.device());
     detail::kimi_delta_attention::launch_batch_update(
         arguments(q, k, v, g, beta, a_log, dt_bias, lower_bound, scale, states, states, out),
-        static_cast<const std::int32_t*>(slots.data), geometry.batch, stream);
+        static_cast<const std::int32_t*>(slots.data), geometry.batch, states.nb[3] / 4, stream);
 }
 
 } // namespace ninfer::ops

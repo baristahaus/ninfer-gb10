@@ -1,69 +1,95 @@
 #pragma once
 
+#include "core/device.h"
+#include "core/arena.h"
 #include "core/tensor.h"
 
 #include <cstdint>
 
-#include <cuda_runtime.h> // cudaStream_t
-
 namespace ninfer::ops {
 
-// Highest rank count one call reports. This is the sampler's own candidate ceiling, so a reported
-// ranking is never wider than the set a stochastic draw could have selected from.
+// Upper bound on reported alternative ranks per token. The Flash-Next egress layout and the
+// serving adapters size their pinned buffers with this bound.
 inline constexpr std::int32_t kMaxReportedLogprobRanks = 20;
-
-// Written to top_ids for ranks past the reported count.
+// Sentinel rank id for columns beyond the reported count.
 inline constexpr std::int32_t kNoReportedLogprobRank = -1;
 
 /**
- * Op: target token log-probabilities
+ * Op: Target token log-probabilities
  *
  * Math / indexing:
- *   Let l[r,c] be the exact real value represented by logits[r,c]. With V = valid_rows:
+ *   Let l[r,c] be the exact real value represented by logits[r,c]. For every column c,
  *
- *     p(r,c) = l[r,c] - log(sum_{u=0..V-1} exp(l[u,c])).
- *
- *   That is the model's own distribution over the token domain: no temperature scaling and no
- *   presence or frequency adjustment, which is what vLLM reports and what an external scorer,
- *   calibrator or verifier needs to agree with the checkpoint. The request's sampling policy is a
- *   separate question, so a token drawn under temperature or penalties need not be the reported
- *   top-1, and the Op cannot express the policy even by accident.
- *
- *   output[c] = p(target_ids[c], c). When top_ids and top_logprobs are both non-null they receive
- *   the leading K ranks of each column ordered by descending l - equivalently descending p, the
- *   normalizer being column-constant - with the lower token id breaking an exact tie, stored
- *   column-major so rank r of column c lives at r + c*K.
+ *     ideal[c] = l[target_ids[c],c]
+ *                - log(sum_{r=0..valid_rows-1} exp(l[r,c])).
  *
  * Logical shapes:
- *   logits is [physical_rows,C], target_ids and output are [C], and top_ids/top_logprobs are [K,C]
- *   with K in [1,kMaxReportedLogprobRanks], with C>0 and 1<=valid_rows<=physical_rows. Values in
- *   target_ids are in [0,valid_rows). Physical rows [valid_rows,physical_rows) participate in
- *   neither the denominator, the target lookup, nor the reported ranking.
+ *   logits is [physical_rows,C], target_ids is [C], and output is [C], with C>0 and
+ *   1<=valid_rows<=physical_rows. Values in target_ids are in [0,valid_rows). Physical rows
+ *   [valid_rows,physical_rows) do not participate in either the denominator or target lookup.
  *
  * Supported domain:
- *   logits is contiguous finite BF16, target_ids is contiguous I32, output is contiguous FP32, and a
- *   requested ranking is contiguous I32 / FP32. Storage has its dtype's natural alignment.
+ *   logits is contiguous finite BF16, target_ids is contiguous I32, and output is contiguous
+ *   FP32. Storage has its dtype's natural alignment.
  *
  * Numeric:
- *   output and top_logprobs are the FP32 numerical approximation of ideal. Reduction association and
- *   private accumulator precision are implementation choices; the independent oracle evaluates the
- *   full formula in FP64 from the represented BF16 inputs.
+ *   output is the FP32 numerical approximation of ideal. Reduction association and private
+ *   accumulator precision are implementation choices; the independent oracle evaluates the full
+ *   formula in FP64 from the represented BF16 inputs.
  *
  * Effects:
- *   Writes every element of output, and of top_ids/top_logprobs when requested, giving ranks past
- *   min(K, valid_rows) the id kNoReportedLogprobRank and negative infinity. Preserves every input. No
- *   output may overlap another output or any input.
+ *   Writes every output element and preserves both inputs. Output must not overlap logits or
+ *   target_ids.
  *
  * Workspace:
- *   None. Reads only logits: no committed-token counts, no sampling config and no round-local token
- *   array, so the report of a column does not depend on when in the round it is taken.
+ *   None.
  *
  * Execution:
- *   Enqueues one CTA per column on stream and owns no persistent state. The route is sized for the
- *   few columns one round publishes, not for a full prefill matrix. Ranking is a compile-time choice,
- *   so a call that requests none allocates no ranking storage.
+ *   Enqueues work on execution.stream() and owns no persistent state.
+ */
+void target_logprobs(const Tensor& logits, const Tensor& target_ids, std::int32_t valid_rows,
+                     Tensor& output, CudaExecutionView execution);
+
+// Capacity for vocabulary_logprob_stats over 1..max_columns columns.
+[[nodiscard]] std::size_t
+vocabulary_logprob_stats_workspace_capacity_bytes(std::int32_t physical_rows,
+                                                  std::int32_t max_columns);
+
+/**
+ * Local sufficient statistics for exact full-vocabulary target log-probabilities.
+ * logits is finite BF16 [V,C]; local row v represents global ID token_begin+v, and only
+ * IDs < token_domain participate. token_begin>=0, token_domain>0, V,C>0. target_ids is
+ * I32 [C], each ID in [0,token_domain). Writes FP32 stats [3,C] containing:
+ *   m = max(local logits), s = sum_local exp(logit-m),
+ *   a = target logit if this partition owns the target, otherwise zero.
+ * An empty partition writes (-infinity,0,0). Padding rows are not consumed.
+ * Inputs/output are contiguous, naturally aligned Device views; output overlaps neither
+ * input. Caller-owned workspace is disjoint and sized by the capacity query. No state changes.
+ */
+void vocabulary_logprob_stats(const Tensor& logits, const Tensor& target_ids,
+                              std::int32_t token_begin, std::int32_t token_domain, Tensor& stats,
+                              MemoryArena& workspace, CudaExecutionView execution);
+
+/**
+ * Given gathered FP32 stats [3,C,R] from R=1..16 disjoint partitions covering the token domain,
+ * writes FP32 output [C]: sum_r a_r - M - log(sum_r s_r*exp(m_r-M)), M=max_r m_r.
+ * Exactly one partition owns each target; empty partitions use (-infinity,0,0), and at least
+ * one partition is nonempty. This computes the full-vocabulary formula of target_logprobs,
+ * with the same FP32 numerical contract. Inputs/output are contiguous and naturally aligned
+ * on execution.device(); output is disjoint from stats. No workspace, allocation or state.
+ * Both entries support Graph capture/replay and consume current Device input values.
+ */
+void target_logprobs_from_stats(const Tensor& stats, Tensor& output, CudaExecutionView execution);
+
+
+/**
+ * Master-generation form of target_logprobs: beside the per-row scores it reports, per sampled
+ * column, the highest-ranked in-domain candidate id and its log-probability. When a pointer is
+ * null the corresponding output is skipped.
+ *
+ * Execution:
+ *   Enqueues work on the given stream and owns no persistent state.
  */
 void target_logprobs(const Tensor& logits, const Tensor& target_ids, std::int32_t valid_rows,
                      Tensor& output, Tensor* top_ids, Tensor* top_logprobs, cudaStream_t stream);
-
 } // namespace ninfer::ops

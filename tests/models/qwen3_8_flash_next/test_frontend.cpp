@@ -64,7 +64,7 @@ void check_tool_call_recovery(const flash::Frontend& frontend) {
     const auto prompt = user_prompt(
         frontend, false,
         {R"({"type":"function","function":{"name":"bash","parameters":{"type":"object","properties":{"command":{"type":"string"}}}}})"});
-    auto session = frontend.make_output_session(prompt, {});
+    auto session = frontend.make_output_session(prompt, {}, {.tool_name_max_length = 64});
     const std::string quoted =
         "<tool_call>\\n<function=shell>\\n<function=command>\\nbroken\\n</parameter>\\n"
         "</function>\\n</tool_call>";

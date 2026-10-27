@@ -3,12 +3,20 @@
 #include "artifact/framing.h"
 #include "artifact/schema.h"
 #include "core/weight_view.h"
+#include "core/io/file.h"
 
 #include <filesystem>
 #include <memory>
 #include <span>
 
 namespace ninfer::artifact {
+
+struct ReadSegment {
+    std::size_t file_index           = 0; // Index into the producing owner's file set.
+    std::uint64_t file_offset        = 0;
+    std::uint64_t destination_offset = 0;
+    std::uint64_t bytes              = 0;
+};
 
 struct MappedSegment {
     std::shared_ptr<const std::byte> storage;
@@ -32,13 +40,6 @@ public:
     void prefetch(std::uint64_t offset, std::uint64_t bytes) const;
 };
 
-struct ReadSegment {
-    std::size_t file_index           = 0;
-    std::uint64_t file_offset        = 0;
-    std::uint64_t destination_offset = 0;
-    std::uint64_t bytes              = 0;
-};
-
 // Owns the cold directory and lazily opened files. Runtime views borrow materialized storage,
 // never this Reader. Encodings are interpreted only for requested objects.
 class Reader {
@@ -57,16 +58,17 @@ public:
     [[nodiscard]] const WeightGeometry& geometry(ObjectHandle handle) const;
     void validate_object(ObjectHandle handle) const;
 
-    [[nodiscard]] MappedRange map_range(std::uint64_t offset, std::uint64_t bytes) const;
-
     [[nodiscard]] std::vector<ReadSegment> segments(std::uint64_t offset,
                                                     std::uint64_t bytes) const;
     void read_into(std::uint64_t offset, std::span<std::byte> destination) const;
     [[nodiscard]] std::vector<std::byte> read_range(std::uint64_t offset,
                                                     std::uint64_t bytes) const;
     [[nodiscard]] std::vector<std::byte> read_object(ObjectHandle handle) const;
-    [[nodiscard]] std::size_t read_direct(std::size_t file_index, std::uint64_t file_offset,
-                                          std::span<std::byte> destination) const;
+    // Maps [offset, offset+bytes) across the artifact's volumes without copying. The PLE disk
+    // tier hashes the mapped pages in place.
+    [[nodiscard]] MappedRange map_range(std::uint64_t offset, std::uint64_t bytes) const;
+    // Opens an independently owned file and checks its framing/length against this directory.
+    [[nodiscard]] io::ReadOnlyFile open_file(std::size_t file_index, io::ReadMode mode) const;
 
 private:
     struct Impl;

@@ -53,6 +53,8 @@ struct CancellationFlagView {
 
 struct RequestPlanSummary {
     std::uint32_t prompt_tokens           = 0;
+    // Master-generation reuse attribution; the restructured planner leaves these at defaults
+    // until the cache policy publishes them.
     std::uint32_t reusable_prompt_tokens  = 0;
     std::uint32_t requested_output_tokens = 0;
     std::uint32_t effective_output_tokens = 0;

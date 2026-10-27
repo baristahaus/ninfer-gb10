@@ -1,11 +1,11 @@
 #pragma once
 
+#include "core/device.h"
 #include "core/weight.h"
 #include "core/arena.h"
 #include "core/cyclic_kv_cache.h"
 #include "core/tensor.h"
 
-#include <cuda_runtime.h>
 
 #include <array>
 #include <cstddef>
@@ -61,16 +61,19 @@ struct ContextKVMaterializeExecutionEnvelope {
  *
  * The caller guarantees min_count <= counts[b] <= max_count <= W, sequential nonnegative live
  * positions, in-range state slots for live rows, and disjoint live destinations. Each selected
- * lane's old live interval ends immediately before positions[0,b], and advancing it by counts[b]
- * makes every overwritten ring slot dead. Inputs, weights, live workspace, and all cache planes are
- * mutually non-overlapping. Raw K has no semantic storage cast. Reduction association, projection
- * staging precision, and intermediate arithmetic are implementation details. The Op is safe for
- * CUDA Graph capture and replay over the complete envelope.
+ * state slot's old live interval ends immediately before positions[0,b], and advancing it by
+ * counts[b] makes every overwritten ring slot dead. Cache K/V have dense [128,padded_capacity,8]
+ * inside each state slot with explicit 16-byte-aligned slot strides nb[3]. Inputs, weights, live
+ * workspace, and all cache planes are mutually non-overlapping. Raw K has no semantic storage cast.
+ * Reduction association, projection staging precision, and intermediate arithmetic are
+ * implementation details. The Op is safe for CUDA Graph capture and replay over the complete
+ * envelope.
  */
 void context_kv_materialize(
     const Tensor& context, const Tensor& positions, const Tensor& counts, const Tensor& state_slots,
     const std::array<ContextKVMaterializeLayerView, kContextKVMaterializeLayers>& layers,
-    ContextKVMaterializeExecutionEnvelope envelope, WorkspaceArena& workspace, cudaStream_t stream);
+    ContextKVMaterializeExecutionEnvelope envelope, MemoryArena& workspace,
+    CudaExecutionView execution);
 
 /**
  * Return transient capacity for every registered W in the inclusive interval at the exact batch

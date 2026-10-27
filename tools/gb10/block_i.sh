@@ -87,7 +87,7 @@ fi
 # ---- I1: does cudaMalloc reclaim clean page cache? ------------------------------------------
 if want I1; then
     begin I1 "allocation versus page cache"
-    "$NVCC" -O2 -std=c++17 -arch="sm_${NINFER_CUDA_ARCH}" tools/gb10/alloc_probe.cu -o "$ROOT/I1/alloc_probe"
+    "$NVCC" -O2 -std=c++17 -arch=sm_121a tools/gb10/alloc_probe.cu -o "$ROOT/I1/alloc_probe"
     {
         echo "## cold (after drop_caches)"
         drop_caches

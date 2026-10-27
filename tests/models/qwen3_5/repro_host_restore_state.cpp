@@ -119,8 +119,8 @@ void print_restore(const char* label, const ninfer::GenerationResult& result,
 int main() {
     const char* artifact = std::getenv("NINFER_TEST_ARTIFACT");
     if (!artifact || !*artifact) {
-        std::cout << "SKIP: supply NINFER_TEST_ARTIFACT\n";
-        return 77;
+        std::cerr << "NINFER_TEST_ARTIFACT must name the 27B .ninfer artifact\n";
+        return 2;
     }
 
     try {

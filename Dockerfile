@@ -10,6 +10,7 @@ RUN apt-get update \
         libavformat-dev \
         libavutil-dev \
         libcurl4-openssl-dev \
+        libhwloc-dev \
         libswscale-dev \
         ninja-build \
         pkg-config \
@@ -19,7 +20,7 @@ WORKDIR /src
 COPY . .
 
 RUN cmake -S . -B /build -G Ninja \
-        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_BUILD_TYPE=Release -DNINFER_TARGET=rtx5090 \
         -DNINFER_BUILD_APPS=ON \
         -DBUILD_TESTING=OFF \
         -DNINFER_BUILD_BENCHMARKS=OFF \
@@ -35,6 +36,7 @@ RUN apt-get update \
         libavformat60 \
         libavutil58 \
         libcurl4t64 \
+        libhwloc15 \
         libswscale7 \
     && rm -rf /var/lib/apt/lists/*
 

@@ -145,15 +145,15 @@ then run the text step (IFBench, AIME25, AIME26, and GPQA-Diamond) and the multi
 RealWorldQA):
 
 ```bash
-eval/run_qwen3_8_27b_nvfp4_reasoning.sh --plan
-eval/run_qwen3_8_27b_nvfp4_reasoning.sh
+eval/run_qwen3_8_27b_reasoning.sh nvfp4 --plan
+eval/run_qwen3_8_27b_reasoning.sh nvfp4
 ```
 
-With no step argument the script runs the two steps back to back, restarting the server between
-them. Pass `text` or `multimodal` to run a single step only, and `--plan` to preview the plan for
-the selected step(s) without starting the server.
+Select `nvfp4` or `groupwise` as the first argument. With no step argument the script runs the two
+steps back to back, restarting the server between them. Pass `text` or `multimodal` to run a single
+step only, and `--plan` before the step to preview the selected plan(s) without starting the server.
 
-The script starts a fresh local server for each step. The text server uses a 252,928-token context
+The script starts a fresh local server for each step. The NVFP4 text server uses a 252,928-token context
 (the largest that fits the RTX 5090 after weights; 262,144 is rejected at startup) and omits
 `--vision`, so Vision's fixed GPU allocations do not reduce the KV pool needed by long reasoning.
 The multimodal server is restarted with `--vision` and an 81,920-token context. Across the cached
@@ -163,33 +163,17 @@ only by each EvalScope request. The target and ordinary jobs use concurrency two
 at concurrency one so its 245,760-token output budget can accommodate the observed long tail. AIME
 uses 122,880 output tokens per request, while IFBench and both multimodal datasets use 65,536.
 
-The completed formal run recorded these scores (run directories `eval/runs/20260818T132336Z-c16a8902`
-and `eval/runs/20260818T223812Z-da6cdbce`):
-
-| Benchmark | Accuracy | Correct / total |
-|---|---:|---:|
-| IFBench (prompt-level strict) | 77.00% | 231 / 300 |
-| AIME 2025 | 96.67% | 29 / 30 |
-| AIME 2026 | 96.67% | 29 / 30 |
-| GPQA-Diamond | 90.40% | 179 / 198 |
-| ERQA | 66.25% | 265 / 400 |
-| RealWorldQA | 83.53% | 639 / 765 |
+The completed NVFP4 run used `eval/runs/20260818T132336Z-c16a8902` and
+`eval/runs/20260818T223812Z-da6cdbce`. Published scores and correct/total counts are maintained in
+the [NVFP4 model card](../model-cards/Qwen3.8-27B-nvfp4-NInfer/README.md#evaluation).
 
 The Qwen3.8-27B groupwise-int profile runs the same protocol through
-`eval/run_qwen3_8_27b_groupwise_reasoning.sh`. Its 16.96 GiB artifact leaves more GPU memory, so the
+`eval/run_qwen3_8_27b_reasoning.sh groupwise`. Its 16.96 GiB artifact leaves more GPU memory, so the
 text step uses the full 262,144-token context and both steps run at concurrency four (run
 directories `eval/runs/20260819T031655Z-078bd8e0` and `eval/runs/20260819T141750Z-531a236a`; the
 multimodal step was resumed with `ninfer_eval resume` after a local proxy change interrupted
-RealWorldQA at 618/765 samples):
-
-| Benchmark | Accuracy | Correct / total |
-|---|---:|---:|
-| IFBench (prompt-level strict) | 77.67% | 233 / 300 |
-| AIME 2025 | 96.67% | 29 / 30 |
-| AIME 2026 | 96.67% | 29 / 30 |
-| GPQA-Diamond | 87.37% | 173 / 198 |
-| ERQA | 66.25% | 265 / 400 |
-| RealWorldQA | 82.22% | 629 / 765 |
+RealWorldQA at 618/765 samples). Published scores and counts are maintained in the
+[groupwise-int model card](../model-cards/Qwen3.8-27B-NInfer/README.md#evaluation).
 
 Prepare and inspect Needle-in-a-Haystack without issuing model requests:
 
@@ -263,7 +247,7 @@ The NVFP4 serving command was:
 build/apps/ninfer-serve out/qwen3_6_27b_nvfp4.ninfer \
   --host 127.0.0.1 --port 18080 \
   --max-context 262144 --prefill-chunk 1024 --kv-dtype int8 \
-  --spec mtp --draft-tokens 3 --lm-head-draft
+  --spec mtp --draft-tokens 3 --proposal-head optimized
 ```
 
 Run the configured reasoning suite in a separate shell using the evaluation environment above:

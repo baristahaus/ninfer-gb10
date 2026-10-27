@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import time
 import urllib.error
 import urllib.request
@@ -85,82 +84,6 @@ def wait_for_health(base_url: str, timeout: float) -> None:
     raise ContractError(
         f"server did not become healthy within {timeout:g}s: {last_error}"
     )
-
-
-def fetch_metrics(base_url: str) -> dict[str, float]:
-    request = urllib.request.Request(f"{base_url}/metrics")
-    try:
-        with urllib.request.urlopen(request, timeout=30) as response:
-            body = response.read().decode("utf-8")
-    except urllib.error.URLError as error:
-        raise ContractError(f"GET /metrics failed: {error}") from error
-    metrics: dict[str, float] = {}
-    for line in body.splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        name, _, value = line.rpartition(" ")
-        try:
-            metrics[name] = float(value)
-        except ValueError as error:
-            raise ContractError(f"GET /metrics has a malformed line: {line!r}") from error
-    if not metrics:
-        raise ContractError("GET /metrics rendered no metric lines")
-    return metrics
-
-
-def check_metrics(base_url: str, model: str) -> dict[str, Any]:
-    metrics = fetch_metrics(base_url)
-
-    def require(name: str) -> float:
-        if name not in metrics:
-            raise ContractError(f"GET /metrics is missing {name}")
-        return metrics[name]
-
-    requests_total = require("ninfer:requests_total")
-    if requests_total < 1:
-        raise ContractError("ninfer:requests_total did not count the smoke's requests")
-    for name in (
-        "ninfer:prompt_tokens_total",
-        "ninfer:generation_tokens_total",
-        "ninfer:cached_tokens_total",
-        "ninfer:computed_prefill_tokens_total",
-        "ninfer:mtp_drafted_total",
-        "ninfer:mtp_accepted_total",
-        "ninfer:request_latency_seconds_count",
-        "ninfer:request_latency_seconds_sum",
-        "ninfer:time_to_first_token_seconds_sum",
-        "ninfer:prefill_seconds_sum",
-        "ninfer:decode_seconds_sum",
-    ):
-        require(name)
-    if metrics["ninfer:request_latency_seconds_count"] != requests_total:
-        raise ContractError(
-            "ninfer:request_latency_seconds_count does not match requests_total"
-        )
-    if metrics["ninfer:prompt_tokens_total"] < 1 or metrics["ninfer:generation_tokens_total"] < 1:
-        raise ContractError("token counters did not accumulate over the smoke's requests")
-    for gauge in (
-        "ninfer:pool_tokens",
-        "ninfer:pool_free_tokens",
-        "ninfer:kept_prompts",
-        "ninfer:context_length",
-    ):
-        require(gauge)
-    if metrics["ninfer:pool_tokens"] < 1 or metrics["ninfer:context_length"] < 1:
-        raise ContractError("pool or context gauges are unset")
-    model_info = f'ninfer:model_info{{model_name="{model}"}}'
-    if model_info not in metrics:
-        raise ContractError(f"GET /metrics does not declare the model identity {model_info!r}")
-    return {
-        "requests_total": int(requests_total),
-        "prompt_tokens_total": int(metrics["ninfer:prompt_tokens_total"]),
-        "generation_tokens_total": int(metrics["ninfer:generation_tokens_total"]),
-        "cached_tokens_total": int(metrics["ninfer:cached_tokens_total"]),
-        "mtp_accepted_total": int(metrics["ninfer:mtp_accepted_total"]),
-        "pool_tokens": int(metrics["ninfer:pool_tokens"]),
-        "kept_prompts": int(metrics["ninfer:kept_prompts"]),
-    }
 
 
 def require_usage(usage: Any, prompt_key: str, completion_key: str) -> tuple[int, int]:
@@ -443,275 +366,7 @@ def parse_responses_stream(response: Response) -> tuple[str, str, dict[str, Any]
     return terminal_content, terminal_reasoning, terminal
 
 
-def expect_error(
-    base_url: str, path: str, payload: dict[str, Any], code: str | None
-) -> dict[str, Any]:
-    """POST a request that must fail with HTTP 400; OpenAI errors must carry `code`."""
-    req = urllib.request.Request(
-        base_url + path,
-        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-        headers={"Accept": "application/json", "Content-Type": "application/json"},
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=300) as response:
-            raise ContractError(f"POST {path} succeeded with HTTP {response.status}; expected 400")
-    except urllib.error.HTTPError as error:
-        body = error.read().decode("utf-8", errors="replace")
-        if error.code != 400:
-            raise ContractError(f"POST {path} returned HTTP {error.code}; expected 400: {body}")
-    value = json.loads(body)
-    if code is not None and value.get("error", {}).get("code") != code:
-        raise ContractError(f"POST {path} returned {body}; expected error code {code!r}")
-    if code is None and value.get("error", {}).get("type") != "invalid_request_error":
-        raise ContractError(f"POST {path} returned {body}; expected invalid_request_error")
-    return value
-
-
-def require_constraint(value: Any, branch: str) -> None:
-    if (
-        not isinstance(value, dict)
-        or value.get("branch") != branch
-        or value.get("complete") is not True
-        or value.get("terminated") is not True
-        or value.get("cache") not in {"hit", "built", "waited"}
-        or not isinstance(value.get("mask_positions"), int)
-        or value["mask_positions"] <= 0
-    ):
-        raise ContractError(f"constraint observation is not a terminated {branch} result: {value!r}")
-
-
-_WEATHER_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "get_weather",
-        "description": "Get the current weather for a city.",
-        "parameters": {
-            "type": "object",
-            "properties": {"city": {"type": "string"}},
-            "required": ["city"],
-            "additionalProperties": False,
-        },
-        "strict": True,
-    },
-}
-_YES_NO_SCHEMA = {
-    "type": "object",
-    "properties": {"answer": {"type": "string", "enum": ["yes", "no"]}},
-    "required": ["answer"],
-    "additionalProperties": False,
-}
-
-
-def chat_payload(model: str, content: str, **fields: Any) -> dict[str, Any]:
-    payload: dict[str, Any] = {
-        "model": model,
-        "messages": [{"role": "user", "content": content}],
-        "max_completion_tokens": 96,
-        "temperature": 0,
-        "enable_thinking": False,
-    }
-    payload.update(fields)
-    return payload
-
-
-def exercise_constraints_enforced(base_url: str, model: str) -> dict[str, Any]:
-    """Qwen3.5 family: output and tool constraints are enforced and observed."""
-    chat = "/v1/chat/completions"
-    schema_format = {
-        "type": "json_schema",
-        "json_schema": {"name": "answer", "schema": _YES_NO_SCHEMA, "strict": True},
-    }
-    answered = json_response(
-        base_url, "POST", chat,
-        chat_payload(model, "Is water wet? Answer in JSON.", response_format=schema_format),
-    )
-    choice = answered["choices"][0]
-    if choice["finish_reason"] != "stop":
-        raise ContractError(f"json_schema answer did not stop: {choice['finish_reason']!r}")
-    if json.loads(choice["message"]["content"]).get("answer") not in {"yes", "no"}:
-        raise ContractError("json_schema answer does not satisfy its schema")
-    require_constraint(answered.get("constraint"), "content")
-
-    choices = ["alpha", "beta", "gamma"]
-    chosen = json_response(
-        base_url, "POST", chat,
-        chat_payload(model, "Pick a Greek letter name.", structured_outputs={"choice": choices}),
-    )
-    if chosen["choices"][0]["message"]["content"] not in choices:
-        raise ContractError("structured_outputs.choice returned a value outside the list")
-    require_constraint(chosen.get("constraint"), "content")
-
-    pattern = "(BUG|TASK)-[0-9]{4}"
-    matched = json_response(
-        base_url, "POST", chat,
-        chat_payload(model, "Name a ticket.", structured_outputs={"regex": pattern}),
-    )
-    if not re.fullmatch(pattern, matched["choices"][0]["message"]["content"]):
-        raise ContractError("structured_outputs.regex returned a non-matching value")
-
-    stream_payload = chat_payload(
-        model, "Describe a cat as a JSON object.",
-        response_format={"type": "json_object"}, stream=True,
-        stream_options={"include_usage": True}, max_completion_tokens=128,
-    )
-    streamed = request(base_url, "POST", chat, stream_payload)
-    content, _, stream_finish, _ = parse_openai_stream(streamed)
-    stream_constraint = None
-    for block in streamed.body.decode("utf-8").split("\n\n"):
-        if block.startswith("data: {"):
-            event = json.loads(block[6:])
-            if "constraint" in event:
-                if stream_constraint is not None:
-                    raise ContractError("OpenAI stream sent the constraint observation twice")
-                stream_constraint = event["constraint"]
-    if stream_constraint is None:
-        raise ContractError("OpenAI stream omitted the constraint observation")
-    if stream_finish == "stop":
-        if not isinstance(json.loads(content), dict):
-            raise ContractError("streamed json_object answer is not an object")
-        require_constraint(stream_constraint, "content")
-
-    tools = [_WEATHER_TOOL]
-    for label, fields in (
-        ("required", {"tool_choice": "required"}),
-        (
-            "named",
-            {
-                "tool_choice": {"type": "function", "function": {"name": "get_weather"}},
-                "parallel_tool_calls": False,
-            },
-        ),
-    ):
-        called = json_response(
-            base_url, "POST", chat,
-            chat_payload(model, "Hello there.", tools=tools, **fields),
-        )
-        choice = called["choices"][0]
-        calls = choice["message"].get("tool_calls") or []
-        if choice["finish_reason"] != "tool_calls" or not calls:
-            raise ContractError(f"tool_choice {label} did not produce a tool call")
-        if label == "named" and len(calls) != 1:
-            raise ContractError("named tool choice without parallel calls produced several calls")
-        for call in calls:
-            arguments = json.loads(call["function"]["arguments"])
-            if call["function"]["name"] != "get_weather" or set(arguments) != {"city"} or (
-                not isinstance(arguments["city"], str)
-            ):
-                raise ContractError(f"strict tool call violates its schema: {call!r}")
-        require_constraint(called.get("constraint"), "tools")
-
-    anthropic = json_response(
-        base_url, "POST", "/v1/messages",
-        {
-            "model": model,
-            "max_tokens": 96,
-            "messages": [{"role": "user", "content": "Hello there."}],
-            "tools": [
-                {
-                    "name": "get_weather",
-                    "description": "Get the current weather for a city.",
-                    "input_schema": _WEATHER_TOOL["function"]["parameters"],
-                    "strict": True,
-                }
-            ],
-            "tool_choice": {"type": "any"},
-        },
-    )
-    uses = [block for block in anthropic.get("content", []) if block.get("type") == "tool_use"]
-    if anthropic.get("stop_reason") != "tool_use" or not uses:
-        raise ContractError("Anthropic tool_choice any did not produce tool_use")
-    if any(set(block.get("input", {})) != {"city"} for block in uses):
-        raise ContractError("Anthropic strict tool input violates its schema")
-
-    formatted = json_response(
-        base_url, "POST", "/v1/responses",
-        {
-            "model": model,
-            "input": "Is water wet? Answer in JSON.",
-            "max_output_tokens": 96,
-            "temperature": 0,
-            "store": False,
-            "text": {"format": {"type": "json_schema", "name": "answer", "schema": _YES_NO_SCHEMA}},
-            "reasoning": {"effort": "none"},
-        },
-    )
-    text, _ = response_text(formatted)
-    if formatted.get("status") != "completed" or json.loads(text).get("answer") not in {"yes", "no"}:
-        raise ContractError("Responses text.format json_schema answer does not satisfy its schema")
-
-    expect_error(base_url, chat, chat_payload(model, "x", structured_outputs={"regex": "(?=a)"}),
-                 "invalid_regex")
-    expect_error(
-        base_url, chat,
-        chat_payload(model, "x", response_format={
-            "type": "json_schema",
-            "json_schema": {"name": "a", "schema": {"type": "string", "unknownKeyword": 1}},
-        }),
-        "unsupported_json_schema",
-    )
-    expect_error(base_url, chat, chat_payload(model, "x", guided_json={"type": "object"}), None)
-    expect_error(
-        base_url, chat,
-        chat_payload(model, "x", response_format={"type": "json_object"}, stop=["END"]),
-        None,
-    )
-    return {
-        "json_schema_answer": choice_content(answered),
-        "stream_finish_reason": stream_finish,
-        "tool_calls": len(calls),
-    }
-
-
-def choice_content(response: dict[str, Any]) -> str:
-    return response["choices"][0]["message"]["content"]
-
-
-def exercise_constraints_refused(base_url: str, model: str) -> dict[str, Any]:
-    """Qwen3.8 Flash-Next: no token-mask execution, so enforceable requests are refused."""
-    chat = "/v1/chat/completions"
-    expect_error(
-        base_url, chat,
-        chat_payload(model, "x", response_format={"type": "json_object"}),
-        "unsupported_json_schema",
-    )
-    expect_error(base_url, chat, chat_payload(model, "x", structured_outputs={"choice": ["a"]}),
-                 "invalid_choice")
-    expect_error(base_url, chat, chat_payload(model, "x", tools=[_WEATHER_TOOL]),
-                 "invalid_tool_constraint")
-    relaxed = dict(_WEATHER_TOOL, function=dict(_WEATHER_TOOL["function"], strict=False))
-    expect_error(
-        base_url, chat,
-        chat_payload(model, "x", tools=[relaxed], tool_choice="required"),
-        "invalid_tool_constraint",
-    )
-    free = json_response(base_url, "POST", chat,
-                         chat_payload(model, "Hello there.", tools=[relaxed], max_completion_tokens=16))
-    if "constraint" in free:
-        raise ContractError("free tool generation reported a constraint observation")
-    return {"refused": 4}
-
-
-def check_constraint_metrics(base_url: str, enforced: bool) -> dict[str, Any]:
-    metrics = fetch_metrics(base_url)
-    terminated = metrics.get('ninfer:constraint_requests_total{outcome="terminated"}')
-    positions = metrics.get("ninfer:constraint_mask_positions_total")
-    uploaded = metrics.get("ninfer:constraint_mask_upload_bytes_total")
-    if terminated is None or positions is None or uploaded is None:
-        raise ContractError("GET /metrics is missing the constraint counters")
-    if enforced and (terminated < 1 or positions < 1 or uploaded < 1):
-        raise ContractError("constraint counters did not move for enforced requests")
-    if not enforced and (terminated != 0 or positions != 0):
-        raise ContractError("constraint counters moved on a family without constraints")
-    return {
-        "terminated": int(terminated),
-        "tools_branch": int(metrics.get('ninfer:constraint_branch_total{branch="tools"}', 0)),
-        "mask_positions": int(positions),
-        "mask_upload_bytes": int(uploaded),
-    }
-
-
-def exercise(base_url: str, model: str, constraints: str) -> dict[str, Any]:
+def exercise(base_url: str, model: str) -> dict[str, Any]:
     models = json_response(base_url, "GET", "/v1/models")
     entries = models.get("data")
     if (
@@ -878,21 +533,14 @@ def exercise(base_url: str, model: str, constraints: str) -> dict[str, Any]:
     blocks = anthropic.get("content")
     if not isinstance(blocks, list) or not blocks:
         raise ContractError("Anthropic response content is empty")
-    anthropic_usage = anthropic.get("usage")
     anthropic_input_tokens, _ = require_usage(
-        anthropic_usage, "input_tokens", "output_tokens"
+        anthropic.get("usage"), "input_tokens", "output_tokens"
     )
-    cache_read = anthropic_usage.get("cache_read_input_tokens") or 0
-    if not isinstance(cache_read, int) or cache_read < 0:
-        raise ContractError("Anthropic usage cache_read_input_tokens is invalid")
-    if anthropic_input_tokens + cache_read != input_tokens:
-        raise ContractError(
-            "Anthropic usage prompt accounting differs from count_tokens: "
-            f"input={anthropic_input_tokens} cache_read={cache_read} count={input_tokens}"
-        )
+    if anthropic_input_tokens != input_tokens:
+        raise ContractError("Anthropic usage input_tokens differs from count_tokens")
 
     return {
-        "format": "ninfer_serve_contract_v3",
+        "format": "ninfer_serve_contract_v2",
         "model": model,
         "count_tokens": input_tokens,
         "openai_finish_reason": stream_finish,
@@ -901,13 +549,6 @@ def exercise(base_url: str, model: str, constraints: str) -> dict[str, Any]:
         "responses_output_tokens": response_output_tokens,
         "image_prompt_tokens": image_prompt_tokens,
         "anthropic_stop_reason": anthropic["stop_reason"],
-        "constraints": (
-            exercise_constraints_enforced(base_url, model)
-            if constraints == "enforced"
-            else exercise_constraints_refused(base_url, model)
-        ),
-        "constraint_metrics": check_constraint_metrics(base_url, constraints == "enforced"),
-        "metrics": check_metrics(base_url, model),
     }
 
 
@@ -916,21 +557,11 @@ def main() -> None:
     parser.add_argument("--base-url", default="http://127.0.0.1:18080")
     parser.add_argument("--model", required=True)
     parser.add_argument("--health-timeout", type=float, default=300.0)
-    parser.add_argument(
-        "--constraints",
-        choices=("enforced", "refused"),
-        default="enforced",
-        help="enforced for the Qwen3.5 family; refused for Qwen3.8 Flash-Next",
-    )
     args = parser.parse_args()
 
     base_url = args.base_url.rstrip("/")
     wait_for_health(base_url, args.health_timeout)
-    print(
-        json.dumps(
-            exercise(base_url, args.model, args.constraints), ensure_ascii=False, indent=2
-        )
-    )
+    print(json.dumps(exercise(base_url, args.model), ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

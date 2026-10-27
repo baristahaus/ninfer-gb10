@@ -33,7 +33,7 @@ void require(bool condition, std::string_view message) {
 }
 
 bool transferred(const q35::ContextProgress& progress, runtime::ContextTransferDirection direction,
-                 std::optional<runtime::ContextTransferResource> resource = std::nullopt) {
+                 std::optional<runtime::ContextResourceClass> resource = std::nullopt) {
     return std::any_of(progress.transfers.begin(), progress.transfers.end(),
                        [&](const auto& transfer) {
                            return transfer.direction == direction &&
@@ -44,11 +44,11 @@ bool transferred(const q35::ContextProgress& progress, runtime::ContextTransferD
 
 std::uint32_t transferred_pages(const q35::ContextProgress& progress,
                                 runtime::ContextTransferDirection direction,
-                                runtime::ContextTransferResource resource) {
+                                runtime::ContextResourceClass resource) {
     std::uint32_t pages = 0;
     for (const auto& transfer : progress.transfers) {
         if (transfer.resource == resource && transfer.direction == direction) {
-            pages += transfer.page_groups;
+            pages += transfer.page_count;
         }
     }
     return pages;
@@ -380,9 +380,9 @@ public:
                         after.occupied.kv_page_groups[0] == before.occupied.kv_page_groups[0] &&
                         after.occupied.kv_page_groups[1] == before.occupied.kv_page_groups[1] &&
                         !transferred(progress, runtime::ContextTransferDirection::DeviceToDevice,
-                                     runtime::ContextTransferResource{q35::kTextKvPool}) &&
+                                     runtime::ContextResourceClass::MainKV) &&
                         !transferred(progress, runtime::ContextTransferDirection::DeviceToDevice,
-                                     runtime::ContextTransferResource{q35::kBackendKvPool}),
+                                     runtime::ContextResourceClass::BackendKV),
                     "internal input recovery point copied or separately allocated KV history");
         }
         return checkpoint;
@@ -505,7 +505,7 @@ public:
                     "active input could not reserve a second request without Main growth");
             const bool copies_kv = std::any_of(
                 candidate->transfers.begin(), candidate->transfers.end(), [](const auto& transfer) {
-                    return !transfer.resource.is_state() &&
+                    return transfer.resource != runtime::ContextResourceClass::State &&
                            transfer.direction == runtime::ContextTransferDirection::DeviceToDevice;
                 });
             require(program_.context_blocks(original) == copies_kv,
@@ -513,7 +513,7 @@ public:
             const auto bound = settle();
             require(bound.sequence && !program_.context_blocks(original) &&
                         transferred(bound, runtime::ContextTransferDirection::DeviceToDevice,
-                                    runtime::ContextTransferResource{q35::kTextKvPool}) ==
+                                    runtime::ContextResourceClass::MainKV) ==
                             (prompt_tokens == 65),
                     "active prefix binding did not settle its required tail copy and writer block");
             finish_prefill(*bound.sequence, 0, false);
@@ -858,7 +858,7 @@ public:
             }
             if (submit_copy) {
                 require(transferred(cancelled, runtime::ContextTransferDirection::DeviceToDevice,
-                                    runtime::ContextTransferResource{q35::kTextKvPool}),
+                                    runtime::ContextResourceClass::MainKV),
                         "post-copy cancellation did not exercise a real KV tail copy");
             }
             expect_usage(baseline, "cancelled binding retained a lane, state or KV reservation");
@@ -892,20 +892,20 @@ public:
         auto base         = request(65, true);
         const auto source = checkpoint(base);
         const std::array<q35::CheckpointHandle, 1> allowed{source};
-        for (const auto resource : {runtime::ContextTransferResource{},
-                                    runtime::ContextTransferResource{q35::kTextKvPool},
-                                    runtime::ContextTransferResource{q35::kBackendKvPool}}) {
-            if (resource == runtime::ContextTransferResource{q35::kBackendKvPool} &&
+        for (const auto resource : {runtime::ContextResourceClass::State,
+                                    runtime::ContextResourceClass::MainKV,
+                                    runtime::ContextResourceClass::BackendKV}) {
+            if (resource == runtime::ContextResourceClass::BackendKV &&
                 program_.physical_usage().occupied.kv_page_groups[1] == 0) {
                 continue;
             }
             const auto usage = program_.physical_usage().occupied;
             q35::ContextResources shortage;
-            if (resource.is_state())
+            if (resource == runtime::ContextResourceClass::State)
                 shortage.state_slots = usage.state_slots;
             else
-                shortage.kv_page_groups[resource.pool->index] =
-                    usage.kv_page_groups[resource.pool->index];
+                shortage.kv_page_groups[static_cast<std::size_t>(resource) - 1] =
+                    usage.kv_page_groups[static_cast<std::size_t>(resource) - 1];
             const auto candidates = program_.plan_reclaim(allowed, {}, shortage).demotions;
             const auto* quote     = demotion_with_sources(candidates, allowed);
             require(quote && quote->host_bytes != 0 && program_.start_demote(*quote),
@@ -925,9 +925,9 @@ public:
         const auto cancelled = settle(true);
         require(!cancelled.published && !cancelled.sequence &&
                     transferred(cancelled, runtime::ContextTransferDirection::HostToDevice,
-                                runtime::ContextTransferResource{}) &&
+                                runtime::ContextResourceClass::State) &&
                     transferred(cancelled, runtime::ContextTransferDirection::HostToDevice,
-                                runtime::ContextTransferResource{q35::kTextKvPool}),
+                                runtime::ContextResourceClass::MainKV),
                 "restore cancellation did not settle its submitted State/KV copies");
         expect_usage(baseline, "cancelled H2D restore retained unpublished destinations");
         require(program_.release_checkpoint(source),
@@ -944,9 +944,9 @@ public:
             require(program_.start_pause(sequence, true), "prefill pause was not accepted");
             auto paused = settle(cancel_transfer);
             require(transferred(paused, runtime::ContextTransferDirection::DeviceToHost,
-                                runtime::ContextTransferResource{}) &&
+                                runtime::ContextResourceClass::State) &&
                         transferred(paused, runtime::ContextTransferDirection::DeviceToHost,
-                                    runtime::ContextTransferResource{q35::kTextKvPool}),
+                                    runtime::ContextResourceClass::MainKV),
                     "pause did not submit its complete State/KV snapshot");
             if (cancel_transfer) {
                 require(!paused.published && !paused.paused,
@@ -1097,7 +1097,7 @@ public:
         require(bound.sequence && program_.valid_checkpoint(input) &&
                     bound.private_points == std::vector(points.begin(), points.end()) &&
                     transferred(bound, runtime::ContextTransferDirection::DeviceToHost,
-                                runtime::ContextTransferResource{}),
+                                runtime::ContextResourceClass::State),
                 "retired Host space did not preserve the complete input recovery image");
         require(driver_.abort(*bound.sequence).status == runtime::ConsumeStatus::Consumed &&
                     program_.release_checkpoint(input),
@@ -1479,7 +1479,7 @@ public:
         const auto cancelled = settle(true);
         require(!cancelled.published && cancelled.operations.pressure_spill_pages == 2 &&
                     transferred_pages(cancelled, runtime::ContextTransferDirection::DeviceToHost,
-                                      runtime::ContextTransferResource{q35::kTextKvPool}) == 2,
+                                      runtime::ContextResourceClass::MainKV) == 2,
                 "cancelled batch did not settle its two submitted Main page copies");
         expect_usage(baseline,
                      "cancelled batch leaked reservations or dropped uncopied Device pages");
@@ -1489,7 +1489,7 @@ public:
         const auto demoted = settle();
         require(demoted.published && demoted.operations.pressure_spill_pages == 2 &&
                     transferred_pages(demoted, runtime::ContextTransferDirection::DeviceToHost,
-                                      runtime::ContextTransferResource{q35::kTextKvPool}) == 2 &&
+                                      runtime::ContextResourceClass::MainKV) == 2 &&
                     program_.physical_usage().occupied.kv_page_groups[0] + 2 ==
                         baseline.occupied.kv_page_groups[0] &&
                     program_.physical_usage().occupied.host_bytes ==
@@ -1647,7 +1647,7 @@ public:
         require(
             !mixed_cancelled.published && mixed_cancelled.operations.pressure_spill_pages == 1 &&
                 transferred_pages(mixed_cancelled, runtime::ContextTransferDirection::DeviceToHost,
-                                  runtime::ContextTransferResource{q35::kTextKvPool}) == 1 &&
+                                  runtime::ContextResourceClass::MainKV) == 1 &&
                 program_.physical_usage().occupied.kv_page_groups[0] + 1 ==
                     baseline.occupied.kv_page_groups[0] &&
                 program_.physical_usage().occupied.host_bytes == baseline.occupied.host_bytes &&
@@ -1661,7 +1661,7 @@ public:
         const auto restored = settle();
         require(restored.sequence &&
                     transferred(restored, runtime::ContextTransferDirection::HostToDevice,
-                                runtime::ContextTransferResource{q35::kTextKvPool}) &&
+                                runtime::ContextResourceClass::MainKV) &&
                     driver_.abort(*restored.sequence).status == runtime::ConsumeStatus::Consumed,
                 "cancelled mixed batch could not restore its released Device replica");
         expect_usage(baseline, "mixed batch restore retained an extra writer or destination");
@@ -1723,10 +1723,10 @@ public:
                         partial_candidate->transfers.begin(), partial_candidate->transfers.end(),
                         [](const auto& transfer) {
                             return transfer.resource ==
-                                       runtime::ContextTransferResource{q35::kTextKvPool} &&
+                                       runtime::ContextResourceClass::MainKV &&
                                    transfer.direction ==
                                        runtime::ContextTransferDirection::HostToDevice &&
-                                   transfer.page_groups == 1;
+                                   transfer.page_count == 1;
                         }) == 1,
                 "mixed Device/Host recovery did not request exactly its missing Main page");
         require(program_.release_checkpoint(partial_source),
@@ -1887,10 +1887,10 @@ void shared_capture_alignment(std::shared_ptr<const q35::ModelDefinition> defini
                     require(shared && captured.operations.partial_tail_cow_pages == 0 &&
                                 !transferred(captured,
                                              runtime::ContextTransferDirection::DeviceToDevice,
-                                             runtime::ContextTransferResource{q35::kTextKvPool}) &&
+                                             runtime::ContextResourceClass::MainKV) &&
                                 !transferred(captured,
                                              runtime::ContextTransferDirection::DeviceToDevice,
-                                             runtime::ContextTransferResource{q35::kBackendKvPool}),
+                                             runtime::ContextResourceClass::BackendKV),
                             "read-only capture copied Main or backend tails");
                     require(
                         program.checkpoint_footprint(captured.captured_checkpoints).state_slots ==

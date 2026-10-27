@@ -41,7 +41,7 @@ void mtp_bridge_and_propose(PrefillContext& state, const Tensor& next_token,
     Tensor rope_position_view = state.execution.work.alloc(DType::I32, {1, 3});
     CUDA_CHECK(cudaMemcpyAsync(rope_position_view.data, rope_position.data(),
                                rope_position.size_bytes(), cudaMemcpyHostToDevice,
-                               state.execution.device.execution_view()));
+                               state.execution.device.stream()));
     const auto bridge_visible = static_cast<std::uint32_t>(position + 1);
     const ops::CausalAttentionExecutionEnvelope bridge_envelope{bridge_visible, bridge_visible};
     if constexpr (Variant::flash_next) {
@@ -81,7 +81,7 @@ void mtp_bridge_and_propose(PrefillContext& state, const Tensor& next_token,
                                      envelope, next_hidden, logits, next_draft, &next_predictor);
             CUDA_CHECK(cudaMemcpyAsync(state.execution.io.mtp->ar_hidden.data, next_predictor.data,
                                        next_predictor.bytes(), cudaMemcpyDeviceToDevice,
-                                       state.execution.device.execution_view()));
+                                       state.execution.device.stream()));
         } else {
             card.mtp_forward_ar_step(previous_token, state.execution.io.mtp->ar_hidden, ar_position,
                                      envelope, next_hidden, logits, next_draft);
@@ -112,7 +112,7 @@ auto mtp_decode_batch_body(MtpBatchContext& state, std::int32_t batch_size, std:
                 throw std::logic_error("MTP deferred GDN fold storage is unavailable");
             }
             copy_gdn_replay_record_rows(*state.execution.replay_records, *state.pending_snapshot,
-                                        state.pending_fold_rows, state.execution.device.execution_view());
+                                        state.pending_fold_rows, state.execution.device.stream());
             if constexpr (Variant::flash_next) {
                 if (state.execution.ple_records == nullptr ||
                     state.execution.ple_state == nullptr) {
@@ -188,7 +188,7 @@ auto mtp_decode_batch_body(MtpBatchContext& state, std::int32_t batch_size, std:
 
         ops::speculative_prepare_verify_inputs(anchors, current_drafts, frontiers, current_extents,
                                                verify_ids, target_positions,
-                                               state.execution.device.execution_view());
+                                               state.execution.device.stream());
         Tensor ple_history = frame.ple_history.slice(1, 0, batch_size);
         if (state.ple_stage_mailbox != nullptr) {
             // Publish the verify columns' PLE row IDs now; the host gathers them while the layers
@@ -247,7 +247,7 @@ auto mtp_decode_batch_body(MtpBatchContext& state, std::int32_t batch_size, std:
 
             ops::target_logprobs(verify_logits, published, TextConfig::token_domain, chosen,
                                  &reported_ids, &reported_logprobs,
-                                 state.execution.device.execution_view());
+                                 state.execution.device.stream());
         }
 
         {
@@ -311,11 +311,11 @@ auto mtp_decode_batch_body(MtpBatchContext& state, std::int32_t batch_size, std:
                 card.mtp_propose_batch(next_hidden, proposal_logits, next);
                 CUDA_CHECK(cudaMemcpyAsync(ar_hidden.data, next_hidden.data, ar_hidden.bytes(),
                                            cudaMemcpyDeviceToDevice,
-                                           state.execution.device.execution_view()));
+                                           state.execution.device.stream()));
                 if constexpr (Variant::flash_next) {
                     CUDA_CHECK(cudaMemcpyAsync(ar_mtp_hidden.data, next_mtp_hidden.data,
                                                ar_mtp_hidden.bytes(), cudaMemcpyDeviceToDevice,
-                                               state.execution.device.execution_view()));
+                                               state.execution.device.stream()));
                 }
             }
         }

@@ -81,4 +81,15 @@ void vocabulary_logprob_stats(const Tensor& logits, const Tensor& target_ids,
  */
 void target_logprobs_from_stats(const Tensor& stats, Tensor& output, CudaExecutionView execution);
 
+
+/**
+ * Master-generation form of target_logprobs: beside the per-row scores it reports, per sampled
+ * column, the highest-ranked in-domain candidate id and its log-probability. When a pointer is
+ * null the corresponding output is skipped.
+ *
+ * Execution:
+ *   Enqueues work on the given stream and owns no persistent state.
+ */
+void target_logprobs(const Tensor& logits, const Tensor& target_ids, std::int32_t valid_rows,
+                     Tensor& output, Tensor* top_ids, Tensor* top_logprobs, cudaStream_t stream);
 } // namespace ninfer::ops

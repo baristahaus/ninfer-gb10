@@ -140,4 +140,22 @@ void rope(const Tensor& positions, int rotary_dim, float theta, Tensor& x, cudaS
     detail::rope_single_launch(positions, rotary_dim, theta, x, stream);
 }
 
+void rope(const Tensor& positions, int rotary_dim, float theta, Tensor& x, cudaStream_t stream) {
+    require_common(positions, rotary_dim, theta);
+    if (x.dtype != DType::BF16) { throw std::invalid_argument("rope: tensor must be BF16"); }
+    (void)numel_allow_zero(positions, "positions");
+    const std::int64_t x_numel  = numel_allow_zero(x, "tensor");
+    const std::int32_t tokens   = x.ne[2];
+    const int axes              = position_axes(positions, tokens);
+    const std::int32_t head_dim = axes == 2 ? kVisionDim : x.ne[0];
+    const std::int32_t heads    = x.ne[1];
+    require_model_mode(axes, rotary_dim, head_dim);
+    require_tensor_layout(x, "tensor", head_dim, heads, tokens);
+    if (x_numel == 0) { return; }
+    require_positions_storage(positions);
+    if (x.data == nullptr) { throw std::invalid_argument("rope: tensor data must be non-null"); }
+    detail::rope_single_launch(positions, rotary_dim, theta, x, stream);
+}
+
+
 } // namespace ninfer::ops

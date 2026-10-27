@@ -373,7 +373,7 @@ auto dflash_decode_batch_body(DFlashBatchContext& state, std::int32_t batch_size
 
         propose_batch_impl<Variant>(state, frame, batch_size, k, envelopes);
         ops::speculative_prepare_verify_ids(anchors, drafts, extents, verify_ids,
-                                            state.execution.device.execution_view());
+                                            state.execution.device.stream());
 
         TextContext card(state.execution.device, state.execution.model, state.execution.work, {},
                          state.execution.linear_attention, state.execution.io,

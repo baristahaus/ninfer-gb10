@@ -15,6 +15,7 @@ enum class KvCapacityMode : std::uint8_t {
 
 enum class KvCacheStorage : std::uint8_t {
     BFloat16,
+    BFloat16KeyValue,
     Int8Group64,
     Fp8E4M3Row256,
     Nvfp4Group16,

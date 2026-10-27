@@ -798,7 +798,7 @@ ProgramImplCore::ProgramImplCore(const LoadedModelData& model_in, const Sequence
       kv_payload_bytes(plan.persistent.kv_payload_bytes),
       graph_allowance_bytes(plan.graph_allowance_bytes), workspace_plan(plan.workspace),
       persistent(plan.persistent.bytes), workspace_storage(plan.workspace.capacity),
-      work(MemorySpan{workspace_storage.base(), plan.workspace.general_capacity}),
+      work(MemorySpan{workspace_storage.base(), plan.workspace.general_capacity, device.device()}),
       bf16_gemm(Variant::flash_next ? std::make_unique<ops::Bf16GemmContext>(device_in.stream())
                                     : nullptr),
       continuation_states(continuation_capacity), continuation_slots(continuation_capacity),
@@ -4652,7 +4652,7 @@ ProgramImplCore::reserve_materialization(AdmissionCandidate&& plan, PreparedProm
                 throw std::logic_error("Vision prefill has no startup workspace plan");
             }
             request.prefill->vision = std::make_unique<schedule::VisionPrefillSession>(
-                device, model, MemorySpan{workspace_storage.base(), workspace_storage.capacity()},
+                device, model, MemorySpan{workspace_storage.base(), workspace_storage.capacity(), device.device()},
                 *workspace_plan.vision, request.prefill->prompt, *request.prefill->vision_plan,
                 vision_handoff_peak_bytes);
         }
@@ -9072,7 +9072,7 @@ runtime::ExecutionTiming ProgramImplCore::append_forced_tokens(
                                              static_cast<std::int32_t>(row_stride));
             Tensor counts = token_counts.slice(1, static_cast<std::int32_t>(lane), 1)
                                 .view({TextConfig::token_domain});
-            ops::increment_token_counts(ids, counts, device.stream());
+            ops::increment_token_counts(ids, counts, device.execution_view());
         }
         work.reset();
     }
@@ -12877,7 +12877,7 @@ runtime::ExecutionTiming ProgramImplCore::resolve_non_speculative_pending(
 
 MemorySummary ProgramImplCore::memory_summary() const noexcept {
     MemorySummary out;
-    out.device           = device.device;
+    out.device           = static_cast<int>(device.device().index());
     out.max_context      = capacity;
     out.kv_capacity      = kv_capacity;
     out.kv_cache         = kv_storage;

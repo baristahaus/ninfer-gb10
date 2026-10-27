@@ -1,6 +1,8 @@
 #include "core/gdn_replay_records.h"
 
+#include <cuda_runtime.h>
 #include <array>
+#include "core/device.h"
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -137,6 +139,51 @@ GdnReplayRecordLayer GdnReplayRecords::layer(std::int32_t layer_index, std::int3
         .value = value.slice(3, outer_begin, rows),
         .gate  = gate.slice(3, outer_begin, rows),
     };
+}
+
+
+void copy_gdn_replay_record_rows(const GdnReplayRecords& source,
+                                 const GdnReplayRecords& destination, std::int32_t rows,
+                                 cudaStream_t stream) {
+    const GdnReplayRecordSpec& a = source.spec;
+    const GdnReplayRecordSpec& b = destination.spec;
+    if (a.layers <= 0 || a.record_capacity <= 0 || a.layers != b.layers ||
+        a.record_capacity != b.record_capacity || a.width != b.width ||
+        a.conv_channels != b.conv_channels || a.qk_heads != b.qk_heads ||
+        a.value_heads != b.value_heads || a.key_dim != b.key_dim || a.value_dim != b.value_dim) {
+        throw std::invalid_argument("GDN replay record copy requires one valid spec");
+    }
+    if (rows <= 0 || rows > a.record_capacity) {
+        throw std::out_of_range("GDN replay record copy row count out of range");
+    }
+    const std::array<std::pair<const Tensor*, const Tensor*>, 4> planes{{
+        {&source.conv, &destination.conv},
+        {&source.key, &destination.key},
+        {&source.value, &destination.value},
+        {&source.gate, &destination.gate},
+    }};
+    const std::size_t outer = static_cast<std::size_t>(a.layers) * a.record_capacity;
+    for (const auto& [from, to] : planes) {
+        const std::size_t bytes = from->bytes();
+        const auto* begin       = static_cast<const std::byte*>(from->data);
+        const auto* other       = static_cast<const std::byte*>(to->data);
+        if (bytes != to->bytes() || !from->is_contiguous() || !to->is_contiguous() ||
+            bytes % outer != 0 ||
+            reinterpret_cast<std::uintptr_t>(begin) % alignof(std::max_align_t) != 0) {
+            throw std::invalid_argument("GDN replay record copy planes do not match");
+        }
+        if (begin < other + bytes && other < begin + bytes) {
+            throw std::invalid_argument("GDN replay record copy planes overlap");
+        }
+        // Outer index layer * capacity + row: one pitch per layer, the first rows of each.
+        const std::size_t row_bytes = bytes / outer;
+        for (std::int32_t layer = 0; layer < a.layers; ++layer) {
+            const auto offset = static_cast<std::size_t>(layer) * a.record_capacity * row_bytes;
+            CUDA_CHECK(cudaMemcpyAsync(static_cast<std::byte*>(to->data) + offset, begin + offset, row_bytes * rows, cudaMemcpyDeviceToDevice,
+                                       stream));
+        }
+    }
+    CUDA_CHECK(cudaGetLastError());
 }
 
 } // namespace ninfer

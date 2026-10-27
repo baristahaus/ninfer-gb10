@@ -171,7 +171,7 @@ int main() {
             options.use_cuda_graph                  = false;
             options.context_cache.extra_state_slots = 1;
             auto planner       = q35::make_sequence_planner(parameters, device, options);
-            const auto pages   = planner.capacity_curve().minimum_primary_page_groups;
+            const auto pages   = planner.capacity_curve().minimum_main_page_groups;
             auto plan          = std::move(planner).finalize(pages);
             const auto session = q35::plan_session(plan);
             require(session.vision_workspace.has_value(), "Vision session lost its workspace plan");

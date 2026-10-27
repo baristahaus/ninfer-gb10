@@ -239,16 +239,19 @@ void EngineCore<Instance>::record_context_work(
     cumulative_stats_.partial_tail_cow_pages += op.partial_tail_cow_pages;
     for (const auto& transfer : progress.transfers) {
         const auto direction = static_cast<std::size_t>(transfer.direction);
+        // Class order mirrors the startup pool order: State, then the Main KV pool, then the
+        // optional backend pool.
+        const auto class_index = static_cast<std::size_t>(transfer.resource);
         auto& series =
-            transfer.resource.is_state()
+            transfer.resource == runtime::ContextResourceClass::State
                 ? cumulative_stats_.context_transfers.state
-                : cumulative_stats_.context_transfers.kv.at(transfer.resource.pool->index);
+                : cumulative_stats_.context_transfers.kv.at(class_index - 1);
         auto& total           = series.at(direction);
         const auto accumulate = [&](GenerationTransferTiming& timing) {
             timing.bytes += transfer.work.payload_bytes;
             timing.seconds += transfer.elapsed_ns * 1.0e-9;
-            timing.images += transfer.image_count;
-            timing.page_groups += transfer.page_groups;
+            timing.images += transfer.units;
+            timing.page_groups += transfer.page_count;
             timing.copy_operations += transfer.work.copy_operations;
         };
         accumulate(total);
@@ -256,7 +259,7 @@ void EngineCore<Instance>::record_context_work(
         if (owner) {
             if (!owner->first_output_timing) {
                 auto& observed =
-                    owner->context_transfers.at(transfer.resource.index()).at(direction);
+                    owner->context_transfers.at(class_index).at(direction);
                 accumulate(observed);
             }
             if (transfer.direction == ContextTransferDirection::DeviceToHost) {

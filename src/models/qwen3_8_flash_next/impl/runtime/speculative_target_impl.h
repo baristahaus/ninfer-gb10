@@ -2,6 +2,7 @@
 #include "models/qwen3_8_flash_next/impl/runtime/schedule.h"
 
 #include "ninfer/ops/scatter.h"
+#include "ninfer/ops/speculative_accept.h"
 #include "ninfer/ops/speculative_round.h"
 
 namespace ninfer::models::qwen3_8_flash_next::detail::NINFER_QWEN38_FLASH_NEXT_RUNTIME_NS::
@@ -34,7 +35,7 @@ void target_verify_accept(ExecutionCore& execution, Tensor& continuation_hidden_
                                           frame.current_extents, frame.frontiers, frame.anchors,
                                           frame.licensed_tokens, frame.licensed_counts,
                                           frame.accepted_drafts, TextConfig::token_domain,
-                                          frame.sampling, execution.work, execution.device.stream());
+                                          frame.sampling, execution.work, execution.device.execution_view());
     ops::speculative_select_accepted_hidden(frame.target_hidden, frame.accepted_drafts,
                                             frame.selected_hidden, execution.device.stream());
     ops::scatter(frame.selected_hidden, frame.state_destination_slots, continuation_hidden_store,

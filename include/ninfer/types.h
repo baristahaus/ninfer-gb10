@@ -80,6 +80,9 @@ enum class StartupPhase : std::uint8_t {
     CudaGraphPrepare,
     CudaGraphCalibration,
     EngineFinalize,
+    // Flash-Next host pinning phases (appended to keep existing values stable).
+    HostStatePin,
+    HostKvPin,
 };
 
 enum class StartupStatus : std::uint8_t {
@@ -198,6 +201,10 @@ struct EngineOptions {
     std::size_t grammar_cache_bytes    = 256ULL * 1024 * 1024;
     EnginePurpose purpose              = EnginePurpose::Generation;
     int device                         = 0;
+    // When true, per-token log-probabilities of sampled tokens are reported. A request asking
+    // for probabilities against an engine loaded without this capability is rejected rather than
+    // answered with placeholders.
+    bool token_logprobs = false;
     std::uint32_t max_context          = 8192; // Logical ceiling of one request or score window.
     KvCapacityPolicy kv_capacity       = KvCapacityPolicy::explicit_capacity(8192);
     std::uint32_t max_concurrency      = 1;

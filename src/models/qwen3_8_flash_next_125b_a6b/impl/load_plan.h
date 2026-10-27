@@ -145,7 +145,7 @@ struct BindingPlan {
 struct ArtifactLoadPlan {
     BindingPlan bindings;
     artifact::MappedRange ple_table;
-    artifact::MaterializationPlan materialization;
+    artifact::PreparedResources materialization;
 };
 
 ArtifactLoadPlan plan_artifact(artifact::Binder& binder,

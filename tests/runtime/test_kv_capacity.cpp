@@ -18,31 +18,31 @@ int check(bool condition, const char* message) {
 int main() {
     int failures = 0;
     const ninfer::runtime::SequenceCapacityCurve curve{
-        .primary_page_tokens                     = 64,
-        .minimum_primary_page_groups             = 2,
-        .maximum_primary_page_groups             = 6,
+        .main_page_tokens                     = 64,
+        .minimum_main_page_groups             = 2,
+        .maximum_main_page_groups             = 6,
         .minimum_device_reservation_bytes        = 1000,
-        .bytes_per_additional_primary_page_group = 128,
+        .bytes_per_additional_main_page_group = 128,
     };
 
     const auto automatic =
         ninfer::runtime::resolve_kv_capacity(ninfer::KvCapacityPolicy::automatic(50), curve, 1360);
     failures +=
-        check(automatic.primary_page_groups == 4 && automatic.resolved_tokens == 256 &&
+        check(automatic.main_page_groups == 4 && automatic.resolved_tokens == 256 &&
                   automatic.runtime_reservation_bytes == 1256 &&
                   automatic.automatic_headroom_bytes == 50 && automatic.planned_slack_bytes == 104,
               "automatic KV capacity did not select the largest fitting page count");
 
     const auto capped =
         ninfer::runtime::resolve_kv_capacity(ninfer::KvCapacityPolicy::automatic(50), curve, 10000);
-    failures += check(capped.primary_page_groups == 6 && capped.resolved_tokens == 384,
+    failures += check(capped.main_page_groups == 6 && capped.resolved_tokens == 384,
                       "automatic KV capacity exceeded or missed the target maximum");
 
     const std::array offers{ninfer::runtime::RankCapacityOffer{curve, 2000},
                             ninfer::runtime::RankCapacityOffer{{64, 2, 6, 1500, 256}, 2100}};
     const auto common =
         ninfer::runtime::resolve_group_kv_capacity(ninfer::KvCapacityPolicy::automatic(0), offers);
-    failures += check(common[0].primary_page_groups == 4 && common[1].primary_page_groups == 4 &&
+    failures += check(common[0].main_page_groups == 4 && common[1].main_page_groups == 4 &&
                           common[0].runtime_reservation_bytes == 1256 &&
                           common[1].runtime_reservation_bytes == 2012,
                       "group capacity did not preserve common pages and local byte costs");
@@ -55,7 +55,7 @@ int main() {
 
     const auto explicit_capacity = ninfer::runtime::resolve_kv_capacity(
         ninfer::KvCapacityPolicy::explicit_capacity(129), curve, 1200);
-    failures += check(explicit_capacity.primary_page_groups == 3 &&
+    failures += check(explicit_capacity.main_page_groups == 3 &&
                           explicit_capacity.resolved_tokens == 192 &&
                           explicit_capacity.runtime_reservation_bytes == 1128,
                       "explicit KV capacity did not use page-aligned token semantics");

@@ -102,4 +102,9 @@ void linear(const Tensor& x, const Weight& w, Tensor& out, cudaStream_t stream);
 void linear(const Tensor& x, const Weight& w, Tensor& out, cudaStream_t stream,
             Bf16GemmContext* bf16_gemm);
 
+// View form of the stream+Bf16GemmContext entry point, for callers that carry execution facts as
+// a view.
+void linear(const Tensor& x, const Weight& w, Tensor& out, CudaExecutionView execution,
+            Bf16GemmContext* bf16_gemm);
+
 } // namespace ninfer::ops

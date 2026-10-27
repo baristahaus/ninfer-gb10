@@ -739,7 +739,7 @@ void migration_reader_lifetime(DeviceContext& device) {
         while (!f.migration->ready()) std::this_thread::yield();
         batch.mark_completed();
         const auto work = f.migration->observations();
-        expect(work.size() == 2 && work[0].image_count == 1 && work[1].page_groups == 2 &&
+        expect(work.size() == 2 && work[0].units == 1 && work[1].page_count == 2 &&
                    work[0].work.payload_bytes == storage.image_bytes(),
                "completed cancelled DMA lost its work or mixed quantity units");
         if (cancel)
@@ -835,9 +835,9 @@ void migration_restore_chain(DeviceContext& device, PagedKVPlaneOrder order) {
     const auto work = f.migration->observations();
     expect(work.size() == 2 &&
                work[0].direction == runtime::ContextTransferDirection::HostToDevice &&
-               work[0].page_groups == 2 &&
+               work[0].page_count == 2 &&
                work[1].direction == runtime::ContextTransferDirection::DeviceToDevice &&
-               work[1].page_groups == 1,
+               work[1].page_count == 1,
            "restoration did not execute its pending-page COW in the same batch");
     batch.publish();
     f.migration->finish();

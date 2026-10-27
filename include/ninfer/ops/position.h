@@ -17,4 +17,21 @@ void fill_i32_positions(Tensor& positions, std::int32_t start, CudaExecutionView
 void offset_i32_positions(const Tensor& source, const Tensor& delta, Tensor& destination,
                           CudaExecutionView execution);
 
+
+/**
+ * Op: fill_i32
+ *
+ * Math / indexing:
+ *   destination[i] = value for every physical element i of the contiguous I32 tensor.
+ *
+ * Effects:
+ *   Writes every physical output element. Input remains unchanged.
+ *
+ * Workspace:
+ *   None.
+ *
+ * Execution:
+ *   Enqueues work on the given stream and owns no persistent state.
+ */
+void fill_i32(Tensor& destination, std::int32_t value, cudaStream_t stream);
 } // namespace ninfer::ops

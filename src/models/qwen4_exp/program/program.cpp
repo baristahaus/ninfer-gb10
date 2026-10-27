@@ -221,7 +221,7 @@ RankMemoryBudget RankProgram::resource_budget() const {
     const auto& plan                         = impl_->resources.plan;
     result.runtime_reservation_bytes         = plan.device_reservation_bytes();
     result.minimum_runtime_reservation_bytes = plan.capacity.minimum_runtime_reservation_bytes;
-    result.bytes_per_page_group = plan.capacity.bytes_per_additional_primary_page_group;
+    result.bytes_per_page_group = plan.capacity.bytes_per_additional_main_page_group;
     result.graphs               = impl_->graph_memory;
     return result;
 }

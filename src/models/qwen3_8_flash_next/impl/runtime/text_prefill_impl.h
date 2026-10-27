@@ -109,7 +109,7 @@ void mtp_bridge_multimodal(PrefillContext& state, const PreparedPromptData& prom
     Tensor bridge_token = state.execution.io.mtp->target_input_ids.slice(0, 0, 1);
     const TokenId token = prompt.token_ids[state.text_kv_base];
     CUDA_CHECK(cudaMemcpyAsync(bridge_token.data, &token, sizeof(token), cudaMemcpyHostToDevice,
-                               state.execution.device.execution_view()));
+                               state.execution.device.stream()));
 
     Tensor visual_embedding;
     const Tensor* composed_embedding = nullptr;
@@ -143,10 +143,10 @@ void sample_from_hidden(PrefillContext& state, const Tensor& hidden, std::int32_
     }
     state.execution.work.reset();
     Tensor logits = state.execution.io.logits.slice(1, 0, 1);
-    ops::linear(hidden, state.execution.model.output_head, logits, state.execution.device.execution_view());
+    ops::linear(hidden, state.execution.model.output_head, logits, state.execution.device.stream());
     CUDA_CHECK(cudaMemcpyAsync(state.execution.io.pos.data, &absolute_position,
                                sizeof(absolute_position), cudaMemcpyHostToDevice,
-                               state.execution.device.execution_view()));
+                               state.execution.device.stream()));
     ops::sample(logits, state.execution.io.token, TextConfig::token_domain, state.sampling,
                 state.execution.io.pos, purpose, state.execution.work,
                 state.execution.device.execution_view());
@@ -157,7 +157,7 @@ void sample_from_hidden(PrefillContext& state, const Tensor& hidden, std::int32_
         Tensor reported_logprobs = state.execution.io.report_top_logprobs;
         ops::target_logprobs(logits, state.execution.io.token, TextConfig::token_domain,
                              state.execution.io.report_logprob, &reported_ids, &reported_logprobs,
-                             state.execution.device.execution_view());
+                             state.execution.device.stream());
     }
     state.execution.work.reset();
 }

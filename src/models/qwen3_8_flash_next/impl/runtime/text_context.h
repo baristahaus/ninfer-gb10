@@ -9,6 +9,7 @@
 #include "core/tensor.h"
 #include "core/weight.h"
 #include "ninfer/ops/flash_next_ple_stage.h"
+#include "ninfer/ops/linear.h"
 #include "ninfer/ops/sampling.h"
 #include "ninfer/ops/softmax_attention.h"
 #include <ninfer/models/qwen3_8_flash_next/decoder_state.h>
@@ -177,6 +178,7 @@ public:
 
     void set_bf16_gemm(ops::Bf16GemmContext* context) noexcept { bf16_gemm_ = context; }
 
+    
     void set_prefill_split_frontier(std::int64_t position) noexcept {
         prefill_split_frontier_ = position;
     }

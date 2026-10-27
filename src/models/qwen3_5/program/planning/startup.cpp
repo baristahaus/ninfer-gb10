@@ -705,18 +705,18 @@ make_sequence_planner_impl(std::shared_ptr<const execution::ModelProfile> profil
     planner->inputs  = inputs;
     planner->minimum = build_sequence_candidate(inputs, minimum_pages);
     planner->curve   = runtime::SequenceCapacityCurve{
-          .primary_page_tokens                     = static_cast<std::uint32_t>(kPagedKVPageSize),
-          .minimum_primary_page_groups             = minimum_pages,
-          .maximum_primary_page_groups             = maximum_pages,
+          .main_page_tokens                     = static_cast<std::uint32_t>(kPagedKVPageSize),
+          .minimum_main_page_groups             = minimum_pages,
+          .maximum_main_page_groups             = maximum_pages,
           .minimum_device_reservation_bytes        = planner->minimum->device_reservation_bytes,
-          .bytes_per_additional_primary_page_group = 0,
+          .bytes_per_additional_main_page_group = 0,
     };
     if (minimum_pages < maximum_pages) {
         auto adjacent = build_sequence_candidate(inputs, minimum_pages + 1U);
         if (adjacent->device_reservation_bytes <= planner->minimum->device_reservation_bytes) {
             throw std::logic_error("Qwen3.5 sequence layout has a nonpositive KV capacity stride");
         }
-        planner->curve.bytes_per_additional_primary_page_group =
+        planner->curve.bytes_per_additional_main_page_group =
             adjacent->device_reservation_bytes - planner->minimum->device_reservation_bytes;
     }
     return planner;
@@ -741,7 +741,7 @@ finalize_sequence_plan_impl(std::unique_ptr<qwen3_5::detail::SequencePlannerImpl
     }
     const std::size_t expected = planner->curve.reservation_bytes(main_page_groups);
     std::unique_ptr<SequencePlanImpl> plan;
-    if (main_page_groups == planner->curve.minimum_primary_page_groups) {
+    if (main_page_groups == planner->curve.minimum_main_page_groups) {
         plan = std::move(planner->minimum);
     } else {
         plan = build_sequence_candidate(planner->inputs, main_page_groups);

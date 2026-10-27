@@ -2,6 +2,7 @@
 
 #include "core/gdn_replay_records.h"
 #include "core/linear_attention_state.h"
+#include "core/linear_attention_state_pool.h"
 
 #include "core/device.h"
 
@@ -52,7 +53,15 @@ class GdnReplayFoldPlan {
 public:
     GdnReplayFoldPlan(const GdnReplayRecords& records, LinearAttentionStateAllLayersView states);
 
+    // Pool form: the caller carries the resident linear-attention pool; the plan drops the pool
+    // slot count and keeps the per-layer geometry the fold reads.
+    GdnReplayFoldPlan(const GdnReplayRecords& records, LinearAttentionStatePoolAllLayersView states);
+
     void execute(std::span<const GdnReplayFoldRow> rows, CudaExecutionView execution) const;
+
+    // Stream form for callers that carry the stream directly; the device facts come from the
+    // records themselves.
+    void execute(std::span<const GdnReplayFoldRow> rows, cudaStream_t stream) const;
 
     // Device I32 [B] metadata, 1<=B<=record_capacity. Selectors and commit lengths obey
     // the same row semantics as the Host overload, including strict zero-row no-op.

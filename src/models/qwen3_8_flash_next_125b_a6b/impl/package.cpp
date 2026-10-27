@@ -25,7 +25,7 @@ LoadPlan::LoadPlan(LoadPlan&&) noexcept            = default;
 LoadPlan& LoadPlan::operator=(LoadPlan&&) noexcept = default;
 LoadPlan::~LoadPlan()                              = default;
 
-artifact::MaterializationPlan& LoadPlan::materialization() {
+artifact::PreparedResources& LoadPlan::materialization() {
     if (!impl_) { throw std::logic_error("Flash-Next load plan is empty"); }
     return impl_->plan.materialization;
 }

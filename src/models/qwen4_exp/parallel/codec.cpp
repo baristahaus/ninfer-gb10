@@ -143,8 +143,8 @@ ExecutionCodec::merge_context_results(const runtime::protocol::Scope& scope,
                                                 return value.resource == transfer.resource &&
                                                        value.direction == transfer.direction;
                                             });
-            if (found == local.transfers.end() || found->image_count != transfer.image_count ||
-                found->page_groups != transfer.page_groups || found->work != transfer.work)
+            if (found == local.transfers.end() || found->units != transfer.units ||
+                found->page_count != transfer.page_count || found->work != transfer.work)
                 throw std::logic_error("Qwen4Exp context owners completed different transfers");
             // Equal local shards run in parallel. Price a logical operation by its slowest
             // owner, retaining the matching per-shard physical work rather than double-counting.

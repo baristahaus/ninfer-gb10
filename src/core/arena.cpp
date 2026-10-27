@@ -1,5 +1,10 @@
 #include "core/arena.h"
 
+#include "core/device.h"
+#include "core/memory.h"
+
+#include <cuda_runtime.h>
+
 #include <algorithm>
 #include <limits>
 #include <new>
@@ -9,6 +14,14 @@
 namespace ninfer {
 
 MemoryArena::MemoryArena(MemorySpan storage) : storage_(storage) { validate_memory(storage); }
+
+MemoryArena::MemoryArena(std::size_t capacity_bytes) : owns_(true) {
+    void* p = nullptr;
+    if (capacity_bytes > 0) {
+        CUDA_CHECK(cudaMalloc(&p, capacity_bytes));
+    }
+    storage_ = MemorySpan{p, capacity_bytes, Device::cuda(0)};
+}
 
 MemoryArena::MemoryArena(MemoryArena&& other) noexcept
     : storage_(std::exchange(other.storage_, {})), offset_(std::exchange(other.offset_, 0)),
@@ -21,6 +34,12 @@ MemoryArena& MemoryArena::operator=(MemoryArena&& other) noexcept {
         peak_    = std::exchange(other.peak_, 0);
     }
     return *this;
+}
+
+MemoryArena::~MemoryArena() {
+    if (owns_ && storage_.data != nullptr) {
+        cudaFree(storage_.data);
+    }
 }
 
 MemorySpan MemoryArena::alloc_bytes(std::size_t bytes, std::size_t alignment) {

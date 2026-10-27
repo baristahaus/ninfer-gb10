@@ -28,6 +28,9 @@ public:
     };
 
     explicit MemoryArena(MemorySpan storage);
+    // Owning arena over one device allocation. The buffer is released in the destructor.
+    explicit MemoryArena(std::size_t capacity_bytes);
+    ~MemoryArena();
     MemoryArena(const MemoryArena&)            = delete;
     MemoryArena& operator=(const MemoryArena&) = delete;
     MemoryArena(MemoryArena&& other) noexcept;
@@ -47,12 +50,15 @@ public:
 
     [[nodiscard]] std::size_t capacity() const noexcept { return storage_.bytes; }
 
+    [[nodiscard]] void* base() const noexcept { return storage_.data; }
+
     [[nodiscard]] std::size_t peak_used() const noexcept { return peak_; }
 
     void reset_peak() noexcept;
 
 private:
     MemorySpan storage_;
+    bool owns_          = false;
     std::size_t offset_ = 0;
     std::size_t peak_   = 0;
 };

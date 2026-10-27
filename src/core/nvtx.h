@@ -95,6 +95,11 @@ enum class Name : std::size_t {
     SparseMoePrefill,
     SparseMoeSmallT,
     SparseMoeDecode,
+    // Flash-Next MTP submit/egress sub-stages.
+    DecodeMtpSubmitGraph,
+    DecodeMtpSubmitIngress,
+    DecodeMtpSubmitFrameUpload,
+    DecodeMtpEgress,
     Count,
 };
 
@@ -223,6 +228,10 @@ enum class Name : std::size_t {
         "sparse_moe.prefill",
         "sparse_moe.small_t",
         "sparse_moe.decode",
+        "decode.mtp.submit.graph",
+        "decode.mtp.submit.ingress",
+        "decode.mtp.submit.frame_upload",
+        "decode.mtp.egress",
     });
     static_assert(names.size() == static_cast<std::size_t>(Name::Count));
     static const auto handles = [] {

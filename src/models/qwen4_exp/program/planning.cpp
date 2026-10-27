@@ -217,7 +217,7 @@ std::optional<ExecutionPlan> plan_execution(std::shared_ptr<const execution::Mod
         out.capacity.mode = policy.mode;
     } else {
         out.capacity   = runtime::resolve_kv_capacity(policy, curve, available);
-        out.persistent = persistent(*out.profile, o, out.capacity.primary_page_groups);
+        out.persistent = persistent(*out.profile, o, out.capacity.main_page_groups);
     }
     return out;
 }

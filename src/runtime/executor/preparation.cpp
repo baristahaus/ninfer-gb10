@@ -50,11 +50,11 @@ std::vector<wire::Bytes> receive(dist::ExecutionGroup& group, wire::Kind kind,
 
 void encode_preparation_report(wire::Encoder& out, const RankPreparationReport& r) {
     const auto& c = r.capacity.curve;
-    out.u32(c.primary_page_tokens);
-    out.u32(c.minimum_primary_page_groups);
-    out.u32(c.maximum_primary_page_groups);
+    out.u32(c.main_page_tokens);
+    out.u32(c.minimum_main_page_groups);
+    out.u32(c.maximum_main_page_groups);
     out.u64(c.minimum_device_reservation_bytes);
-    out.u64(c.bytes_per_additional_primary_page_group);
+    out.u64(c.bytes_per_additional_main_page_group);
     out.u64(r.capacity.available_bytes);
     out.u64(r.weight_bytes);
     out.u64(r.host_weight_bytes);
@@ -158,7 +158,7 @@ GroupPreparation prepare_execution_group(dist::ExecutionGroup& group,
             std::vector<RankCapacityOffer> offers;
             for (const auto& report : result.reports) offers.push_back(report.capacity);
             const auto capacities = resolve_group_kv_capacity(policy, offers);
-            result.pages          = capacities.front().primary_page_groups;
+            result.pages          = capacities.front().main_page_groups;
             enter(PreparationAction::Allocate);
             bool success = allocated(true);
             if (success) {

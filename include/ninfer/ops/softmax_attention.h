@@ -186,4 +186,13 @@ void context_softmax_attention(const Tensor& q, const Tensor& query_k, const Ten
     AttentionHeadGeometry geometry, ContextAttentionExecutionEnvelope envelope,
     std::int32_t min_tokens, std::int32_t max_tokens, std::int32_t batch_size);
 
+
+// Stream forms for callers that carry the stream directly; validation is identical.
+void packed_softmax_attention(const Tensor& q, const Tensor& k, const Tensor& v,
+                              AttentionHeadGeometry geometry, float scale, const Tensor& cu_seqlens,
+                              MemoryArena& workspace, Tensor& out, cudaStream_t stream);
+void packed_softmax_attention(const Tensor& q, const Tensor& k, const Tensor& v,
+                              AttentionHeadGeometry geometry, float scale,
+                              std::int32_t segment_length, Tensor& out, cudaStream_t stream);
+
 } // namespace ninfer::ops

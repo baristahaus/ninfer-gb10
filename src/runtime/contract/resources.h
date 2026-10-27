@@ -132,19 +132,19 @@ enum class ContextTransferDirection : std::uint8_t {
     DeviceToDevice,
 };
 
-struct ContextTransferObservation {
-    ContextTransferResource resource;
-    ContextTransferDirection direction = ContextTransferDirection::DeviceToHost;
-    std::uint32_t image_count          = 0;
-    std::uint32_t page_groups          = 0;
-    TransferWork work;
-    std::uint64_t elapsed_ns = 0;
-};
-
 enum class ContextResourceClass : std::uint8_t {
     State,
     MainKV,
     BackendKV,
+};
+
+struct ContextTransferObservation {
+    ContextResourceClass resource        = ContextResourceClass::State;
+    ContextTransferDirection direction   = ContextTransferDirection::DeviceToHost;
+    std::uint64_t units                  = 0; // State images for State; bytes for typed KV.
+    std::uint32_t page_count             = 0;
+    TransferWork work;
+    std::uint64_t elapsed_ns = 0;
 };
 
 struct ContextTransferRequirement {
@@ -164,26 +164,27 @@ struct ContextOperationCounts {
     std::uint64_t state_restores         = 0;
     std::uint64_t pressure_spill_pages   = 0;
     std::uint64_t partial_tail_cow_pages = 0;
+    std::uint64_t historical_fork_hits   = 0;
 };
 
 struct SequenceCapacityCurve {
-    std::uint32_t primary_page_tokens                   = 0;
-    std::uint32_t minimum_primary_page_groups           = 0;
-    std::uint32_t maximum_primary_page_groups           = 0;
+    std::uint32_t main_page_tokens                   = 0;
+    std::uint32_t minimum_main_page_groups           = 0;
+    std::uint32_t maximum_main_page_groups           = 0;
     std::size_t minimum_device_reservation_bytes        = 0;
-    std::size_t bytes_per_additional_primary_page_group = 0;
+    std::size_t bytes_per_additional_main_page_group = 0;
 
-    [[nodiscard]] std::size_t reservation_bytes(std::uint32_t primary_page_groups) const;
-    [[nodiscard]] std::uint32_t resolved_tokens(std::uint32_t primary_page_groups) const;
+    [[nodiscard]] std::size_t reservation_bytes(std::uint32_t main_page_groups) const;
+    [[nodiscard]] std::uint32_t resolved_tokens(std::uint32_t main_page_groups) const;
 };
 
 struct KvCapacityResolution {
     KvCapacityMode mode                                 = KvCapacityMode::Explicit;
-    std::uint32_t primary_page_groups                   = 0;
-    std::uint32_t maximum_primary_page_groups           = 0;
+    std::uint32_t main_page_groups                   = 0;
+    std::uint32_t maximum_main_page_groups           = 0;
     std::uint32_t resolved_tokens                       = 0;
     std::size_t minimum_runtime_reservation_bytes       = 0;
-    std::size_t bytes_per_additional_primary_page_group = 0;
+    std::size_t bytes_per_additional_main_page_group = 0;
     std::size_t runtime_reservation_bytes               = 0;
     std::size_t available_after_weights_bytes           = 0;
     std::size_t available_after_startup_bytes           = 0;

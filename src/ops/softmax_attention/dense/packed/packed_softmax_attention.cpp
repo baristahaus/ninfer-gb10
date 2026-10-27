@@ -86,4 +86,33 @@ void packed_softmax_attention(const Tensor& q, const Tensor& k, const Tensor& v,
     detail::launch_packed_attention_uniform(q, k, v, segment_length, out, stream);
 }
 
+void packed_softmax_attention(const Tensor& q, const Tensor& k, const Tensor& v,
+                              AttentionHeadGeometry geometry, float scale, const Tensor& cu_seqlens,
+                              MemoryArena& workspace, Tensor& out, cudaStream_t stream) {
+    const std::int32_t tokens = detail::noncausal::validate_qkv(
+        q, k, v, out, geometry, scale, "packed_softmax_attention", q.device);
+    const std::int32_t segments = cu_seqlens.ne[0] - 1;
+    if (cu_seqlens.dtype != DType::I32 || segments <= 0 || segments > tokens ||
+        cu_seqlens.ne[1] != 1 || cu_seqlens.ne[2] != 1 || cu_seqlens.ne[3] != 1 ||
+        !cu_seqlens.is_contiguous() || cu_seqlens.data == nullptr) {
+        throw std::invalid_argument(
+            "packed_softmax_attention: cu_seqlens must be contiguous I32 [S+1]");
+    }
+    auto scratch_scope = workspace.scope();
+    Tensor tiles       = allocate_workspace(workspace, tokens, segments);
+    Tensor* tiles_ptr  = tiles.data == nullptr ? nullptr : &tiles;
+    detail::launch_packed_attention(q, k, v, cu_seqlens, tiles_ptr, out, stream);
+}
+
+void packed_softmax_attention(const Tensor& q, const Tensor& k, const Tensor& v,
+                              AttentionHeadGeometry geometry, float scale,
+                              std::int32_t segment_length, Tensor& out, cudaStream_t stream) {
+    const std::int32_t tokens = detail::noncausal::validate_qkv(
+        q, k, v, out, geometry, scale, "packed_softmax_attention", q.device);
+    if (segment_length <= 0 || tokens % segment_length != 0) {
+        throw std::invalid_argument("packed_softmax_attention: invalid uniform segment length");
+    }
+    detail::launch_packed_attention_uniform(q, k, v, segment_length, out, stream);
+}
+
 } // namespace ninfer::ops

@@ -38,6 +38,20 @@ ParameterReference Binder::parameter(std::string_view name, Shape shape,
     return binding(std::string(name), found->second, std::move(shape), exact_format);
 }
 
+ParameterReference Binder::parameter(std::string_view name, Shape shape, Residency residency,
+                                     std::optional<QType> exact_format) {
+    auto out = parameter(name, std::move(shape), std::move(exact_format));
+    out.residency = residency;
+    return out;
+}
+
+ParameterReference Binder::binding(std::string name, const Binding& binding, Shape shape,
+                                   Residency residency, std::optional<QType> exact_format) {
+    auto out = this->binding(std::move(name), binding, std::move(shape), std::move(exact_format));
+    out.residency = residency;
+    return out;
+}
+
 ParameterReference Binder::binding(std::string name, const Binding& binding, Shape shape,
                                    std::optional<QType> exact_format) {
     if (weight_element_count(shape) != binding.elements ||

@@ -404,11 +404,10 @@ void encode_result(Encoder& out, const Result& result) {
                 out.u8(2);
                 out.u64(v.transfers.size());
                 for (const auto& t : v.transfers) {
-                    out.boolean(t.resource.pool.has_value());
-                    if (t.resource.pool) out.u16(t.resource.pool->index);
+                    out.u8(static_cast<std::uint8_t>(t.resource));
                     out.u8(static_cast<std::uint8_t>(t.direction));
-                    out.u32(t.image_count);
-                    out.u32(t.page_groups);
+                    out.u64(t.units);
+                    out.u32(t.page_count);
                     out.u64(t.work.payload_bytes);
                     out.u32(t.work.copy_operations);
                     out.u64(t.elapsed_ns);
@@ -443,10 +442,11 @@ Result decode_result(Decoder& in) {
         ContextResult v;
         v.transfers.resize(in.count(30));
         for (auto& t : v.transfers) {
-            if (in.boolean()) t.resource.pool = runtime::KvPoolId{in.u16()};
+            t.resource =
+                static_cast<runtime::ContextResourceClass>(in.u8());
             t.direction   = static_cast<runtime::ContextTransferDirection>(in.u8());
-            t.image_count = in.u32();
-            t.page_groups = in.u32();
+            t.units = in.u64();
+            t.page_count = in.u32();
             t.work        = {in.u64(), in.u32()};
             t.elapsed_ns  = in.u64();
         }

@@ -77,7 +77,7 @@ auto ordinary_batch_body(OrdinaryBatchContext& state, std::int32_t batch_size,
             Tensor reported_ids      = ordinary.top_ids.slice(1, 0, batch_size);
             Tensor reported_logprobs = ordinary.top_logprobs.slice(1, 0, batch_size);
             ops::target_logprobs(logits, sampled, TextConfig::token_domain, chosen, &reported_ids,
-                                 &reported_logprobs, state.execution.device.execution_view());
+                                 &reported_logprobs, state.execution.device.stream());
         }
         CUDA_CHECK(cudaMemcpyAsync(&state.host_egress, ordinary.egress.data,
                                    sizeof(qwen3_8_flash_next::OrdinaryDecodeEgress),

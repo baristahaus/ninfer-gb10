@@ -10,10 +10,15 @@
 
 namespace ninfer::artifact {
 
+// Where a parameter's payload belongs at load time. Device is the default; Host marks the
+// file-mapped host tier (the Flash-Next PLE table); Values marks an inline host value.
+enum class Residency { Device, Host, Values };
+
 struct ParameterReference {
     std::string name;
     Shape shape;
     Binding binding;
+    Residency residency = Residency::Device;
 };
 
 struct HostValues {
@@ -33,7 +38,13 @@ public:
 
     [[nodiscard]] ParameterReference parameter(std::string_view name, Shape shape,
                                                std::optional<QType> exact_format = {});
+    [[nodiscard]] ParameterReference parameter(std::string_view name, Shape shape,
+                                               Residency residency,
+                                               std::optional<QType> exact_format = {});
     [[nodiscard]] ParameterReference binding(std::string name, const Binding& binding, Shape shape,
+                                             std::optional<QType> exact_format = {});
+    [[nodiscard]] ParameterReference binding(std::string name, const Binding& binding, Shape shape,
+                                             Residency residency,
                                              std::optional<QType> exact_format = {});
     [[nodiscard]] const Use& use(std::string_view parameter, std::string_view input) const;
     [[nodiscard]] bool contains(std::string_view parameter) const;

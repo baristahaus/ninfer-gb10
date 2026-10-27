@@ -140,6 +140,25 @@ validate_fold_rows(const GdnReplayRecords& records, LinearAttentionStateAllLayer
 } // namespace
 
 GdnReplayFoldPlan::GdnReplayFoldPlan(const GdnReplayRecords& records,
+                                     LinearAttentionStatePoolAllLayersView states)
+    : records_(records) {
+    states_.conv_layer0 = states.conv_layer0;
+    states_.recurrent_layer0 = states.recurrent_layer0;
+    states_.conv_layer_stride_bytes = states.conv_layer_stride_bytes;
+    states_.recurrent_layer_stride_bytes = states.recurrent_layer_stride_bytes;
+    states_.spec.layers = states.spec.layers;
+    states_.spec.conv_channels = states.spec.conv_channels;
+    states_.spec.conv_width = states.spec.conv_width;
+    states_.spec.value_heads = states.spec.value_heads;
+    states_.spec.value_head_dim = states.spec.value_head_dim;
+    states_.spec.key_head_dim = states.spec.key_head_dim;
+    states_.spec.conv_dtype = states.spec.conv_dtype;
+    validate_fold_records(records_);
+    validate_fold_states(records_, states_);
+    require_records_disjoint_from_states(records_, states_);
+}
+
+GdnReplayFoldPlan::GdnReplayFoldPlan(const GdnReplayRecords& records,
                                      LinearAttentionStateAllLayersView states)
     : records_(records), states_(states) {
     validate_fold_records(records_);
@@ -160,6 +179,16 @@ void GdnReplayFoldPlan::execute(std::span<const GdnReplayFoldRow> rows,
         return;
     detail::gated_delta_net::launch_replay_fold(
         records_, states_, packed, static_cast<std::int32_t>(rows.size()), execution.stream());
+}
+
+void GdnReplayFoldPlan::execute(std::span<const GdnReplayFoldRow> rows, cudaStream_t stream) const {
+    const detail::gated_delta_net::GdnReplayFoldKernelRows packed =
+        validate_fold_rows(records_, states_, rows);
+    if (std::none_of(rows.begin(), rows.end(),
+                     [](const GdnReplayFoldRow& row) { return row.commit_columns != 0; }))
+        return;
+    detail::gated_delta_net::launch_replay_fold(
+        records_, states_, packed, static_cast<std::int32_t>(rows.size()), stream);
 }
 
 void GdnReplayFoldPlan::execute(const Tensor& source_slots, const Tensor& destination_slots,

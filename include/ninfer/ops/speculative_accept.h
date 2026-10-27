@@ -1,26 +1,8 @@
 #pragma once
 
-#include "core/device.h"
-#include "core/tensor.h"
-#include "ninfer/ops/sampling.h"
-
-
-#include <cstdint>
+#include "ninfer/ops/speculative_round.h"
 
 namespace ninfer::ops {
-
-struct SpeculativeAcceptExecutionEnvelope {
-    // Execution promise: every row has temperature<=0, both penalties disabled and no token mask.
-    // When false, the general route remains valid for any supported mixture of greedy and
-    // stochastic rows.
-    bool all_rows_greedy_without_penalties = false;
-};
-
-// Caller-owned transient capacity for every draft-count and batch-size pair in the inclusive
-// domains. token_domain is the fixed sampling profile; invalid domains throw.
-[[nodiscard]] std::size_t speculative_accept_greedy_drafts_workspace_capacity_bytes(
-    std::int32_t token_domain, std::int32_t min_drafts, std::int32_t max_drafts,
-    std::int32_t min_batch, std::int32_t max_batch);
 
 
 

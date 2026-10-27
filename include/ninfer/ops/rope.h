@@ -36,4 +36,10 @@ void rope(const Tensor& positions, int rotary_dim, float theta, Tensor& q, Tenso
 void rope(const Tensor& positions, int rotary_dim, float theta, Tensor& x,
           CudaExecutionView execution);
 
+
+// Stream forms for callers that carry the stream directly; validation is identical.
+void rope(const Tensor& positions, int rotary_dim, float theta, Tensor& q, Tensor& k,
+          cudaStream_t stream);
+void rope(const Tensor& positions, int rotary_dim, float theta, Tensor& x, cudaStream_t stream);
+
 } // namespace ninfer::ops

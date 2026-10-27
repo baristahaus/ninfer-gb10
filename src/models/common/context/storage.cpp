@@ -511,34 +511,35 @@ runtime::ContextTransferObservation ContextStorage::describe(const ContextAction
                                          ? Direction::DeviceToHost
                                          : Direction::HostToDevice;
                 result.work        = state_->layout().transfer_work();
-                result.image_count = 1;
+                result.units       = 1;
             } else if constexpr (std::is_same_v<T, StateCopy>) {
                 result.direction = Direction::DeviceToDevice;
                 result.work =
                     value.bytes ? TransferWork{value.bytes, 1} : state_->layout().transfer_work();
-                result.image_count = 1;
+                result.units       = 1;
             } else if constexpr (std::is_same_v<T, PageCopy>) {
                 validate_slot(value.source);
                 validate_slot(value.destination);
                 if (value.source.pool_id != value.destination.pool_id)
                     throw std::invalid_argument("context page copy spans different pools");
-                result.resource = {
-                    runtime::KvPoolId{static_cast<std::uint16_t>(value.source.pool_id)}};
+                result.resource = value.source.pool_id == 1 ? runtime::ContextResourceClass::BackendKV
+                                                            : runtime::ContextResourceClass::MainKV;
                 result.direction   = Direction::DeviceToDevice;
                 result.work        = value.source.index == value.destination.index
                                          ? TransferWork{}
                                          : pool(value.source.pool_id).pages->device_copy_work(1);
-                result.page_groups = 1;
+                result.page_count = 1;
             } else if constexpr (std::is_same_v<T, PageTransfer>) {
                 if (value.pages.empty())
                     throw std::invalid_argument("context page transfer is empty");
                 const auto id      = value.pages.front().pool_id;
-                result.resource    = {runtime::KvPoolId{static_cast<std::uint16_t>(id)}};
+                result.resource    = id == 1 ? runtime::ContextResourceClass::BackendKV
+                                             : runtime::ContextResourceClass::MainKV;
                 result.direction   = value.direction == StateCopyDirection::DeviceToHost
                                          ? Direction::DeviceToHost
                                          : Direction::HostToDevice;
                 result.work        = pool(id).pages->host_transfer_work(page_indices(value.pages));
-                result.page_groups = value.pages.size();
+                result.page_count = static_cast<std::uint32_t>(value.pages.size());
             }
         },
         action);

@@ -4,6 +4,7 @@
 #include "runtime/contract/execution.h"
 #include "runtime/contract/request.h"
 #include "runtime/contract/resources.h"
+#include "artifact/binder.h"
 #include <ninfer/models/qwen3_8_flash_next/frontend.h>
 #include <ninfer/models/qwen3_8_flash_next/runtime.h>
 
@@ -39,7 +40,7 @@ public:
     ~LoadPlan();
     LoadPlan(const LoadPlan&)            = delete;
     LoadPlan& operator=(const LoadPlan&) = delete;
-    [[nodiscard]] artifact::MaterializationPlan& materialization();
+    [[nodiscard]] artifact::PreparedResources& materialization();
 private:
     class Impl;
     explicit LoadPlan(std::unique_ptr<Impl> impl) noexcept;

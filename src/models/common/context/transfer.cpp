@@ -83,8 +83,8 @@ void ContextMigration::prepare(const ContextActions& actions) {
             segment.end   = i + 1;
             segment.observed.work.payload_bytes += observed.work.payload_bytes;
             segment.observed.work.copy_operations += observed.work.copy_operations;
-            segment.observed.page_groups += observed.page_groups;
-            segment.observed.image_count += observed.image_count;
+            segment.observed.page_count += observed.page_count;
+            segment.observed.units += observed.units;
         }
     }
 }
@@ -146,8 +146,8 @@ std::span<const runtime::ContextTransferObservation> ContextMigration::observati
         else {
             existing->work.payload_bytes += observed.work.payload_bytes;
             existing->work.copy_operations += observed.work.copy_operations;
-            existing->page_groups += observed.page_groups;
-            existing->image_count += observed.image_count;
+            existing->page_count += observed.page_count;
+            existing->units += observed.units;
             existing->elapsed_ns += observed.elapsed_ns;
         }
     }

@@ -312,7 +312,7 @@ BuiltModel<typename Setup::Types> build_local_model(const artifact::Reader& read
     memory.rank_budgets.push_back(
         {memory.device_budget_bytes, capacity.runtime_reservation_bytes,
          capacity.minimum_runtime_reservation_bytes,
-         capacity.bytes_per_additional_primary_page_group, capacity.available_after_weights_bytes,
+         capacity.bytes_per_additional_main_page_group, capacity.available_after_weights_bytes,
          capacity.available_after_startup_bytes, capacity.automatic_headroom_bytes,
          capacity.planned_slack_bytes, memory.startup_retained_bytes, memory.cuda_graph});
     auto worker = std::make_unique<RankWorker<Types>>(std::move(device_owner), std::move(instance));

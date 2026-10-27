@@ -38,6 +38,12 @@ void causal_conv1d_silu_split(const Tensor& x, const Tensor& weight, const Tenso
                               Tensor& conv_state_out, Tensor& out0, Tensor& out1, Tensor& out2,
                               CudaExecutionView execution);
 
+// Stream-based variant for callers that own only a stream (the Flash-Next GDN block). The
+// geometry and overlap checks are identical; the execution device is not re-checked.
+void causal_conv1d_silu_split(const Tensor& x, const Tensor& weight, const Tensor& conv_state_in,
+                              Tensor& conv_state_out, Tensor& out0, Tensor& out1, Tensor& out2,
+                              cudaStream_t stream);
+
 /**
  * Snapshot form for B independent sequences. `x` and `out` are contiguous BF16 [C,W,B],
  * `conv_states` is BF16 [C,3,Slots] with dense [C,3] and an explicit BF16-aligned nb[2], and
@@ -56,5 +62,10 @@ void causal_conv1d_silu_snapshot(const Tensor& x, const Tensor& weight, Tensor& 
                                  const Tensor& valid_columns, const Tensor& initial_state_slots,
                                  const Tensor& snapshot_base_slots, Tensor& out,
                                  CudaExecutionView execution);
+
+void causal_conv1d_silu_snapshot(const Tensor& x, const Tensor& weight, Tensor& conv_states,
+                                 const Tensor& valid_columns, const Tensor& initial_state_slots,
+                                 const Tensor& snapshot_base_slots, Tensor& out,
+                                 cudaStream_t stream);
 
 } // namespace ninfer::ops

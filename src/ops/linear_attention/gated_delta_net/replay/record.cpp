@@ -91,4 +91,65 @@ void gated_delta_net_replay_record(const Tensor& q, const Tensor& k, const Tenso
         records.value, records.gate, out, stream);
 }
 
+void gated_delta_net_replay_record(const Tensor& q, const Tensor& k, const Tensor& v,
+                                   const Tensor& g, const Tensor& beta, float scale,
+                                   const Tensor& ssm_states, const Tensor& valid_columns,
+                                   const Tensor& initial_state_slots, GdnRecurrenceRecords records,
+                                   Tensor& out, cudaStream_t stream) {
+    validate_replay_record(q, k, v, g, beta, scale, ssm_states, valid_columns, initial_state_slots,
+                           records.key, records.value, records.gate, out, q.device);
+    detail::gated_delta_net::launch_recurrent_record(
+        q, k, v, g, beta, scale, ssm_states, valid_columns, initial_state_slots, records.key,
+        records.value, records.gate, out, stream);
+}
+
+void gated_delta_net_fold_replay_record(const Tensor& q, const Tensor& k, const Tensor& v,
+                                        const Tensor& g, const Tensor& beta, float scale,
+                                        Tensor& ssm_states, const Tensor& valid_columns,
+                                        const Tensor& initial_state_slots,
+                                        GdnRecurrenceRecords records, Tensor& out,
+                                        const GdnPendingFold& pending, cudaStream_t stream) {
+    constexpr const char* kOp = "gated_delta_net_fold_replay_record";
+    const auto device = q.device;
+    validate_replay_record(q, k, v, g, beta, scale, ssm_states, valid_columns, initial_state_slots,
+                           records.key, records.value, records.gate, out, device);
+    const std::int32_t qk_heads     = q.ne[1];
+    const std::int32_t value_heads  = v.ne[1];
+    const std::int32_t width        = q.ne[2];
+    const std::int32_t pending_rows = pending.rows.ne[1];
+    if (pending_rows <= 0 || pending_rows > detail::gated_delta_net::replay::kMaximumRows) {
+        throw std::invalid_argument(std::string(kOp) + ": pending row count must be in [1,8]");
+    }
+    namespace operand = common::operand;
+    operand::tensor(pending.rows, DType::I32, {4, pending_rows}, 16, kOp, "pending rows", device);
+    operand::tensor(pending.key_record, DType::BF16, {detail::gated_delta_net::kStateDim, qk_heads,
+                                                      width, pending_rows},
+                    8, kOp, "pending key record", device);
+    operand::tensor(pending.value_record, DType::BF16,
+                    {detail::gated_delta_net::kStateDim, value_heads, width, pending_rows}, 2, kOp,
+                    "pending value record", device);
+    operand::tensor(pending.gate_record, DType::FP32, {2, value_heads, width, pending_rows}, 8, kOp,
+                    "pending gate record", device);
+    const std::array<const Tensor*, 7> written{&ssm_states,  &records.key,   &records.value,
+                                               &records.gate, &out,           &pending.key_record,
+                                               &pending.rows};
+    std::array<operand::Blocks, 9> ranges{};
+    std::size_t count = 0;
+    for (const Tensor* tensor : written) { ranges[count++] = operand::blocks(*tensor, kOp); }
+    ranges[count++] = operand::blocks(pending.value_record, kOp);
+    ranges[count++] = operand::blocks(pending.gate_record, kOp);
+    for (std::size_t i = 0; i < count; ++i)
+        for (std::size_t j = 0; j < i; ++j)
+            if (operand::overlaps(ranges[i], ranges[j]))
+                throw std::invalid_argument(
+                    std::string(kOp) + ": pending records must be a separate copy of the "
+                                        "previous round and must not overlap the operands");
+    static_assert(sizeof(detail::gated_delta_net::GdnReplayFoldKernelRow) == 4 * sizeof(std::int32_t));
+    detail::gated_delta_net::launch_recurrent_fold_record(
+        q, k, v, g, beta, scale, ssm_states, valid_columns, initial_state_slots, records.key,
+        records.value, records.gate, out,
+        static_cast<const detail::gated_delta_net::GdnReplayFoldKernelRow*>(pending.rows.data),
+        pending_rows, pending.key_record, pending.value_record, pending.gate_record, stream);
+}
+
 } // namespace ninfer::ops

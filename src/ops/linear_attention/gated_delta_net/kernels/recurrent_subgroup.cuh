@@ -8,7 +8,7 @@ namespace subgroup {
 
 inline constexpr int kWindowSize = 16;
 
-enum class Mode { Update, Record, Fold };
+enum class Mode { Update, Record, Fold, FoldWrite };
 
 template <int Capacity>
 struct alignas(16) Window {
@@ -60,7 +60,7 @@ template <int Lanes, bool Normalize, Mode Behavior, bool Prefetch, int Capacity,
 __device__ __forceinline__ void run(const Access& a, RecurrentCoordinates original, int valid,
                                     Window<Capacity>* sm) {
     static_assert(Lanes == 8 || Lanes == 16);
-    constexpr bool Readout    = Behavior != Mode::Fold;
+    constexpr bool Readout    = Behavior != Mode::Fold && Behavior != Mode::FoldWrite;
     constexpr bool Record     = Behavior == Mode::Record;
     constexpr bool WriteState = Behavior != Mode::Record;
     constexpr int Rows        = Lanes / 8;

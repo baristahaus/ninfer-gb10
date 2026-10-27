@@ -34,7 +34,7 @@ void same_shape(const Tensor& x, const Tensor& other, const char* op) {
 } // namespace
 
 Operands validate(const Tensor& x, const Tensor& weight, const Tensor* gate, float eps,
-                  const Tensor& out, Epilogue kind, CudaExecutionView execution, const char* op) {
+                  const Tensor& out, Epilogue kind, Device device, const char* op) {
     require(x.dtype == DType::BF16 && weight.dtype == DType::BF16 && out.dtype == DType::BF16 &&
                 (!gate || gate->dtype == DType::BF16),
             op, "operands must be BF16");
@@ -49,7 +49,7 @@ Operands validate(const Tensor& x, const Tensor& weight, const Tensor* gate, flo
     std::uintptr_t addresses = 0;
     for (const auto* t : tensors) {
         if (!t) continue;
-        require(t->device == execution.device(), op, "operand belongs to another device");
+        require(t->device == device, op, "operand belongs to another device");
         require(t->is_contiguous() && common::operand::aligned(t->data, 2), op,
                 "operands require contiguous BF16-aligned backing");
         addresses |= reinterpret_cast<std::uintptr_t>(t->data);

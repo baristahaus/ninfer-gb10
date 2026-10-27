@@ -3,6 +3,8 @@
 #include "ops/common/cuda/reduce.cuh"
 #include "ops/common/cuda/memory.cuh"
 #include "ops/linear_attention/gated_delta_net/kernels/transition.cuh"
+#include "ops/linear_attention/gated_delta_net/replay/fold_io.cuh"
+#include "ops/linear_attention/gated_delta_net/kernels/recurrent_subgroup.cuh"
 
 namespace ninfer::ops::detail::gated_delta_net {
 struct RecordEffects {
@@ -142,6 +144,101 @@ __global__ void __launch_bounds__(common::kWarpSize* kNumWarps, 2)
     load_state_tile(state, access.state_read_base(coord), coord);
     run_recurrent_sequence<true, RecordEffects>(state, access, coord, valid);
     zero_output_suffix(access, coord, valid, access.width);
+}
+
+// Pending-fold access for the fused fold-then-record kernel: the fold pass replays one pending
+// entry's committed columns into the record row's initial slot, in place, with exactly the
+// arithmetic of gdn_replay_fold's fold kernel (subgroup::run in FoldWrite mode).
+struct PendingFoldAccess {
+    const __nv_bfloat16* key_record;
+    const __nv_bfloat16* value_record;
+    const uint2* gate_record;
+    float* states;
+    std::int32_t slot;
+    std::int32_t batch;
+    std::int32_t row;
+    HeadMap heads;
+    std::int32_t width;
+    std::int64_t state_slot_stride;
+
+    __device__ __forceinline__ RecurrentCoordinates coordinates() const {
+        return make_coordinates(batch, 0, static_cast<std::int32_t>(blockIdx.z), heads);
+    }
+
+    __device__ __forceinline__ std::int64_t column(std::int32_t token) const {
+        return static_cast<std::int64_t>(row) * width + token;
+    }
+
+    __device__ __forceinline__ const float*
+    state_read_base(const RecurrentCoordinates& coord) const {
+        return states + static_cast<std::int64_t>(slot) * state_slot_stride +
+               static_cast<std::int64_t>(coord.value_head) * kStateDim * kStateDim;
+    }
+
+    __device__ __forceinline__ float* state_write_base(const RecurrentCoordinates& coord) const {
+        return states + static_cast<std::int64_t>(slot) * state_slot_stride +
+               static_cast<std::int64_t>(coord.value_head) * kStateDim * kStateDim;
+    }
+
+    __device__ __forceinline__ const __nv_bfloat16* key_ptr(const RecurrentCoordinates& coord,
+                                                            std::int32_t token) const {
+        return key_record + (column(token) * heads.H_qk + coord.qk_head) * kStateDim;
+    }
+
+    __device__ __forceinline__ const __nv_bfloat16* value_ptr(const RecurrentCoordinates& coord,
+                                                              std::int32_t token) const {
+        return value_record + (column(token) * heads.H_v + coord.value_head) * kStateDim;
+    }
+
+    __device__ __forceinline__ RawGatePair load_gate(const RecurrentCoordinates& coord,
+                                                     std::int32_t token) const {
+        return load_record_gate(gate_record, column(token) * heads.H_v + coord.value_head);
+    }
+};
+
+struct PendingFoldTable {
+    const GdnReplayFoldKernelRow* rows;
+    std::int32_t count;
+    const __nv_bfloat16* key_record;
+    const __nv_bfloat16* value_record;
+    const uint2* gate_record;
+    std::int32_t width;
+};
+
+// recurrent_record_kernel preceded by the row's pending fold: when a pending row names this row's
+// state slot (in place) with a positive extent, its committed columns are applied to the state
+// with the fold's arithmetic and stored back before this round's columns run. Same order as
+// gdn_replay_fold followed by the record pass, in the same subgroup formulation.
+template <bool Masked>
+__global__ void __launch_bounds__(common::kWarpSize* kNumWarps, 2)
+    recurrent_fold_record_kernel(RecordAccess<Masked> access, PendingFoldTable pending) {
+    extern __shared__ __align__(16) char backing[];
+    auto* window = reinterpret_cast<subgroup::Window<subgroup::kWindowSize>*>(backing);
+    const RecurrentCoordinates coord = access.coordinates();
+    const std::int32_t valid         = access.active_columns(coord);
+    const std::int32_t slot          = access.initial_slots[coord.batch];
+    for (std::int32_t entry = 0; entry < pending.count; ++entry) {
+        const GdnReplayFoldKernelRow row = pending.rows[entry];
+        if (row.commit_columns <= 0 || row.source_state_slot != slot ||
+            row.destination_state_slot != slot) {
+            continue;
+        }
+        const PendingFoldAccess fold{pending.key_record,
+                                     pending.value_record,
+                                     pending.gate_record,
+                                     const_cast<float*>(access.states),
+                                     slot,
+                                     coord.batch,
+                                     entry,
+                                     access.heads,
+                                     pending.width,
+                                     access.state_slot_stride};
+        subgroup::run<16, true, subgroup::Mode::FoldWrite, true>(
+            fold, coord, row.commit_columns, window);
+        __syncthreads();
+        break;
+    }
+    subgroup::run<16, true, subgroup::Mode::Record, true>(access, coord, valid, window);
 }
 
 } // namespace ninfer::ops::detail::gated_delta_net

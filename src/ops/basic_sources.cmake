@@ -17,7 +17,7 @@ endforeach()
 
 # Launchers for ops without a restructured-layer counterpart.
 foreach(_f IN ITEMS
-    prepare_ragged_prefix.cu prepare_masked_block.cu vision_pos_embed.cu)
+    prepare_ragged_prefix.cu prepare_masked_block.cu vision_pos_embed.cu gdn_gating.cu)
   if(EXISTS "${NINFER_OPS_DIR}/launcher/${_f}")
     target_sources(ninfer_ops PRIVATE "${NINFER_OPS_DIR}/launcher/${_f}")
   endif()
@@ -32,7 +32,8 @@ target_sources(ninfer_ops PRIVATE
 
 # Public wrappers for the same no-counterpart ops.
 foreach(_f IN ITEMS
-    prepare_ragged_prefix.cpp prepare_masked_block.cpp vision_pos_embed.cpp)
+    prepare_ragged_prefix.cpp prepare_masked_block.cpp vision_pos_embed.cpp
+    gdn_gating.cpp)
   target_sources(ninfer_ops PRIVATE "${NINFER_OPS_DIR}/wrapper/${_f}")
 endforeach()
 
@@ -44,5 +45,6 @@ target_sources(ninfer_ops PRIVATE ${_ninfer_fn_bf16_sources})
 target_sources(ninfer_ops PRIVATE
   "${NINFER_OPS_DIR}/launcher/hyperconnection.cu"
   "${NINFER_OPS_DIR}/launcher/flash_next_ple.cu"
+  "${NINFER_OPS_DIR}/launcher/flash_next_ple_stage.cu"
   "${NINFER_OPS_DIR}/linear_attention/flash_next_gdn.cu"
 )

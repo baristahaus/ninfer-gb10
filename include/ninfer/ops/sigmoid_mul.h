@@ -16,4 +16,7 @@ namespace ninfer::ops {
  */
 void sigmoid_mul(const Tensor& gate, Tensor& x, CudaExecutionView execution);
 
+// Stream-based variant for callers that own only a stream; operands are pinned to gate's device.
+void sigmoid_mul(const Tensor& gate, Tensor& x, cudaStream_t stream);
+
 } // namespace ninfer::ops

@@ -4,6 +4,7 @@
 #include "core/device.h"
 #include "core/tensor.h"
 
+#include <cuda_runtime.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -103,5 +104,31 @@ void gated_delta_net_replay_record(const Tensor& q, const Tensor& k, const Tenso
                                    const Tensor& ssm_states, const Tensor& valid_columns,
                                    const Tensor& initial_state_slots, GdnRecurrenceRecords records,
                                    Tensor& out, CudaExecutionView execution);
+
+// Stream-based variant of gated_delta_net_replay_record for callers that own only a stream (the
+// Flash-Next GDN block). Validation pins every operand to the q tensor's device.
+void gated_delta_net_replay_record(const Tensor& q, const Tensor& k, const Tensor& v,
+                                   const Tensor& g, const Tensor& beta, float scale,
+                                   const Tensor& ssm_states, const Tensor& valid_columns,
+                                   const Tensor& initial_state_slots, GdnRecurrenceRecords records,
+                                   Tensor& out, cudaStream_t stream);
+
+// One previous round's records still to be folded into the recorded layer's states: rows is
+// device I32 [4,R] ({source, destination, commit_columns, 0} per row; the fold applies exactly
+// the rows whose source and destination slot equal a record row's initial slot, in place), and
+// key_record/value_record/gate_record are that round's records with R rows.
+struct GdnPendingFold {
+    Tensor rows;
+    Tensor key_record;
+    Tensor value_record;
+    Tensor gate_record;
+};
+
+void gated_delta_net_fold_replay_record(const Tensor& q, const Tensor& k, const Tensor& v,
+                                        const Tensor& g, const Tensor& beta, float scale,
+                                        Tensor& ssm_states, const Tensor& valid_columns,
+                                        const Tensor& initial_state_slots,
+                                        GdnRecurrenceRecords records, Tensor& out,
+                                        const GdnPendingFold& pending, cudaStream_t stream);
 
 } // namespace ninfer::ops

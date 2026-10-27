@@ -122,15 +122,15 @@ int run(int kPrefillTokens) {
     d_raw_pages.fill();
     d_position_pages.fill();
     PagedKVBatchLayerView cache{
-        .k_pages = Tensor(d_k_pages.data(), DType::BF16, {kHeadDim, 64, 2, kCachePages}),
-        .v_pages = Tensor(d_v_pages.data(), DType::BF16, {kHeadDim, 64, 2, kCachePages}),
-        .block_tables = Tensor(d_table.data(), DType::I32, {kCachePages, 1}),
+        .k_pages = Tensor(d_k_pages.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {kHeadDim, 64, 2, kCachePages}),
+        .v_pages = Tensor(d_v_pages.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {kHeadDim, 64, 2, kCachePages}),
+        .block_tables = Tensor(d_table.data(), ninfer::test::cuda_environment().context.device(), DType::I32, {kCachePages, 1}),
         .head_dim = kHeadDim,
         .num_kv_heads = 2,
         .storage = KvCacheStorage::BFloat16KeyValue,
         .auxiliary_pages = {
-            Tensor(d_raw_pages.data(), DType::BF16, {128, 64, kCachePages, 1}),
-            Tensor(d_position_pages.data(), DType::I32, {3, 64, kCachePages, 1}),
+            Tensor(d_raw_pages.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {128, 64, kCachePages, 1}),
+            Tensor(d_position_pages.data(), ninfer::test::cuda_environment().context.device(), DType::I32, {3, 64, kCachePages, 1}),
         },
     };
 
@@ -139,26 +139,26 @@ int run(int kPrefillTokens) {
     DeviceBuffer d_valid = to_device_i32(std::vector<int>{1});
     DeviceBuffer d_rows = to_device_i32(std::vector<int>{0});
     GuardedDeviceBuffer d_destination(kHidden * sizeof(std::uint16_t));
-    Tensor input_tensor(d_input.data(), DType::BF16, {kHidden, 1});
-    Tensor destination(d_destination.data(), DType::BF16, {kHidden, 1});
+    Tensor input_tensor(d_input.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {kHidden, 1});
+    Tensor destination(d_destination.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {kHidden, 1});
     ops::FlashNextQsaWeights weights{
         .query_gate = bf16_weight(d_query_gate, 2 * kQueryRows, kHidden),
         .key = bf16_weight(d_key, kKvRows, kHidden),
         .value = bf16_weight(d_value, kKvRows, kHidden),
         .output = bf16_weight(d_output_weight, kHidden, kQueryRows),
-        .query_norm = Tensor(d_query_norm.data(), DType::BF16, {kHeadDim}),
-        .key_norm = Tensor(d_key_norm.data(), DType::BF16, {kHeadDim}),
+        .query_norm = Tensor(d_query_norm.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {kHeadDim}),
+        .key_norm = Tensor(d_key_norm.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {kHeadDim}),
         .index_query = bf16_weight(d_index_query, 512, kHidden),
         .index_key = bf16_weight(d_index_key, 128, kHidden),
-        .index_query_norm = Tensor(d_index_query_norm.data(), DType::BF16, {128}),
-        .index_key_norm = Tensor(d_index_key_norm.data(), DType::BF16, {128}),
+        .index_query_norm = Tensor(d_index_query_norm.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {128}),
+        .index_key_norm = Tensor(d_index_key_norm.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {128}),
     };
     MemoryArena workspace(ops::flash_next_qsa_workspace_capacity_bytes(1,
                                                                            64 * kCachePages));
     ops::flash_next_qsa(
-        input_tensor, Tensor(d_cache_positions.data(), DType::I32, {1, 1}),
-        Tensor(d_rope_positions.data(), DType::I32, {1, 1, 3}),
-        Tensor(d_valid.data(), DType::I32, {1}), Tensor(d_rows.data(), DType::I32, {1}), weights,
+        input_tensor, Tensor(d_cache_positions.data(), ninfer::test::cuda_environment().context.device(), DType::I32, {1, 1}),
+        Tensor(d_rope_positions.data(), ninfer::test::cuda_environment().context.device(), DType::I32, {1, 1, 3}),
+        Tensor(d_valid.data(), ninfer::test::cuda_environment().context.device(), DType::I32, {1}), Tensor(d_rows.data(), ninfer::test::cuda_environment().context.device(), DType::I32, {1}), weights,
         cache, {.min_visible_keys = 1, .max_visible_keys = 1}, destination, workspace,
         nullptr);
     cuda_synchronize();
@@ -190,25 +190,25 @@ int run(int kPrefillTokens) {
     d_fp8_k_scales.fill();
     d_fp8_v_scales.fill();
     PagedKVBatchLayerView fp8_cache{
-        .k_pages = Tensor(d_fp8_k_pages.data(), DType::FP8_E4M3FN, {kHeadDim, 64, 2, kCachePages}),
-        .v_pages = Tensor(d_fp8_v_pages.data(), DType::FP8_E4M3FN, {kHeadDim, 64, 2, kCachePages}),
-        .k_scale_pages = Tensor(d_fp8_k_scales.data(), DType::FP16, {1, 64, 2, kCachePages}),
-        .v_scale_pages = Tensor(d_fp8_v_scales.data(), DType::FP16, {1, 64, 2, kCachePages}),
-        .block_tables = Tensor(d_table.data(), DType::I32, {kCachePages, 1}),
+        .k_pages = Tensor(d_fp8_k_pages.data(), ninfer::test::cuda_environment().context.device(), DType::FP8_E4M3FN, {kHeadDim, 64, 2, kCachePages}),
+        .v_pages = Tensor(d_fp8_v_pages.data(), ninfer::test::cuda_environment().context.device(), DType::FP8_E4M3FN, {kHeadDim, 64, 2, kCachePages}),
+        .k_scale_pages = Tensor(d_fp8_k_scales.data(), ninfer::test::cuda_environment().context.device(), DType::FP16, {1, 64, 2, kCachePages}),
+        .v_scale_pages = Tensor(d_fp8_v_scales.data(), ninfer::test::cuda_environment().context.device(), DType::FP16, {1, 64, 2, kCachePages}),
+        .block_tables = Tensor(d_table.data(), ninfer::test::cuda_environment().context.device(), DType::I32, {kCachePages, 1}),
         .head_dim = kHeadDim,
         .num_kv_heads = 2,
         .storage = KvCacheStorage::Fp8E4M3Row256,
         .auxiliary_pages = {
-            Tensor(d_raw_pages.data(), DType::BF16, {128, 64, kCachePages, 1}),
-            Tensor(d_position_pages.data(), DType::I32, {3, 64, kCachePages, 1}),
+            Tensor(d_raw_pages.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {128, 64, kCachePages, 1}),
+            Tensor(d_position_pages.data(), ninfer::test::cuda_environment().context.device(), DType::I32, {3, 64, kCachePages, 1}),
         },
     };
     d_destination.fill();
     workspace.reset();
     ops::flash_next_qsa(
-        input_tensor, Tensor(d_cache_positions.data(), DType::I32, {1, 1}),
-        Tensor(d_rope_positions.data(), DType::I32, {1, 1, 3}),
-        Tensor(d_valid.data(), DType::I32, {1}), Tensor(d_rows.data(), DType::I32, {1}), weights,
+        input_tensor, Tensor(d_cache_positions.data(), ninfer::test::cuda_environment().context.device(), DType::I32, {1, 1}),
+        Tensor(d_rope_positions.data(), ninfer::test::cuda_environment().context.device(), DType::I32, {1, 1, 3}),
+        Tensor(d_valid.data(), ninfer::test::cuda_environment().context.device(), DType::I32, {1}), Tensor(d_rows.data(), ninfer::test::cuda_environment().context.device(), DType::I32, {1}), weights,
         fp8_cache, {.min_visible_keys = 1, .max_visible_keys = 1}, destination, workspace,
         nullptr);
     cuda_synchronize();
@@ -234,9 +234,9 @@ int run(int kPrefillTokens) {
     d_destination.fill();
     workspace.reset();
     ops::flash_next_qsa(
-        input_tensor, Tensor(d_group_end_position.data(), DType::I32, {1, 1}),
-        Tensor(d_rope_positions.data(), DType::I32, {1, 1, 3}),
-        Tensor(d_valid.data(), DType::I32, {1}), Tensor(d_rows.data(), DType::I32, {1}), weights,
+        input_tensor, Tensor(d_group_end_position.data(), ninfer::test::cuda_environment().context.device(), DType::I32, {1, 1}),
+        Tensor(d_rope_positions.data(), ninfer::test::cuda_environment().context.device(), DType::I32, {1, 1, 3}),
+        Tensor(d_valid.data(), ninfer::test::cuda_environment().context.device(), DType::I32, {1}), Tensor(d_rows.data(), ninfer::test::cuda_environment().context.device(), DType::I32, {1}), weights,
         cache, {.min_visible_keys = 4, .max_visible_keys = 4}, destination, workspace, nullptr);
     cuda_synchronize();
     std::uint16_t compressed_value = 0;
@@ -269,9 +269,9 @@ int run(int kPrefillTokens) {
     d_destination.fill();
     workspace.reset();
     ops::flash_next_qsa(
-        input_tensor, Tensor(d_long_cache_positions.data(), DType::I32, {1, 1}),
-        Tensor(d_long_rope_positions.data(), DType::I32, {1, 1, 3}),
-        Tensor(d_valid.data(), DType::I32, {1}), Tensor(d_rows.data(), DType::I32, {1}), weights,
+        input_tensor, Tensor(d_long_cache_positions.data(), ninfer::test::cuda_environment().context.device(), DType::I32, {1, 1}),
+        Tensor(d_long_rope_positions.data(), ninfer::test::cuda_environment().context.device(), DType::I32, {1, 1, 3}),
+        Tensor(d_valid.data(), ninfer::test::cuda_environment().context.device(), DType::I32, {1}), Tensor(d_rows.data(), ninfer::test::cuda_environment().context.device(), DType::I32, {1}), weights,
         cache,
         {.min_visible_keys = kLongPosition + 1, .max_visible_keys = kLongPosition + 1},
         destination, workspace, nullptr);
@@ -304,15 +304,15 @@ int run(int kPrefillTokens) {
     DeviceBuffer d_prefill_rope = to_device_i32(std::vector<int>(3 * kPrefillTokens, 0));
     DeviceBuffer d_prefill_valid = to_device_i32(std::vector<int>{kPrefillTokens});
     GuardedDeviceBuffer d_prefill_destination(static_cast<std::size_t>(kHidden) * kPrefillTokens * sizeof(std::uint16_t));
-    Tensor prefill_destination(d_prefill_destination.data(), DType::BF16,
+    Tensor prefill_destination(d_prefill_destination.data(), ninfer::test::cuda_environment().context.device(), DType::BF16,
                                {kHidden, kPrefillTokens});
     MemoryArena prefill_workspace(
         ops::flash_next_qsa_workspace_capacity_bytes(kPrefillTokens, 64 * kCachePages));
     ops::flash_next_qsa(
-        Tensor(d_prefill_input.data(), DType::BF16, {kHidden, kPrefillTokens}),
-        Tensor(d_prefill_positions.data(), DType::I32, {kPrefillTokens, 1}),
-        Tensor(d_prefill_rope.data(), DType::I32, {kPrefillTokens, 1, 3}),
-        Tensor(d_prefill_valid.data(), DType::I32, {1}), Tensor(d_rows.data(), DType::I32, {1}),
+        Tensor(d_prefill_input.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {kHidden, kPrefillTokens}),
+        Tensor(d_prefill_positions.data(), ninfer::test::cuda_environment().context.device(), DType::I32, {kPrefillTokens, 1}),
+        Tensor(d_prefill_rope.data(), ninfer::test::cuda_environment().context.device(), DType::I32, {kPrefillTokens, 1, 3}),
+        Tensor(d_prefill_valid.data(), ninfer::test::cuda_environment().context.device(), DType::I32, {1}), Tensor(d_rows.data(), ninfer::test::cuda_environment().context.device(), DType::I32, {1}),
         weights, cache,
         {.min_visible_keys = kLongPosition + 1,
          .max_visible_keys = kLongPosition + kPrefillTokens},
@@ -377,14 +377,14 @@ int run(int kPrefillTokens) {
                 numerator / denominator / (1.0 + std::exp(-2.0 * query_input(token)));
         }
         DeviceBuffer d_selected = to_device_i32(selected);
-        Tensor selected_tensor(d_selected.data(), DType::I32, {2051, kPrefillTokens});
+        Tensor selected_tensor(d_selected.data(), ninfer::test::cuda_environment().context.device(), DType::I32, {2051, kPrefillTokens});
         d_prefill_destination.fill();
         poison_workspace(prefill_workspace);
         ops::flash_next_qsa(
-            Tensor(d_prefill_input.data(), DType::BF16, {kHidden, kPrefillTokens}),
-            Tensor(d_prefill_positions.data(), DType::I32, {kPrefillTokens, 1}),
-            Tensor(d_prefill_rope.data(), DType::I32, {kPrefillTokens, 1, 3}),
-            Tensor(d_prefill_valid.data(), DType::I32, {1}), Tensor(d_rows.data(), DType::I32, {1}),
+            Tensor(d_prefill_input.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {kHidden, kPrefillTokens}),
+            Tensor(d_prefill_positions.data(), ninfer::test::cuda_environment().context.device(), DType::I32, {kPrefillTokens, 1}),
+            Tensor(d_prefill_rope.data(), ninfer::test::cuda_environment().context.device(), DType::I32, {kPrefillTokens, 1, 3}),
+            Tensor(d_prefill_valid.data(), ninfer::test::cuda_environment().context.device(), DType::I32, {1}), Tensor(d_rows.data(), ninfer::test::cuda_environment().context.device(), DType::I32, {1}),
             weights, cache, {.min_visible_keys = kLongPosition + 1,
                              .max_visible_keys = kLongPosition + kPrefillTokens},
             prefill_destination, prefill_workspace, nullptr, nullptr,
@@ -414,13 +414,13 @@ int run(int kPrefillTokens) {
     }
     DeviceBuffer d_dense_positions = to_device_i32(dense_positions);
     DeviceBuffer d_dense_selected = to_device_i32(std::vector<int>(2051 * kPrefillTokens, 1 << 30));
-    Tensor dense_selected(d_dense_selected.data(), DType::I32, {2051, kPrefillTokens});
+    Tensor dense_selected(d_dense_selected.data(), ninfer::test::cuda_environment().context.device(), DType::I32, {2051, kPrefillTokens});
     poison_workspace(prefill_workspace);
     ops::flash_next_qsa(
-        Tensor(d_prefill_input.data(), DType::BF16, {kHidden, kPrefillTokens}),
-        Tensor(d_dense_positions.data(), DType::I32, {kPrefillTokens, 1}),
-        Tensor(d_prefill_rope.data(), DType::I32, {kPrefillTokens, 1, 3}),
-        Tensor(d_prefill_valid.data(), DType::I32, {1}), Tensor(d_rows.data(), DType::I32, {1}),
+        Tensor(d_prefill_input.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {kHidden, kPrefillTokens}),
+        Tensor(d_dense_positions.data(), ninfer::test::cuda_environment().context.device(), DType::I32, {kPrefillTokens, 1}),
+        Tensor(d_prefill_rope.data(), ninfer::test::cuda_environment().context.device(), DType::I32, {kPrefillTokens, 1, 3}),
+        Tensor(d_prefill_valid.data(), ninfer::test::cuda_environment().context.device(), DType::I32, {1}), Tensor(d_rows.data(), ninfer::test::cuda_environment().context.device(), DType::I32, {1}),
         weights, cache,
         {.min_visible_keys = kDensePosition + 1,
          .max_visible_keys = kDensePosition + kPrefillTokens},
@@ -454,15 +454,15 @@ int run(int kPrefillTokens) {
     DeviceBuffer d_split_valid     = to_device_i32(std::vector<int>{kSplitTokens});
     DeviceBuffer d_split_selected =
         to_device_i32(std::vector<int>(2051 * kSplitTokens, 1 << 30));
-    Tensor split_selected(d_split_selected.data(), DType::I32, {2051, kSplitTokens});
+    Tensor split_selected(d_split_selected.data(), ninfer::test::cuda_environment().context.device(), DType::I32, {2051, kSplitTokens});
     GuardedDeviceBuffer d_split_destination(static_cast<std::size_t>(kHidden) * kSplitTokens * sizeof(std::uint16_t));
-    Tensor split_destination(d_split_destination.data(), DType::BF16, {kHidden, kSplitTokens});
+    Tensor split_destination(d_split_destination.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {kHidden, kSplitTokens});
     prefill_workspace.reset();
     ops::flash_next_qsa(
-        Tensor(d_prefill_input.data(), DType::BF16, {kHidden, kSplitTokens}),
-        Tensor(d_split_positions.data(), DType::I32, {kSplitTokens, 1}),
-        Tensor(d_split_rope.data(), DType::I32, {kSplitTokens, 1, 3}),
-        Tensor(d_split_valid.data(), DType::I32, {1}), Tensor(d_rows.data(), DType::I32, {1}), weights,
+        Tensor(d_prefill_input.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {kHidden, kSplitTokens}),
+        Tensor(d_split_positions.data(), ninfer::test::cuda_environment().context.device(), DType::I32, {kSplitTokens, 1}),
+        Tensor(d_split_rope.data(), ninfer::test::cuda_environment().context.device(), DType::I32, {kSplitTokens, 1, 3}),
+        Tensor(d_split_valid.data(), ninfer::test::cuda_environment().context.device(), DType::I32, {1}), Tensor(d_rows.data(), ninfer::test::cuda_environment().context.device(), DType::I32, {1}), weights,
         cache,
         {.min_visible_keys = kSplitPosition + 1,
          .max_visible_keys = kSplitPosition + kSplitTokens},
@@ -550,9 +550,9 @@ int run_query_gate(bool fp8, int tokens) {
     DeviceBuffer d_input = to_device_bf16(input);
     GuardedDeviceBuffer d_query(query_reference.size() * sizeof(std::uint16_t));
     GuardedDeviceBuffer d_gate(gate_reference.size() * sizeof(std::uint16_t));
-    Tensor input_tensor(d_input.data(), DType::BF16, {kHidden, tokens});
-    Tensor query_tensor(d_query.data(), DType::BF16, {kQueryRows, tokens});
-    Tensor gate_tensor(d_gate.data(), DType::BF16, {kQueryRows, tokens});
+    Tensor input_tensor(d_input.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {kHidden, tokens});
+    Tensor query_tensor(d_query.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {kQueryRows, tokens});
+    Tensor gate_tensor(d_gate.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {kQueryRows, tokens});
     MemoryArena workspace(ops::flash_next_query_gate_workspace_capacity_bytes(tokens));
     ops::flash_next_project_query_gate(input_tensor, packed, query_tensor, gate_tensor, workspace,
                                        nullptr);

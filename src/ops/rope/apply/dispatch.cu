@@ -98,22 +98,22 @@ Selection select_rope(const RopeArguments& a, int multiprocessors) {
     return generic;
 }
 
-void apply(const RopeArguments& arguments, CudaExecutionView execution) {
-    const auto selected = select_rope(arguments, execution.multiprocessor_count());
-    selected.launch(arguments, selected.threads, execution.stream());
+void apply(const RopeArguments& arguments, int multiprocessor_count, cudaStream_t stream) {
+    const auto selected = select_rope(arguments, multiprocessor_count);
+    selected.launch(arguments, selected.threads, stream);
     CUDA_CHECK(cudaGetLastError());
 }
 
 } // namespace
 
 void rope_dispatch(const Tensor& positions, int rotary_dim, float theta, Tensor& q, Tensor& k,
-                   CudaExecutionView execution) {
-    apply({positions, q, &k, rotary_dim, theta}, execution);
+                   int multiprocessor_count, cudaStream_t stream) {
+    apply({positions, q, &k, rotary_dim, theta}, multiprocessor_count, stream);
 }
 
 void rope_dispatch(const Tensor& positions, int rotary_dim, float theta, Tensor& x,
-                   CudaExecutionView execution) {
-    apply({positions, x, nullptr, rotary_dim, theta}, execution);
+                   int multiprocessor_count, cudaStream_t stream) {
+    apply({positions, x, nullptr, rotary_dim, theta}, multiprocessor_count, stream);
 }
 
 } // namespace ninfer::ops::detail

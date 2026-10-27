@@ -110,10 +110,10 @@ int run() {
     GuardedDeviceBuffer d_scalar_output(static_cast<std::size_t>(kHidden) * sizeof(std::uint16_t));
     GuardedDeviceBuffer d_grouped_output(static_cast<std::size_t>(kHidden) * kGroupedTokens *
                                          sizeof(std::uint16_t));
-    Tensor scalar_input(d_input.data(), DType::BF16, {kHidden, 1});
-    Tensor scalar_output(d_scalar_output.data(), DType::BF16, {kHidden, 1});
-    Tensor grouped_input(d_input.data(), DType::BF16, {kHidden, kGroupedTokens});
-    Tensor grouped_output(d_grouped_output.data(), DType::BF16, {kHidden, kGroupedTokens});
+    Tensor scalar_input(d_input.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {kHidden, 1});
+    Tensor scalar_output(d_scalar_output.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {kHidden, 1});
+    Tensor grouped_input(d_input.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {kHidden, kGroupedTokens});
+    Tensor grouped_output(d_grouped_output.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {kHidden, kGroupedTokens});
     ops::FlashNextMoeWeights weights{
         .router = bf16_weight(d_router, kExperts, kHidden),
         .shared_gate_up =
@@ -424,8 +424,8 @@ int run_nvfp4() {
     // with an out-of-range expert id before the call, as an Engine round leaves them.
     const auto run_rows = [&](int tokens, bool poisoned = false) {
         GuardedDeviceBuffer d_output(static_cast<std::size_t>(kHidden) * tokens * 2);
-        Tensor in(d_input.data(), DType::BF16, {kHidden, tokens});
-        Tensor out(d_output.data(), DType::BF16, {kHidden, tokens});
+        Tensor in(d_input.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {kHidden, tokens});
+        Tensor out(d_output.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {kHidden, tokens});
         MemoryArena workspace(ops::flash_next_moe_workspace_capacity_bytes(tokens));
         if (poisoned) {
             test::poison_device_bytes(workspace.base(), workspace.capacity(), 0xFF);
@@ -525,8 +525,8 @@ int run_nvfp4() {
                                   static_cast<std::size_t>(t) * kHidden * 2,
                               static_cast<std::size_t>(kHidden) * 2, cudaMemcpyDeviceToDevice));
         GuardedDeviceBuffer d_out(static_cast<std::size_t>(kHidden) * 2);
-        Tensor in(d_row.data(), DType::BF16, {kHidden, 1});
-        Tensor out(d_out.data(), DType::BF16, {kHidden, 1});
+        Tensor in(d_row.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {kHidden, 1});
+        Tensor out(d_out.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {kHidden, 1});
         MemoryArena workspace(ops::flash_next_moe_workspace_capacity_bytes(1));
         ops::flash_next_moe(in, weights, out, workspace, cuda_environment().context.execution_view());
         cuda_synchronize();
@@ -535,8 +535,8 @@ int run_nvfp4() {
                   single.begin() + static_cast<std::ptrdiff_t>(t) * kHidden);
     }
     GuardedDeviceBuffer d_batch(static_cast<std::size_t>(kHidden) * kBatch * 2);
-    Tensor in(d_input.data(), DType::BF16, {kHidden, kBatch});
-    Tensor out(d_batch.data(), DType::BF16, {kHidden, kBatch});
+    Tensor in(d_input.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {kHidden, kBatch});
+    Tensor out(d_batch.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {kHidden, kBatch});
     MemoryArena workspace(ops::flash_next_moe_workspace_capacity_bytes(kBatch));
     ops::flash_next_moe(in, weights, out, workspace, cuda_environment().context.execution_view());
     cuda_synchronize();

@@ -1,4 +1,5 @@
 target_sources(ninfer_ops PRIVATE
+  "${CMAKE_CURRENT_LIST_DIR}/flash_next_qsa.cu"
   "${CMAKE_CURRENT_LIST_DIR}/tail_extract.cu"
   "${CMAKE_CURRENT_LIST_DIR}/prepare/prepare.cpp"
   "${CMAKE_CURRENT_LIST_DIR}/prepare/launch.cu"

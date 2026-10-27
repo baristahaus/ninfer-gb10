@@ -21,6 +21,10 @@ namespace ninfer::ops {
 void rmsnorm(const Tensor& x, const Tensor& weight, float eps, bool unit_offset, Tensor& out,
              CudaExecutionView execution);
 
+// Stream-based variant for callers that own only a stream; operands are pinned to x's device.
+void rmsnorm(const Tensor& x, const Tensor& weight, float eps, bool unit_offset, Tensor& out,
+             cudaStream_t stream);
+
 /**
  * Applies RMS normalization over ne[0] and an elementwise SiLU gate. For each logical row r:
  *

@@ -238,9 +238,9 @@ std::size_t flash_next_gdn_workspace_capacity_bytes(std::int32_t tokens) {
 void flash_next_gdn(const Tensor& input, const FlashNextGdnWeights& weights,
                     const Tensor& convolution_state_in, Tensor& convolution_state_out,
                     const Tensor& recurrent_state_in, Tensor& recurrent_state_out,
-                    Tensor& destination, WorkspaceArena& workspace,
-                    DeviceExecutionView execution, Bf16GemmContext* bf16_gemm) {
-    const cudaStream_t stream = execution.stream;
+                    Tensor& destination, MemoryArena& workspace,
+                    CudaExecutionView execution, Bf16GemmContext* bf16_gemm) {
+    const cudaStream_t stream = execution.stream();
     NINFER_PERF_SCOPE("gdn.prefill", input.ne[1], 1, 0,
                        flash_next_work::gdn(input.ne[1], 1, false, true,
                                             fp8_row_weight(weights.query_key_value)));
@@ -299,7 +299,7 @@ void flash_next_gdn(const Tensor& input, const FlashNextGdnWeights& weights,
 void flash_next_gdn_batch_update(const Tensor& input, const FlashNextGdnWeights& weights,
                                  Tensor& convolution_states, Tensor& recurrent_states,
                                  const Tensor& source_slots, const Tensor& destination_slots,
-                                 Tensor& destination, WorkspaceArena& workspace,
+                                 Tensor& destination, MemoryArena& workspace,
                                  cudaStream_t stream) {
     NINFER_PERF_SCOPE("gdn.update", input.ne[1], input.ne[1], 0,
                        flash_next_work::gdn(input.ne[1], input.ne[1], false, false,
@@ -369,7 +369,7 @@ void flash_next_gdn_replay_record(const Tensor& input, const FlashNextGdnWeights
                                   Tensor& convolution_states, Tensor& recurrent_states,
                                   const Tensor& valid_columns, const Tensor& source_slots,
                                   GdnReplayRecordLayer records, Tensor& destination,
-                                  WorkspaceArena& workspace, cudaStream_t stream,
+                                  MemoryArena& workspace, cudaStream_t stream,
                                   const FlashNextGdnPendingFold* pending) {
     NINFER_PERF_SCOPE("gdn.record", input.ne[1], records.conv.ne[2], 0,
                        flash_next_work::gdn(input.ne[1], records.conv.ne[2], true, false,
@@ -465,12 +465,16 @@ void flash_next_gdn_replay_record(const Tensor& input, const FlashNextGdnWeights
                                                pending->records.value, pending->records.gate};
         gated_delta_net_fold_replay_record(q_batch, k_batch, v_batch, g_batch, beta_batch,
                                            0.08838834764831845F, recurrent_states, valid_columns,
-                                           source_slots, records.key, records.value, records.gate,
+                                           source_slots,
+                                           GdnRecurrenceRecords{records.key, records.value,
+                                                                records.gate},
                                            recurrent_batch, recurrent_pending, stream);
     } else {
         gated_delta_net_replay_record(q_batch, k_batch, v_batch, g_batch, beta_batch,
                                       0.08838834764831845F, recurrent_states, valid_columns,
-                                      source_slots, records.key, records.value, records.gate,
+                                      source_slots,
+                                      GdnRecurrenceRecords{records.key, records.value,
+                                                           records.gate},
                                       recurrent_batch, stream);
     }
     Tensor normalized = workspace.alloc(DType::BF16, {kValue, tokens});

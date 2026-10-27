@@ -127,10 +127,10 @@ int run_case(int tokens, ProjectionFormat format) {
     DeviceBuffer d_inject = to_device(inject_bits);
     GuardedDeviceBuffer d_block(block_reference.size() * sizeof(std::uint16_t));
     GuardedDeviceBuffer d_injection(injection_reference.size() * sizeof(std::uint16_t));
-    Tensor hyper_tensor(d_hyper.data(), DType::BF16, {kHyper, tokens});
-    Tensor norm_tensor(d_norm.data(), DType::BF16, {kHyper});
-    Tensor block_tensor(d_block.data(), DType::BF16, {kHidden, tokens});
-    Tensor injection_tensor(d_injection.data(), DType::BF16, {kStreams, tokens});
+    Tensor hyper_tensor(d_hyper.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {kHyper, tokens});
+    Tensor norm_tensor(d_norm.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {kHyper});
+    Tensor block_tensor(d_block.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {kHidden, tokens});
+    Tensor injection_tensor(d_injection.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {kStreams, tokens});
     ops::HyperConnectionWeights weights{
         .norm      = norm_tensor,
         .down      = format == ProjectionFormat::Fp8 ? fp8_down.device_weight(d_down.span())
@@ -178,19 +178,19 @@ int run_case(int tokens, ProjectionFormat format) {
         }
     }
     DeviceBuffer d_block_output = to_device(encode(block_output));
-    Tensor block_output_tensor(d_block_output.data(), DType::BF16, {kHidden, tokens});
+    Tensor block_output_tensor(d_block_output.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {kHidden, tokens});
     DeviceBuffer d_hyper_fused = to_device(hyper_bits);
-    Tensor hyper_fused_tensor(d_hyper_fused.data(), DType::BF16, {kHyper, tokens});
+    Tensor hyper_fused_tensor(d_hyper_fused.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {kHyper, tokens});
     ops::hyperconnection_combine(hyper_tensor, block_output_tensor, injection_tensor,
                                  cuda_environment().context.stream());
     GuardedDeviceBuffer d_next_block(block_reference.size() * sizeof(std::uint16_t));
     GuardedDeviceBuffer d_next_injection(injection_reference.size() * sizeof(std::uint16_t));
     GuardedDeviceBuffer d_fused_block(block_reference.size() * sizeof(std::uint16_t));
     GuardedDeviceBuffer d_fused_injection(injection_reference.size() * sizeof(std::uint16_t));
-    Tensor next_block(d_next_block.data(), DType::BF16, {kHidden, tokens});
-    Tensor next_injection(d_next_injection.data(), DType::BF16, {kStreams, tokens});
-    Tensor fused_block(d_fused_block.data(), DType::BF16, {kHidden, tokens});
-    Tensor fused_injection(d_fused_injection.data(), DType::BF16, {kStreams, tokens});
+    Tensor next_block(d_next_block.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {kHidden, tokens});
+    Tensor next_injection(d_next_injection.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {kStreams, tokens});
+    Tensor fused_block(d_fused_block.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {kHidden, tokens});
+    Tensor fused_injection(d_fused_injection.data(), ninfer::test::cuda_environment().context.device(), DType::BF16, {kStreams, tokens});
     ops::hyperconnection_mix(hyper_tensor, weights, next_block, &next_injection, workspace,
                              cuda_environment().context.stream());
     ops::hyperconnection_combine_mix(hyper_fused_tensor, block_output_tensor, injection_tensor,

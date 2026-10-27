@@ -154,4 +154,74 @@ __global__ void __launch_bounds__(common::kWarpSize* kNumWarps, 2)
     store_state_tile(state, access.state_write_base(coord), coord);
 }
 
+// Batch update over one packed {2*QkHeads + ValueHeads, B} BF16 column block: q, k, and v are
+// interleaved channels of the same token column instead of separate tensors. The transition
+// arithmetic is the batch update's; only the operand addressing differs.
+template <int QkHeads, int ValueHeads>
+struct PackedBatchUpdateAccess {
+    static constexpr int kPackedStride = (2 * QkHeads + ValueHeads) * kStateDim;
+    const __nv_bfloat16* packed_qkv;
+    const float* g;
+    const float* beta;
+    const float* states_read;
+    float* states_write;
+    const std::int32_t* source_state_slots;
+    const std::int32_t* destination_state_slots;
+    __nv_bfloat16* out;
+    HeadMap heads;
+    std::int64_t state_slot_stride;
+    float scale;
+
+    __device__ __forceinline__ RecurrentCoordinates coordinates() const {
+        return make_coordinates(static_cast<std::int32_t>(blockIdx.y), 0,
+                                static_cast<std::int32_t>(blockIdx.z), heads);
+    }
+
+    __device__ __forceinline__ std::int64_t column(const RecurrentCoordinates& coord,
+                                                   std::int32_t token) const {
+        (void)token;
+        return coord.batch;
+    }
+
+    __device__ __forceinline__ const float*
+    state_read_base(const RecurrentCoordinates& coord) const {
+        return states_read +
+               static_cast<std::int64_t>(source_state_slots[coord.batch]) * state_slot_stride +
+               static_cast<std::int64_t>(coord.value_head) * kStateDim * kStateDim;
+    }
+
+    __device__ __forceinline__ float* state_write_base(const RecurrentCoordinates& coord) const {
+        return states_write +
+               static_cast<std::int64_t>(destination_state_slots[coord.batch]) * state_slot_stride +
+               static_cast<std::int64_t>(coord.value_head) * kStateDim * kStateDim;
+    }
+
+    __device__ __forceinline__ const __nv_bfloat16* key_ptr(const RecurrentCoordinates& coord,
+                                                            std::int32_t token) const {
+        return packed_qkv + column(coord, token) * kPackedStride + QkHeads * kStateDim +
+               coord.qk_head * kStateDim;
+    }
+
+    __device__ __forceinline__ const __nv_bfloat16* value_ptr(const RecurrentCoordinates& coord,
+                                                              std::int32_t token) const {
+        return packed_qkv + column(coord, token) * kPackedStride + 2 * QkHeads * kStateDim +
+               coord.value_head * kStateDim;
+    }
+
+    __device__ __forceinline__ RawGatePair load_gate(const RecurrentCoordinates& coord,
+                                                     std::int32_t token) const {
+        return load_source_gate(g, beta, column(coord, token) * heads.H_v + coord.value_head);
+    }
+
+    __device__ __forceinline__ const __nv_bfloat16* query_ptr(const RecurrentCoordinates& coord,
+                                                              std::int32_t token) const {
+        return packed_qkv + column(coord, token) * kPackedStride + coord.qk_head * kStateDim;
+    }
+
+    __device__ __forceinline__ __nv_bfloat16* output_ptr(const RecurrentCoordinates& coord,
+                                                         std::int32_t token) const {
+        return out + (column(coord, token) * heads.H_v + coord.value_head) * kStateDim;
+    }
+};
+
 } // namespace ninfer::ops::detail::gated_delta_net

@@ -140,8 +140,9 @@ std::int64_t numel_allow_zero(const Tensor& t) {
 
 } // namespace
 
-void sigmoid_mul(const Tensor& gate, Tensor& x, CudaExecutionView execution) {
-    const auto stream = execution.stream();
+namespace {
+
+void sigmoid_mul_impl(const Tensor& gate, Tensor& x, Device device, cudaStream_t stream) {
     if (gate.dtype != DType::BF16 || x.dtype != DType::BF16) {
         throw std::invalid_argument("sigmoid_mul: gate/x must be BF16");
     }
@@ -151,7 +152,7 @@ void sigmoid_mul(const Tensor& gate, Tensor& x, CudaExecutionView execution) {
         }
     }
     if (numel_allow_zero(x) == 0) { return; }
-    if (gate.device != execution.device() || x.device != execution.device()) {
+    if (gate.device != device || x.device != device) {
         throw std::invalid_argument("sigmoid_mul: operands must belong to the execution device");
     }
     if (!gate.is_contiguous() || !x.is_contiguous()) {
@@ -162,6 +163,16 @@ void sigmoid_mul(const Tensor& gate, Tensor& x, CudaExecutionView execution) {
     }
 
     launch_sigmoid_mul(gate, x, stream);
+}
+
+} // namespace
+
+void sigmoid_mul(const Tensor& gate, Tensor& x, CudaExecutionView execution) {
+    sigmoid_mul_impl(gate, x, execution.device(), execution.stream());
+}
+
+void sigmoid_mul(const Tensor& gate, Tensor& x, cudaStream_t stream) {
+    sigmoid_mul_impl(gate, x, gate.device, stream);
 }
 
 } // namespace ninfer::ops

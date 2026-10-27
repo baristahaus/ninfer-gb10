@@ -205,10 +205,12 @@ void causal_conv1d_silu(const Tensor& x, const Tensor& weight, const Tensor& con
     detail::launch_causal_conv(x, weight, conv_state_in, conv_state_out, out, plan, stream);
 }
 
-void causal_conv1d_silu_split(const Tensor& x, const Tensor& weight, const Tensor& conv_state_in,
-                              Tensor& conv_state_out, Tensor& out0, Tensor& out1, Tensor& out2,
-                              CudaExecutionView execution) {
-    const auto stream = execution.stream();
+namespace {
+
+void causal_conv1d_silu_split_impl(const Tensor& x, const Tensor& weight,
+                                   const Tensor& conv_state_in, Tensor& conv_state_out,
+                                   Tensor& out0, Tensor& out1, Tensor& out2, Device device,
+                                   cudaStream_t stream) {
     if (x.dtype != DType::BF16 || weight.dtype != DType::BF16 ||
         conv_state_in.dtype != DType::BF16 || conv_state_out.dtype != DType::BF16) {
         throw std::invalid_argument("causal_conv1d: x/weight/conv_state must be BF16");
@@ -237,7 +239,7 @@ void causal_conv1d_silu_split(const Tensor& x, const Tensor& weight, const Tenso
                                                                {&out2, "out2"}};
     for (const auto& operand : operands) {
         common::operand::contiguous_nonnull(*operand.first, "causal_conv1d", operand.second,
-                                            execution.device());
+                                            device);
         require_pair_aligned(*operand.first, operand.second);
     }
     require_state_alias_rule(conv_state_in, conv_state_out);
@@ -247,16 +249,34 @@ void causal_conv1d_silu_split(const Tensor& x, const Tensor& weight, const Tenso
                                      geometry, stream);
 }
 
+} // namespace
+
+void causal_conv1d_silu_split(const Tensor& x, const Tensor& weight, const Tensor& conv_state_in,
+                              Tensor& conv_state_out, Tensor& out0, Tensor& out1, Tensor& out2,
+                              CudaExecutionView execution) {
+    causal_conv1d_silu_split_impl(x, weight, conv_state_in, conv_state_out, out0, out1, out2,
+                                  execution.device(), execution.stream());
+}
+
+void causal_conv1d_silu_split(const Tensor& x, const Tensor& weight, const Tensor& conv_state_in,
+                              Tensor& conv_state_out, Tensor& out0, Tensor& out1, Tensor& out2,
+                              cudaStream_t stream) {
+    causal_conv1d_silu_split_impl(x, weight, conv_state_in, conv_state_out, out0, out1, out2,
+                                  x.device, stream);
+}
+
 void causal_conv1d_silu(const Tensor& x, const Tensor& weight, Tensor& conv_state, Tensor& out,
                         CudaExecutionView execution) {
     causal_conv1d_silu(x, weight, conv_state, conv_state, out, execution);
 }
 
-void causal_conv1d_silu_snapshot(const Tensor& x, const Tensor& weight, Tensor& conv_states,
-                                 const Tensor& valid_columns, const Tensor& initial_state_slots,
-                                 const Tensor& snapshot_base_slots, Tensor& out,
-                                 CudaExecutionView execution) {
-    const auto stream = execution.stream();
+namespace {
+
+void causal_conv1d_silu_snapshot_impl(const Tensor& x, const Tensor& weight, Tensor& conv_states,
+                                      const Tensor& valid_columns,
+                                      const Tensor& initial_state_slots,
+                                      const Tensor& snapshot_base_slots, Tensor& out,
+                                      Device device, cudaStream_t stream) {
     const bool masked = valid_columns.data != nullptr;
     if (x.dtype != DType::BF16 || weight.dtype != DType::BF16 || conv_states.dtype != DType::BF16 ||
         out.dtype != DType::BF16) {
@@ -287,17 +307,17 @@ void causal_conv1d_silu_snapshot(const Tensor& x, const Tensor& weight, Tensor& 
 
     for (const Tensor* tensor : std::initializer_list<const Tensor*>{&x, &weight, &out})
         common::operand::contiguous_nonnull(*tensor, "causal_conv1d", "operand",
-                                            execution.device());
+                                            device);
     common::operand::slotted_tensor(conv_states, DType::BF16, {x.ne[0], 3, conv_states.ne[2]}, 2, 2,
-                                    "causal_conv1d", "states", execution.device());
+                                    "causal_conv1d", "states", device);
     if (masked) {
         common::operand::contiguous_nonnull(valid_columns, "causal_conv1d", "valid_columns",
-                                            execution.device());
+                                            device);
     }
     common::operand::contiguous_nonnull(initial_state_slots, "causal_conv1d", "initial_state_slots",
-                                        execution.device());
+                                        device);
     common::operand::contiguous_nonnull(snapshot_base_slots, "causal_conv1d", "snapshot_base_slots",
-                                        execution.device());
+                                        device);
     const auto state_blocks = common::operand::blocks(conv_states, "causal_conv1d");
     for (const Tensor* operand : std::initializer_list<const Tensor*>{
              &x, &weight, &valid_columns, &initial_state_slots, &snapshot_base_slots, &out}) {
@@ -308,6 +328,25 @@ void causal_conv1d_silu_snapshot(const Tensor& x, const Tensor& weight, Tensor& 
     detail::launch_causal_conv_snapshot(
         x, weight, conv_states, valid_columns, initial_state_slots, snapshot_base_slots, out,
         detail::select_causal_conv_snapshot_plan(x.ne[1], batch, masked), stream);
+}
+
+} // namespace
+
+void causal_conv1d_silu_snapshot(const Tensor& x, const Tensor& weight, Tensor& conv_states,
+                                 const Tensor& valid_columns, const Tensor& initial_state_slots,
+                                 const Tensor& snapshot_base_slots, Tensor& out,
+                                 CudaExecutionView execution) {
+    causal_conv1d_silu_snapshot_impl(x, weight, conv_states, valid_columns, initial_state_slots,
+                                     snapshot_base_slots, out, execution.device(),
+                                     execution.stream());
+}
+
+void causal_conv1d_silu_snapshot(const Tensor& x, const Tensor& weight, Tensor& conv_states,
+                                 const Tensor& valid_columns, const Tensor& initial_state_slots,
+                                 const Tensor& snapshot_base_slots, Tensor& out,
+                                 cudaStream_t stream) {
+    causal_conv1d_silu_snapshot_impl(x, weight, conv_states, valid_columns, initial_state_slots,
+                                     snapshot_base_slots, out, x.device, stream);
 }
 
 } // namespace ninfer::ops

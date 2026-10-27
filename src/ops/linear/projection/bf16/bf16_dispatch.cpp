@@ -1,11 +1,24 @@
 #include "ops/linear/projection/bf16/bf16_dispatch.h"
 #include "ops/linear/projection/bf16/bf16_shapes.h"
+#include "ops/linear/bf16/flash_next/bf16_dispatch.h"
 #include "core/platform.h"
 #include <array>
 #include <stdexcept>
 
 namespace ninfer::ops::detail {
 namespace {
+// Flash-Next GDN block shapes (qkv projection, output gate, output projection) route through
+// the Flash-Next BF16 bank launchers.
+Bf16Launch select_flash_next_n10240_k2560(std::int32_t t) {
+    return flash_next::select_bf16_a16_launch(10240, 2560, t);
+}
+Bf16Launch select_flash_next_n6144_k2560(std::int32_t t) {
+    return flash_next::select_bf16_a16_launch(6144, 2560, t);
+}
+Bf16Launch select_flash_next_n2560_k6144(std::int32_t t) {
+    return flash_next::select_bf16_a16_launch(2560, 6144, t);
+}
+
 struct ShapeEntry {
     std::int32_t n, k;
     Bf16Launch (*select)(std::int32_t);
@@ -46,6 +59,9 @@ constexpr std::array kShapes{
     ShapeEntry{4608, 4608, select_bf16_n4608_k4608},
     ShapeEntry{2560, 4608, select_bf16_n2560_k4608},
     ShapeEntry{256, 5120, select_bf16_n256_k5120},
+    ShapeEntry{10240, 2560, select_flash_next_n10240_k2560},
+    ShapeEntry{6144, 2560, select_flash_next_n6144_k2560},
+    ShapeEntry{2560, 6144, select_flash_next_n2560_k6144},
 };
 } // namespace
 
@@ -54,7 +70,9 @@ Bf16Launch select_bf16_a16_launch(std::int32_t n, std::int32_t k, std::int32_t t
     for (const auto& entry : kShapes) {
         if (entry.n == n && entry.k == k) return entry.select(t);
     }
-    throw std::invalid_argument("bf16 linear: unsupported shape");
+    // Flash-Next family shapes (GDN block, QSA projections, ...) are registered in the
+    // Flash-Next BF16 bank dispatch.
+    return flash_next::select_bf16_a16_launch(n, k, t);
 }
 
 Bf16Launch select_bf16_launch(std::int32_t n, std::int32_t k, std::int32_t t, LinearPolicy policy) {

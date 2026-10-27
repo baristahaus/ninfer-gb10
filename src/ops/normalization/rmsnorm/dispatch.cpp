@@ -34,7 +34,7 @@ Instance select_instance(Epilogue kind, Operands operands, std::int32_t sms) {
 } // namespace
 
 void dispatch(const Tensor& x, const Tensor& weight, const Tensor* gate, float eps, Epilogue kind,
-              Tensor& out, Operands operands, CudaExecutionView execution) {
+              Tensor& out, Operands operands, int multiprocessor_count, cudaStream_t stream) {
     // Each launch respects grid.x capacity; the semantic row extent remains unrestricted.
     constexpr std::int64_t kMaxRows = std::numeric_limits<int>::max();
     for (std::int64_t first = 0; first < operands.rows;) {
@@ -49,7 +49,7 @@ void dispatch(const Tensor& x, const Tensor& weight, const Tensor* gate, float e
         }
         const Operands chunk{operands.dimension, count, operands.aligned_pairs};
         launch(x_chunk, weight, gate ? &gate_chunk : nullptr, eps, kind, out_chunk, chunk,
-               select_instance(kind, chunk, execution.multiprocessor_count()), execution.stream());
+               select_instance(kind, chunk, multiprocessor_count), stream);
         first += count;
     }
 }

@@ -550,9 +550,6 @@ std::string format_server_start_json(const std::string& server_instance_id, std:
     const ninfer::ContextCacheOptions& cache       = engine_options.context_cache;
     const ninfer::ContextCostSummary& context_cost = load.context_cost;
     const auto total_device_state_slots            = description.device_state_capacity;
-    fprintf(stderr, "PROBE cache extra=%d host=%d\n",
-            (int)cache.extra_state_slots.has_value(),
-            (int)cache.host_capacity_bytes.has_value());
     record["engine"]                               = Json{
                                       {"device", engine_options.device},
                                       {"max_context", engine_options.max_context},
@@ -581,9 +578,12 @@ std::string format_server_start_json(const std::string& server_instance_id, std:
                                                             {"prefill_signature", context_cost.prefill_signature},
                                                             {"preset_path", context_cost.preset_path.string()}}},
                                       {"context_cache", Json{{"enabled", cache.enabled},
-                                                             {"extra_state_slots", cache.extra_state_slots.value()},
+                                                             {"extra_state_slots", cache.extra_state_slots.value_or(0)},
                                                              {"total_device_state_slots", total_device_state_slots},
-                                                             {"host_capacity_bytes", cache.host_capacity_bytes.value()}}}};
+                                                             // The resolved quota: the raw option may be unset (the engine
+                                                             // resolves the platform default), so the description carries
+                                                             // what the engine actually runs with.
+                                                             {"host_capacity_bytes", description.host_context_capacity_bytes}}}};
     record["sampling_defaults"] =
         Json{{"thinking", preset_json(sampling_defaults.thinking)},
              {"non_thinking", preset_json(sampling_defaults.non_thinking)},

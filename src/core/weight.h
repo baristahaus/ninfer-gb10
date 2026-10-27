@@ -19,6 +19,8 @@ enum class QType : std::uint16_t {
     FP8_E4M3FN_ROW_BF16          = 8,
     NF4_G16_E4M3FN               = 9,
     FP8_E4M3FN_BLOCK128X128_BF16 = 10,
+    // Raw E4M3FN payload with no per-row or per-block scale plane; the Flash-Next PLE table.
+    FP8_E4M3FN                   = 11,
 };
 
 enum class QuantLayout : std::uint16_t {

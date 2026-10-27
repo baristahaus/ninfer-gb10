@@ -17,6 +17,22 @@ namespace ninfer::runtime {
 
 inline constexpr std::uint64_t kContextCostQ32One = 1ULL << 32U;
 
+enum class MaterializationCopyPhase : std::uint8_t {
+    PressureToHost,
+    Candidate,
+};
+
+// Work already coalesced for one ordered copy phase and one direction. Distinct entries are serial;
+// callers merge work that shares both fields before asking the machine model to price it.
+struct TransferBatchWork {
+    MaterializationCopyPhase phase     = MaterializationCopyPhase::Candidate;
+    ContextTransferDirection direction = ContextTransferDirection::HostToDevice;
+    TransferWork work;
+
+    [[nodiscard]] friend constexpr bool operator==(TransferBatchWork,
+                                                   TransferBatchWork) noexcept = default;
+};
+
 // One machine-level transfer model. Resource type, model, KV dtype, and speculative backend do
 // not participate: their physical byte and copy-operation counts already capture the work.
 struct ContextTransferCost {
@@ -51,11 +67,33 @@ struct ContextMachineCostModel {
 
     [[nodiscard]] friend constexpr bool
     operator==(const ContextMachineCostModel&, const ContextMachineCostModel&) noexcept = default;
+
+    // Master-generation Flash-Next pricing: the same transfer_ns over materialization copy
+    // batches, coalesced per ordered phase and direction before pricing.
+    [[nodiscard]] std::uint64_t
+    transfer_batches_ns(std::span<const TransferBatchWork> batches) const noexcept;
 };
 
 [[nodiscard]] std::uint64_t price_context_transfer_requirements(
     const ContextMachineCostModel& model,
     std::span<const ContextTransferRequirement> requirements) noexcept;
+
+// Machine-level pricing of one planned materialization: optimistic and immediate request costs,
+// plus the transferred byte and copy-operation shape.
+struct PricedMaterializationMachineWork {
+    std::uint64_t optimistic_request_ns = 0;
+    std::uint64_t immediate_ns          = 0;
+    std::uint64_t transferred_bytes     = 0;
+    std::uint32_t copy_operations       = 0;
+};
+
+[[nodiscard]] PricedMaterializationMachineWork
+price_materialization_machine_work(const ContextMachineCostModel& model,
+                                   const MaterializationMachineWork& work) noexcept;
+
+[[nodiscard]] std::uint64_t price_checkpoint_recovery_work(
+    const ContextMachineCostModel& model,
+    std::span<const CheckpointRecoveryAlternativeWork> alternatives) noexcept;
 
 struct ContextCostIdentity {
     std::string hardware_class;

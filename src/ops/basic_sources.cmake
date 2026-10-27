@@ -24,11 +24,24 @@ foreach(_f IN ITEMS
 endforeach()
 
 # Master-generation target-logprobs overload (top-rank egress for the Flash-Next MTP parity
-# reports) beside the restructured reduction route.
+# reports) beside the restructured reduction route. The MTP round advance and the scatter the
+# Flash-Next family programs call have no restructured-layer counterpart.
 target_sources(ninfer_ops PRIVATE
   "${NINFER_OPS_DIR}/wrapper/target_logprobs.cpp"
   "${NINFER_OPS_DIR}/launcher/target_logprobs.cu"
-  "${NINFER_OPS_DIR}/kernel/target_logprobs.cuh")
+  "${NINFER_OPS_DIR}/kernel/target_logprobs.cuh"
+  "${NINFER_OPS_DIR}/wrapper/mtp_round.cpp"
+  "${NINFER_OPS_DIR}/launcher/mtp_round.cu"
+  "${NINFER_OPS_DIR}/wrapper/scatter.cpp"
+  "${NINFER_OPS_DIR}/launcher/scatter.cu"
+  "${NINFER_OPS_DIR}/wrapper/speculative_round.cpp"
+  "${NINFER_OPS_DIR}/launcher/speculative_round.cu"
+  "${NINFER_OPS_DIR}/wrapper/mtp_pack.cpp"
+  "${NINFER_OPS_DIR}/launcher/mtp_pack.cu"
+  "${NINFER_OPS_DIR}/wrapper/position.cpp"
+  "${NINFER_OPS_DIR}/launcher/position.cu"
+  "${NINFER_OPS_DIR}/wrapper/argmax.cpp"
+  "${NINFER_OPS_DIR}/launcher/argmax.cu")
 
 # Public wrappers for the same no-counterpart ops.
 foreach(_f IN ITEMS

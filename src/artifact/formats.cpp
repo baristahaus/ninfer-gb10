@@ -20,6 +20,7 @@ constexpr std::array kFormats = {
     std::pair{QType::NF4_G16_E4M3FN, std::string_view{"nf4_g16_e4m3fn"}},
     std::pair{QType::FP8_E4M3FN_BLOCK128X128_BF16,
               std::string_view{"fp8_e4m3fn_block128x128_bf16"}},
+    std::pair{QType::FP8_E4M3FN, std::string_view{"fp8_e4m3fn"}},
 };
 constexpr std::array kLayouts = {
     std::pair{QuantLayout::Contiguous, std::string_view{"contiguous_le_v1"}},
@@ -29,6 +30,10 @@ constexpr std::array kLayouts = {
     std::pair{QuantLayout::BlockScaleK16M128x4, std::string_view{"block_scale_k16_m128x4_v1"}},
     std::pair{QuantLayout::BatchedBlockScaleK16M128x4,
               std::string_view{"batched_block_scale_k16_m128x4_v1"}},
+    // The Flash-Next artifact's spelling for the same [E,N,K] bank encoding; the master converter
+    // wrote it before the layout was renamed.
+    std::pair{QuantLayout::BatchedBlockScaleK16M128x4,
+              std::string_view{"expert_block_scale_k16_m128x4_v1"}},
     std::pair{QuantLayout::BlockScaleM128K128, std::string_view{"block_scale_m128_k128_v1"}},
 };
 

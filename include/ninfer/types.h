@@ -224,6 +224,12 @@ struct EngineOptions {
     ContextCacheOptions context_cache;
     ContextCostOptions context_cost;
     StartupObserver startup_observer;
+    // A multi-chunk prefill parks after each chunk when a shorter request is ready to run, for at
+    // most this long before the Engine forces the prefill through. Zero uses the Engine default.
+    std::uint32_t long_prefill_wait_ms = 20000;
+    // Share of the worker loop a running decode phase keeps for itself before the scheduler
+    // re-evaluates admission; the remainder serves prefill work.
+    std::uint32_t prefill_decode_share_percent = 50;
 };
 
 enum class SamplingMode : std::uint8_t {
@@ -676,6 +682,31 @@ enum class FinishReason : std::uint8_t {
     Cancelled,
 };
 
+// One reported vocabulary entry: a token and its natural-log probability under the target model's
+// own distribution - the full vocabulary, with no temperature scaling and no presence or frequency
+// adjustment. A token drawn under temperature or penalties is therefore not necessarily the
+// reported top-1.
+struct TokenLogprob {
+    TokenId token = 0;
+    float logprob = 0.0F;
+};
+
+// The probability report for one generated token. `top` holds the leading vocabulary ranks for the
+// same position in descending order and may or may not contain `token`; it is empty when the request
+// asked for no alternatives.
+//
+// Reports stay index-aligned with the generated tokens they describe. A token the Engine injected
+// deterministically rather than drew from the target - a forced thinking-control or tool-call span -
+// reports zero with `injected` set and an empty `top`, because inventing a target-model value for a
+// position whose logits were never consumed would be false. A drawn token's logprob is a negative
+// number in practice, so the two cases never collide.
+struct GeneratedTokenLogprob {
+    TokenId token = 0;
+    float logprob = 0.0F;
+    bool injected = false;
+    std::vector<TokenLogprob> top;
+};
+
 struct OutputDelta {
     // Bytes of tool-call argument text the frontend consumed for the in-flight call. Streaming
     // protocols use it to report decode progress while parameters are still private.
@@ -793,8 +824,11 @@ using GenerationFirstTokenObserver = std::function<void(const GenerationFirstTok
 // Streaming consumer. Request wall/execution statistics are always collected.
 struct GenerationObservationOptions {
     bool constraint_timings = false;
-    bool live_timings       = false;
-    bool prompt_progress    = false;
+    // Retained for the direct-Program engine route: per-phase wall timings are collected for an
+    // Aggregate terminal response.
+    bool phase_timings     = false;
+    bool live_timings      = false;
+    bool prompt_progress   = false;
     // Optional for either consumer mode. No scheduling events are retained when unset.
     GenerationSchedulingObserver scheduling;
     GenerationFirstTokenObserver first_token;
@@ -840,6 +874,98 @@ struct RequestStats {
     std::optional<ConstraintObservation> constraint;
 };
 
+// Why bounded pressure planning stopped for the materialization decision committed to one request.
+enum class MaterializationStopReason : std::uint8_t {
+    NoPressure,
+    QueueExhausted,
+    TargetBudget,
+    ExpansionCapacity,
+    TimeBudget,
+    InsufficientExpectedGain,
+    WorkBudget,
+};
+
+[[nodiscard]] inline constexpr const char*
+materialization_stop_reason_name(MaterializationStopReason reason) noexcept {
+    switch (reason) {
+    case MaterializationStopReason::NoPressure:
+        return "no_pressure";
+    case MaterializationStopReason::QueueExhausted:
+        return "queue_exhausted";
+    case MaterializationStopReason::TargetBudget:
+        return "target_budget";
+    case MaterializationStopReason::ExpansionCapacity:
+        return "expansion_capacity";
+    case MaterializationStopReason::TimeBudget:
+        return "time_budget";
+    case MaterializationStopReason::InsufficientExpectedGain:
+        return "insufficient_expected_gain";
+    case MaterializationStopReason::WorkBudget:
+        return "work_budget";
+    }
+    return "no_pressure";
+}
+
+enum class MaterializationSearchPhase : std::uint8_t {
+    None,
+    Setup,
+    Construction,
+    Assessment,
+    Expansion,
+    Refinement,
+};
+
+[[nodiscard]] inline constexpr const char*
+materialization_search_phase_name(MaterializationSearchPhase phase) noexcept {
+    switch (phase) {
+    case MaterializationSearchPhase::None:
+        return "none";
+    case MaterializationSearchPhase::Setup:
+        return "setup";
+    case MaterializationSearchPhase::Construction:
+        return "construction";
+    case MaterializationSearchPhase::Assessment:
+        return "assessment";
+    case MaterializationSearchPhase::Expansion:
+        return "expansion";
+    case MaterializationSearchPhase::Refinement:
+        return "refinement";
+    }
+    return "none";
+}
+
+// Machine-level pricing and search work the materialization decision spent, as decided for one
+// request. The predicted values price the context machine model over the chosen plan; the search
+// values describe the bounded optimization that produced the choice.
+struct MaterializationDiagnostics {
+    std::uint64_t predicted_now_ns           = 0;
+    std::uint64_t predicted_future_loss_ns   = 0;
+    std::uint64_t predicted_total_ns         = 0;
+    std::uint32_t targets_evaluated          = 0;
+    std::uint64_t projection_work            = 0;
+    std::uint64_t planning_elapsed_ns        = 0;
+    std::uint64_t search_elapsed_ns          = 0;
+    MaterializationStopReason stop_reason    = MaterializationStopReason::NoPressure;
+    bool budget_exhausted                    = false;
+    std::uint32_t selected_degradation_units = 0;
+    bool selected_maximal_fallback           = false;
+
+    std::uint64_t initial_predicted_total_ns = 0;
+    std::optional<std::uint64_t> first_improvement_ns;
+    std::uint32_t incumbent_improvements         = 0;
+    std::uint64_t search_work                    = 0;
+    std::uint64_t search_granted_ns              = 0;
+    std::uint32_t search_renewals                = 0;
+    bool search_discovery_used                   = false;
+    std::uint64_t search_overshoot_ns            = 0;
+    MaterializationSearchPhase search_stop_phase = MaterializationSearchPhase::None;
+    bool search_boundary_limited                 = false;
+
+    [[nodiscard]] friend constexpr bool
+    operator==(const MaterializationDiagnostics&,
+               const MaterializationDiagnostics&) noexcept = default;
+};
+
 struct GenerationResult {
     PromptSummary prompt;
     std::vector<TokenId> generated_token_ids;
@@ -851,6 +977,14 @@ struct GenerationResult {
     FinishReason finish_reason     = FinishReason::None;
     std::optional<std::string> matched_stop_string;
     RequestStats stats;
+    // Exactly one report per entry of generated_token_ids, in the same order. Present only when
+    // the engine was loaded with EngineOptions::token_logprobs.
+    std::vector<GeneratedTokenLogprob> token_logprobs;
+    // Prompt tokens the request reused from captured state; the rest of the prompt prefilled.
+    std::uint32_t reused_prompt_tokens = 0;
+    PrefixReusePath prefix_reuse_path  = PrefixReusePath::Root;
+    MaterializationDiagnostics materialization;
+    SpeculativeStats speculative;
 };
 
 } // namespace ninfer

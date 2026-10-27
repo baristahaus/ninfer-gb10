@@ -1,5 +1,6 @@
 #include "runtime/engine/startup.h"
 #include "runtime/engine/startup.inl"
+#include "runtime/engine/flash_next/startup.h"
 #include "models/qwen3_5/startup.h"
 #include "models/qwen3_5/measurement.h"
 #include "models/qwen4_exp/startup.h"
@@ -128,6 +129,8 @@ ConstructedModel construct_model(EngineOptions& options) {
         auto built = detail::build_local_model<models::qwen3_5::Startup>(reader, options, start);
         return {std::move(built.instance), std::move(built.load), std::move(built.context_cost)};
     }
+    case models::Architecture::Qwen3_8FlashNext:
+        return flashnext_runtime::construct_flash_next(options, reader, start);
     }
     throw std::logic_error("architecture has no Engine construction route");
 }

@@ -65,6 +65,7 @@ PagedKVBatchLayerView single_row_paged_kv_batch_view(const PagedKVLayerView& cac
         .head_dim      = cache.head_dim,
         .num_kv_heads  = cache.num_kv_heads,
         .storage       = cache.storage,
+        .auxiliary_pages = cache.auxiliary_pages,
     };
 }
 

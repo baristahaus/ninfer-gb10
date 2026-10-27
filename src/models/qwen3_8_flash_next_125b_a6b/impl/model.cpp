@@ -106,7 +106,7 @@ ops::FlashNextExpertBank nvfp4_bank(const artifact::MaterializedArtifact& artifa
     const std::uint64_t shape[] = {512, static_cast<std::uint64_t>(rows),
                                    static_cast<std::uint64_t>(columns)};
     const auto geometry =
-        weight_geometry(QType::NVFP4, QuantLayout::BlockScaleK16M128x4, shape);
+        weight_geometry(QType::NVFP4, QuantLayout::BatchedBlockScaleK16M128x4, shape);
     const auto* base = data(artifact, handle);
     return {
         .codes                 = base,

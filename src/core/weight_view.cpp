@@ -35,6 +35,8 @@ std::int32_t dimension(std::uint64_t n) {
 
 std::uint64_t word_bytes(QType format) {
     switch (format) {
+    case QType::FP8_E4M3FN:
+        return 1;
     case QType::BF16:
         return 2;
     case QType::FP32:

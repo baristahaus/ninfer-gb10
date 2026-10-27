@@ -2,6 +2,7 @@
 
 #include "artifact/framing.h"
 
+#include <algorithm>
 #include <bit>
 #include <limits>
 #include <utility>
@@ -42,6 +43,14 @@ ParameterReference Binder::parameter(std::string_view name, Shape shape, Residen
                                      std::optional<QType> exact_format) {
     auto out = parameter(name, std::move(shape), std::move(exact_format));
     out.residency = residency;
+    if (residency == Residency::Device) {
+        for (const auto& part : out.binding.parts) {
+            const bool known =
+                std::find(device_objects_.begin(), device_objects_.end(), part.object) !=
+                device_objects_.end();
+            if (!known) { device_objects_.push_back(part.object); }
+        }
+    }
     return out;
 }
 
@@ -49,6 +58,14 @@ ParameterReference Binder::binding(std::string name, const Binding& binding, Sha
                                    Residency residency, std::optional<QType> exact_format) {
     auto out = this->binding(std::move(name), binding, std::move(shape), std::move(exact_format));
     out.residency = residency;
+    if (residency == Residency::Device) {
+        for (const auto& part : out.binding.parts) {
+            const bool known =
+                std::find(device_objects_.begin(), device_objects_.end(), part.object) !=
+                device_objects_.end();
+            if (!known) { device_objects_.push_back(part.object); }
+        }
+    }
     return out;
 }
 
@@ -147,6 +164,8 @@ HostValues Binder::values(const Binding& binding, std::optional<QType> format) {
     owned_value_bytes_ = checked_add(owned_value_bytes_, out.data.size(), "owning value bytes");
     return out;
 }
+
+std::vector<ObjectHandle> Binder::device_objects() const { return device_objects_; }
 
 PreparedResources Binder::finish() && {
     PreparedResources out;

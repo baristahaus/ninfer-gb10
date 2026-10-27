@@ -24,7 +24,9 @@ struct Tensor {
     // device. The Flash-Next family plans and binds storage this way; kernels receive the
     // execution view separately.
     Tensor(void* data, DType dtype, std::initializer_list<std::int32_t> shape)
-        : Tensor(data, Device{}, dtype, shape) {}
+        : Tensor(Tensor::metadata(dtype, shape)) {
+        this->data = data;
+    }
     [[nodiscard]] static Tensor metadata(DType dtype, std::initializer_list<std::int32_t> shape);
 
     std::int64_t numel() const;

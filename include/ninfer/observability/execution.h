@@ -150,9 +150,13 @@ struct GenerationEngineTiming {
     double executor_poll_exposed_seconds          = 0.0;
     double engine_commit_output_exposed_seconds   = 0.0;
     double engine_maintenance_exposed_seconds     = 0.0;
+    // Master-generation Flash-Next engine counters: Device-side completion wait exposure, kept
+    // additive until the routes share one vocabulary.
+    double device_wait_exposed_seconds            = 0.0;
     double scheduler_yield_exposed_seconds        = 0.0;
     double executor_flush_exposed_seconds         = 0.0;
     double decode_host_exposed_seconds            = 0.0;
+    double decode_device_wait_exposed_seconds     = 0.0;
     double decode_scheduler_yield_exposed_seconds = 0.0;
     std::uint64_t prefill_units                   = 0;
     std::uint64_t decode_rounds                   = 0;

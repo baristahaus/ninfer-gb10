@@ -15,9 +15,13 @@ add_library(ninfer_engine STATIC
   engine/startup.cpp
   contract/sampling.cpp
   engine/engine.cpp
+  engine/flash_next/instance.cpp
+  engine/flash_next/startup.cpp
+  engine/flash_next/admission_policy.cpp
 )
 ninfer_internal_includes(ninfer_engine)
 target_include_directories(ninfer_engine PUBLIC ${PROJECT_SOURCE_DIR}/include)
+target_compile_definitions(ninfer_engine PRIVATE NINFER_ENGINE_FAULT_INJECTION=1)
 target_link_libraries(ninfer_engine PRIVATE
   ninfer_deployment
   ninfer_model_execution

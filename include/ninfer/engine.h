@@ -105,9 +105,27 @@ public:
     [[nodiscard]] const EngineDescription& description() const;
     [[nodiscard]] const StartupReport& startup_report() const;
     [[nodiscard]] EngineSnapshot snapshot() const;
+    // The LoadSummary recorded at construction: architecture, weight formats, transfer and byte
+    // totals, and the resolved context machine cost.
+    [[nodiscard]] LoadSummary load_summary() const;
+    // Monotonic execution counters, boundary-consistent gauges and last decision observations.
+    // Consumers derive interval counters by subtracting two snapshots.
+    [[nodiscard]] RuntimeStats runtime_stats() const;
     [[nodiscard]] bool is_available() const;
 
     void reset_measurement_peaks();
+
+#if defined(NINFER_ENGINE_FAULT_INJECTION)
+    // Test-only fault injection: the next worker unit rethrows the armed exception before
+    // doing any work. Oom models a transient allocation failure (recoverable: the admitted
+    // request ends with a retryable Overloaded error, the pending FIFO retries);
+    // InvariantError models an invariant violation (the whole Engine fails).
+    enum class WorkerFault : std::uint8_t {
+        Oom,
+        InvariantError,
+    };
+    void arm_next_worker_fault(WorkerFault fault) noexcept;
+#endif
 
 private:
     class Impl;

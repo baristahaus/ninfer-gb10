@@ -55,10 +55,14 @@ public:
     [[nodiscard]] ObjectHandle resource(std::string_view component, std::string_view role);
     [[nodiscard]] HostValues values(const Binding& binding, std::optional<QType> format = {});
     [[nodiscard]] PreparedResources finish() &&;
+    // Device-resident tensor objects bound so far, deduplicated in first-binding order. Callers
+    // turn them into PlacementRequests for plan_materialization.
+    [[nodiscard]] std::vector<ObjectHandle> device_objects() const;
 
 private:
     const Reader& reader_;
     std::vector<PreparedResource> resources_;
+    std::vector<ObjectHandle> device_objects_;
     std::uint64_t read_bytes_        = 0;
     std::uint64_t owned_value_bytes_ = 0;
 };

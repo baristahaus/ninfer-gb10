@@ -31,6 +31,19 @@ struct RuntimeHostWorkStats {
 
     std::uint64_t stats_publication_ns          = 0;
     std::uint64_t stats_publication_invocations = 0;
+
+    // Master-generation Flash-Next engine counters. The same accounting as the restructured
+    // session/executor splits above, kept additive until the routes share one vocabulary.
+    std::uint64_t program_submit_ns             = 0;
+    std::uint64_t program_post_ns               = 0;
+    std::uint64_t device_wait_ns                = 0;
+    std::uint64_t decode_device_wait_ns         = 0;
+    std::uint64_t prefill_device_wait_ns        = 0;
+    std::uint64_t control_device_wait_ns        = 0;
+    std::uint64_t admission_policy_ns           = 0;
+    std::uint64_t context_progress_ns           = 0;
+    std::uint64_t admission_policy_invocations  = 0;
+    std::uint64_t context_progress_invocations  = 0;
 };
 
 // Monotonic execution counters, boundary-consistent current gauges, and explicitly named last
@@ -93,6 +106,60 @@ struct RuntimeStats {
     // Allocator lifetime high-water mark, including reserved transfer destinations.
     std::size_t host_context_peak_occupied_bytes = 0;
     double actual_context_transfer_seconds       = 0.0;
+
+    // Master-generation Flash-Next engine counters, additive to the set above. Admission gating
+    // decisions and reuse paths are the Flash-Next admission policy's own vocabulary.
+    std::uint64_t admission_blocked_context_transaction  = 0;
+    std::uint64_t admission_blocked_unsettled_state_fork = 0;
+    std::uint64_t admission_blocked_no_free_lane         = 0;
+    std::uint64_t admission_blocked_no_feasible_plan     = 0;
+    std::uint64_t admission_deferred_long_prefill        = 0;
+    std::uint64_t admission_short_backfills              = 0;
+    std::uint64_t admission_prefill_yields               = 0;
+    std::uint64_t private_endpoint_selections            = 0;
+    std::uint64_t private_turn_closure_selections        = 0;
+    std::uint64_t private_response_replay_selections     = 0;
+    std::uint64_t private_long_anchor_selections         = 0;
+    std::uint64_t shared_stable_prefix_selections        = 0;
+    std::uint64_t state_d2h_count                        = 0;
+    std::uint64_t state_h2d_count                        = 0;
+    std::uint64_t state_d2d_count                        = 0;
+    std::uint64_t state_d2h_bytes                        = 0;
+    std::uint64_t state_h2d_bytes                        = 0;
+    std::uint64_t state_d2d_bytes                        = 0;
+    double state_d2h_seconds                             = 0.0;
+    double state_h2d_seconds                             = 0.0;
+    double state_d2d_seconds                             = 0.0;
+    std::uint64_t main_kv_d2h_pages                      = 0;
+    std::uint64_t main_kv_h2d_pages                      = 0;
+    std::uint64_t main_kv_d2d_pages                      = 0;
+    std::uint64_t main_kv_d2h_bytes                      = 0;
+    std::uint64_t main_kv_h2d_bytes                      = 0;
+    std::uint64_t main_kv_d2d_bytes                      = 0;
+    double main_kv_d2h_seconds                           = 0.0;
+    double main_kv_h2d_seconds                           = 0.0;
+    double main_kv_d2d_seconds                           = 0.0;
+    std::uint64_t backend_kv_d2h_pages                   = 0;
+    std::uint64_t backend_kv_h2d_pages                   = 0;
+    std::uint64_t backend_kv_d2d_pages                   = 0;
+    std::uint64_t backend_kv_d2h_bytes                   = 0;
+    std::uint64_t backend_kv_h2d_bytes                   = 0;
+    std::uint64_t backend_kv_d2d_bytes                   = 0;
+    double backend_kv_d2h_seconds                        = 0.0;
+    double backend_kv_h2d_seconds                        = 0.0;
+    double backend_kv_d2d_seconds                        = 0.0;
+    std::uint32_t device_main_kv_occupied_pages          = 0;
+    std::uint32_t device_backend_kv_occupied_pages       = 0;
+    std::uint64_t pressure_private_owners_degraded       = 0;
+    std::uint64_t pressure_private_owners_evicted        = 0;
+    std::uint64_t pressure_shared_owners_degraded        = 0;
+    std::uint64_t pressure_shared_owners_evicted         = 0;
+    std::uint64_t pressure_checkpoints_dropped           = 0;
+    std::uint64_t pressure_searches                      = 0;
+    std::uint64_t pressure_search_budget_exhaustions     = 0;
+    std::uint64_t pressure_maximal_fallback_selections   = 0;
+    std::uint32_t shared_active_references               = 0;
+    std::uint64_t historical_fork_hits                   = 0;
 };
 
 enum class ContextCostPresetSource : std::uint8_t {

@@ -145,6 +145,8 @@ struct BindingPlan {
 struct ArtifactLoadPlan {
     BindingPlan bindings;
     artifact::MappedRange ple_table;
+    // Device-resident tensor objects the plan bound; callers turn them into PlacementRequests.
+    std::vector<artifact::ObjectHandle> device_objects;
     artifact::PreparedResources materialization;
 };
 

@@ -30,6 +30,11 @@ artifact::PreparedResources& LoadPlan::materialization() {
     return impl_->plan.materialization;
 }
 
+std::vector<artifact::ObjectHandle>& LoadPlan::device_objects() {
+    if (!impl_) { throw std::logic_error("Flash-Next load plan is empty"); }
+    return impl_->plan.device_objects;
+}
+
 LoadedModel::LoadedModel(std::unique_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {}
 
 LoadedModel::~LoadedModel() = default;

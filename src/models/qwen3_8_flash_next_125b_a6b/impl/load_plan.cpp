@@ -349,6 +349,7 @@ ArtifactLoadPlan plan_artifact(artifact::Binder& binder,
     const Placement vision_placement = features.vision ? Placement::Device : Placement::Disabled;
     out.bindings.vision              = bind_vision(binder, vision_placement);
 
+    out.device_objects = binder.device_objects();
     out.materialization = std::move(binder).finish();
     return out;
 }

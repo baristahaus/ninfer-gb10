@@ -76,7 +76,7 @@ public:
 
     void progress(ninfer::PromptProgress) override {}
     void timing(ninfer::GenerationTimingObservation) override {}
-    void publish(ninfer::OutputDelta) override {}
+    void publish(ninfer::OutputEvent) override {}
 
 private:
     ninfer::Engine& engine_;

@@ -112,12 +112,12 @@ StateImageHostLayout plan_host_state_image(const StateImageSpec& spec) {
     LayoutBuilder builder;
     StateImageHostLayout host;
     host.spec = spec;
-    const Tensor conv_slot(nullptr, spec.linear.conv_dtype,
-                           {spec.linear.conv_channels, spec.linear.conv_width});
-    const Tensor recurrent_slot(
-        nullptr, DType::FP32,
-        {spec.linear.key_head_dim, spec.linear.value_head_dim, spec.linear.value_heads});
-    const Tensor hidden_slot(nullptr, DType::BF16, {spec.hidden});
+    const Tensor conv_slot = Tensor::metadata(
+        spec.linear.conv_dtype, {spec.linear.conv_channels, spec.linear.conv_width});
+    const Tensor recurrent_slot = Tensor::metadata(
+        DType::FP32, {spec.linear.key_head_dim, spec.linear.value_head_dim,
+                      spec.linear.value_heads});
+    const Tensor hidden_slot = Tensor::metadata(DType::BF16, {spec.hidden});
     host.linear_conv_layer_bytes = conv_slot.bytes();
     host.linear_conv = builder.add(checked_mul(host.linear_conv_layer_bytes, spec.linear.layers,
                                                "StateImage host convolution bytes overflow"),
@@ -130,17 +130,18 @@ StateImageHostLayout plan_host_state_image(const StateImageSpec& spec) {
     host.continuation_hidden = builder.add(hidden_slot.bytes(), kStateImageAlignment,
                                            "StateImage host continuation hidden");
     if (spec.mtp_hidden) {
-        const Tensor mtp_hidden_slot(nullptr, DType::BF16, {*spec.mtp_hidden});
+        const Tensor mtp_hidden_slot = Tensor::metadata(DType::BF16, {*spec.mtp_hidden});
         host.mtp_hidden = builder.add(mtp_hidden_slot.bytes(), kStateImageAlignment,
                                       "StateImage host MTP hidden");
     }
     if (spec.ple) {
-        const Tensor ple_slot(nullptr, DType::BF16, {spec.ple->channels, spec.ple->width});
+        const Tensor ple_slot =
+            Tensor::metadata(DType::BF16, {spec.ple->channels, spec.ple->width});
         host.ple = builder.add(ple_slot.bytes(), kStateImageAlignment, "StateImage host PLE");
     }
     if (spec.dflash_local) {
-        const Tensor local_slot(
-            nullptr, DType::BF16,
+        const Tensor local_slot = Tensor::metadata(
+            DType::BF16,
             {spec.dflash_local->head_dim,
              static_cast<std::int32_t>(padded_dflash_capacity(spec.dflash_local->capacity)),
              spec.dflash_local->kv_heads});

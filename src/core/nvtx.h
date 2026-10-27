@@ -100,6 +100,9 @@ enum class Name : std::size_t {
     DecodeMtpSubmitIngress,
     DecodeMtpSubmitFrameUpload,
     DecodeMtpEgress,
+    // Flash-Next admission and context-transaction phases (appended to keep values stable).
+    ContextProgress,
+    AdmissionPolicy,
     Count,
 };
 
@@ -232,6 +235,8 @@ enum class Name : std::size_t {
         "decode.mtp.submit.ingress",
         "decode.mtp.submit.frame_upload",
         "decode.mtp.egress",
+        "engine.context_progress",
+        "engine.admission_policy",
     });
     static_assert(names.size() == static_cast<std::size_t>(Name::Count));
     static const auto handles = [] {

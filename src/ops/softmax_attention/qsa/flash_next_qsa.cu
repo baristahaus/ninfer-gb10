@@ -1682,7 +1682,14 @@ void flash_next_qsa(const Tensor& input, const Tensor& cache_positions,
         cache.auxiliary_pages[0].ne[0] != kIndexDim ||
         cache.auxiliary_pages[1].dtype != DType::I32 ||
         cache.auxiliary_pages[1].ne[0] != 3) {
-        throw std::invalid_argument("flash_next_qsa: invalid auxiliary cache geometry");
+        std::ostringstream message;
+        message << "flash_next_qsa: invalid auxiliary cache geometry: count="
+                << cache.auxiliary_pages.size();
+        for (const auto& page : cache.auxiliary_pages) {
+            message << " [dtype=" << static_cast<int>(page.dtype) << " shape=[" << page.ne[0]
+                    << ',' << page.ne[1] << ',' << page.ne[2] << ',' << page.ne[3] << "]]";
+        }
+        throw std::invalid_argument(message.str());
     }
     require_weight(weights.query_gate, 12288, 2560,
                    "flash_next_qsa: invalid packed query/gate weight", WeightFormats::Bf16OrFp8);

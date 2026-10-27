@@ -248,6 +248,11 @@ public:
         return published_snapshot_;
     }
 
+    [[nodiscard]] RuntimeStats runtime_stats() const {
+        std::lock_guard lock(stats_mutex_);
+        return published_snapshot_.runtime;
+    }
+
     [[nodiscard]] bool is_available() const {
         std::lock_guard lock(queue_mutex_);
         return !stopping_ && !failed_;

@@ -41,6 +41,7 @@ public:
     LoadPlan(const LoadPlan&)            = delete;
     LoadPlan& operator=(const LoadPlan&) = delete;
     [[nodiscard]] artifact::PreparedResources& materialization();
+    [[nodiscard]] std::vector<artifact::ObjectHandle>& device_objects();
 private:
     class Impl;
     explicit LoadPlan(std::unique_ptr<Impl> impl) noexcept;

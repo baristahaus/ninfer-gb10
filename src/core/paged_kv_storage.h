@@ -68,6 +68,8 @@ struct PagedKVStorageLayout {
                 head_dim,
                 {DType::BF16, head_dim, DType::U8, 0},
                 {DType::FP16, head_dim, DType::U8, 0}};
+    case KvCacheStorage::BFloat16KeyValue:
+        return symmetric({DType::BF16, head_dim, DType::U8, 0});
     case KvCacheStorage::Int8Group64:
         if (head_dim == kD256KVCacheHeadDim) { return symmetric({DType::I8, 256, DType::FP16, 4}); }
         break;

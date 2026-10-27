@@ -119,7 +119,9 @@ struct ContextCacheOptions {
     // Extra Device StateImage slots beyond max_concurrency. Defaults to max_concurrency.
     std::optional<std::uint32_t> extra_state_slots;
     // Shared Host quota for StateImages, KV, pause snapshots and in-flight destinations.
-    // RTX 5090 defaults to 8 GiB plus eight model StateImages; DGX Spark resolves this to zero.
+    // RTX 5090 defaults to 8 GiB plus eight model StateImages; DGX Spark defaults to four Host
+    // state slots plus a 1 GiB Host KV arena (the demote-then-restore compound needs a
+    // destination).
     // This does not bound total process RAM.
     // Engine::options() returns both resolved capacities after construction.
     std::optional<std::size_t> host_capacity_bytes;

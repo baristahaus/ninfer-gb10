@@ -127,6 +127,15 @@ void normalize_flash_next_cache_options(EngineOptions& options) {
         cache.max_shared_prefixes.value_or(std::max(concurrency, static_cast<std::uint32_t>(
                                                                    kMaximumExplicitPromptCacheMarkers)));
     cache.max_long_anchors_per_continuation = cache.max_long_anchors_per_continuation.value_or(2U);
+    // Integrated-lane Host quota defaults: the demote-then-restore compound needs a Host
+    // destination, and a zero quota makes multi-turn pressure reuse impossible (drop wins by
+    // construction). Four Host state slots plus a 1 GiB Host KV arena carry roughly 2400-token
+    // conversation checkpoints (69 MB class); explicit options override.
+    if (!cache.host_capacity_bytes && cache.host_state_slots == 0 &&
+        cache.host_kv_capacity_bytes == 0) {
+        cache.host_state_slots      = 4;
+        cache.host_kv_capacity_bytes = 1ULL << 30;
+    }
     if (*cache.max_private_continuations < concurrency) {
         throw std::invalid_argument(
             "context cache max_private_continuations must cover every active request");

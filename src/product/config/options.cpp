@@ -649,7 +649,7 @@ std::string startup_usage_text(std::string_view executable, EntryPoint entry) {
         << "Boolean options also accept --flag=true|false.\n"
         << "Default prefill chunk: Qwen4Exp/CPU expert offload 4096, otherwise 1024.\n"
         << "Context cache defaults: CLI 0 extra slots / 0B Host; serve one extra slot per lane,\n"
-        << "RTX 5090 Host 8GiB + 8 StateImages, Spark Host 0B.\n"
+        << "RTX 5090 Host 8GiB + 8 StateImages, Spark Host 1GiB + 4 StateImages.\n"
         << "Environment: NINFER_VRAM_BUDGET_MIB, NINFER_CUDA_SYNC.\n";
     return out.str();
 }

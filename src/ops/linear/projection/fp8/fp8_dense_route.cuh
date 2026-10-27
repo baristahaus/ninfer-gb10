@@ -35,9 +35,10 @@ void launch_dense_a16(const Tensor& x, const Weight& weight, Tensor& out, cudaSt
     const LinearBf16Output output{static_cast<__nv_bfloat16*>(out.data), weight.n};
     const int tokens = x.ne[1];
     if (tokens == 1) {
-        return launch_fp8_a16_gemv<Fp8ScheduleInstance<GemvSchedule, K>>(operands, output,
-                                                                         LinearIdentityEpilogue{},
-                                                                         stream);
+        // K=320 is a whole number of lane packs but not of warp phases; the gemv kernel's
+        // predicated tail phase covers it (master fp8_a16_gemv.cuh semantics).
+        return launch_fp8_a16_gemv_tail<Fp8ScheduleInstance<GemvSchedule, K>>(
+            operands, output, LinearIdentityEpilogue{}, stream);
     }
     if (tokens <= 8) {
         return launch_fp8_a16_sliced_k_mma<

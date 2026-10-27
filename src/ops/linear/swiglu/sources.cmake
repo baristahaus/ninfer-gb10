@@ -4,6 +4,7 @@ target_sources(ninfer_ops PRIVATE
   "${CMAKE_CURRENT_LIST_DIR}/linear_swiglu.cpp"
   "${CMAKE_CURRENT_LIST_DIR}/nvfp4/shapes/n34816_k5120/dispatch.cpp"
   "${CMAKE_CURRENT_LIST_DIR}/q4/shapes/n34816_k5120/dispatch.cpp"
+  "${CMAKE_CURRENT_LIST_DIR}/fp8/shapes/n1280_k2560.cu"
   "${CMAKE_CURRENT_LIST_DIR}/fp8/shapes/n34816_k5120/a16.cu"
   "${CMAKE_CURRENT_LIST_DIR}/fp8/shapes/n34816_k5120/a8.cu"
   "${CMAKE_CURRENT_LIST_DIR}/nvfp4/shapes/n34816_k5120/a16.cu"
@@ -23,4 +24,5 @@ if(NINFER_TARGET STREQUAL "dgx_spark")
   target_sources(ninfer_ops PRIVATE "${CMAKE_CURRENT_LIST_DIR}/nvfp4/dgx_spark/shapes/n12288_k4096.cu")
   target_sources(ninfer_ops_non_rdc PRIVATE "${CMAKE_CURRENT_LIST_DIR}/nvfp4/dgx_spark/shapes/n12288_k4096_tma.cu")
   target_sources(ninfer_ops PRIVATE "${CMAKE_CURRENT_LIST_DIR}/bf16/dgx_spark/shapes/n2048_k4096.cu")
+  target_sources(ninfer_ops PRIVATE "${CMAKE_CURRENT_LIST_DIR}/bf16/dgx_spark/shapes/n1280_k2560.cu")
 endif()

@@ -16,6 +16,9 @@ LinearSwiGluLaunch select_q8_swiglu_n34816_k5120(int tokens);
 std::size_t q4_linear_swiglu_capacity_workspace_bytes(int rows, int k, int first, int last);
 void q4_linear_swiglu_dispatch(const Tensor&, const Weight&, Tensor&, MemoryArena&,
                                CudaExecutionView);
+void fp8_linear_swiglu_flash_next_launch(const Tensor&, const Weight&, Tensor&, cudaStream_t);
+void launch_bf16_swiglu_n1280_k2560(const Tensor&, const Weight&, Tensor&, float limit,
+                                    bool clamped, cudaStream_t);
 void launch_bf16_swiglu_n2048_k4096(const Tensor&, const Weight&, Tensor&, float limit,
                                     bool clamped, cudaStream_t);
 } // namespace ninfer::ops::detail

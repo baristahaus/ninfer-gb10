@@ -19,4 +19,5 @@ extern const Fp8LinearShape kFp8N5120K17408;
 extern const Fp8LinearShape kFp8N248320K5120;
 extern const Fp8LinearShape kFp8ProjN12288K2560;
 extern const Fp8LinearShape kFp8ProjN10240K320;
+extern const Fp8LinearShape kFp8ProjN2560K640;
 } // namespace ninfer::ops::detail

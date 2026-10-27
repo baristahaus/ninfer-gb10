@@ -100,7 +100,11 @@ static void execute_swiglu(const Tensor& x, const Weight& gate_up_weight, Tensor
             w.qhigh || w.high_plane_bytes || w.payload_bytes < std::uint64_t(w.n) * w.k * 2 ||
             !common::operand::aligned(w.qdata, 16))
             throw std::invalid_argument("linear_swiglu: invalid BF16 weight");
-        detail::launch_bf16_swiglu_n2048_k4096(x, w, out, limit, clamped, execution.stream());
+        if (w.n == 1280 && w.k == 2560) {
+            detail::launch_bf16_swiglu_n1280_k2560(x, w, out, limit, clamped, execution.stream());
+        } else {
+            detail::launch_bf16_swiglu_n2048_k4096(x, w, out, limit, clamped, execution.stream());
+        }
         return;
     }
 #endif
@@ -118,6 +122,11 @@ static void execute_swiglu(const Tensor& x, const Weight& gate_up_weight, Tensor
 
     if (fp8_weight) {
         (void)common::validate_fp8_weight(gate_up_weight, "fp8 linear_swiglu");
+        if (w.n == 1280 && w.k == 2560) {
+            detail::fp8_linear_swiglu_flash_next_launch(x, gate_up_weight, out,
+                                                        execution.stream());
+            return;
+        }
         detail::fp8_linear_swiglu_dispatch(x, gate_up_weight, out, policy, ws, execution.stream());
         return;
     }

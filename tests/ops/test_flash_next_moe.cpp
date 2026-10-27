@@ -33,6 +33,7 @@ constexpr int kGroupedTokens = 17;
 
 Weight bf16_weight(const DeviceBuffer& storage, int rows, int columns) {
     Weight out{};
+    out.device = storage.device();
     out.payload = out.qdata = storage.data();
     out.payload_bytes = storage.size();
     out.qtype = QType::BF16;
@@ -262,7 +263,7 @@ struct Nvfp4Bank {
     Nvfp4Bank(int rows, int columns, std::uint32_t seed) : input_divisors(kExperts, 1.0F) {
         const std::array<std::uint64_t, 3> shape{kExperts, static_cast<std::uint64_t>(rows),
                                                  static_cast<std::uint64_t>(columns)};
-        geometry = weight_geometry(QType::NVFP4, QuantLayout::BlockScaleK16M128x4, shape);
+        geometry = weight_geometry(QType::NVFP4, QuantLayout::BatchedBlockScaleK16M128x4, shape);
         device   = DeviceBuffer(ninfer::test::cuda_environment().context.device(), geometry.bytes);
         device.fill(); // unused experts: zero codes and scales
         std::vector<float> divisors(kExperts, 1.0F);

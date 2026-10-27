@@ -24,6 +24,19 @@ void launch_fp8_a16_gemv(const Fp8A16Operands& p, Output output, Epilogue epilog
     CUDA_CHECK(cudaGetLastError());
 }
 
+// GEMV for K values that are a whole number of lane packs but not of warp phases (the
+// Flash-Next HyperConnection K=320 route); the kernel's predicated tail phase covers the rest.
+template <class Schedule, class Output, class Epilogue, class Rows = Fp8IdentityRows>
+void launch_fp8_a16_gemv_tail(const Fp8A16Operands& p, Output output, Epilogue epilogue,
+                              cudaStream_t stream, Rows rows = {}) {
+    validate_fp8_operands<Schedule>(p);
+    if (p.tokens != 1 || p.rows % Schedule::kBlockRows || p.k % Schedule::kValuesPerLane)
+        throw std::invalid_argument("FP8 tail GEMV requires T=1, complete rows and lane packs");
+    fp8_a16_gemv_kernel<Schedule><<<p.rows / Schedule::kBlockRows, Schedule::kThreads, 0, stream>>>(
+        p.x, p.codes, p.scales, output, epilogue, rows, p.rows, p.k);
+    CUDA_CHECK(cudaGetLastError());
+}
+
 template <class Schedule, class Output, class Epilogue, class Rows = Fp8IdentityRows>
 void launch_fp8_a16_simt(const Fp8A16Operands& p, Output output, Epilogue epilogue,
                          cudaStream_t stream, Rows rows = {}) {

@@ -202,16 +202,25 @@ Reference bind_ple_table(artifact::Binder& binder, const std::string& name) {
 }
 
 PlePlan bind_ple(artifact::Binder& binder, const std::string& prefix) {
-    PlePlan out{
-        .convolution      = device(binder, prefix + "conv1d.weight", QType::BF16, {4, 10240}),
-        .key_projection   = device(binder, prefix + "key_proj.weight", QType::BF16, {10240, 2560}),
-        .convolution_norm = device(binder, prefix + "norm_conv.weight", QType::BF16, {10240}),
-        .key_norm         = device(binder, prefix + "norm_key.weight", QType::BF16, {10240}),
-        .query_norm       = device(binder, prefix + "norm_query.weight", QType::BF16, {10240}),
-        .value_projection = device(binder, prefix + "value_proj.weight", QType::BF16, {2560, 2560}),
-        .embedding_scale =
-            device(binder, prefix + "ple_embedding.ngram_embedding.weight_scale", QType::BF16, {1}),
-    };
+    const auto& bindings = binder.reader().directory().bindings;
+    const std::string table_name = prefix + "ple_embedding.ngram_embedding.weight";
+    const bool nvfp4_table =
+        binder.reader().directory().tensor(bindings.at(table_name).parts.front().object)
+            .format == "nvfp4";
+    PlePlan out{};
+    if (!nvfp4_table) {
+        // Vendor FP8 recipes carry the table scale as its own object; the NVFP4
+        // recipe's scale_2 word lives in the table payload.
+        out.embedding_scale = device(
+            binder, prefix + "ple_embedding.ngram_embedding.weight_scale", QType::BF16, {1});
+    }
+    out.nvfp4_table = nvfp4_table;
+    out.convolution      = device(binder, prefix + "conv1d.weight", QType::BF16, {4, 10240});
+    out.key_projection   = device(binder, prefix + "key_proj.weight", QType::BF16, {10240, 2560});
+    out.convolution_norm = device(binder, prefix + "norm_conv.weight", QType::BF16, {10240});
+    out.key_norm         = device(binder, prefix + "norm_key.weight", QType::BF16, {10240});
+    out.query_norm       = device(binder, prefix + "norm_query.weight", QType::BF16, {10240});
+    out.value_projection = device(binder, prefix + "value_proj.weight", QType::BF16, {2560, 2560});
     out.embedding_table = bind_ple_table(binder, prefix + "ple_embedding.ngram_embedding.weight");
     return out;
 }

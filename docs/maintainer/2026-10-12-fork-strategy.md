@@ -268,8 +268,9 @@ what "correct" means.
   points — gates green, serving verified — as ordinary master-line merges; the frontier is never
   rebased against upstream, and upstream merges land only through an explicit integration task
   (the 2026-10-27 243-commit integration of the EXL3/tiering/telemetry/SP-2 line is the model:
-  golden-recorded gates before and after, one merge commit per frontier). Published side branches
-  (`5090-test`, `gb10-field-report`) stay as records; `master` is their superset once absorbed.
+  golden-recorded gates before and after, one merge commit per frontier). Published side
+  branches stay as records until absorbed: `gb10-field-report` is absorbed (October 2026);
+  `5090-test` carries the live tiering-lane line and is not a record.
 - This document authorizes no implementation; each package requires task-level authorization and
   updates the affected active authorities (`AGENTS.md`, the maintainer references) as part of its
   execution, not after.

@@ -86,7 +86,9 @@ The second build lane is the RTX 5090 (`sm_120a`). It carries the tiering work: 
 than the card run across GPU, RAM, and disk. The EXL3/Trellis quantization lever, serving
 telemetry, and constrained decoding for the Qwen3.5 family landed on `master` in the October
 2026 integration. The 27B-class models serve fully hot on that lane and are the regression
-baseline.
+baseline. The tiering lane's current work (the SP-7 strategy packages) lives on the
+`5090-test` branch on the remote; it is not yet merged into `master`. Older work-line and
+verification branches were archived as `archive/*` tags in October 2026.
 
 ## Build and run
 

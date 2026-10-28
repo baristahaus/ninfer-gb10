@@ -53,7 +53,7 @@ bench() { # $1 = log path, then ninfer_bench arguments after the artifact
 }
 serve_args() { # $1 = max concurrency, $2 = K (0 = no speculation)
     SERVE_ARGS=(--max-context 73728 --max-concurrency "$1" --kv-dtype "$KV_DTYPE" --preserve-thinking)
-    if (($2 > 0)); then SERVE_ARGS+=(--spec mtp --draft-tokens "$2" --lm-head-draft); fi
+    if (($2 > 0)); then SERVE_ARGS+=(--spec mtp --draft-tokens "$2"); fi
 }
 NATURAL=$ROOT/natural_corpus.ids
 natural_corpus() {
@@ -130,7 +130,7 @@ if want I2; then
         name=$(basename "$corpus" .ids)
         for k in 0 3; do
             spec=()
-            ((k > 0)) && spec=(--spec mtp --draft-tokens "$k" --lm-head-draft)
+            ((k > 0)) && spec=(--spec mtp --draft-tokens "$k")
             bench "$ROOT/I2/$name-k$k.log" --corpus "$corpus" --max-ctx 73728 \
                 --prefill-chunk 8192 -pg '2048,512;8192,512' "${spec[@]}" --warmup 1 -r 3 \
                 -o json --output-file "$ROOT/I2/$name-k$k.json"
@@ -175,7 +175,7 @@ if want I5; then
     drop_caches
     for k in 0 3; do
         spec=()
-        ((k > 0)) && spec=(--spec mtp --draft-tokens "$k" --lm-head-draft)
+        ((k > 0)) && spec=(--spec mtp --draft-tokens "$k")
         bench "$ROOT/I5/k$k.log" --corpus "$corpus" --max-ctx 139264 --prefill-chunk 8192 \
             -pg '1024,256;8192,256;32768,256;131072,256' "${spec[@]}" --warmup 1 -r 3 \
             -o json --output-file "$ROOT/I5/k$k.json"
@@ -241,7 +241,7 @@ if want I9; then
         gpu_idle
         # DGPP writes a prepacked weight image (~82 GiB) to ~/.cache/dgpp/resident on first load
         # unless told not to; this comparison must not consume that disk.
-        ( cd "$DGPP_DIR" && export DGPP_RESIDENT_CACHE=off && eval "$DGPP_START" ) \
+        ( cd "$DGPP_DIR" && export DGPP_RESIDENT_CACHE=off && eval "$DGPP_START") \
             >"$ROOT/I9/dgpp-start.log" 2>&1
         waited=0
         until curl -sf "http://127.0.0.1:${DGPP_PORT:-8000}/v1/models" >/dev/null 2>&1; do
@@ -252,7 +252,7 @@ if want I9; then
         "${load[@]}" "${DGPP_PORT:-8000}" "${load_args[@]}" --json-out "$ROOT/I9/dgpp.json" \
             >"$ROOT/I9/dgpp.txt" 2>&1 || log "I9 DGPP load exited nonzero"
         curl -sf "http://127.0.0.1:${DGPP_PORT:-8000}/v1/metrics" >"$ROOT/I9/dgpp-metrics.json" || true
-        ( cd "$DGPP_DIR" && eval "$DGPP_STOP" ) >>"$ROOT/I9/dgpp-start.log" 2>&1 || true
+        ( cd "$DGPP_DIR" && eval "$DGPP_STOP") >>"$ROOT/I9/dgpp-start.log" 2>&1 || true
         "$PYTHON" "$DGPP_DIR/scripts/bench_compare.py" "$ROOT/I9/dgpp.json" \
             "$ROOT/I9/ninfer-k1.json" >"$ROOT/I9/compare-k1.txt" 2>&1 || true
     else

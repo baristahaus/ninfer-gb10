@@ -30,7 +30,7 @@ cmake -S . -B build-trace "${generator[@]}" -DCMAKE_BUILD_TYPE=Release \
 cmake --build build-trace -j --target ninfer-serve >>"$dir/build_trace.log" 2>&1
 
 serve_args=(--port "$PORT" --max-context 73728 --max-concurrency "$CONC" --kv-dtype "$KV_DTYPE"
-            --preserve-thinking --spec mtp --draft-tokens "$DRAFT" --lm-head-draft
+            --preserve-thinking --spec mtp --draft-tokens "$DRAFT" 
             --request-log-jsonl "$dir/requests.jsonl")
 log "nsys capture: C$CONC MTP draft $DRAFT, two batches of $CONC x $MAX_TOKENS tokens"
 nsys profile --trace=cuda,nvtx --cuda-graph-trace=node --sample=none --cpuctxsw=none \

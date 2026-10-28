@@ -17,7 +17,7 @@ SERVE_ARGS=(
   --max-context 262144
   --max-concurrency 2
   --kv-dtype fp8
-  --spec mtp --draft-tokens 2 --lm-head-draft
+  --spec mtp --draft-tokens 2 
   --vision
 )
 

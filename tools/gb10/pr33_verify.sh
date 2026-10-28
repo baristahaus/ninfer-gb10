@@ -46,7 +46,7 @@ gpu_idle() {
 }
 serve_args() { # $1 = max concurrency, $2 = K (0 = no speculation)
     SERVE_ARGS=(--max-context 73728 --max-concurrency "$1" --kv-dtype "$KV_DTYPE" --preserve-thinking)
-    if (($2 > 0)); then SERVE_ARGS+=(--spec mtp --draft-tokens "$2" --lm-head-draft); fi
+    if (($2 > 0)); then SERVE_ARGS+=(--spec mtp --draft-tokens "$2"); fi
 }
 
 gpu_idle
@@ -163,7 +163,7 @@ if want S4; then
     # K=3 (the adopted draft depth). Pass: no errors, and the shared-prefix outputs match
     # the shared prefix run alone.
     {
-        SERVE_ARGS=(--max-context 16384 --max-concurrency 8 --kv-dtype "$KV_DTYPE" --preserve-thinking --spec mtp --draft-tokens 3 --lm-head-draft)
+        SERVE_ARGS=(--max-context 16384 --max-concurrency 8 --kv-dtype "$KV_DTYPE" --preserve-thinking --spec mtp --draft-tokens 3 )
         start_server "$ROOT/S4/evict.log" --kv-capacity 16384 \
             --request-log-jsonl "$ROOT/S4/evict.jsonl"
         "$PYTHON" - "$BASE_URL" "$ROOT/S4/evict-result.json" <<'EOF'

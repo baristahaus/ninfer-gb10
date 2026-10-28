@@ -50,7 +50,7 @@ for k in $KS; do
         [[ $CHUNKS == default ]] || arm+=-c$chunk
         [[ $DECODE_SHARES == default ]] || arm+=-s$share
         SERVE_ARGS=(--max-context 262144 --max-concurrency 2 --kv-dtype "$KV_DTYPE" --preserve-thinking --vision
-                    --spec mtp --draft-tokens "$k" --lm-head-draft)
+                    --spec mtp --draft-tokens "$k")
         [[ $chunk == default ]] || SERVE_ARGS+=(--prefill-chunk "$chunk")
         [[ $share == default ]] || SERVE_ARGS+=(--prefill-decode-share "$share")
         [[ -z ${LONG_PREFILL_WAIT_MS:-} ]] || SERVE_ARGS+=(--long-prefill-wait-ms "$LONG_PREFILL_WAIT_MS")

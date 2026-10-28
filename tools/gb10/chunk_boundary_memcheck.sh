@@ -19,7 +19,7 @@ fi
 sanitize=(compute-sanitizer --tool memcheck --leak-check no --print-limit 20 --error-exitcode 99)
 
 declare -a rows=()
-for spec in "" "--spec mtp --draft-tokens $DRAFT_TOKENS --lm-head-draft"; do
+for spec in "" "--spec mtp --draft-tokens $DRAFT_TOKENS "; do
     tag=$([[ -z $spec ]] && echo mtp0 || echo "mtp$DRAFT_TOKENS")
     for length in 255 256 257 513; do
         log "A: $tag prompt $length"
@@ -36,7 +36,7 @@ done
 log "B: serve under memcheck, chunk 128, capture-frontier sweep"
 "${sanitize[@]}" "$SERVE_BIN" "$ART" --port "$PORT" --max-context 4096 --max-concurrency 1 \
     --kv-dtype "$KV_DTYPE" --prefill-chunk 128 --spec mtp --draft-tokens "$DRAFT_TOKENS" \
-    --lm-head-draft --no-cuda-graph >"$dir/B-serve.log" 2>&1 &
+    --no-cuda-graph >"$dir/B-serve.log" 2>&1 &
 SERVER_PID=$!
 waited=0
 until curl -sf "$BASE_URL/health" >/dev/null 2>&1; do

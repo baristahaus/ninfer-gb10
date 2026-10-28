@@ -18,7 +18,7 @@ mkdir -p "$OUT"
 CAP="$OUT/full_capture.bin"
 "$REPO/build/bench/ninfer_bench" \
   --weights "$ART" --corpus "$CORPUS" \
-  --kv-dtype fp8 --spec mtp --draft-tokens 2 --lm-head-draft \
+  --kv-dtype fp8 --spec mtp --draft-tokens 2 \
   --sampling greedy --repetitions 3 --concurrency 2 --max-ctx 2048 \
   --mtp-capture "$CAP" \
   --output json --output-file "$OUT/full.json" \

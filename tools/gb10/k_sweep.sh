@@ -31,7 +31,7 @@ run_one() { # $1=K $2=ART $3=LABEL
         log "skip $label (acceptance.json exists)"
         return 0
     fi
-    [[ $k == 0 ]] || spec="--spec mtp --draft-tokens $k --lm-head-draft"
+    [[ $k == 0 ]] || spec="--spec mtp --draft-tokens $k "
     local cfg="$CFGDIR/$label.sh"
     cat >"$cfg" <<CFG
 PORT=$PORT

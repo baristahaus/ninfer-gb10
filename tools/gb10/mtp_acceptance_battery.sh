@@ -9,7 +9,7 @@ mkdir -p "$OUT"
 i=0
 while IFS= read -r prompt; do
     i=$((i+1))
-    build/apps/ninfer "$ART" --spec mtp --draft-tokens 2 --lm-head-draft \
+    build/apps/ninfer "$ART" --spec mtp --draft-tokens 2 \
         --max-new 128 --prompt "$prompt" --greedy --no-thinking --log-level warning \
         > "$OUT/run$i.out" 2> "$OUT/run$i.err"
 done << 'PROMPTS'

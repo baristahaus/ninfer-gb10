@@ -2,7 +2,7 @@
 
 Scope: complete standalone torch replication of the Flash-Next MTP draft layer
 (125B-A6B NVFP4+FP8 MTP artifact, GB10, `--no-cuda-graph --kv-dtype fp8 --spec
-mtp --draft-tokens 2 --lm-head-draft --greedy`), verified against windowed
+mtp --draft-tokens 2 --greedy`), verified against windowed
 engine dumps (`NINFER_MTP_DUMP`, parity window `NINFER_MTP_PARITY_CALL`).
 
 ## Engine call structure (measured)

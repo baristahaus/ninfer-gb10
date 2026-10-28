@@ -19,7 +19,7 @@ SERVE_ARGS=(
   --max-context 73728
   --max-concurrency 2
   --kv-dtype fp8
-  --spec mtp --draft-tokens 2 --lm-head-draft
+  --spec mtp --draft-tokens 2 
   --preserve-thinking
 )
 BASE_URL="http://127.0.0.1:$PORT"

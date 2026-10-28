@@ -37,7 +37,7 @@ capture() { # $1 = name, remaining = speculative flags
         log "report for $name failed; see $dir/$name-nsys.log"
 }
 capture mtp0
-capture "mtp$DRAFT_TOKENS" --spec mtp --draft-tokens "$DRAFT_TOKENS" --lm-head-draft
+capture "mtp$DRAFT_TOKENS" --spec mtp --draft-tokens "$DRAFT_TOKENS" 
 
 log "PLE residency: unannotated decode run, counting major page faults"
 timer=()

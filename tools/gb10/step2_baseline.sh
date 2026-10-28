@@ -40,7 +40,7 @@ draft_counts=(0 "$DRAFT_TOKENS")
 [[ $DRAFT_TOKENS != 3 ]] && draft_counts+=(3)
 reports=()
 for k in "${draft_counts[@]}"; do
-    [[ $k == 0 ]] && spec=() || spec=(--spec mtp --draft-tokens "$k" --lm-head-draft)
+    [[ $k == 0 ]] && spec=() || spec=(--spec mtp --draft-tokens "$k")
     log "ninfer_bench K=$k (8K and 64K prompts, 1 warmup + 5 measured)"
     bench "mtp$k" -pg '8192,512;65536,512' "${spec[@]}" --warmup 1 -r 5 -o json \
         --output-file "$dir/mtp$k.json"
@@ -51,7 +51,7 @@ done
 # model's registered preset (the sampling a served request gets by default) gives the realistic
 # acceptance and speed beside it.
 for k in 0 "$DRAFT_TOKENS"; do
-    [[ $k == 0 ]] && spec=() || spec=(--spec mtp --draft-tokens "$k" --lm-head-draft)
+    [[ $k == 0 ]] && spec=() || spec=(--spec mtp --draft-tokens "$k")
     log "ninfer_bench K=$k, model sampling preset (8K prompt, 1 warmup + 3 measured)"
     bench "sampled$k" -pg 8192,512 "${spec[@]}" --sampling model --seed 1 --warmup 1 -r 3 \
         -o json --output-file "$dir/sampled$k.json"
@@ -68,7 +68,7 @@ sleep 10
 stop_gpu_sampler
 gpu_runs=("idle@$dir/gpu_idle.csv")
 for k in "${draft_counts[@]}"; do
-    [[ $k == 0 ]] && spec=() || spec=(--spec mtp --draft-tokens "$k" --lm-head-draft)
+    [[ $k == 0 ]] && spec=() || spec=(--spec mtp --draft-tokens "$k")
     log "decode power run K=$k (1K prompt, 1536 outputs, 1 warmup + 2 measured, GPU telemetry)"
     start_gpu_sampler "$dir/gpu_mtp$k.csv"
     bench "power$k" -pg 1024,1536 "${spec[@]}" --warmup 1 -r 2 -o json \

@@ -44,11 +44,13 @@ runtime::ContextTransferRequirement
 kv_transfer_requirement(runtime::ContextTransferResource resource,
                         runtime::ContextTransferDirection direction, std::uint32_t pages,
                         TransferWork work) {
-    // The master-generation requirement vocabulary carries the page count; the restructured
-    // pool id stays with the caller's allocation policy.
-    (void)resource;
+    // The pool vocabulary maps onto the transfer classes by slot: the main KV pool is pool 0
+    // and the optional backend pool is pool 1.
     return runtime::ContextTransferRequirement{
-        .direction = direction,
+        .resource   = resource.pool && resource.pool->index != 0
+                          ? runtime::ContextResourceClass::BackendKV
+                          : runtime::ContextResourceClass::MainKV,
+        .direction  = direction,
         .page_count = pages,
         .work       = work,
     };

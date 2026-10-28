@@ -116,4 +116,22 @@ gdn_input_proj_conv_record_workspace_capacity_bytes(const ProjectionProfile& wei
     return gdn_input_proj_conv_record_workspace_capacity_bytes(projection_profile(weights), batch,
                                                                first, last);
 }
+
+/**
+ * Op: gdn_input_proj_exl3 (the dense EXL3 GDN input projection).
+ *
+ * Projects the layer input into the fused QKV and output-gate rows from the SP-7 dense EXL3
+ * [16384,5120] parent: the query/key/value/z row groups slice into per-group dense dispatches
+ * at decode token shapes, and larger token counts compose the decoded weight with BF16
+ * linears. The conv snapshot and record forms above carry the causal-conv state handoff.
+ */
+void gdn_input_proj_exl3(const Tensor& x, const Weight& query_key_value_z_weight, Tensor& qkv,
+                         Tensor& z, LinearPolicy policy, MemoryArena& workspace,
+                         cudaStream_t stream);
+
+[[nodiscard]] std::size_t gdn_input_proj_exl3_workspace_capacity_bytes(std::int32_t parent_rows,
+                                                                       std::int32_t input_rows,
+                                                                       LinearPolicy policy,
+                                                                       std::int32_t min_tokens,
+                                                                       std::int32_t max_tokens);
 } // namespace ninfer::ops

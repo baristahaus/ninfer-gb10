@@ -97,7 +97,13 @@ public:
                 dimension(inputs[0].weight.shape[0]), dimension(inputs[1].weight.shape[0]),
                 dimension(inputs[2].weight.shape[0]), dimension(inputs[3].weight.shape[0])};
             auto projection = ops::prepare_projection_weights(inputs);
-            (void)ops::linear_split_workspace_capacity_bytes(projection, rows, 1, 1);
+            const auto* exl3_single_weight = std::get_if<ops::SingleProjectionWeight>(&projection);
+            const bool exl3_single =
+                exl3_single_weight != nullptr &&
+                exl3_single_weight->weight.qtype == QType::EXL3;
+            if (!exl3_single) {
+                (void)ops::linear_split_workspace_capacity_bytes(projection, rows, 1, 1);
+            }
             out.mixer = AttentionParameters{std::move(projection), rows, tensor(a->query_norm),
                                             tensor(a->key_norm), linear(a->output)};
             out.projection_prefetch =
@@ -110,7 +116,12 @@ public:
                                             inputs[2].weight.shape[0]),
                                   dimension(inputs[3].weight.shape[0])};
             auto projection = ops::prepare_projection_weights(inputs);
-            (void)ops::linear_split_workspace_capacity_bytes(projection, rows, 1, 1);
+            const auto* gdn_exl3_weight = std::get_if<ops::SingleProjectionWeight>(&projection);
+            const bool gdn_exl3_single =
+                gdn_exl3_weight != nullptr && gdn_exl3_weight->weight.qtype == QType::EXL3;
+            if (!gdn_exl3_single) {
+                (void)ops::linear_split_workspace_capacity_bytes(projection, rows, 1, 1);
+            }
             out.mixer =
                 GdnParameters{std::move(projection),
                               rows,
@@ -154,7 +165,8 @@ public:
         out.projection.output_rows = {
             dimension(inputs[0].weight.shape[0]), dimension(inputs[1].weight.shape[0]),
             dimension(inputs[2].weight.shape[0]), dimension(inputs[3].weight.shape[0])};
-        if (profile_.config.text.architecture == Architecture::Qwen3_5) {
+        if (profile_.config.text.architecture == Architecture::Qwen3_5 ||
+            out.projection.packed.weight.qtype == QType::EXL3) {
             out.projection.rows = {linear(a.query), linear(a.key), linear(a.gate), linear(a.value)};
         } else {
             (void)ops::linear_split_workspace_capacity_bytes(out.projection.packed,

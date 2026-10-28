@@ -1,4 +1,6 @@
+#include "ninfer/ops/linear.h"
 #include "ninfer/ops/linear_add.h"
+#include "ninfer/ops/residual_add.h"
 #include "ops/common/host/operands.h"
 #include "ops/linear/add/dispatch.h"
 #include "ops/linear/add/fp8/dispatch.h"
@@ -60,6 +62,15 @@ void validate_operands(const Tensor& x, const Weight& w, const Tensor& residual,
         (void)common::validate_nvfp4_weight(w, "linear_add");
         return;
     }
+    if (w.qtype == QType::EXL3) {
+        // The dense EXL3 Weight carries its encoded object in payload; qdata stays null.
+        if (w.layout != QuantLayout::Exl3Dense || w.payload == nullptr ||
+            !operand::aligned(w.payload, 16)) {
+            throw std::invalid_argument(
+                "linear_add: EXL3 weight must be dense with an aligned payload");
+        }
+        return;
+    }
     if (!operand::aligned(w.qdata, 16))
         throw std::invalid_argument("linear_add: weight codes must be 16-byte aligned");
     if (w.qtype == QType::BF16) {
@@ -87,6 +98,13 @@ std::size_t linear_add_workspace_capacity_bytes(QType type, std::int32_t rows, s
         return detail::fp8_linear_add_workspace_capacity_bytes(rows, k, policy, first, last);
     if (type == QType::NVFP4)
         return detail::nvfp4_linear_add_workspace_capacity_bytes(rows, k, policy, first, last);
+    if (type == QType::EXL3) {
+        // The dense EXL3 route (SP-7): the projection runs the registered dense decode or
+        // composed prefill route into a transient delta plane, then the registered residual
+        // add completes the fused semantics.
+        return static_cast<std::size_t>(rows) * static_cast<std::size_t>(last) * 2 +
+               linear_workspace_capacity_bytes(QType::EXL3, rows, k, policy, first, last);
+    }
     (void)select_a16(type, rows, k, first);
     (void)select_a16(type, rows, k, last);
     return 0;
@@ -110,6 +128,21 @@ void linear_add(const Tensor& x, const Weight& w, Tensor& residual, LinearPolicy
     if (w.qtype == QType::NVFP4)
         return detail::nvfp4_linear_add_dispatch(x, w, residual, policy, workspace,
                                                  execution.stream());
+    if (w.qtype == QType::EXL3) {
+        // The dense EXL3 route (SP-7): the projection runs the registered dense decode or
+        // composed prefill route into transient storage, then the registered residual add
+        // completes the fused semantics.
+        if (w.layout != QuantLayout::Exl3Dense) {
+            throw std::invalid_argument("linear_add: EXL3 requires the dense layout");
+        }
+        auto scope = workspace.scope();
+        const auto delta_span = workspace.alloc_bytes(
+            static_cast<std::size_t>(w.n) * static_cast<std::size_t>(x.ne[1]) * 2, 256);
+        Tensor delta(delta_span.data, execution.device(), DType::BF16, {w.n, x.ne[1]});
+        linear(x, w, delta, policy, workspace, execution);
+        residual_add(delta, residual, execution);
+        return;
+    }
     select_a16(w.qtype, w.n, w.k, x.ne[1])(x, w, residual, execution.stream());
 }
 

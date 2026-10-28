@@ -225,12 +225,48 @@ void TextRun::gdn(const BlockParameters& block, std::uint32_t compact_layer) {
         Tensor value_output     = vc.view({dimension(gdn.value_width()), width, batch});
         Tensor gate_output      = z.view({dimension(gdn.value_width()), width, batch});
         Tensor conv             = view_.states.layer_view(compact_layer).conv;
+        const auto* exl3_single = std::get_if<LinearParameters>(&p.projection);
+        const bool exl3_route =
+            exl3_single != nullptr && exl3_single->weight.qtype == QType::EXL3;
         if (replay) {
+            if (exl3_route) {
+                throw std::invalid_argument(
+                    "the EXL3 GDN route does not support the speculative replay record path");
+            }
             const auto records = replay->records.layer(compact_layer, batch);
             Tensor conv_record = records.conv;
             gdn_projection_record(projection_input, p, conv, inputs_.valid_columns,
                                   inputs_.state_source_slots, conv_record, query_output, key_output,
                                   value_output, gate_output, work, cuda);
+        } else if (exl3_route) {
+            // Decomposed decode: the dense EXL3 wrapper projects the fused qkv rows and the
+            // output gate, then the standalone batched causal conv runs over the qkv rows
+            // with the state selectors. The conv preserves the projection's row order, so
+            // each split output is a contiguous row range of its result.
+            const std::int32_t kColumns = width * batch;
+            Tensor qkv       = workspace::gdn_prefill_conv(work, cfg, kColumns);
+            Tensor z_flat    = z.view({dimension(gdn.value_width()), kColumns});
+            Tensor hidden_2d = h.view({dimension(cfg.hidden_size), kColumns});
+            gdn_projection(hidden_2d, p, qkv, z_flat, work, cuda);
+            Tensor conv_out    = workspace::gdn_prefill_conv(work, cfg, kColumns);
+            Tensor conv_input  = qkv.view({dimension(gdn.conv_channels()), width, batch});
+            Tensor conv_result = conv_out.view({dimension(gdn.conv_channels()), width, batch});
+            ops::causal_conv1d_silu_snapshot(conv_input, p.convolution, conv, inputs_.valid_columns,
+                                             inputs_.state_source_slots,
+                                             inputs_.state_destination_slots, conv_result, cuda);
+            const auto q_rows  = static_cast<std::size_t>(dimension(gdn.key_width())) *
+                                static_cast<std::size_t>(kColumns) * 2;
+            const auto k_rows  = static_cast<std::size_t>(dimension(gdn.key_width())) *
+                                static_cast<std::size_t>(kColumns) * 2;
+            const auto v_rows  = static_cast<std::size_t>(dimension(gdn.value_width())) *
+                                static_cast<std::size_t>(kColumns) * 2;
+            const auto* source = static_cast<const std::byte*>(conv_out.data);
+            CUDA_CHECK(cudaMemcpyAsync(query_output.data, source, q_rows, cudaMemcpyDeviceToDevice,
+                                       cuda.stream()));
+            CUDA_CHECK(cudaMemcpyAsync(key_output.data, source + q_rows, k_rows,
+                                       cudaMemcpyDeviceToDevice, cuda.stream()));
+            CUDA_CHECK(cudaMemcpyAsync(value_output.data, source + q_rows + k_rows, v_rows,
+                                       cudaMemcpyDeviceToDevice, cuda.stream()));
         } else {
             gdn_projection_snapshot(projection_input, p, conv, inputs_.valid_columns,
                                     inputs_.state_source_slots, inputs_.state_destination_slots,

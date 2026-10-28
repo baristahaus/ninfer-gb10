@@ -88,7 +88,8 @@ public:
         out.projection.output_rows = {
             dimension(inputs[0].weight.shape[0]), dimension(inputs[1].weight.shape[0]),
             dimension(inputs[2].weight.shape[0]), dimension(inputs[3].weight.shape[0])};
-        if (plan_.config().text.architecture == Architecture::Qwen3_5) {
+        if (plan_.config().text.architecture == Architecture::Qwen3_5 ||
+            out.projection.packed.qtype == QType::EXL3) {
             out.projection.rows = {linear(a.query), linear(a.key), linear(a.gate), linear(a.value)};
         }
         return out;

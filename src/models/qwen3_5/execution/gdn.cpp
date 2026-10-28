@@ -7,6 +7,11 @@ namespace ninfer::models::qwen3_5::execution {
 
 std::size_t gdn_projection_workspace_bytes(const GdnProfile& parameters, std::int32_t first,
                                            std::int32_t last) {
+    if (const auto& packed = parameters.projection.first;
+        !parameters.projection.second && packed.qtype == QType::EXL3) {
+        return ops::gdn_input_proj_exl3_workspace_capacity_bytes(packed.n, packed.k, packed.policy,
+                                                                 first, last);
+    }
     return ops::linear_split_workspace_capacity_bytes(parameters.projection,
                                                       parameters.projection_rows, first, last);
 }
@@ -25,6 +30,12 @@ std::size_t gdn_record_workspace_bytes(const GdnProfile& parameters, std::int32_
 
 void gdn_projection(const Tensor& hidden, const GdnParameters& parameters, Tensor& qkv, Tensor& z,
                     MemoryArena& workspace, CudaExecutionView execution) {
+    if (const auto* single = std::get_if<LinearParameters>(&parameters.projection);
+        single != nullptr && single->weight.qtype == QType::EXL3) {
+        ops::gdn_input_proj_exl3(hidden, single->weight, qkv, z, single->policy, workspace,
+                                 execution.stream());
+        return;
+    }
     std::array outputs{qkv, z};
     ops::linear_split(hidden, parameters.projection, outputs, workspace, execution);
 }

@@ -1,6 +1,9 @@
 #include "core/platform.h"
 #include "core/weight.h"
+#include "ninfer/ops/linear.h"
 #include "ninfer/ops/linear_swiglu.h"
+#include "ninfer/ops/silu_mul.h"
+#include "ops/linear/exl3/exl3_dense_dispatch.h"
 
 #include "ops/linear/swiglu/fp8/dispatch.h"
 #include "ops/linear/swiglu/nvfp4/dispatch.h"
@@ -54,6 +57,13 @@ std::size_t linear_swiglu_workspace_capacity_bytes(QType qtype, std::int32_t gat
     }
     if (qtype == QType::FP8_E4M3FN_ROW_BF16) {
         return detail::fp8_linear_swiglu_workspace_capacity_bytes(policy, min_tokens, max_tokens);
+    }
+    if (qtype == QType::EXL3) {
+        // The dense EXL3 route (SP-7): the fused object's gate and up halves decode as
+        // row-sliced dense linears while silu_mul combines them; each half's capacity
+        // covers its decode or composed prefill route.
+        return 2 * linear_workspace_capacity_bytes(QType::EXL3, gate_up_rows / 2, input_rows,
+                                                   policy, min_tokens, max_tokens);
     }
     throw std::invalid_argument("linear_swiglu workspace: unsupported weight format");
 }
@@ -111,7 +121,7 @@ static void execute_swiglu(const Tensor& x, const Weight& gate_up_weight, Tensor
     const bool q8_weight    = w.qtype == QType::Q8_G32_FP16;
     const bool fp8_weight   = w.qtype == QType::FP8_E4M3FN_ROW_BF16;
     const bool nvfp4_weight = w.qtype == QType::NVFP4;
-    if (!fp8_weight && !nvfp4_weight) {
+    if (!fp8_weight && !nvfp4_weight && w.qtype != QType::EXL3) {
         const int group = q8_weight ? 32 : 64;
         if (w.layout != QuantLayout::RowSplit || w.scale_dtype != DType::FP16 || w.ndim != 2 ||
             w.shape[0] != w.n || w.shape[1] != w.k || w.group_size != group || w.group != group ||
@@ -142,6 +152,28 @@ static void execute_swiglu(const Tensor& x, const Weight& gate_up_weight, Tensor
 #endif
         detail::nvfp4_linear_swiglu_dispatch(x, gate_up_weight, out, policy, ws,
                                              execution.stream());
+        return;
+    }
+
+    if (w.qtype == QType::EXL3) {
+        // The dense EXL3 route (SP-7): the fused object's gate and up halves decode as
+        // row-sliced dense linears, then silu_mul combines them. The halves' [M,T]
+        // outputs live together for the combine, so both stay resident.
+        if (w.layout != QuantLayout::Exl3Dense) {
+            throw std::invalid_argument("linear_swiglu: EXL3 requires the dense layout");
+        }
+        auto scope = ws.scope();
+        const auto gate_span = ws.alloc_bytes(
+            static_cast<std::size_t>(out.ne[0]) * static_cast<std::size_t>(t) * 2, 256);
+        const auto up_span = ws.alloc_bytes(
+            static_cast<std::size_t>(out.ne[0]) * static_cast<std::size_t>(t) * 2, 256);
+        Tensor gate_out(gate_span.data, execution.device(), DType::BF16, {out.ne[0], t});
+        Tensor up_out(up_span.data, execution.device(), DType::BF16, {out.ne[0], t});
+        const Weight gate_half = detail::exl3_dense_slice(gate_up_weight, 0, out.ne[0]);
+        const Weight up_half = detail::exl3_dense_slice(gate_up_weight, out.ne[0], out.ne[0]);
+        linear(x, gate_half, gate_out, policy, ws, execution);
+        linear(x, up_half, up_out, policy, ws, execution);
+        silu_mul(gate_out, up_out, out, execution);
         return;
     }
 

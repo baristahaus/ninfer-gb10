@@ -323,6 +323,7 @@ Weight native_weight(const WeightView& view, float input_divisor) {
             throw std::invalid_argument("native EXL3 weight requires the complete object");
         }
         Weight out;
+        out.device           = region.parent->device;
         out.payload          = region.parent->data;
         out.payload_bytes    = g.bytes;
         out.qtype            = QType::EXL3;

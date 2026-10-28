@@ -46,7 +46,7 @@ target_sources(ninfer_ops PRIVATE
 # Public wrappers for the same no-counterpart ops.
 foreach(_f IN ITEMS
     prepare_ragged_prefix.cpp prepare_masked_block.cpp vision_pos_embed.cpp
-    gdn_gating.cpp)
+    gdn_gating.cpp gdn_input_proj_exl3.cpp)
   target_sources(ninfer_ops PRIVATE "${NINFER_OPS_DIR}/wrapper/${_f}")
 endforeach()
 

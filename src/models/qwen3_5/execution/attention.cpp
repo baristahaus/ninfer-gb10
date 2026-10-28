@@ -1,5 +1,6 @@
 #include "models/qwen3_5/execution/attention.h"
 
+#include "ninfer/ops/attn_input_proj.h"
 #include "ninfer/ops/linear_split.h"
 #include "ninfer/ops/rope.h"
 
@@ -21,6 +22,12 @@ void require_rope_axes(const Tensor& positions, const RopeConfig& config) {
 
 std::size_t attention_projection_workspace_bytes(const AttentionProfile& parameters,
                                                  std::int32_t first, std::int32_t last) {
+    if (const auto& first_profile = parameters.projection.first;
+        !parameters.projection.second && first_profile.qtype == QType::EXL3) {
+        return ops::attn_input_proj_workspace_capacity_bytes(first_profile.qtype, first_profile.n,
+                                                             first_profile.k, first_profile.policy,
+                                                             first, last);
+    }
     return ops::linear_split_workspace_capacity_bytes(parameters.projection,
                                                       parameters.projection_rows, first, last);
 }
@@ -28,6 +35,12 @@ std::size_t attention_projection_workspace_bytes(const AttentionProfile& paramet
 void attention_projection(const Tensor& hidden, const AttentionParameters& parameters,
                           Tensor& query, Tensor& gate, Tensor& key, Tensor& value,
                           MemoryArena& workspace, CudaExecutionView execution) {
+    if (const auto* single = std::get_if<LinearParameters>(&parameters.projection);
+        single != nullptr && single->weight.qtype == QType::EXL3) {
+        ops::attn_input_proj(hidden, single->weight, query, gate, key, value, single->policy,
+                             workspace, execution.stream());
+        return;
+    }
     std::array outputs{query, key, gate, value};
     ops::linear_split(hidden, parameters.projection, outputs, workspace, execution);
 }

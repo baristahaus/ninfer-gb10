@@ -209,7 +209,17 @@ WorkspaceSpec build_workspace_plan(const SequencePlanImpl& plan) {
                     scratch(layout, ops::gdn_norm_control_proj_workspace_capacity_bytes(
                                         gdn.control, first, last));
                     (void)workspace::gdn_projection(layout, config, last);
-                    if (path == GdnWorkspacePath::Snapshot) {
+                    const bool exl3_gdn = !gdn.projection.second &&
+                                          gdn.projection.first.qtype == QType::EXL3;
+                    if (path == GdnWorkspacePath::Snapshot && exl3_gdn) {
+                        // The decomposed EXL3 decode route: the dense EXL3 projection into
+                        // one qkv plane, then the standalone batched causal conv into a
+                        // second plane whose row ranges become the split outputs.
+                        (void)workspace::gdn_prefill_conv(layout, config, max_width);
+                        (void)workspace::gdn_prefill_conv(layout, config, max_width);
+                        scratch(layout, execution::gdn_projection_workspace_bytes(
+                                            gdn, min_width, max_width));
+                    } else if (path == GdnWorkspacePath::Snapshot) {
                         scratch(layout, execution::gdn_snapshot_workspace_bytes(
                                             gdn, batch_size, min_width, max_width));
                     } else if (path == GdnWorkspacePath::ReplayRecord) {

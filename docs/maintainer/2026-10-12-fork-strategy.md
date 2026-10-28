@@ -264,6 +264,12 @@ what "correct" means.
 - No speculative Qwen-4 code; readiness is architectural, not implemented (section 5).
 - Multi-GPU and multi-node happen only per the phase gates and with explicit contract revisions
   (section 8).
+- **Merge cadence (ratified 2026-10-27).** The work frontier merges into `master` at stable
+  points — gates green, serving verified — as ordinary master-line merges; the frontier is never
+  rebased against upstream, and upstream merges land only through an explicit integration task
+  (the 2026-10-27 243-commit integration of the EXL3/tiering/telemetry/SP-2 line is the model:
+  golden-recorded gates before and after, one merge commit per frontier). Published side branches
+  (`5090-test`, `gb10-field-report`) stay as records; `master` is their superset once absorbed.
 - This document authorizes no implementation; each package requires task-level authorization and
   updates the affected active authorities (`AGENTS.md`, the maintainer references) as part of its
   execution, not after.

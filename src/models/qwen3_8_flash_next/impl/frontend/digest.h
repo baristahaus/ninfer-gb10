@@ -1,20 +1,13 @@
 #pragma once
 
-#include <array>
-#include <cstdint>
-#include <functional>
-#include <span>
-#include <string>
-#include <string_view>
+// The SHA-256 digest helpers are family-neutral: the common Qwen implementation is the single
+// source, re-exported under this family's private namespace.
+#include "models/common/qwen/frontend/digest.h"
 
 namespace ninfer::models::qwen3_8_flash_next::frontend_internal {
 
-using Sha256Digest = std::array<std::uint8_t, 32>;
-
-[[nodiscard]] Sha256Digest sha256(std::span<const std::uint8_t> input);
-[[nodiscard]] Sha256Digest sha256(std::span<const std::uint8_t> input,
-                                  const std::function<void()>& checkpoint);
-[[nodiscard]] Sha256Digest sha256(std::string_view input);
-[[nodiscard]] std::string sha256_hex(const Sha256Digest& digest);
+using qwen::frontend::Sha256Digest;
+using qwen::frontend::sha256;
+using qwen::frontend::sha256_hex;
 
 } // namespace ninfer::models::qwen3_8_flash_next::frontend_internal

@@ -14,6 +14,38 @@ probes on the 5090 box (CUDA 13.4.92); the `/nfs` checkpoint is now mounted on
 the 5090 box (verified 2026-10-15), so the PLE facts below are first-hand reads
 from the shards and both model cards.
 Tracking: beads `ninfer-gb10-<id>` (created with this plan).
+
+Status reconciliation and remaining-effort evaluation (2026-10-28, master at
+074a6aa5): the 2026-10-27 work-line integration carried the kernel routes to
+`master` — A4's MXFP8 tiled-MMA and linear routes with the GDN gating fix
+(8c66f403, `src/ops/softmax_attention/kernels/causal/mxfp8_tiled_mma.cuh`,
+`src/ops/linear/mxfp8/`), B3's W4A16 MTP bank route
+(`src/ops/sparse_moe/flash_next/flash_next_nvfp4_w4a16.cuh`) and the QAD
+converter module (`tools/convert/qwen3_8_flash_next_125b_a6b/qad_convert.py`);
+the verified QAD-native artifact sits in `out/` (98.6 GiB, §9 record). A4 and B3
+are therefore closed on `master`; the stale status line above names them as
+remaining. What actually remains on `master`:
+
+- E2c binder: `bind_ple_table` still refuses everything but the FP8 table
+  ("PLE requires a complete raw FP8 table",
+  `src/models/qwen3_8_flash_next_125b_a6b/impl/load_plan.cpp`); the recipe-
+  dependent NVFP4 ~90 B/row route exists on `5090-test` (449edc04) and is a
+  mechanical port. 0.5–1 d, low.
+- E2d kernels: the PLE consumer contract
+  (`src/models/qwen3_8_flash_next/impl/ple_stage.h`) stages kPleEmbeddingDim
+  FP8 bytes per token; the NVFP4 decode-in-gather vs new-gather-kernel decision
+  is still open exactly as §6 states it. 1.5–2.5 d, low-medium.
+- E2e oracle: the NVFP4 group-16 decode at real row shapes. 0.5–1 d, low.
+- D serving evidence on the QAD-native artifact (perplexity, acceptance, TEB
+  battery on GB10). 1–2 d, low.
+- F (MTP draft realignment by distillation, §11): not started; ~1 week,
+  dominated by the training runs, and it should be re-scoped only after the
+  native route serves so the misalignment is measured on the served artifact.
+
+Remaining to a servable QAD-native artifact: **~3.5–6.5 working days**, with E2d
+the only nontrivial design decision left; no gating unknown. F is a separate
+follow-on decision (~1 week) and stays gated on that serving milestone.
+
 Origin of the request: `/nfs` checkpoint
 `edp1096/Huihui-Qwen3.8-Flash-Next-abliterated-NVFP4-QAD` (93 GB) — a Qwen3.8
 Flash-Next 125B-A6B of a different training lineage (the LIL QAD student,

@@ -190,28 +190,40 @@ Reference bind_ple_table(artifact::Binder& binder, const std::string& name) {
     const auto& binding = binder.reader().directory().bindings.at(name);
     const artifact::Shape shape{320001536, 160};
     if (!binding.whole_object || binding.parts.size() != 1) {
-        throw artifact::ArtifactError("PLE requires a complete raw FP8 table");
+        throw artifact::ArtifactError("PLE requires a complete raw table object");
     }
     const auto& object = binder.reader().directory().tensor(binding.parts.front().object);
     binder.reader().validate_object(binding.parts.front().object);
-    if (object.shape != shape || object.format != "fp8_e4m3fn" ||
-        object.layout != "contiguous_le_v1") {
+    const bool fp8_table = object.format == "fp8_e4m3fn" && object.layout == "contiguous_le_v1";
+    const bool nvfp4_table = object.format == "nvfp4" && object.layout == "block_scale_k16_v1";
+    if (object.shape != shape || (!fp8_table && !nvfp4_table)) {
         throw artifact::ArtifactError("PLE table representation is invalid");
     }
+    // The row count and hash constants are family constants; the stored row format
+    // is recipe-dependent (FP8 160 B/row vs NVFP4 90 B/row + scale_2).
     return {name, shape, binding, artifact::Residency::Host};
 }
 
 PlePlan bind_ple(artifact::Binder& binder, const std::string& prefix) {
-    PlePlan out{
-        .convolution      = device(binder, prefix + "conv1d.weight", QType::BF16, {4, 10240}),
-        .key_projection   = device(binder, prefix + "key_proj.weight", QType::BF16, {10240, 2560}),
-        .convolution_norm = device(binder, prefix + "norm_conv.weight", QType::BF16, {10240}),
-        .key_norm         = device(binder, prefix + "norm_key.weight", QType::BF16, {10240}),
-        .query_norm       = device(binder, prefix + "norm_query.weight", QType::BF16, {10240}),
-        .value_projection = device(binder, prefix + "value_proj.weight", QType::BF16, {2560, 2560}),
-        .embedding_scale =
-            device(binder, prefix + "ple_embedding.ngram_embedding.weight_scale", QType::BF16, {1}),
-    };
+    const auto& bindings = binder.reader().directory().bindings;
+    const std::string table_name = prefix + "ple_embedding.ngram_embedding.weight";
+    const bool nvfp4_table =
+        binder.reader().directory().tensor(bindings.at(table_name).parts.front().object)
+            .format == "nvfp4";
+    PlePlan out{};
+    if (!nvfp4_table) {
+        // Vendor FP8 recipes carry the table scale as its own object; the NVFP4
+        // recipe's scale_2 word lives in the table payload.
+        out.embedding_scale = device(
+            binder, prefix + "ple_embedding.ngram_embedding.weight_scale", QType::BF16, {1});
+    }
+    out.nvfp4_table = nvfp4_table;
+    out.convolution      = device(binder, prefix + "conv1d.weight", QType::BF16, {4, 10240});
+    out.key_projection   = device(binder, prefix + "key_proj.weight", QType::BF16, {10240, 2560});
+    out.convolution_norm = device(binder, prefix + "norm_conv.weight", QType::BF16, {10240});
+    out.key_norm         = device(binder, prefix + "norm_key.weight", QType::BF16, {10240});
+    out.query_norm       = device(binder, prefix + "norm_query.weight", QType::BF16, {10240});
+    out.value_projection = device(binder, prefix + "value_proj.weight", QType::BF16, {2560, 2560});
     out.embedding_table = bind_ple_table(binder, prefix + "ple_embedding.ngram_embedding.weight");
     return out;
 }

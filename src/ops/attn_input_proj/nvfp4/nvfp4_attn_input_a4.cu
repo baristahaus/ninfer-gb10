@@ -3,8 +3,8 @@
 
 #include "core/device.h"
 #include "ops/attn_input_proj/nvfp4/nvfp4_attn_input_output.cuh"
-#include "ops/linear/nvfp4/nvfp4_schedule.cuh"
-#include "ops/linear/nvfp4/nvfp4_template_launch.cuh"
+#include "ops/linear/kernels/nvfp4/nvfp4_schedule.cuh"
+#include "ops/linear/kernels/nvfp4/nvfp4_template_launch.cuh"
 #include "ops/attn_input_proj/nvfp4/nvfp4_attn_input_a4_tma_launch.h"
 
 #include <cuda_bf16.h>

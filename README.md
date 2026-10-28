@@ -35,9 +35,14 @@ GB10-specific work does not land upstream.
 
 ### The family peer
 
-`lkarlslund/ninfer` (now `ninfer6000`) is the Flash-Next peer line. We port its
-Flash-Next advances selectively and push draft branches back to it. This exchange
-carries more value than the upstream exchange.
+`lkarlslund/ninfer` (archived as `ninfer6000` in late 2026) was the Flash-Next peer
+line; this fork's Flash-Next work descends from it. Its successor is
+[`quench6k`](https://github.com/lkarlslund/quench6k), a separate Rust/CUDA engine
+serving the same Qwen3.8 Flash-Next model on the RTX PRO 6000. The exchange
+continues at the design and evidence level: C++ patches no longer carry across
+codebases, so shared findings (bug reports, measurement methodology, format
+facts) are the currency, and Flash-Next fixes we find are offered to both
+`quench6k` and `Neroued/ninfer`.
 
 ### Where the work lives
 

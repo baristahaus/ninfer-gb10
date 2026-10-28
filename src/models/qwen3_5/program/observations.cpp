@@ -48,7 +48,7 @@ RankMemoryUsage RankProgramImpl::observe_resources() const {
         summary.handoff_offset_bytes   = vision.handoff_offset_bytes;
         summary.handoff_capacity_bytes = vision.handoff_capacity_bytes;
         summary.handoff_active_bytes   = handoff;
-        summary.handoff_peak_bytes     = vision_peak;
+        summary.handoff_peak_bytes     = std::max(vision_lifetime_peak, vision_peak);
     }
     if (resources.moe) {
         const auto& plan = resources.moe->description();
@@ -84,7 +84,8 @@ void RankProgramImpl::reset_measurement_peaks() noexcept {
     workspace_lifetime_peak =
         std::max({workspace_lifetime_peak, resources.work.peak_used(), workspace_peak});
     resources.work.reset_peak();
-    vision_peak = 0;
+    vision_lifetime_peak = std::max(vision_lifetime_peak, vision_peak);
+    vision_peak          = 0;
     for (const auto& residency : residencies)
         if (residency.vision)
             vision_peak = std::max(vision_peak, residency.vision->active_handoff_bytes());

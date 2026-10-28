@@ -218,9 +218,11 @@ private:
     void sample_resources(bool force) {
         auto& snapshot = this->observations_[0];
         const auto now = observation_time_ns();
-        if (!force && now - snapshot.stamp.sampled_ns < kResourceSamplePeriodNs) return;
+        // The program observation is cheap and carries the measurement peaks; only the
+        // physical device sample keeps its period.
         snapshot.memory = worker_->program().observe_resources();
         snapshot.host   = host_;
+        if (!force && now - snapshot.stamp.sampled_ns < kResourceSamplePeriodNs) return;
         if (force || !pool_.in_flight())
             snapshot.physical_memory = sample_physical_memory(worker_->device());
         snapshot.stamp       = {snapshot.stamp.sequence + 1, now};

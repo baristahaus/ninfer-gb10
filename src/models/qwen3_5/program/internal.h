@@ -166,6 +166,8 @@ public:
     qwen::VisionHandoffState vision_handoff;
     std::size_t workspace_peak = 0;
     std::size_t vision_peak    = 0;
+    // Handoff peak folded across measurement resets; the within-step peak clears below.
+    std::size_t vision_lifetime_peak = 0;
     std::unique_ptr<ComputeOperation> compute;
     CudaCompletionEvent result_ready;
     CudaCompletionEvent drafts_ready;

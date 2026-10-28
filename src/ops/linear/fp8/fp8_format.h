@@ -18,8 +18,4 @@ struct Fp8WeightGeometry {
 
 Fp8WeightGeometry validate_fp8_weight(const Weight& weight, const char* operation);
 
-inline bool mxfp8_block_weight(const Weight& weight) {
-    return weight.qtype == QType::MXFP8 && weight.layout == QuantLayout::DenseBlockScaleK32Mxfp8;
-}
-
 } // namespace ninfer::ops::detail

@@ -64,6 +64,9 @@ struct SpeculativeOptions {
     // Startup-fixed K: MTP 1..5; DFlash and DFlash2 1..15 (query width K+1).
     std::uint32_t draft_tokens = 0;
     ProposalHead proposal_head = ProposalHead::Full;
+    // Truncate the optimized proposal head to its first N frequency-ranked rows
+    // (0 = artifact default). Flash-Next MTP only.
+    std::uint32_t proposal_head_rows = 0;
 };
 
 enum class StartupPhase : std::uint8_t {
@@ -175,6 +178,21 @@ struct MemorySummary {
     std::size_t host_kv_occupied_bytes            = 0;
 };
 
+// SP-4 phase 2b: per-expert activation counts accumulated by the MoE routing stages since
+// Engine construction. One entry per routed-expert MoE layer, in execution order.
+struct MoeActivationProfileLayer {
+    // The layer's component path, matching the routed bank object names: "text/layers/7" for
+    // the banks "text/layers/7/moe/routed_gate_up" and "text/layers/7/moe/routed_down", or
+    // "mtp/layer" for the MTP banks.
+    std::string component;
+    // One count per routed expert, in expert id order.
+    std::vector<std::uint32_t> counts;
+};
+
+struct MoeActivationProfile {
+    std::vector<MoeActivationProfileLayer> layers;
+};
+
 struct ContextCostOptions {
     // Empty selects generic defaults plus any matching values compiled into the binary. A
     // nonempty runtime preset independently overrides its matching machine transfer and
@@ -200,6 +218,8 @@ struct EngineOptions {
     std::optional<DeploymentOptions> deployment;
     std::filesystem::path artifact_path;
     std::filesystem::path chat_template_path;
+    // Retained compiled output-constraint grammars per model. Grammars still referenced by an
+    // active request outlive eviction, so this bounds the cache, not total process memory.
     std::size_t grammar_cache_bytes    = 256ULL * 1024 * 1024;
     EnginePurpose purpose              = EnginePurpose::Generation;
     int device                         = 0;
@@ -635,6 +655,7 @@ enum class RequestErrorSource : std::uint8_t { OutputConstraint, Tools };
 
 class RequestError final : public std::invalid_argument {
 public:
+    // pointer is a JSON Pointer into the offending schema source when one applies.
     RequestError(RequestErrorKind kind, std::string message, std::string pointer = {},
                  RequestErrorSource source = RequestErrorSource::OutputConstraint)
         : std::invalid_argument(std::move(message)), kind_(kind), pointer_(std::move(pointer)),
@@ -987,6 +1008,7 @@ struct GenerationResult {
     PrefixReusePath prefix_reuse_path  = PrefixReusePath::Root;
     MaterializationDiagnostics materialization;
     SpeculativeStats speculative;
+
 };
 
 } // namespace ninfer

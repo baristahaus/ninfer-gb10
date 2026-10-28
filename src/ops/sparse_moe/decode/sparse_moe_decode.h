@@ -27,21 +27,32 @@ struct SparseMoeDecodeWorkspace {
     Tensor alpha;
     Tensor shared_scale;
     Tensor scratch;
+    // SP-7 EXL3 (single-token decode route): the gate/up inner-product vectors D3a leaves
+    // for D4a's output transforms, and the per-path down results D4a stages for D4b's
+    // block-diagonal output transform, route-weighted sum and residual epilogue.
+    Tensor exl3_z;
+    Tensor exl3_down;
 };
 
 template <class Arena>
-SparseMoeDecodeWorkspace allocate_sparse_moe_decode_workspace(Arena& arena) {
+SparseMoeDecodeWorkspace allocate_sparse_moe_decode_workspace(Arena& arena, bool exl3 = false) {
     SparseMoeDecodeWorkspace out;
     out.ids          = arena.alloc(DType::I32, {8}, 16);
     out.alpha        = arena.alloc(DType::FP32, {8}, 16);
     out.shared_scale = arena.alloc(DType::FP32, {1}, 4);
     // D1 uses the first 257 values as scores. D3 then reuses the same lifetime for [9,512]
-    // natural FP32 SwiGLU results consumed by D4.
+    // natural FP32 SwiGLU results consumed by D4. On the EXL3 route only the shared expert
+    // writes its activation slot here; the routed experts transform inside D4a.
     out.scratch = arena.alloc(DType::FP32, {9, 512}, 256);
+    if (exl3) {
+        out.exl3_z    = arena.alloc(DType::FP32, {8, 2, 512}, 256);
+        out.exl3_down = arena.alloc(DType::FP32, {9, 2048}, 256);
+    }
     return out;
 }
 
 [[nodiscard]] std::size_t sparse_moe_decode_workspace_bytes();
+[[nodiscard]] std::size_t sparse_moe_exl3_decode_workspace_bytes();
 [[nodiscard]] SparseMoeDecodePlan resolve_sparse_moe_decode_plan(QType routed_gate_up,
                                                                  QType routed_down,
                                                                  const SparseMoeHints& hints = {});

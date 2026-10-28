@@ -88,6 +88,12 @@ enum class LinearPolicy : std::uint8_t {
  * policy permits private A16/A8/A4 computation; input and output remain BF16. Permission
  * does not require activation quantization. Workspace is caller-owned transient storage,
  * sized by linear_workspace_capacity_bytes(), disjoint from all operands. No hidden allocation.
+ *
+ * The dense EXL3 route (`exl3_dense_v1` weights, SP-7 contract sections 4 and 7) additionally
+ * admits the 27B dense-route problems `[1024,5120], [5120,6144], [6144,5120], [10240,5120],
+ * [17408,5120], [5120,17408]` at every decode token extent `T in 1..8`, A16 compute under
+ * every policy, with the mcg and mul1 codebooks (3INST banks are refused). Prefill token
+ * extents are unregistered and refused until their route exists.
  */
 void linear(const Tensor& x, const Weight& w, Tensor& out, LinearPolicy policy,
             MemoryArena& workspace, CudaExecutionView execution);

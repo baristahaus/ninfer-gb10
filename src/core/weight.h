@@ -33,8 +33,10 @@ enum class QuantLayout : std::uint16_t {
     RowPagedG16_4K             = 4,
     BatchedBlockScaleK16M128x4 = 5,
     BlockScaleM128K128         = 6,
-    Exl3ExpertBank      = 12,
-    DenseBlockScaleK32Mxfp8 = 13,
+    Exl3ExpertBank             = 12,
+    DenseBlockScaleK32Mxfp8    = 13,
+    Exl3Dense                  = 14,
+    BlockScaleK16              = 15,
 };
 
 struct Weight {
@@ -60,6 +62,26 @@ struct Weight {
     std::int64_t scale_nb[4]   = {0, 0, 0, 0};
     float weight_scale_divisor = 0.0F;
     float input_scale_divisor  = 0.0F;
+
+    // EXL3 expert bank and dense linear (SP-7; QType::EXL3, layouts Exl3ExpertBank and
+    // Exl3Dense). `payload` addresses the complete encoded object; for a bank the per-expert
+    // directory at its start resolves each expert's trellis extent and bitrate at runtime, so
+    // mixed-width banks need no host-side tables; a dense linear is the one-expert case
+    // without a directory (trellis at offset 0, `exl3_experts` = 1). Plane offsets are
+    // payload-relative; the directory entry is {u64 offset, u32 extent, u8 2K, three zero
+    // bytes} per expert.
+    std::uint64_t exl3_trellis_offset = 0;
+    std::uint64_t exl3_suh_offset      = 0;
+    std::uint64_t exl3_svh_offset      = 0;
+    std::uint32_t exl3_codebook        = 0;  // 0 = 3inst, 1 = mcg, 2 = mul1
+    std::uint32_t exl3_experts         = 0;
+    std::uint32_t exl3_rows_per_expert = 0;
+    // Row-sliced dense views (SP-7 fused mixers): `exl3_row_stride` is the parent's n
+    // (0 = this weight's own n, an unsliced complete object) and `exl3_k2` is the
+    // explicit bitrate (0 = resolve from the dense extent at launch; a slice's byte
+    // extent does not determine it). svh addresses shift by the slice's row begin.
+    std::uint32_t exl3_k2         = 0;
+    std::uint32_t exl3_row_stride = 0;
 };
 
 } // namespace ninfer

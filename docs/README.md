@@ -50,7 +50,10 @@ other references own narrower contracts:
 | [Engine architecture](maintainer/engine-architecture.md) | model/config/weight ownership, loading-to-execution flow, requests, scheduling, transactions and graphs |
 | [Build system](maintainer/build-system.md) | CMake targets, explicit source ownership, CUDA compilation boundaries, presets and developer configuration |
 | [Artifact container](maintainer/artifact-container.md) | v3 directory, objects, logical bindings, Uses, resources and file framing/sharding |
-- `maintainer/exl3-trellis-contract.md`: the EXL3 trellis codec contract (SP-7) — the exllamav3-compatible format, the codec and SparseMoe oracles, the container extension, variable-extent expert tiering, the converter routes, kernel contracts, acceptance, and the delegation boundary.
+ - `maintainer/exl3-trellis-contract.md`: the EXL3 trellis codec contract (SP-7) — the exllamav3-compatible format, the codec and SparseMoe oracles, the container extension, variable-extent expert tiering, the converter routes, kernel contracts, acceptance, and the delegation boundary.
+- `maintainer/2026-10-21-q38fn-exl3-campaign-plan.md`: the closed plan for the Flash-Next 125B EXL3 banks campaign — the shape-readiness sweep, streaming procedure, cost basis and acceptance gates.
+- `maintainer/2026-10-24-exl3-effort-report.md`: the closing record of the SP-7 EXL3/Trellis effort — accepted routes and numbers, decisions, and the parked next steps.
+- `maintainer/2026-10-24-agent-cache-tiering-design.md`: the active design for session-scoped retention and the state spill tier (agent-class cache economics).
 | [Numeric formats](maintainer/tensor-formats.md) | represented values, codes/scales, conversion arithmetic and numerical interpretation |
 | [Storage layouts](maintainer/storage-layouts.md) | packing, plane offsets, padding, encoded sizes and view addressing |
 | [Qwen3.5 model](maintainer/qwen3_5-model.md) | Dense/MoE mathematics, instance config, logical parameters, MTP, Vision and state semantics |

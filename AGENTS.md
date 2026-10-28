@@ -410,8 +410,8 @@ These are conventional project resources, not a checklist of resources every tas
 | repository | current checkout |
 | Python 3.11 | `python3` in the selected maintainer environment |
 | BF16 source checkpoint | explicit local checkpoint directory |
-| product artifact | `out/qwen3_6_27b.ninfer` |
-| conversion report | `out/qwen3_6_27b.ninfer.conversion.json` |
+| product artifact | `out/qwen3_8_27b_exl3.ninfer` (accepted EXL3 dense route); `out/qwen3_8_27b.ninfer` (symlink to the serving artifact) |
+| conversion report | `out/qwen3_8_27b_exl3.ninfer.conversion.json` |
 | normal build | `build/` |
 | profiler output | `profiles/ncu/`, `profiles/nsys/`, `profiles/bench/` |
 | hardware/toolchain | RTX 5090 (32 GiB VRAM + 123 GiB host RAM — the local box, tiered lane), `sm_120a` (default); GB10 (Grace Blackwell), `sm_121a` (native lane); CUDA 13.4.92 |
@@ -427,8 +427,8 @@ do not download or regenerate them unless that work is in scope.
 
 ```bash
 PYTHON=python3
-MODEL=/path/to/Qwen3.6-27B
-NINFER_WEIGHTS=out/qwen3_6_27b.ninfer
+MODEL=/path/to/Qwen3.8-27B
+NINFER_WEIGHTS=out/qwen3_8_27b_exl3.ninfer
 ```
 
 ## Commits

@@ -17,6 +17,29 @@ struct SparseMoeWeights {
     Weight routed_down;
     Weight shared_gate_up;
     Weight shared_down;
+    // Expert tiering (strategy SP-4 phase 2a). Routed experts below `tiered_hot_experts` read
+    // their rows from the device banks above; experts at or above the boundary read from the
+    // pinned-host warm twins, packed in expert order starting at the first non-hot expert.
+    // `tiered_hot_experts == 0` marks an untiered bank: every expert reads the device bank and
+    // the warm twins stay null, preserving the single-bank path bit-for-bit.
+    Weight warm_routed_gate_up;
+    Weight warm_routed_down;
+    std::uint32_t tiered_hot_experts = 0;
+    // SP-4 phase 2b: when non-null, the routing stage accumulates one count per selected
+    // expert per token into this device buffer (256 counters per MoE layer); null preserves
+    // the exact existing behavior.
+    std::uint32_t* expert_activations = nullptr;
+    // SP-4 phase 2b: per-expert residency (256 entries per MoE layer): bit 31 marks the warm
+    // tier, the low bits are the expert's compacted rank in its bank. Null selects the
+    // untiered direct path where every expert reads the device banks at its own rank.
+    const std::uint32_t* expert_residency = nullptr;
+    // SP-7 EXL3: gate and up are separate banks (one fused weight cannot carry two input-side
+    // vectors). A non-null `exl3_routed_gate.payload` marks the EXL3 route: `routed_gate_up`
+    // and the warm twins stay null, `routed_down` carries the EXL3 down bank, and every
+    // routed projection carries its own transforms. The route is untiered until the SP-4
+    // variable-extent change (contract section 5).
+    Weight exl3_routed_gate;
+    Weight exl3_routed_up;
 };
 
 enum class SparseMoeEpilogue : std::uint8_t {

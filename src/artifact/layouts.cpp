@@ -120,6 +120,82 @@ struct DirectoryEntry {
 
 } // namespace
 
+WeightGeometry describe_exl3_dense(const TensorObject& object,
+                                   std::array<std::byte, 4> codebook_word) {
+    try {
+        if (parse_format(object.format) != QType::EXL3 ||
+            parse_layout(object.layout) != QuantLayout::Exl3Dense) {
+            throw std::invalid_argument("object is not an exl3_dense_v1");
+        }
+        if (object.shape.size() != 2) {
+            throw std::invalid_argument("EXL3 dense linear must be rank 2 [N, K]");
+        }
+        const auto rows = object.shape[0];
+        const auto k    = object.shape[1];
+        if (rows % 128 != 0 || k % 128 != 0) {
+            throw std::invalid_argument("EXL3 dense linear requires N and K divisible by 128");
+        }
+        const auto codebook = read_u32_le(codebook_word.data());
+        if (codebook > 2) {
+            throw std::invalid_argument("unknown EXL3 codebook id " + std::to_string(codebook));
+        }
+        // The object's byte size is align256(k·n·K/8) + 2·(k + n) + 4. Admissible bitrates
+        // differ by n·k/16 bytes (at least 1024), far above the 256-byte trellis alignment,
+        // so at most one 2K in 2…16 reproduces the size.
+        const auto tail_bytes = add64(mul64(add64(k, rows), 2), 4);
+        if (object.bytes < tail_bytes) {
+            throw std::invalid_argument("EXL3 dense linear byte size is below its fixed planes");
+        }
+        std::uint32_t found = 0;
+        std::uint64_t trellis_bytes = 0;
+        std::uint32_t k2 = 0;
+        for (std::uint32_t candidate = 2; candidate <= 16; ++candidate) {
+            // Half-integer rates are 1.5, 2.5 and 3.5 only (contract section 2.4).
+            if (candidate % 2 != 0 && candidate != 3 && candidate != 5 && candidate != 7) {
+                continue;
+            }
+            const auto extent = align256(mul64(mul64(k, rows), candidate) / 16);
+            if (add64(extent, tail_bytes) != object.bytes) { continue; }
+            if (found != 0) {
+                throw std::invalid_argument("ambiguous EXL3 dense bitrate");
+            }
+            found        = candidate;
+            trellis_bytes = extent;
+            k2            = candidate;
+        }
+        if (found == 0) {
+            throw std::invalid_argument(
+                "EXL3 dense linear byte size matches no admissible bitrate");
+        }
+        if (k2 % 2 != 0 && codebook != 2) {
+            throw std::invalid_argument("half-integer EXL3 bitrate requires the mul1 codebook");
+        }
+        Exl3BankGeometry bank;
+        bank.codebook        = codebook;
+        bank.trellis_offset  = 0;
+        bank.trellis_bytes   = trellis_bytes;
+        bank.suh_offset      = trellis_bytes;
+        bank.suh_bytes       = mul64(k, 2);
+        bank.svh_offset      = add64(bank.suh_offset, bank.suh_bytes);
+        bank.svh_bytes       = mul64(rows, 2);
+        bank.experts         = 1;
+        bank.rows_per_expert = static_cast<std::uint32_t>(rows);
+        bank.trellis_extents = {trellis_bytes};
+        bank.k2              = {k2};
+        WeightGeometry geometry;
+        geometry.format    = QType::EXL3;
+        geometry.layout    = QuantLayout::Exl3Dense;
+        geometry.shape     = object.shape;
+        geometry.elements  = mul64(rows, k);
+        geometry.bytes     = object.bytes;
+        geometry.alignment = 256;
+        geometry.exl3      = std::move(bank);
+        return geometry;
+    } catch (const std::exception& error) {
+        throw ArtifactError(object.id + ": " + error.what());
+    }
+}
+
 WeightGeometry describe_tensor(const TensorObject& object) {
     try {
         auto geometry =

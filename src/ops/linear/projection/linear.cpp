@@ -8,6 +8,9 @@
 #include "ops/linear/projection/q5/q5_dispatch.h"
 #include "ops/linear/projection/q6/q6_dispatch.h"
 #include "ops/linear/projection/q8/q8_dispatch.h"
+#include "ops/linear/exl3/exl3_dense_dispatch.h"
+#include "ops/linear/exl3/exl3_prefill.h"
+#include "ops/linear/mxfp8/mxfp8_dispatch.h"
 
 #include <cstdint>
 #include <limits>
@@ -102,6 +105,43 @@ void dispatch_linear(const Tensor& x, const Weight& w, Tensor& out, LinearPolicy
     case QType::FP8_E4M3FN_ROW_BF16:
         detail::fp8_dispatch(x, w, out, policy, workspace, stream);
         return;
+    case QType::EXL3:
+        if (w.layout != QuantLayout::Exl3Dense) {
+            throw std::invalid_argument("linear: EXL3 weights route through their consumers");
+        }
+        if (out.ne[1] <= 8) {
+            detail::exl3_dense_dispatch(x, w, out, workspace, stream);
+            return;
+        }
+        // Prefill composition (SP-7): decode with the output-side Hadamard and svh
+        // folded, transform the activation with the input-side Hadamard and suh, and run
+        // the registered BF16 linear route.
+        {
+            const std::int32_t n = w.n;
+            const std::int32_t k = w.k;
+            auto scope = workspace->scope();
+            const auto prime_span =
+                workspace->alloc_bytes(static_cast<std::size_t>(n) * static_cast<std::size_t>(k) * 2,
+                                       256);
+            const auto u_span = workspace->alloc_bytes(
+                static_cast<std::size_t>(k) * static_cast<std::size_t>(out.ne[1]) * 2, 256);
+            Tensor prime(prime_span.data, DType::BF16, {n, k});
+            Tensor u(u_span.data, DType::BF16, {k, out.ne[1]});
+            detail::exl3_prefill_dequant(w, prime, stream);
+            detail::exl3_prefill_transform(x, w, u, stream);
+            Weight dense;
+            dense.qtype = QType::BF16;
+            dense.layout = QuantLayout::Contiguous;
+            dense.ndim = 2;
+            dense.n = dense.shape[0] = dense.padded_shape[0] = n;
+            dense.k = dense.shape[1] = dense.padded_shape[1] = k;
+            dense.qdata = prime.data;
+            detail::bf16_dispatch(u, dense, out, policy, stream);
+            return;
+        }
+    case QType::MXFP8:
+        detail::mxfp8_dispatch(x, w, out, policy, workspace, stream);
+        return;
     case QType::FP32:
     case QType::INT32:
         break;
@@ -146,6 +186,28 @@ std::size_t linear_workspace_capacity_bytes(QType qtype, std::int32_t output_row
     case QType::FP8_E4M3FN_ROW_BF16:
         return detail::fp8_linear_workspace_capacity_bytes(output_rows, input_rows, policy,
                                                            min_tokens, max_tokens);
+    case QType::EXL3: {
+        if (output_rows % 128 != 0 || input_rows % 128 != 0) {
+            throw std::invalid_argument("linear workspace: EXL3 dense requires 128-multiples");
+        }
+        if (!detail::exl3_dense_registered(output_rows, input_rows)) {
+            throw std::invalid_argument("linear workspace: unregistered EXL3 dense problem " +
+                                        std::to_string(output_rows) + "x" +
+                                        std::to_string(input_rows));
+        }
+        std::size_t bytes = detail::exl3_dense_workspace_bytes(
+            output_rows, input_rows, std::min(max_tokens, 8));
+        if (max_tokens > 8) {
+            // The prefill composition: the decoded W'[n, k] and u[k, T] planes plus the
+            // transformed-input GEMM; the registered BF16 route takes no transient bytes.
+            bytes = std::max(bytes, detail::exl3_prefill_workspace_bytes(output_rows, input_rows,
+                                                                         max_tokens));
+        }
+        return bytes;
+    }
+    case QType::MXFP8:
+        return detail::mxfp8_linear_workspace_capacity_bytes(output_rows, input_rows, policy,
+                                                             min_tokens, max_tokens);
     case QType::FP32:
     case QType::INT32:
         break;

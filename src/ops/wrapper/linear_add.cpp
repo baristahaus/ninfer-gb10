@@ -1,6 +1,8 @@
 #include "core/weight.h"
 #include "ninfer/ops/linear_add.h"
 
+#include "ninfer/ops/residual_add.h"
+
 #include "ops/linear_add/bf16/bf16_linear_add_plan.h"
 #include "ops/linear/fp8/fp8_geometry.h"
 #include "ops/linear/fp8/fp8_format.h"
@@ -115,6 +117,15 @@ std::size_t linear_add_workspace_capacity_bytes(QType qtype, std::int32_t output
         return detail::q5_linear_add_capacity_workspace_bytes(output_rows, input_rows, input_rows,
                                                               min_tokens, max_tokens);
     }
+    if (qtype == QType::EXL3) {
+        if (output_rows % 128 != 0 || input_rows % 128 != 0) {
+            throw std::invalid_argument("linear_add workspace: EXL3 requires 128-multiples");
+        }
+        // The composed route's capacity plus the transient [n, T] delta.
+        return ops::linear_workspace_capacity_bytes(QType::EXL3, output_rows, input_rows, policy,
+                                                    min_tokens, max_tokens) +
+               static_cast<std::size_t>(output_rows) * static_cast<std::size_t>(max_tokens) * 2;
+    }
     if (qtype == QType::NVFP4) {
         const bool supported = (output_rows == detail::Nvfp4N5120K6144::kOutputRows &&
                                 input_rows == detail::Nvfp4N5120K6144::kInputRows) ||
@@ -154,6 +165,22 @@ void linear_add(const Tensor& x, const Weight& w, Tensor& residual_out, LinearPo
     require_tensor(residual_out, DType::BF16, w.n, t, "residual_out");
     if (overlaps(x, residual_out)) {
         throw std::invalid_argument("linear_add: x and residual_out must not overlap");
+    }
+
+    if (w.qtype == QType::EXL3) {
+        // The dense EXL3 route (SP-7): the projection runs the registered dense decode or
+        // composed prefill route into transient storage, then the registered residual add
+        // completes the fused semantics.
+        if (w.layout != QuantLayout::Exl3Dense) {
+            throw std::invalid_argument("linear_add: EXL3 requires the dense layout");
+        }
+        auto scope = ws.scope();
+        const auto delta_span = ws.alloc_bytes(
+            static_cast<std::size_t>(w.n) * static_cast<std::size_t>(t) * 2, 256);
+        Tensor delta(delta_span.data, DType::BF16, {w.n, t});
+        ops::linear(x, w, delta, policy, ws, stream);
+        ops::residual_add(delta, residual_out, stream);
+        return;
     }
 
     if (w.qtype == QType::BF16) {

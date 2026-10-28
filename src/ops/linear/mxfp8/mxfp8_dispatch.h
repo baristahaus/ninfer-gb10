@@ -17,6 +17,6 @@ std::size_t mxfp8_linear_workspace_capacity_bytes(std::int32_t n, std::int32_t k
                                                   std::int32_t max_tokens);
 
 void mxfp8_dispatch(const Tensor& x, const Weight& weight, Tensor& out, LinearPolicy policy,
-                    WorkspaceArena* workspace, cudaStream_t stream);
+                    MemoryArena* workspace, cudaStream_t stream);
 
 } // namespace ninfer::ops::detail

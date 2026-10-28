@@ -70,6 +70,16 @@ void launch_bf16_mma(const Tensor& x, const Weight& weight, Tensor& out, cudaStr
     NINFER_BF16_MMA(2560, 2560)
     NINFER_BF16_MMA(248320, 2560)
     NINFER_BF16_MMA(117248, 2560)
+    // The dense-route problems (SP-7): the composed EXL3 prefill route's decoded weight
+    // runs the registered BF16 kernels; 14336x5120 and 5120x6144 already register above.
+    NINFER_BF16_MMA(1024, 5120)
+    NINFER_BF16_MMA(2048, 5120)
+    NINFER_BF16_MMA(6144, 5120)
+    NINFER_BF16_MMA(10240, 5120)
+    NINFER_BF16_MMA(16384, 5120)
+    NINFER_BF16_MMA(17408, 5120)
+    NINFER_BF16_MMA(34816, 5120)
+    NINFER_BF16_MMA(5120, 17408)
 #undef NINFER_BF16_MMA
     throw std::invalid_argument("bf16 linear MMA: unsupported exact problem");
 }

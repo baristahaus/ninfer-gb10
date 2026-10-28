@@ -86,6 +86,14 @@ WeightGeometry weight_geometry(QType format, QuantLayout layout,
     out.layout = layout;
     out.shape.assign(shape.begin(), shape.end());
     out.elements = weight_element_count(shape);
+    if (layout == QuantLayout::Exl3ExpertBank || layout == QuantLayout::Exl3Dense) {
+        // Mixed per-expert bitrates make the EXL3 bank's byte size the sum of the experts'
+        // own trellis extents: the geometry resolves directory-aware from the payload
+        // (ninfer::artifact::describe_exl3_bank), never from the shape alone. The dense
+        // linear's single bitrate is likewise resolved from the object's byte size
+        // (ninfer::artifact::describe_exl3_dense).
+        throw std::invalid_argument("EXL3 geometry resolves from the encoded payload");
+    }
     if (layout == QuantLayout::Contiguous) {
         out.bytes = out.code_bytes = mul(out.elements, word_bytes(format));
         if (shape.size() >= 2) {
@@ -306,6 +314,29 @@ Weight native_weight(const WeightView& view, float input_divisor) {
     const auto& g     = region.parent->geometry;
     if (view.shape.size() != 2 || !region.parent->data) {
         throw std::invalid_argument("native Weight requires a resident logical matrix");
+    }
+    if (g.layout == QuantLayout::Exl3ExpertBank || g.layout == QuantLayout::Exl3Dense) {
+        // The EXL3 bank resolves per-expert addresses through its own payload directory at
+        // runtime; the dense linear is the one-expert case without a directory. The native
+        // view is the complete encoded object in both layouts.
+        if (!is_complete_weight(view)) {
+            throw std::invalid_argument("native EXL3 weight requires the complete object");
+        }
+        Weight out;
+        out.payload          = region.parent->data;
+        out.payload_bytes    = g.bytes;
+        out.qtype            = QType::EXL3;
+        out.layout           = g.layout;
+        out.ndim             = 2;
+        out.n = out.shape[0] = out.padded_shape[0] = dimension(view.shape[0]);
+        out.k = out.shape[1] = out.padded_shape[1] = dimension(view.shape[1]);
+        out.exl3_trellis_offset = g.exl3.trellis_offset;
+        out.exl3_suh_offset      = g.exl3.suh_offset;
+        out.exl3_svh_offset      = g.exl3.svh_offset;
+        out.exl3_codebook        = g.exl3.codebook;
+        out.exl3_experts         = g.exl3.experts;
+        out.exl3_rows_per_expert = g.exl3.rows_per_expert;
+        return out;
     }
     Weight out;
     out.device           = region.parent->device;

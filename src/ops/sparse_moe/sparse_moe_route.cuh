@@ -57,9 +57,25 @@ sparse_moe_merge_ranked_runs(SparseMoeRankedValue (&run)[kSparseMoeTopK]) {
     }
 }
 
+// SP-4 phase 2b: the per-expert residency entry. Bit 31 marks the warm tier; the low 31
+// bits are the expert's compacted rank in its bank. A null table selects the untiered
+// direct path: the expert reads the device bank at its own rank.
+__device__ __forceinline__ void sparse_moe_residency(const unsigned* __restrict__ table,
+                                                     int expert, bool& warm, int& rank) {
+    if (table == nullptr) {
+        warm = false;
+        rank = expert;
+        return;
+    }
+    const unsigned entry = table[expert];
+    warm = (entry & 0x80000000u) != 0u;
+    rank = static_cast<int>(entry & 0x7fffffffu);
+}
+
 __device__ __forceinline__ void sparse_moe_select_top8_warp(const float* scores, int* ids,
                                                             float* alpha, float* shared_scale,
-                                                            float* selected_logits) {
+                                                            float* selected_logits,
+                                                            std::uint32_t* expert_activations) {
     const int lane = static_cast<int>(threadIdx.x) & 31;
     SparseMoeRankedValue local[kSparseMoeTopK];
 #pragma unroll
@@ -87,6 +103,11 @@ __device__ __forceinline__ void sparse_moe_select_top8_warp(const float* scores,
         }
     }
     __syncwarp();
+
+    // SP-4 phase 2b: accumulate one count per selected expert when profiling is armed.
+    if (expert_activations != nullptr && lane < kSparseMoeTopK) {
+        atomicAdd(expert_activations + ids[lane], 1u);
+    }
 
     float exponential = 0.0f;
     if (lane < kSparseMoeTopK) { exponential = expf(selected_logits[lane] - selected_logits[0]); }

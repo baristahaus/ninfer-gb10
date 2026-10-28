@@ -174,6 +174,30 @@ std::vector<ReadSpan> plan_reads(std::span<const CopyRange> ranges) {
     return reads;
 }
 
+// The NVFP4 weight divisor word: the last four payload bytes of a swizzled bank matrix.
+float read_divisor(const Reader& reader, ObjectHandle handle, const WeightGeometry& geometry,
+                   std::span<const std::byte> host, MaterializationStats& stats) {
+    if (geometry.format != QType::NVFP4 ||
+        geometry.layout == QuantLayout::BatchedBlockScaleK16M128x4) {
+        return 0.0F;
+    }
+    std::array<std::byte, 4> word{};
+    if (!host.empty()) {
+        std::copy_n(host.data() + geometry.divisor_offset, word.size(), word.data());
+    } else {
+        const auto& object = reader.directory().tensor(handle);
+        reader.read_into(checked_add(object.offset, geometry.divisor_offset, "weight divisor"),
+                         word);
+        stats.read_bytes = checked_add(stats.read_bytes, word.size(), "read bytes");
+    }
+    const auto value = std::bit_cast<float>(read_u32_le(word.data()));
+    if (!std::isfinite(value) || value <= 0) {
+        throw ArtifactError(reader.directory().tensor(handle).id +
+                            ": invalid NVFP4 weight divisor");
+    }
+    return value;
+}
+
 void validate_divisors(std::span<float> values, const std::string& name) {
     for (std::size_t i = 0; i < values.size(); ++i) {
         const auto* word = reinterpret_cast<const std::byte*>(values.data() + i);
@@ -352,6 +376,124 @@ MaterializedArtifact materialize(const Reader& reader, MaterializationPlan&& pla
     place(plan.ordinary_host_objects, out.host_storage_.span().subspan(plan.registered_host_bytes),
           false);
     place(plan.device_objects, out.device_storage_.span(), true);
+    // SP-4 tiered banks: compact hot mini-banks on the device, pinned-host warm mini-banks.
+    // Placed after the plain device objects so the arena's sequential offsets match the plan;
+    // each bank reads once and packs per expert per plane, in the tier permutation's order.
+    for (const auto& tier : plan.tier_objects) {
+        const auto& geometry = reader.geometry(tier.object);
+        if (geometry.format == QType::EXL3) {
+            // Refused at plan time (Binder::set_tier); this is the load-time backstop.
+            throw ArtifactError("tiered EXL3 weights (banks and dense linears) require "
+                                "the SP-4 variable-extent change");
+        }
+        const auto rows    = geometry.shape[0];
+        const auto experts = tier.new_order.size();
+        if (geometry.shape.size() != 2 || rows == 0 || geometry.shape[1] == 0 ||
+            experts == 0 || rows % experts != 0 || tier.hot_experts == 0 ||
+            tier.hot_experts >= experts || geometry.bytes % rows != 0 ||
+            tier.bytes != geometry.bytes / experts * (tier.hot_experts + tier.cache_slots)) {
+            throw ArtifactError(reader.directory().tensor(tier.object).id +
+                                ": tiered placement does not divide into per-expert mini-banks");
+        }
+        if (geometry.layout == QuantLayout::BlockScaleK16M128x4 && rows / experts % 128 != 0) {
+            throw ArtifactError("tiered swizzled-scale split requires 128-row tile alignment");
+        }
+        const auto rows_per_expert = rows / experts;
+        const auto warm_experts    = experts - tier.hot_experts;
+        auto& storage              = out.tensors_.at(tier.object.index);
+        if (storage.device || storage.host || storage.pinned.has_value()) {
+            throw ArtifactError("duplicate tiered placement");
+        }
+        const auto hot_bytes = static_cast<std::size_t>(tier.bytes);
+        std::vector<std::byte> hot_packed(hot_bytes);
+        storage.pinned.emplace(
+            static_cast<std::size_t>(geometry.bytes / experts * warm_experts));
+        const auto staging = reader.read_object(tier.object);
+        out.stats_.read_bytes =
+            checked_add(out.stats_.read_bytes, staging.size(), "tiered read bytes");
+        const auto divisor = read_divisor(reader, tier.object, geometry, staging, out.stats_);
+        // The packed mini-banks: each expert's per-plane block at its compacted slot in the
+        // hot (device) or warm (pinned-host) mini-bank.
+        const std::array<std::pair<std::uint64_t, std::uint64_t>, 3> planes{{
+            {0, geometry.code_bytes_per_row},
+            {geometry.high_offset, geometry.high_bytes_per_row},
+            {geometry.scale_offset, geometry.scale_row_bytes},
+        }};
+        std::uint64_t hot_written  = 0;
+        std::uint64_t warm_written = 0;
+        std::uint64_t hot_plane    = 0;
+        std::uint64_t warm_plane   = 0;
+        for (const auto& [object_offset, per_row] : planes) {
+            if (per_row == 0) { continue; }
+            const auto block = checked_mul(per_row, rows_per_expert, "tiered expert block");
+            for (std::size_t slot = 0; slot < experts; ++slot) {
+                const auto expert   = tier.new_order[slot];
+                const bool warm     = slot >= tier.hot_experts;
+                const auto dst_slot = warm ? slot - tier.hot_experts : slot;
+                const auto source =
+                    checked_add(object_offset, checked_mul(expert, block, "tiered source block"),
+                                "tiered source offset");
+                const auto destination =
+                    checked_add(warm ? warm_plane : hot_plane,
+                                checked_mul(dst_slot, block, "tiered slot block"),
+                                "tiered destination offset");
+                if (warm) {
+                    std::memcpy(static_cast<std::byte*>(storage.pinned->data()) + destination,
+                                staging.data() + source, static_cast<std::size_t>(block));
+                    warm_written = checked_add(warm_written, block, "tiered warm bytes");
+                } else {
+                    std::memcpy(hot_packed.data() + destination, staging.data() + source,
+                                static_cast<std::size_t>(block));
+                    hot_written = checked_add(hot_written, block, "tiered hot bytes");
+                }
+            }
+            hot_plane  = checked_add(
+                hot_plane,
+                checked_mul(block, tier.hot_experts + tier.cache_slots, "tiered hot plane"),
+                "tiered hot plane base");
+            warm_plane = checked_add(warm_plane,
+                                     checked_mul(block, warm_experts, "tiered warm plane"),
+                                     "tiered warm plane base");
+        }
+        const auto hot_slice_bytes =
+            checked_mul(tier.hot_experts, geometry.bytes / experts, "tiered hot slice");
+        if (hot_written != hot_slice_bytes || warm_written != storage.pinned->size()) {
+            throw ArtifactError("tiered expert packing does not cover the mini-banks");
+        }
+        // The scaled mini-bank geometries: the same plane structure at the split row counts.
+        const auto mini_geometry = [&](std::uint64_t mini_rows) {
+            WeightGeometry mini = geometry;
+            mini.shape[0]       = mini_rows;
+            mini.elements       = checked_mul(mini_rows, geometry.shape[1], "tiered elements");
+            mini.bytes          = geometry.bytes / rows * mini_rows;
+            mini.code_bytes     = checked_mul(geometry.code_bytes_per_row, mini_rows, "codes");
+            mini.high_bytes     = checked_mul(geometry.high_bytes_per_row, mini_rows, "high");
+            mini.scale_bytes    = checked_mul(geometry.scale_row_bytes, mini_rows, "scales");
+            mini.high_offset    = mini.code_bytes;
+            mini.scale_offset   = checked_add(mini.code_bytes, mini.high_bytes, "scale offset");
+            mini.divisor_offset = 0;
+            return mini;
+        };
+        const auto hot_region = LayoutRegion{tier.offset, tier.bytes, tier.alignment};
+        const auto hot_bound  = hot_region.bind(out.device_storage_.span());
+        storage.device = WeightParent{mini_geometry((tier.hot_experts + tier.cache_slots) *
+                                                    rows_per_expert),
+                                      hot_bound.device, static_cast<const std::byte*>(hot_bound.data), {}};
+        storage.host   = WeightParent{mini_geometry(warm_experts * rows_per_expert), Device{},
+                                     static_cast<const std::byte*>(storage.pinned->data()), {}};
+        // One-shot synchronous upload: the staging and packed buffers are per-bank locals.
+        check_cuda(
+            cudaMemcpy(hot_bound.data, hot_packed.data(), hot_packed.size(),
+                       cudaMemcpyHostToDevice),
+            "tiered hot upload");
+        out.stats_.h2d_bytes =
+            checked_add(out.stats_.h2d_bytes, hot_packed.size(), "tiered h2d");
+        out.stats_.retained_host_bytes = checked_add(out.stats_.retained_host_bytes,
+                                                     storage.pinned->size(), "tiered warm bytes");
+        out.stats_.tier_pinned_warm_bytes = checked_add(out.stats_.tier_pinned_warm_bytes,
+                                                        storage.pinned->size(),
+                                                        "tiered warm bytes");
+    }
     std::vector<CopyRange> ranges;
     for (std::size_t i = 0; i < out.tensors_.size(); ++i) {
         auto& object       = out.tensors_[i];

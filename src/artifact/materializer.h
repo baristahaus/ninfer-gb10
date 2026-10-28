@@ -14,6 +14,7 @@ namespace ninfer::artifact {
 
 class Reader;
 
+
 struct MaterializationStats {
     std::uint64_t file_bytes = 0; // Declared container file set, including framing.
     std::uint64_t read_bytes = 0; // Actual payload reads, including direct-I/O alignment.
@@ -21,6 +22,8 @@ struct MaterializationStats {
     std::uint64_t device_capacity_bytes = 0;
     std::uint64_t host_capacity_bytes   = 0; // Tensor backing, including alignment gaps.
     std::uint64_t retained_host_bytes   = 0; // Tensor payloads and retained resources.
+    // SP-4 tiered banks: the pinned-host warm mini-bank bytes retained after load.
+    std::uint64_t tier_pinned_warm_bytes = 0;
     std::uint64_t owned_value_bytes     = 0;
     std::uint64_t peak_staging_bytes    = 0;
     std::uint64_t registered_host_bytes = 0; // Subset of host_capacity_bytes.
@@ -59,6 +62,10 @@ private:
         std::vector<float> weight_divisors;
         std::optional<WeightParent> device;
         std::optional<WeightParent> host;
+        std::vector<std::byte> host_data;
+        // SP-4 tiered bank: the pinned warm mini-bank's storage (core PinnedHostBuffer);
+        // `host` holds its parent.
+        std::optional<PinnedHostBuffer> pinned;
     };
 
     HostBuffer host_storage_;

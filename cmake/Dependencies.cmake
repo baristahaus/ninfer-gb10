@@ -24,8 +24,6 @@ if(NINFER_BUILD_ENGINE)
   add_subdirectory(third_party/xgrammar EXCLUDE_FROM_ALL)
 endif()
 
-# CPU grammar source base; consumers will link it explicitly.
-
 if(NINFER_BUILD_PRODUCT_SUPPORT)
   add_library(ninfer::toml INTERFACE IMPORTED GLOBAL)
   target_include_directories(ninfer::toml INTERFACE

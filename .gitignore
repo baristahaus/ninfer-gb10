@@ -64,6 +64,15 @@ profiles/
 # Claude Code personal/local settings (may contain API tokens)
 .claude/settings.local.json
 
+# Local GB10 run configuration (tools/gb10/config.example.sh is the template)
+tools/gb10/config.local.sh
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+.beads-credential-key
+.beads/proxieddb/
+*.gate.lock*
+
 # Local startup configuration; keep the complete reference in version control.
 *.toml
 !/ninfer.example.toml

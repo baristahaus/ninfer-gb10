@@ -63,8 +63,26 @@ MaterializationPlan plan_materialization(const Reader& reader,
 }
 
 MaterializationPlan plan_materialization(const Reader& reader,
+                                         std::span<const PlacementRequest> requests,
+                                         std::span<const TierPlanInput> tiers,
+                                         TierBudget budget, PreparedResources resources) {
+    std::vector<TensorRequest> tensors;
+    tensors.reserve(requests.size());
+    for (const auto& r : requests)
+        tensors.push_back({whole_tensor(reader, r.object), r.device, r.host_access});
+    return plan_materialization(reader, tensors, tiers, budget, std::move(resources));
+}
+
+MaterializationPlan plan_materialization(const Reader& reader,
                                          std::span<const TensorRequest> requests,
                                          PreparedResources resources) {
+    return plan_materialization(reader, requests, {}, TierBudget{}, std::move(resources));
+}
+
+MaterializationPlan plan_materialization(const Reader& reader,
+                                         std::span<const TensorRequest> requests,
+                                         std::span<const TierPlanInput> tiers,
+                                         TierBudget budget, PreparedResources resources) {
     if (resources.source && resources.source != &reader)
         throw ArtifactError("prepared resources belong to another load session");
     MaterializationPlan out;
@@ -144,7 +162,45 @@ MaterializationPlan plan_materialization(const Reader& reader,
                                "registered Host weights");
     if (host_layout.finish())
         (void)host_storage.add(host_layout.finish(), out.host_alignment, "ordinary Host weights");
-    out.host_capacity_bytes   = host_storage.finish();
+    out.host_capacity_bytes = host_storage.finish();
+    // SP-4 tiered banks follow the plain device objects so the arena's sequential allocation
+    // order matches the plan offsets: the device carries only each compact hot mini-bank; the
+    // pinned-host warm mini-bank is allocated and filled by the materializer.
+    std::uint32_t cache_slots = 0;
+    if (!tiers.empty()) {
+        std::uint64_t slice_cost = 0;
+        std::uint64_t min_warm   = std::numeric_limits<std::uint64_t>::max();
+        std::uint64_t hot_bytes  = 0;
+        for (const auto& tier : tiers) {
+            const auto& geometry = reader.geometry(tier.object);
+            const auto experts   = tier.new_order.size();
+            slice_cost           = checked_add(slice_cost, geometry.bytes / experts,
+                                               "expert cache slice cost");
+            min_warm = std::min(min_warm, experts - tier.hot_experts);
+            hot_bytes = checked_add(
+                hot_bytes,
+                checked_mul(tier.hot_experts, geometry.bytes / experts, "tiered hot bytes"),
+                "tiered hot total");
+        }
+        const auto weights_bytes = checked_add(device_layout.finish(), hot_bytes,
+                                               "tiered weights bytes");
+        const auto tail_budget =
+            budget.device_bytes > weights_bytes ? budget.device_bytes - weights_bytes : 0;
+        cache_slots = static_cast<std::uint32_t>(
+            std::min<std::uint64_t>(min_warm, tail_budget / slice_cost));
+        if (budget.slot_cap != 0) { cache_slots = std::min(cache_slots, budget.slot_cap); }
+    }
+    for (const auto& tier : tiers) {
+        const auto& geometry = reader.geometry(tier.object);
+        const auto experts   = tier.new_order.size();
+        const auto bank_bytes =
+            checked_mul(tier.hot_experts + cache_slots, geometry.bytes / experts,
+                        "tiered device bytes");
+        const auto region = device_layout.add(bank_bytes, tier.alignment,
+                                               "tiered hot mini-bank");
+        out.tier_objects.push_back({tier.object, region.offset, bank_bytes, tier.alignment,
+                                    tier.hot_experts, cache_slots, tier.new_order});
+    }
     out.device_capacity_bytes = device_layout.finish();
     return out;
 }

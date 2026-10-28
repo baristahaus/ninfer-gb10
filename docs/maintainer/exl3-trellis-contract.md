@@ -29,9 +29,13 @@ acceptance. The delegated work (§9) executes against it. The fork owns every ch
 
 In scope for SP-7: the routed expert banks of the Qwen3.6 35B-A3B MoE (hidden 2048, 256 experts,
 expert intermediate 512, top-8), with every other tensor in the artifact keeping its existing
-representation. Dense projections, the shared expert, attention/GDN projections, the embedding and
-lm_head follow in later steps under this same contract. The 125B Flash-Next banks (512-way MoE) are
-a later step that adds shapes, not semantics.
+representation. The `exl3_dense_v1` container layout (§4) and its Linear consumer route — the
+fused decode kernels for the 27B dense-route problems at the decode token shapes, qualified
+against the FP64 oracle of §3.2's composition — are executed. The remaining dense consumers (the
+shared expert inside SparseMoe, the embedding and lm_head) and the prefill token route follow in
+later steps under this same contract. The 125B Flash-Next banks (512-way MoE) are
+a later step that adds shapes, not semantics; its execution planning lives in the dated campaign
+plan (docs/maintainer/2026-10-21-q38fn-exl3-campaign-plan.md).
 
 Out of scope, and rejected at import: exllamav3's n-gram embedding codec (160-element tiles),
 quantized dimensions padded to a multiple of 128 (`trim_padded_out`), linear biases, the obsolete
@@ -203,6 +207,22 @@ gain their entries when the codec lands.
 - **Load validation**: offsets increase in expert id order, are 256-byte aligned, and match the
   extents implied by `2K`. An odd `2K` requires MUL1 and `K` ∈ {1.5, 2.5, 3.5}. Both `k` and `n`
   are multiples of 128, and the bank's codebook is uniform.
+- **Layout** `exl3_dense_v1`: one dense linear per object with logical shape `[n, k]` (the executed
+  dense step of §1). It is the one-expert case of the bank without the directory plane: the linear
+  carries a single bitrate, so no per-expert directory exists and the planes are
+
+| Plane | Content |
+|---|---|
+| `trellis` | the exllamav3 `trellis` bytes verbatim at payload offset 0, `k·n·K/8` bytes zero-padded to a multiple of 256 bytes |
+| `suh` | FP16 `[k]` |
+| `svh` | FP16 `[n]` |
+| — | the final four bytes are the codebook id, as in the bank |
+
+  Load validation: `k` and `n` are multiples of 128; an odd `2K` requires MUL1 and `K` ∈
+  {1.5, 2.5, 3.5}; the planes plus the codebook word end exactly at the object's byte size, and
+  because admissible bitrates differ by at least `k·n/16` bytes (above the 256-byte alignment)
+  that size determines `2K` uniquely. The geometry resolves from the shape and the byte size; no
+  directory is read.
 - **Provenance** (descriptive only): the source exllamav3 version and checkpoint identity, or the
   fork converter's recipe and bitrate map. Nothing needed for execution lives in provenance.
 
@@ -267,6 +287,45 @@ The fork's converter emits the same format by EXL3's method. The steps:
 5. **Verification**: the same exact-oracle check as §6.1 step 4. The output must also pass the
    import route's validation unchanged.
 
+#### 6.2.1 Executed bring-up: the uncalibrated streaming quantize route (2026-10-16..21)
+
+The route's first executed campaign dropped the Hessian requirement to establish the container,
+binder and kernel route end to end. The method is the §6.2 pipeline without step 1: per MoE layer,
+the converter streams one layer's routed tensors from the BF16 source shard (~5 GB resident),
+derives `suh`/`svh` from random signs (EXL3's incoherence derivation without the scale search),
+runs LDLQ–Viterbi at one bank-wide rate, writes `layer_NN.pt`, and discards the shard. Completed
+layer files are resumed as-is, and a later campaign may reuse a finished projection's layer file
+when its rate is unchanged (the down banks carried over between the 35B campaigns). Measured on
+the RTX 5090 box: ~2800 s per 35B layer with gate and up quantized as separate linears, ~2230 s
+per layer for the packed-gate_up variant. Two layout lessons are now contract:
+
+- **Gate and up are separate complete banks** (per §2.2 and the kernel route): the routed experts'
+  gate and up projections are quantized as separate linears and emitted as separate banks. A packed
+  gate_up campaign (one linear per expert over the checkpoint's [2·intermediate, hidden] block) was
+  executed and reverted: it cannot feed the `exl3_routed_gate`/`exl3_routed_up` kernel route.
+- **The tier rank stride is layout-aware**: the SP-4 rank check assumes the packed native route's
+  2·intermediate row stride for Q4/Q8 banks and one row block per expert for EXL3 banks; the
+  initial implementation assumed the packed stride for all banks and rejected every separate-bank
+  artifact at startup.
+
+The engine reconciliation that made banks artifacts serve (2026-10-21): the layout-aware tier
+stride, the FFN workspace sizing for the EXL3 decode plan (the fused `routed_gate_up` qtype is
+empty on the EXL3 route), and the removal of the wrapper's artificial single-token restriction —
+the decode loop covers arbitrary token counts, so prefill runs as per-token decode, numerically
+identical because routing is per-token independent. A batched EXL3 MoE prefill kernel remains
+future work under §7.
+
+Acceptance status: the 27B dense route (`exl3_dense_v1`) is accepted — 7.92 GiB artifact, full-
+corpus perplexity 5.18 against the FP8 control's 4.55 at 26.5 GiB (both `qwen3_8_27b` family).
+The 35B bank route completed its full-corpus acceptance on 2026-10-24: the uncalibrated k2=6
+banks artifact (14.0 GiB) scores overall perplexity 4.613 against the same-model FP8 control's
+4.552 (26.5 GiB, identical corpus, windows, context/stride 4096/2048 and fp8 KV) — within 1.4%
+at 53% of the bytes. Per corpus: banks 5.281 vs control 5.480 (chinese_reference), 7.808 vs
+7.807 (english_long_form, tied), 5.931 vs 6.080 (english_reference), 1.842 vs 1.640 (ninfer_code,
+the one clear regression). Single-run evidence without repeats; the routed experts' EXL3 trellis
+codes at k2=6 evidently lose little against this FP8 recipe on prose while code pays more. This
+anchor satisfied the campaign plan's quality gate; the 125B campaign was then closed by decision
+in favor of serving the FP8 artifact directly, so no 125B banks numbers exist.
 ## 7. Kernel contracts (`src/ops`)
 
 - **Op.** The SparseMoe Op's mathematical contract is unchanged (§2.2), with BF16 activations in and

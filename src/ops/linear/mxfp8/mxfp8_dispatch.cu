@@ -47,7 +47,7 @@ std::size_t mxfp8_linear_workspace_capacity_bytes(std::int32_t, std::int32_t, Li
 }
 
 void mxfp8_dispatch(const Tensor& x, const Weight& weight, Tensor& out, LinearPolicy policy,
-                    WorkspaceArena* workspace, cudaStream_t stream) {
+                    MemoryArena* workspace, cudaStream_t stream) {
     (void)policy;
     (void)workspace;
     validate_mxfp8_weight(weight, "mxfp8 linear");

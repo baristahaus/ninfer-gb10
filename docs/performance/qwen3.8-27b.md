@@ -175,6 +175,37 @@ distribution, so acceptance falls to 33.16% and the round count rises from 408 t
   same 512 tokens: constrained MTP3 decode runs at 53% of the unconstrained rate. Requests that
   need constrained output at full throughput can disable speculation for that request class.
 
+## Constrained decode
+
+Grammar-constrained generation (SP-2: JSON-object masking through the MTP round), measured
+2026-10-13 on the RTX 5090 (CUDA 13.4.92) with the v3 NVFP4 27B artifact, greedy sampling,
+fp8 KV, prompt 2048 + 512 generated tokens, three measured repetitions after one warmup. The
+pre-port binary (`5090-test@3b885469`) and the SP-2 binary ran identical commands:
+
+```bash
+./build/bench/ninfer_bench --weights <27b-v3-nvfp4>.ninfer --corpus bench/fixtures/bench_corpus.ids \
+  -pg 2048,512 -r 3 --kv-dtype fp8 --spec mtp --draft-tokens 3 --lm-head-draft [--json-object]
+```
+
+| Configuration | decode out t/s | MTP acceptance | Spec rounds |
+|---|---:|---:|---:|
+| Unconstrained, pre-port binary | 228.89 ± 0.22 | 92.38% | 408 |
+| Unconstrained, SP-2 binary | 228.86 ± 0.03 | 92.38% | 408 |
+| Unconstrained, no speculation | 75.62 ± 0.02 | — | — |
+| JSON-object, no speculation | 75.50 ± 0.02 | — | — |
+| JSON-object, MTP3 | 120.93 ± 0.07 | 33.16% | 771 |
+
+Readings:
+
+- The port's structural costs measure zero on this workload: unconstrained MTP3 decode is
+  unchanged (228.86 vs 228.89 tok/s; acceptance and round counts bit-identical between the two
+  binaries), and grammar masking without speculation costs 0.16% (75.50 vs 75.62 tok/s).
+- The constrained cost is the speculation interaction. Under the JSON-object grammar the MTP
+  drafts are legal under the mask but diverge from the target's grammar-concentrated
+distribution, so acceptance falls to 33.16% and the round count rises from 408 to 771 for the
+  same 512 tokens: constrained MTP3 decode runs at 53% of the unconstrained rate. Requests that
+  need constrained output at full throughput can disable speculation for that request class.
+
 ## Corpus makespan
 
 Each point is one uninterrupted run of the same 75-request corpus, using shuffle seed `20260811`

@@ -106,6 +106,76 @@ KV extension is **tail streaming**: for long contexts, the most-read KV pages st
 the rest restores/streams from host on demand — an extension of the existing host-KV-spill
 machinery from batch-restore-at-reuse to demand reads.
 
+**The cache-economics frame (added 2026-10-23).** External evidence (DeepSeek's DeepInfer
+deployment and 3FS; validated brief 2026-10-24) shows the serving economics of an agent-class
+workload are dominated by KV hit rate, not engine speed: ~96% of served input tokens are cache
+reads loaded from disk rather than recomputed, and the unit cost of serving varies ~7× on hit
+rate alone. Three consequences carry into this fork's design, all within the single-box
+contract:
+
+- *Retention is an economics variable.* The context-cache's retention classes (including
+  `LongAnchor`) decide value, not just memory pressure. A longer effective retention window is
+  bought two ways: host/disk tiering of cold KV pages, and KV density — every halving of
+  bytes/token (fp8 → k8v4-class formats) doubles the window within the same host budget. Format
+  decisions should weigh retention capacity, not only bandwidth.
+- *Partial misses are already O(tail), keep them that way.* Prefix reuse selects the longest
+  cached prefix, so a partial miss recomputes only the uncached suffix. The design invariant to
+  protect: never let an admission path fall back to full-prefix recomputation when any valid
+  prefix checkpoint exists. The disk tier below raises the stakes — a miss against a
+  disk-resident page must page it in, never silently recompute it.
+- *Long-horizon context flagging and shared session cache.* Agent workloads are
+  input-dominated and long-horizon: one agent session (and its subagents) produces many requests
+  that share a large common prefix — system prompt, tool definitions, accumulated scratch state.
+  The context-cache already keys shared prefixes engine-wide; the extension is **session-scoped
+  flagging**: admission accepts a session key so related requests' prefixes are cataloged under
+  one root; retention weights anchor prefixes of *ongoing* sessions over closed ones (the
+  existing `LongAnchor` class becomes the target of an explicit promote on session activity and
+  demote on session close); and cold anchor pages spill to the disk tier rather than evicting.
+  This is what makes a long-horizon session survive an idle gap: the expensive shared prefix is
+  still there — on disk if not in RAM — and a resumed request pays only the O(tail) recomputation.
+
+**Disk tier for state (long-horizon storage caching).** The same evidence validates NVMe as a
+real tier for inference state, not only weights: DeepSeek serves KV cache reads from 3FS-backed
+SSD at 40 GiB/s peaks. The single-box analog extends the existing cold tier (the artifact file,
+read through the OS page cache — the PLE pattern) to **context state**: page-cached spill first
+(mmap-backed, zero new machinery, already how PLE reads), and — if a future workload shows
+page-fault overhead dominating at expert/page granularity — explicit queued reads via Linux
+`io_uring` with registered buffers (the local-node version of 3FS's USRBIO API shape). The
+trigger for the io_uring path is measured, not speculative: adopt it only when profiles show
+page-fault costs dominating the disk-tier read path. Multi-node cache machinery (shared cache
+clusters, cross-machine hits, disaggregated storage) remains out of the product contract.
+
+**External validation of the tiering design (added 2026-10-24).** llama.cpp's GPU expert cache
+(PR #29887 merged 2026-10-07, shipped v0.7.0; verified) implements this section's warm-host /
+hot-device expert cache for the same 125B model family — per-layer LRU pools of hot experts in
+spare VRAM, misses copied over PCIe, host experts otherwise. Reported 27→50.8 t/s (RTX 5090,
+61k ctx) with ~89% hit rate. Four findings carry into this fork's design decisions:
+
+- *Break-even is high*: ~85% hit rate (community rule of thumb) and ~¼ of expert bytes as cache
+  below that, enabling it hurts — small-VRAM cards lose 1.2–2.7× with the cache enabled. Our
+  adaptive hot-set cache seeds from ranked profiles and sizes from free VRAM after the baseline
+  reservation, which is the same discipline; the finding reinforces that the cache must never
+  take VRAM the KV or graphs need.
+- *Decode-only boundaries are a defect, not a design*: their cache is active for batches ≤32
+  tokens; long prompts bypass it while its VRAM is still taken from prompt processing, so
+  agentic/long-context traffic can be net slower. Under this fork's cache-economics frame,
+  tiering must hold through prefill: a tiered expert path whose prefill falls back to a
+  non-tiered route (the EXL3 banks route's looped decode is exactly this failure) is
+  disqualified for agent-class serving.
+- *MTP bursts change the hit-rate math*: each draft token picks its own experts, so hit rates
+  measured at one token per step do not transfer; their measured cache was 27% slower with MTP
+  on, and the unmerged graph-safe branch (LRU decisions and copies inside the compute graph,
+  `LRU_DECIDE`/`LRU_FILL`, no host readback of expert ids) is the reference for making tiered
+  decode CUDA-graph-replay-safe. Our design keeps residency decisions at resource boundaries
+  with a single residency-table upload per boundary — replay-safe by construction, and the
+  chart to beat if per-round adaptation is ever wanted.
+- *The PCIe budget is arithmetic, not tuning*: at 90% hit rate ~137 MB crosses the bus per
+  token; chipset-attached x4 links cap throughput regardless of cache quality. The 5090 lane's
+  streaming path sizes against the link, not the SSD or the GPU.
+
+This is single-run community reporting without error bars on heterogeneous harnesses — used
+here as design-direction evidence, not as acceptance numbers.
+
 **Ranked profiles.** The converter already owns a frequency-corpus ranking discipline (the 35B
 artifact carries `tools/freq_corpus` ranking provenance). The same discipline produces per-
 `(layer, expert)` activation profiles at conversion time; the artifact carries them as component
@@ -297,6 +367,18 @@ what "correct" means.
   design must account for (the MTP draft layer reads hot dense weights and must stay viable
   alongside tiered experts). RAM economics gate tiering (96 GB DDR5 ≈ $1,899): the strategy
   deliberately targets the RAM users already have.
+- **The Harness² finding** (Google Cloud AI Research, arXiv 2610.14224, ingested 2026-10-24 via a
+  verified brief): recursive harness self-improvement with frozen weights buys real points
+  (+11.5 on an empty base harness), but the durable takeaways for the local agent fleet are
+  cheaper than the loop. Probe-before-keep: every harness/skill edit earns its place by a
+  same-task A/B against observed behavior, never by plausibility. The durable artifact is a
+  lessons-with-evidence library (the existing skill library already is one — keep evidence
+  attached); always-on prompt prose is paid per run and belongs in triggered skills. Plumbing
+  rules rot with each model swap; expect to rewrite them per model generation. When any
+  agent-facing work touches evaluation or rubrics, firewall the eval sources from the agent
+  under test (the paper's own contamination incident). Do not run the reference
+  `google-research/harness2` as-is (3 commits, 106 open PRs, no budget cap); the hand-rolled
+  loop over a repetitive task class is the sane form if ever wanted.
 
 ## 14. Provenance of the numbers
 

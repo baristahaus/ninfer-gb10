@@ -55,8 +55,8 @@ The trellis-coded weight format is:
 The `exl3` numeric decode (tiles, ring, codebooks) is fixed by the SP-7 contract,
 [`exl3-trellis-contract.md`](exl3-trellis-contract.md) sections 2.3–2.5, and is implemented
 for verification by the exact codec oracles (`tools/convert/quantization/exl3.py`,
-`exl3_reference.py`, `tests/ops/exl3_ref.h`). It exists only as the `exl3_expert_bank` layout
-and only for routed MoE banks.
+`exl3_reference.py`, `tests/ops/exl3_ref.h`). It exists as the `exl3_expert_bank` layout
+for routed MoE banks and as `exl3_dense_v1` for dense projections.
 
 Each name fixes a code and scale contract. The format registry is implemented in
 [`tools/artifact/formats.py`](../../tools/artifact/formats.py) and
@@ -330,17 +330,18 @@ concerns and are not persistent fields of this format.
 ### 3.5 `exl3`
 
 `exl3` is a trellis-coded weight representation defined by the SP-7 contract,
-[`exl3-trellis-contract.md`](exl3-trellis-contract.md), and exists only inside the
-`exl3_expert_bank` layout. One 16-bit codebook state is stored per logical weight element of a
-routed expert bank `[E*N, K]`: each 16×16 tile of the expert's `[N,K]` weight packs one tail-biting
+[`exl3-trellis-contract.md`](exl3-trellis-contract.md), and exists inside the `exl3_expert_bank`
+layout (routed expert banks `[E*N, K]`) and the `exl3_dense_v1` layout (one dense linear `[N,K]`).
+One 16-bit codebook state is stored per logical weight element: each 16×16 tile of the linear's
+`[N,K]` weight packs one tail-biting
 ring of `16·K` int16 words (bitrate `K` in 1…8, or 1.5, 2.5, 3.5 with the `mul1` codebook), and
 the ring's 16-bit windows select the codebook entries. Three codebooks are admitted (`3inst`,
-`mcg`, `mul1`); the bank's object scalar records which one, and a bank's codebook is uniform.
+`mcg`, `mul1`); the object scalar records which one, and it is uniform within an object.
 
 The numeric decode, the ring storage rule, the codebook formulas and the exact bitrates are fixed
-by contract sections 2.3–2.5 and are not restated here. The format carries no scales: the expert's
+by contract sections 2.3–2.5 and are not restated here. The format carries no scales: the linear's
 `suh` and `svh` FP16 vectors and the block Hadamard transforms of contract section 2.1 are stored
-in the bank layout, not in the numeric format. Verification oracles exist in Python
+in the layout, not in the numeric format. Verification oracles exist in Python
 (`tools/convert/quantization/exl3.py`, `exl3_reference.py`) and C++ (`tests/ops/exl3_ref.h`),
 qualified bit-exactly against exllamav3 v1.6.1.
 

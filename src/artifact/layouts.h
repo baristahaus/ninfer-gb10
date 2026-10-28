@@ -31,4 +31,17 @@ struct TensorObject;
                                                 std::span<const std::byte> directory,
                                                 std::array<std::byte, 4> codebook_word);
 
+// Resolve one exl3_dense_v1's complete geometry from its payload (SP-7 contract section 4).
+//
+// A dense linear carries one bitrate, so its trellis extent follows from the shape and the
+// bitrate together: no directory plane exists and the geometry resolves from the shape plus
+// the object's byte size, of which exactly one admissible bitrate must be consistent.
+// `codebook_word` is the payload's final four bytes.
+//
+// Validation (the contract's load validation): the shape is rank 2 [N, K] with K and N
+// multiples of 128; the codebook id is known; a half-integer bitrate (odd 2K) requires the
+// mul1 codebook; and the trellis, suh and svh planes plus the codebook word end exactly at
+// the object's byte size.
+[[nodiscard]] WeightGeometry describe_exl3_dense(const TensorObject& object,
+                                                 std::array<std::byte, 4> codebook_word);
 } // namespace ninfer::artifact

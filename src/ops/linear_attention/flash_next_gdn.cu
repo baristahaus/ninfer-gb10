@@ -10,7 +10,8 @@
 #include "ninfer/ops/gdn_gating.h"
 #include "ninfer/ops/linear.h"
 #include "ops/common/math.cuh"
-#include "ops/linear/fp8/fp8_format.h"
+#include "ops/linear/common/weight_validation.h"
+#include "ops/linear/kernels/fp8/fp8_format.h"
 #include "ops/linear_attention/gated_delta_net/launch.h"
 
 #include <cuda_bf16.h>

@@ -2,7 +2,7 @@
 #include "ops/attn_input_proj/bf16/bf16_attn_input_plan.h"
 
 #include "core/device.h"
-#include "ops/linear/bf16/bf16_template_launch.cuh"
+#include "ops/linear/kernels/bf16/bf16_template_launch.cuh"
 
 #include <array>
 #include <cstddef>

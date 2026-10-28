@@ -10,7 +10,7 @@
 #include "ops/linear/bf16/flash_next/bf16_config.h"
 #include "ops/linear/bf16/flash_next/bf16_launch.h"
 #include "ops/linear/nvfp4/nvfp4_codec.cuh"
-#include "ops/linear/nvfp4/nvfp4_geometry.h"
+#include "ops/linear/kernels/nvfp4/nvfp4_geometry.h"
 #include "ops/linear/bf16/flash_next/bf16_gemm_mma.cuh"
 #include "ops/sparse_moe/flash_next/flash_next_nvfp4_w4a4.cuh"
 

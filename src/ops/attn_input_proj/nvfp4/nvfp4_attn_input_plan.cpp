@@ -1,8 +1,8 @@
 #include "core/weight.h"
 #include "ops/attn_input_proj/nvfp4/nvfp4_attn_input_plan.h"
 
-#include "ops/linear/nvfp4/nvfp4_layout.h"
-#include "ops/linear/nvfp4/nvfp4_a4_plan.h"
+#include "ops/linear/kernels/nvfp4/nvfp4_layout.h"
+#include "ops/linear/kernels/nvfp4/nvfp4_a4_plan.h"
 
 #include <algorithm>
 #include <cstdint>

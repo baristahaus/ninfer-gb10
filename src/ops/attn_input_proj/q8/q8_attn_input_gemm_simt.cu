@@ -3,7 +3,7 @@
 
 #include "core/device.h"
 #include "ops/common/math.h"
-#include "ops/linear/q8/q8_simt_launch.cuh"
+#include "ops/linear/kernels/q8/q8_simt_launch.cuh"
 
 namespace ninfer::ops::detail {
 namespace {

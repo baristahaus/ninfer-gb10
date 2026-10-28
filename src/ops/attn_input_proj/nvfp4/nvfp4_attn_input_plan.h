@@ -4,7 +4,7 @@
 #include "core/arena.h"
 #include "core/tensor.h"
 #include "ninfer/ops/linear.h"
-#include "ops/linear/nvfp4/nvfp4_a4_plan.h"
+#include "ops/linear/kernels/nvfp4/nvfp4_a4_plan.h"
 
 #include <cuda_runtime.h>
 

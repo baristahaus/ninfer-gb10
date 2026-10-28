@@ -1,5 +1,5 @@
 #include "ops/attn_input_proj/nvfp4/nvfp4_attn_input_a4_tma_launch.h"
-#include "ops/linear/nvfp4/nvfp4_a4_tma.cuh"
+#include "ops/linear/kernels/nvfp4/nvfp4_a4_tma.cuh"
 #include "ops/attn_input_proj/nvfp4/nvfp4_attn_input_output.cuh"
 
 namespace ninfer::ops::detail {

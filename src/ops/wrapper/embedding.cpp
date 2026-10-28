@@ -2,7 +2,7 @@
 #include "ninfer/ops/embedding.h"
 
 #include "ops/common/math.h"
-#include "ops/linear/fp8/fp8_format.h"
+#include "ops/linear/kernels/fp8/fp8_format.h"
 #include "ops/launcher/embed_gather.h" // detail::embed_gather_*_launch
 #include "core/weight_view.h"
 

@@ -1,7 +1,7 @@
 #include "core/weight.h"
 #include "ninfer/ops/linear_swiglu.h"
 
-#include "ops/linear/fp8/fp8_format.h"
+#include "ops/linear/kernels/fp8/fp8_format.h"
 #include "ops/linear/nvfp4/nvfp4_format.h"
 #include "ops/linear_swiglu/fp8/fp8_linear_swiglu_plan.h"
 #include "ops/linear_swiglu/nvfp4/nvfp4_linear_swiglu_plan.h"

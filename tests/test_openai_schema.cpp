@@ -897,6 +897,17 @@ int test_stream_response() {
     const auto partial_events = interrupted.finish(tool_outcome);
     failures += check(parse_sse(partial_events[0])["choices"][0]["finish_reason"] == "length",
                       "streamed completed call hid a later truncation");
+
+    OpenAIChatStream progress_only(identity(), false);
+    (void)progress_only.start();
+    (void)progress_only.tool_call_progress(16);
+    const auto progress_finish = progress_only.finish(tool_outcome);
+    const Json adopted         = parse_sse(progress_finish[0]);
+    failures += check(
+        adopted["choices"][0]["delta"]["tool_calls"][0]["function"]["name"] == "Edit" &&
+            adopted["choices"][0]["delta"]["tool_calls"][0]["function"]["arguments"] ==
+                R"({"file_path":"/tmp/probe.cpp"})",
+        "progress-only route emits terminal calls as complete tool-call deltas");
     return failures;
 }
 

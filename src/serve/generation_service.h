@@ -53,6 +53,7 @@ struct StreamSink {
     std::function<void(const ninfer::ToolCallStart&)> on_tool_start;
     std::function<void(const ninfer::ToolArgumentsDelta&)> on_tool_arguments;
     std::function<void(const ninfer::ToolCallEnd&)> on_tool_end;
+    std::function<void(std::size_t cumulative_bytes)> on_tool_call_progress;
     std::function<bool()> is_cancelled;
 };
 

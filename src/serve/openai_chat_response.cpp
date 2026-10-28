@@ -357,6 +357,17 @@ std::string OpenAIChatStream::content_delta(const std::string& text) {
     return chunk(identity_, Json{{"content", text}}, nullptr, include_usage_, live_timings_json());
 }
 
+std::string OpenAIChatStream::tool_call_progress(std::size_t cumulative_bytes) {
+    if (!started_ || finished_ || cumulative_bytes == 0) {
+        throw std::logic_error("invalid OpenAI Chat tool-call progress state");
+    }
+    Json payload       = base_payload(identity_, "chat.completion.chunk");
+    payload["choices"] = Json::array({stream_choice(Json::object())});
+    payload["tool_call_progress"] = Json{{"bytes", cumulative_bytes}};
+    if (include_usage_) { payload["usage"] = nullptr; }
+    return event(std::move(payload));
+}
+
 std::vector<std::string> OpenAIChatStream::tool_start(const ninfer::ToolCallStart& value) {
     if (!started_ || finished_) throw std::logic_error("invalid Chat tool start state");
     content_started_ = true;
@@ -414,7 +425,32 @@ std::vector<std::string> OpenAIChatStream::finish(const GenerationOutcome& outco
                                include_usage_, output_timings));
     }
 
-    tools_.verify(outcome.tool_calls);
+    if (tools_.calls().empty() && !outcome.tool_calls.empty()) {
+        // Progress-only tool route: the engine streams byte progress while parameters are
+        // private and publishes terminal calls only. Emit each terminal call as one complete
+        // tool-call delta so streamed state and terminal calls agree.
+        for (std::size_t index = 0; index < outcome.tool_calls.size(); ++index) {
+            const GeneratedToolCall& call = outcome.tool_calls[index];
+            tools_.start(ninfer::ToolCallStart{static_cast<std::uint32_t>(index), call.name});
+            if (!call.arguments_json.empty()) {
+                tools_.append(ninfer::ToolArgumentsDelta{static_cast<std::uint32_t>(index),
+                                                         call.arguments_json, true});
+            }
+            tools_.end(ninfer::ToolCallEnd{static_cast<std::uint32_t>(index), call.status});
+            events.push_back(chunk(
+                identity_,
+                Json{{"tool_calls",
+                      Json::array({Json{{"index", index},
+                                        {"id", new_openai_chat_tool_call_id()},
+                                        {"type", "function"},
+                                        {"function",
+                                         Json{{"name", call.name},
+                                              {"arguments", call.arguments_json}}}}})}},
+                nullptr, include_usage_, output_timings));
+        }
+    } else {
+        tools_.verify(outcome.tool_calls);
+    }
     events.push_back(chunk(identity_, Json::object(), finish_reason(outcome), include_usage_,
                            include_usage_ ? Json(nullptr) : final_timings,
                            include_usage_ ? Json(nullptr) : constraint));

@@ -286,11 +286,15 @@ public:
                 [&](const auto& delta) {
                     using T = std::decay_t<decltype(delta)>;
                     if constexpr (std::is_same_v<T, ninfer::OutputDelta>) {
+                        if (delta.tool_call_progress_bytes != 0 && sink_->on_tool_call_progress) {
+                            sink_->on_tool_call_progress(delta.tool_call_progress_bytes);
+                        }
                         if (delta.text.empty()) return;
                         if (delta.channel == ninfer::OutputChannel::Reasoning) {
                             if (sink_->on_reasoning) sink_->on_reasoning(delta.text);
-                        } else if (sink_->on_content)
+                        } else if (sink_->on_content) {
                             sink_->on_content(delta.text);
+                        }
                     } else if constexpr (std::is_same_v<T, ninfer::ToolCallStart>) {
                         if (sink_->on_tool_start) sink_->on_tool_start(delta);
                     } else if constexpr (std::is_same_v<T, ninfer::ToolArgumentsDelta>) {

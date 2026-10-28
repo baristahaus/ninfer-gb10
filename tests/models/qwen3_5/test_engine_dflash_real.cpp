@@ -1,5 +1,6 @@
 #include "ninfer/engine.h"
 #include "speculative_page_boundary.h"
+#include "artifact/reader.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -11,6 +12,12 @@
 #include <vector>
 
 namespace {
+
+ninfer::ProposalHead artifact_proposal_head(const char* artifact) {
+    ninfer::artifact::Reader reader(artifact);
+    return reader.directory().component("text").proposal ? ninfer::ProposalHead::Optimized
+                                                         : ninfer::ProposalHead::Full;
+}
 
 ninfer::EngineOptions base_engine_options(const char* artifact) {
     ninfer::EngineOptions options;
@@ -40,7 +47,7 @@ ninfer::EngineOptions dflash_engine_options(const char* artifact, ninfer::Propos
 
 ninfer::EngineOptions dflash_vision_engine_options(const char* artifact) {
     ninfer::EngineOptions options =
-        dflash_engine_options(artifact, ninfer::ProposalHead::Optimized, 4096);
+        dflash_engine_options(artifact, artifact_proposal_head(artifact), 4096);
     options.prefill_chunk   = 1024;
     options.max_concurrency = 2;
     options.enable_vision   = true;
@@ -380,6 +387,14 @@ int main() {
             return 77;
         }
 
+        {
+            ninfer::artifact::Reader reader(artifact);
+            if (!reader.directory().components.contains("dflash")) {
+                std::cout << "skip: artifact lacks the dflash component\n";
+                return 77;
+            }
+        }
+
         const std::vector<ninfer::TokenId> prompt{
             248045, 846,    198, 109266, 3709,  96220, 117443, 97913,
             1710,   248046, 198, 248045, 74455, 198,   248068, 198,
@@ -411,7 +426,7 @@ int main() {
 
         {
             ninfer::Engine engine(
-                dflash_engine_options(artifact, ninfer::ProposalHead::Optimized, 4352));
+                dflash_engine_options(artifact, artifact_proposal_head(artifact), 4352));
             if (const int result = verify_dflash_load(engine); result != 0) { return result; }
             ninfer::test::speculative_page_boundary(engine);
             engine.reset_measurement_peaks();
@@ -445,14 +460,14 @@ int main() {
         // leaves reused points that may legitimately win retention under the same slot budget.
         {
             ninfer::Engine engine(
-                dflash_engine_options(artifact, ninfer::ProposalHead::Optimized, 4352));
+                dflash_engine_options(artifact, artifact_proposal_head(artifact), 4352));
             if (const int result = exercise_boundary_restore(engine); result != 0) {
                 return result;
             }
         }
         {
             ninfer::Engine engine(
-                dflash_engine_options(artifact, ninfer::ProposalHead::Optimized, 4352));
+                dflash_engine_options(artifact, artifact_proposal_head(artifact), 4352));
             if (const int result = exercise_long_boundary_restore(engine); result != 0) {
                 return result;
             }

@@ -1,4 +1,5 @@
 #include "ninfer/engine.h"
+#include "artifact/reader.h"
 
 #include <cstdint>
 #include <cstdlib>
@@ -11,6 +12,12 @@
 
 namespace {
 
+ninfer::ProposalHead artifact_proposal_head(const char* artifact) {
+    ninfer::artifact::Reader reader(artifact);
+    return reader.directory().component("text").proposal ? ninfer::ProposalHead::Optimized
+                                                         : ninfer::ProposalHead::Full;
+}
+
 ninfer::EngineOptions engine_options(const char* artifact) {
     ninfer::EngineOptions options;
     options.artifact_path                     = artifact;
@@ -19,7 +26,7 @@ ninfer::EngineOptions engine_options(const char* artifact) {
     options.kv_cache                          = ninfer::KvCacheStorage::Int8Group64;
     options.speculative.backend               = ninfer::SpeculativeBackend::Mtp;
     options.speculative.draft_tokens          = 3;
-    options.speculative.proposal_head         = ninfer::ProposalHead::Optimized;
+    options.speculative.proposal_head         = artifact_proposal_head(artifact);
     options.enable_vision                     = true;
     options.use_cuda_graph                    = std::getenv("NINFER_TEST_EAGER") == nullptr;
     options.context_cache.host_capacity_bytes = 0;
@@ -32,7 +39,6 @@ ninfer::EngineOptions maximum_engine_options(const char* artifact) {
     options.kv_capacity               = ninfer::KvCapacityPolicy::explicit_capacity(262144);
     options.speculative.backend       = ninfer::SpeculativeBackend::Mtp;
     options.speculative.draft_tokens  = 5;
-    options.speculative.proposal_head = ninfer::ProposalHead::Optimized;
     return options;
 }
 
@@ -209,7 +215,12 @@ int exercise_vision(ninfer::Engine& engine) {
         after.vision->handoff_peak_bytes > after.vision->handoff_capacity_bytes ||
         after.workspace.measurement_peak_bytes == 0 ||
         after.workspace.measurement_peak_bytes > after.allocations.workspace_device_bytes) {
-        std::cerr << "35B Vision request did not use the startup-frozen workspace handoff\n";
+        std::cerr << "35B Vision request did not use the startup-frozen workspace handoff:"
+                  << " active=" << after.vision->handoff_active_bytes
+                  << " peak=" << after.vision->handoff_peak_bytes
+                  << " capacity=" << after.vision->handoff_capacity_bytes
+                  << " workspace_peak=" << after.workspace.measurement_peak_bytes
+                  << " workspace_bytes=" << after.allocations.workspace_device_bytes << '\n';
         return 1;
     }
     return 0;

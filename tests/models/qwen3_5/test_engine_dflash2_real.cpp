@@ -1,6 +1,7 @@
 #include "ninfer/engine.h"
 #include "speculative_page_boundary.h"
 #include "kv_cache_storage.h"
+#include "artifact/reader.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -12,6 +13,12 @@
 namespace {
 void require(bool condition, const char* message) {
     if (!condition) { throw std::runtime_error(message); }
+}
+
+ninfer::ProposalHead artifact_proposal_head(const char* artifact) {
+    ninfer::artifact::Reader reader(artifact);
+    return reader.directory().component("text").proposal ? ninfer::ProposalHead::Optimized
+                                                         : ninfer::ProposalHead::Full;
 }
 
 ninfer::RequestOptions request(std::uint32_t outputs, bool reuse = false) {
@@ -72,7 +79,9 @@ int main(int argc, char** argv) {
     try {
         const auto k         = argc > 1 ? static_cast<unsigned>(std::stoul(argv[1])) : 15U;
         const bool graph     = argc > 2 ? std::stoi(argv[2]) != 0 : true;
-        const bool optimized = argc > 3 ? std::stoi(argv[3]) != 0 : true;
+        const bool optimized =
+            argc > 3 ? std::stoi(argv[3]) != 0
+                     : artifact_proposal_head(artifact) == ninfer::ProposalHead::Optimized;
         const auto batch     = argc > 4 ? static_cast<unsigned>(std::stoul(argv[4])) : 8U;
         ninfer::EngineOptions options;
         options.artifact_path   = artifact;

@@ -1,5 +1,6 @@
 #include "ninfer/engine.h"
 #include "kv_cache_storage.h"
+#include "artifact/reader.h"
 
 #include <cstdint>
 #include <cstdlib>
@@ -13,6 +14,12 @@
 
 namespace {
 
+ninfer::ProposalHead artifact_proposal_head(const char* artifact) {
+    ninfer::artifact::Reader reader(artifact);
+    return reader.directory().component("text").proposal ? ninfer::ProposalHead::Optimized
+                                                         : ninfer::ProposalHead::Full;
+}
+
 ninfer::EngineOptions engine_options(const char* artifact) {
     ninfer::EngineOptions options;
     options.artifact_path                   = artifact;
@@ -21,7 +28,7 @@ ninfer::EngineOptions engine_options(const char* artifact) {
     options.prefill_chunk                   = 1024;
     options.speculative.backend             = ninfer::SpeculativeBackend::Mtp;
     options.speculative.draft_tokens        = 3;
-    options.speculative.proposal_head       = ninfer::ProposalHead::Optimized;
+    options.speculative.proposal_head       = artifact_proposal_head(artifact);
     options.enable_vision                   = true;
     options.max_concurrency                 = 1;
     options.max_pending_requests            = 1;
@@ -37,7 +44,7 @@ ninfer::EngineOptions host_restore_engine_options(const char* artifact) {
     options.prefill_chunk                     = 256;
     options.speculative.backend               = ninfer::SpeculativeBackend::Mtp;
     options.speculative.draft_tokens          = 3;
-    options.speculative.proposal_head         = ninfer::ProposalHead::Optimized;
+    options.speculative.proposal_head         = artifact_proposal_head(artifact);
     options.max_concurrency                   = 1;
     options.max_pending_requests              = 1;
     options.context_cache.extra_state_slots   = 1;
@@ -53,7 +60,7 @@ ninfer::EngineOptions anthropic_prefix_regression_engine_options(const char* art
     options.prefill_chunk                   = 512;
     options.speculative.backend             = ninfer::SpeculativeBackend::Mtp;
     options.speculative.draft_tokens        = 3;
-    options.speculative.proposal_head       = ninfer::ProposalHead::Optimized;
+    options.speculative.proposal_head       = artifact_proposal_head(artifact);
     options.max_concurrency                 = 1;
     options.max_pending_requests            = 1;
     options.context_cache.extra_state_slots = 1;
@@ -72,7 +79,7 @@ ninfer::EngineOptions shared_rewrite_materialization_engine_options(const char* 
     options.kv_cache                          = ninfer::KvCacheStorage::Fp8E4M3Row256;
     options.speculative.backend               = ninfer::SpeculativeBackend::Mtp;
     options.speculative.draft_tokens          = 3;
-    options.speculative.proposal_head         = ninfer::ProposalHead::Optimized;
+    options.speculative.proposal_head         = artifact_proposal_head(artifact);
     options.max_concurrency                   = 1;
     options.max_pending_requests              = 1;
     options.context_cache.extra_state_slots   = 2;
@@ -102,7 +109,7 @@ ninfer::EngineOptions concurrent_engine_options(const char* artifact) {
     options.prefill_chunk                     = 256;
     options.speculative.backend               = ninfer::SpeculativeBackend::Mtp;
     options.speculative.draft_tokens          = 3;
-    options.speculative.proposal_head         = ninfer::ProposalHead::Optimized;
+    options.speculative.proposal_head         = artifact_proposal_head(artifact);
     options.max_concurrency                   = 8;
     options.max_pending_requests              = 8;
     options.context_cache.extra_state_slots   = 16;
@@ -135,7 +142,9 @@ ninfer::PromptInput chinese_chat(bool enable_thinking) {
 }
 
 int exercise_artifact_frontend(const ninfer::Engine& engine) {
-    if (engine.count_tokens(chinese_chat(true)) != 16) {
+    // The artifact's template is the model's real one; thinking mode adds the default
+    // xhigh reasoning-effort instructions, which the bundled fallback template omits.
+    if (engine.count_tokens(chinese_chat(true)) != 58) {
         std::cerr << "artifact tokenizer/chat template changed the thinking prompt golden\n";
         return 1;
     }
@@ -632,6 +641,8 @@ int exercise_nested_tool_markers(const char* artifact) {
     request.execution.requested_output_tokens = 1;
     request.execution.sampling.temperature    = 0.0F;
     request.execution.allow_prefix_reuse      = true;
+    // Manual probes, not grammar-constrained generation; tools are declaration-only.
+    request.tool_choice.constraints           = ninfer::ToolConstraintMode::Automatic;
     request.stop.include_model_defaults       = false;
 
     // A single source creates both markers. Each probe changes the user suffix so the
@@ -1110,6 +1121,8 @@ int exercise_rewrite_checkpoints(ninfer::Engine& engine) {
         result.execution.requested_output_tokens = 4;
         result.execution.sampling.temperature    = 0.0F;
         result.execution.allow_prefix_reuse      = reuse;
+        // Manual rounds with structured tool history; tools are declaration-only.
+        result.tool_choice.constraints           = ninfer::ToolConstraintMode::Automatic;
         result.stop.include_model_defaults       = false;
         return result;
     };
@@ -1215,6 +1228,9 @@ int exercise_agent_continuation(const char* artifact) {
     request.execution.requested_output_tokens = 4;
     request.execution.sampling.temperature    = 0.0F;
     request.execution.allow_prefix_reuse      = true;
+    // The scenario drives a manual agent trajectory; tools are declared without the
+    // grammar protection that would require the model's default stop tokens.
+    request.tool_choice.constraints           = ninfer::ToolConstraintMode::Automatic;
     request.stop.include_model_defaults       = false;
     const auto opener_tokens =
         static_cast<std::uint32_t>(engine.tokenize_text("<|im_start|>assistant\n<think>\n").size());
@@ -1289,12 +1305,15 @@ int exercise_agent_continuation(const char* artifact) {
             text_message(ninfer::ChatRole::Tool, "{\"value\":" + std::to_string(round * 17) + '}');
         tool.tool_call_id = call_id;
         input.messages.push_back(std::move(tool));
+        // Mid-trajectory injections change the rendered prefix; the artifact's chat template
+        // only admits system messages at the beginning, so the recovery exercise uses user
+        // turns for the mid-conversation injections.
         if (round == 5) {
             input.messages.push_back(text_message(
-                ninfer::ChatRole::System, "Keep using the established diagnostic sequence."));
+                ninfer::ChatRole::User, "Keep using the established diagnostic sequence."));
         } else if (round == 11) {
             input.messages.push_back(text_message(
-                ninfer::ChatRole::Developer, "Preserve prior results and inspect the next step."));
+                ninfer::ChatRole::User, "Preserve prior results and inspect the next step."));
         }
 
         if (round == 8) {
@@ -1369,6 +1388,8 @@ int exercise_rewrite_branch(const char* artifact) {
         value.execution.requested_output_tokens = 4;
         value.execution.sampling.temperature    = 0.0F;
         value.execution.allow_prefix_reuse      = reuse;
+        // Manual checkpoint branching; tools are declaration-only.
+        value.tool_choice.constraints           = ninfer::ToolConstraintMode::Automatic;
         value.stop.include_model_defaults       = false;
         return value;
     };
@@ -1440,14 +1461,15 @@ int exercise_late_instructions(const char* artifact) {
     // template's serialization.
     const auto recovery_suffix_tokens = static_cast<std::uint32_t>(
         engine.tokenize_text("<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n").size());
-    for (const auto role : {ninfer::ChatRole::System, ninfer::ChatRole::Developer}) {
+    // The artifact's chat template only admits system and developer messages at the
+    // beginning; the late-injection recovery exercise uses user turns for both rounds.
+    for (const auto* instruction :
+         {"For the next answer, emphasize concrete examples.",
+          "Keep the next explanation technical and practical."}) {
         auto assistant              = text_message(ninfer::ChatRole::Assistant, previous.content);
         assistant.reasoning_content = previous.reasoning;
         input.messages.push_back(std::move(assistant));
-        input.messages.push_back(
-            text_message(role, role == ninfer::ChatRole::System
-                                   ? "For the next answer, emphasize concrete examples."
-                                   : "Keep the next explanation technical and practical."));
+        input.messages.push_back(text_message(ninfer::ChatRole::User, instruction));
         input.messages.push_back(text_message(
             ninfer::ChatRole::User,
             "Continue with another long paragraph describing the next stage of execution."));
@@ -1465,8 +1487,7 @@ int exercise_late_instructions(const char* artifact) {
                 next.prompt.prompt_tokens - next.stats.reused_prompt_tokens ||
             after.computed_prefill_tokens - before.computed_prefill_tokens !=
                 next.stats.computed_prefill_tokens) {
-            std::cerr << "late " << (role == ninfer::ChatRole::System ? "system" : "developer")
-                      << " instruction invalidated the stable conversation prefix: reused="
+            std::cerr << "late instruction invalidated the stable conversation prefix: reused="
                       << next.stats.reused_prompt_tokens << " required=" << required_frontier
                       << " prior_reused=" << previous.stats.reused_prompt_tokens
                       << " prompt=" << next.prompt.prompt_tokens

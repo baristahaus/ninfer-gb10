@@ -149,10 +149,14 @@ int main() {
         CUDA_CHECK(status);
         ninfer::DeviceContext device;
         ninfer::models::LoadOptions selected;
+        ninfer::artifact::Reader reader(artifact);
+        // The proposal head follows the artifact's inventory.
+        const ninfer::ProposalHead artifact_head =
+            reader.directory().component("text").proposal ? ninfer::ProposalHead::Optimized
+                                                           : ninfer::ProposalHead::Full;
         selected.vision        = true;
         selected.speculative   = ninfer::SpeculativeBackend::Mtp;
-        selected.proposal_head = ninfer::ProposalHead::Optimized;
-        ninfer::artifact::Reader reader(artifact);
+        selected.proposal_head = artifact_head;
         auto definition = q35::read_definition(reader, selected);
         auto profile    = q35::execution::describe_model(*definition);
         auto model =
@@ -166,7 +170,7 @@ int main() {
             options.kv_cache            = ninfer::KvCacheStorage::Fp8E4M3Row256;
             options.speculative.backend = ninfer::SpeculativeBackend::Mtp;
             options.speculative.draft_tokens        = 3;
-            options.speculative.proposal_head       = ninfer::ProposalHead::Optimized;
+            options.speculative.proposal_head       = artifact_head;
             options.enable_vision                   = true;
             options.use_cuda_graph                  = false;
             options.context_cache.extra_state_slots = 1;

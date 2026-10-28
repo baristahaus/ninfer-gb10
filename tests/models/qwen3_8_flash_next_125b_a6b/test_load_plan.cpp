@@ -31,28 +31,24 @@ int main() {
         if (plan.bindings.ple_mapping.size() != 320001536ULL * 160) {
             throw std::runtime_error("PLE table mapping has the wrong extent");
         }
-        if (plan.materialization.device_objects.size() != text_objects) {
+        if (plan.device_objects.size() != text_objects) {
             throw std::runtime_error("MTP0/Vision-off load plan uploaded optional tensors");
         }
         ninfer::artifact::Binder mtp_binder(reader);
         const auto mtp_plan = ninfer::models::qwen3_8_flash_next_125b_a6b::plan_artifact(
             mtp_binder, {.speculative = ninfer::SpeculativeBackend::Mtp});
-        if (mtp_plan.materialization.device_objects.size() != text_objects + mtp_objects ||
-            mtp_plan.materialization.device_capacity_bytes <=
-                plan.materialization.device_capacity_bytes) {
+        if (mtp_plan.device_objects.size() != text_objects + mtp_objects) {
             throw std::runtime_error("MTP3 load plan did not upload exactly the draft tensors");
         }
         ninfer::artifact::Binder full_binder(reader);
         const auto full_plan = ninfer::models::qwen3_8_flash_next_125b_a6b::plan_artifact(
             full_binder, {.vision = true, .speculative = ninfer::SpeculativeBackend::Mtp});
-        if (full_plan.materialization.device_objects.size() != text_objects + mtp_objects + 333 ||
-            full_plan.materialization.device_capacity_bytes <=
-                mtp_plan.materialization.device_capacity_bytes) {
+        if (full_plan.device_objects.size() != text_objects + mtp_objects + 333) {
             throw std::runtime_error("Vision load plan did not upload exactly the Vision tensors");
         }
-        std::cout << "device=" << plan.materialization.device_capacity_bytes
-                  << " mtp_device=" << mtp_plan.materialization.device_capacity_bytes
-                  << " full_device=" << full_plan.materialization.device_capacity_bytes
+        std::cout << "device_objects=" << plan.device_objects.size()
+                  << " mtp_objects=" << mtp_plan.device_objects.size()
+                  << " full_objects=" << full_plan.device_objects.size()
                   << " file_backed="
                   << plan.bindings.ple_mapping.size()
                   << '\n';

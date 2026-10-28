@@ -401,9 +401,15 @@ int exercise_own_source_demote_restore(const char* artifact) {
         options.max_concurrency                      = 2;
         options.max_pending_requests                 = 2;
         options.enable_vision                        = false;
+        // Two lanes and no spare slot: the two lane states plus the shared capture contend for
+        // two Device StateImage slots, so the follow-up's fork admission always plans under
+        // pressure, independent of capture timing.
         options.context_cache.device_state_slots     = device_state_slots;
         options.context_cache.host_state_slots       = 4;
         options.context_cache.host_kv_capacity_bytes = 1ULL << 30;
+        // Defer the follow-up's long prefill so its admission is planned while the first turn
+        // still runs, deterministic regardless of prefill speed.
+        options.long_prefill_wait_ms                 = 200;
         return options;
     };
 
@@ -506,6 +512,244 @@ int exercise_own_source_demote_restore(const char* artifact) {
     return 0;
 }
 
+// Forced own-source pressure geometry, in two deterministic phases.
+//
+// Two engine facts (recorded while building this exercise against the demote-then-restore
+// planner) keep the full conjunction - the shared source demoted, no ordinary owner relieved,
+// and the follow-up forking - out of reach of one admission:
+//   1. Every completed turn catalogues an endpoint whose Device StateImages relieve more
+//      cheaply than the candidate's own shared source (relieving the own source also strips
+//      the restore credit from the assessed fork work). The endpoint disappears from the
+//      victim domain only while a later turn of the same conversation is consuming it.
+//   2. With the endpoint consumed and the shared source the only victim, the search still
+//      selects the root candidate with the same single-victim demote: the composed fork whose
+//      own pressure demotes its source never beats the root plan. The demote-then-restore
+//      therefore executes across admissions - a source demoted to Host by one admission is
+//      restored by a later fork planned around a Host-resident source.
+// Phase 1 pins the forced victim domain: the middle turn consumes the capture endpoint, so
+// the follow-up's admission has exactly one pressure victim - the shared source - and the
+// selected plan demotes it to Host, never evicts it, drops no checkpoint and relieves no
+// private owner. Phase 2 pins the restore execution: with the shared source already
+// Host-resident, the follow-up forks it through the Host-to-Device fallback and matches the
+// unpressured fork token for token.
+int exercise_forced_own_source_compound(const char* artifact) {
+    const std::string sentence = "The quick brown fox jumps over the lazy dog. ";
+    std::string body;
+    for (int repeat = 0; repeat < 120; ++repeat) { body += sentence; }
+    std::string divergent;
+    for (int repeat = 0; repeat < 120; ++repeat) {
+        divergent += "Pack my box with five dozen liquor jugs. ";
+    }
+    const auto text_message = [](std::string text, ninfer::ChatRole role) {
+        ninfer::ChatMessage message;
+        message.role = role;
+        message.parts.push_back(
+            ninfer::MessagePart{.kind = ninfer::MessagePartKind::Text,
+                                .text = std::move(text), .media = {}});
+        return message;
+    };
+    const auto shared_marker = [] {
+        ninfer::PromptCacheMarker marker;
+        marker.after_message_count = 1;
+        return marker;
+    };
+    const auto capture_turn = [&]() {
+        ninfer::PromptInput input;
+        input.messages.push_back(text_message(body, ninfer::ChatRole::User));
+        input.messages.push_back(text_message(body, ninfer::ChatRole::User));
+        input.options.enable_thinking = false;
+        input.context_cache.markers.push_back(shared_marker());
+        return input;
+    };
+    const auto follow_up = [&]() {
+        ninfer::PromptInput input;
+        input.messages.push_back(text_message(body, ninfer::ChatRole::User));
+        input.messages.push_back(text_message(divergent, ninfer::ChatRole::User));
+        input.messages.push_back(text_message(
+            "Answer with one short sentence about the text above.", ninfer::ChatRole::User));
+        input.options.enable_thinking = false;
+        input.context_cache.markers.push_back(shared_marker());
+        return input;
+    };
+    // Continues the capture turn's own conversation through its assistant response, so the
+    // admission consumes the capture endpoint in place instead of forking a new StateImage and
+    // instead of touching the shared source.
+    const auto consuming_middle_turn = [&](const std::string& capture_content) {
+        ninfer::PromptInput input;
+        input.messages.push_back(text_message(body, ninfer::ChatRole::User));
+        input.messages.push_back(text_message(body, ninfer::ChatRole::User));
+        ninfer::ChatMessage response;
+        response.role = ninfer::ChatRole::Assistant;
+        response.parts.push_back(
+            ninfer::MessagePart{.kind = ninfer::MessagePartKind::Text,
+                                .text = capture_content, .media = {}});
+        input.messages.push_back(std::move(response));
+        input.messages.push_back(text_message("Summarize in five words.", ninfer::ChatRole::User));
+        input.options.enable_thinking = false;
+        return input;
+    };
+
+    // Phase 1: the forced victim domain. The middle turn consumes the capture endpoint while
+    // it runs, so the follow-up's admission - planned 200 ms after its submission, well inside
+    // the middle turn's multi-second run - sees exactly one pressure victim: the shared source.
+    ninfer::GenerationResult capture;
+    ninfer::GenerationResult middle_result;
+    ninfer::GenerationResult follow_up_result;
+    {
+        ninfer::EngineOptions options                    = engine_options(artifact);
+        options.max_context                              = 8192;
+        options.kv_capacity                              = ninfer::KvCapacityPolicy::explicit_capacity(8192);
+        options.max_concurrency                          = 2;
+        options.max_pending_requests                     = 2;
+        // Three Device state slots in total: the capture endpoint, its turn-closure image and
+        // the shared source fill the pool exactly; the consuming middle turn fits without
+        // pressure, and the follow-up's admission is left with a one-slot deficit.
+        options.context_cache.device_state_slots         = 1;
+        options.enable_vision                            = false;
+        options.context_cache.host_state_slots           = 4;
+        options.context_cache.host_kv_capacity_bytes     = 2ULL << 30;
+        options.context_cache.max_private_continuations  = 4;
+        options.context_cache.max_shared_prefixes        = 4;
+        // Release the follow-up's long prefill 200 ms after submission so its admission is
+        // planned while the middle turn still runs and still consumes the capture endpoint.
+        options.long_prefill_wait_ms                     = 200;
+        ninfer::Engine engine(std::move(options));
+        capture = engine.submit(engine.prepare(capture_turn()), greedy_options(64, true)).wait();
+        if (capture.generated_token_ids.empty() || capture.content.empty()) {
+            std::cerr << "Flash-Next forced-compound capture turn did not generate\n";
+            return 1;
+        }
+        auto middle_handle =
+            engine.submit(engine.prepare(consuming_middle_turn(capture.content)),
+                          greedy_options(64, true));
+        // Read the middle turn's admission bookkeeping before the follow-up is submitted: the
+        // follow-up's own admission pressure lands while the middle turn still runs and would
+        // otherwise pollute this snapshot.
+        const auto after_middle = engine.runtime_stats();
+        auto follow_up_handle =
+            engine.submit(engine.prepare(follow_up()), greedy_options(8, true));
+        middle_result = middle_handle.wait();
+        if (middle_result.prefix_reuse_path != ninfer::PrefixReusePath::PrivateEndpoint ||
+            middle_result.reused_prompt_tokens < 1024) {
+            std::cerr << "Flash-Next forced-compound middle turn did not consume the capture "
+                         "endpoint (reused " << middle_result.reused_prompt_tokens << ", path "
+                      << static_cast<int>(middle_result.prefix_reuse_path) << ")\n";
+            return 1;
+        }
+        follow_up_result = follow_up_handle.wait();
+        if (follow_up_result.content.empty()) {
+            std::cerr << "Flash-Next forced-compound follow-up did not generate\n";
+            return 1;
+        }
+        const auto after = engine.runtime_stats();
+        if (after.pressure_shared_owners_degraded == 0 ||
+            after.pressure_shared_owners_evicted != 0 ||
+            after.pressure_checkpoints_dropped != 0 ||
+            after.pressure_private_owners_degraded != 0 ||
+            after.pressure_private_owners_evicted != 0) {
+            std::cerr << "Flash-Next forced-compound victim domain was not exactly the shared "
+                         "source (shared degraded " << after.pressure_shared_owners_degraded
+                      << ", shared evicted " << after.pressure_shared_owners_evicted
+                      << ", private degraded " << after.pressure_private_owners_degraded
+                      << ", private evicted " << after.pressure_private_owners_evicted
+                      << ", dropped " << after.pressure_checkpoints_dropped << ")\n";
+            return 1;
+        }
+        std::cout << "forced compound: middle consumed " << middle_result.reused_prompt_tokens
+                  << ", shared degraded " << after.pressure_shared_owners_degraded
+                  << ", private relieved 0, dropped 0\n";
+    }
+
+    // Phase 2: the restore execution. One Device state slot in total leaves the shared source
+    // on Host after the capture (it never wins a Device slot from the running lane), so the
+    // follow-up's fork is planned around a Host-resident source and restores it through the
+    // Host-to-Device fallback. The capture endpoint is the only Device checkpoint owner and
+    // the engine must relieve it; the plan demotes (retains) it rather than evicting it, and
+    // no checkpoint is destroyed.
+    {
+        const auto options_for = [&](std::uint32_t device_state_slots) {
+            ninfer::EngineOptions options                    = engine_options(artifact);
+            options.max_context                              = 8192;
+            options.kv_capacity                              = ninfer::KvCapacityPolicy::explicit_capacity(8192);
+            options.max_concurrency                          = 1;
+            options.max_pending_requests                     = 2;
+            options.context_cache.device_state_slots         = device_state_slots;
+            options.enable_vision                            = false;
+            options.context_cache.host_state_slots           = 4;
+            options.context_cache.host_kv_capacity_bytes     = 2ULL << 30;
+            options.context_cache.max_private_continuations  = 4;
+            options.context_cache.max_shared_prefixes        = 4;
+            return options;
+        };
+        ninfer::GenerationResult restore_capture;
+        ninfer::GenerationResult restore_follow_up;
+        {
+            ninfer::Engine engine(options_for(0));
+            restore_capture =
+                engine.submit(engine.prepare(capture_turn()), greedy_options(64, true)).wait();
+            if (restore_capture.generated_token_ids.empty()) {
+                std::cerr << "Flash-Next forced-compound restore capture did not generate\n";
+                return 1;
+            }
+            const auto after_capture = engine.runtime_stats();
+            if (after_capture.host_state_occupied_slots == 0 ||
+                after_capture.pressure_shared_owners_degraded != 0 ||
+                after_capture.pressure_shared_owners_evicted != 0) {
+                std::cerr << "Flash-Next forced-compound restore capture did not park the "
+                             "shared source on Host (host states "
+                          << after_capture.host_state_occupied_slots << ")\n";
+                return 1;
+            }
+            restore_follow_up =
+                engine.submit(engine.prepare(follow_up()), greedy_options(8, true)).wait();
+            if (restore_follow_up.prefix_reuse_path !=
+                    ninfer::PrefixReusePath::SharedStablePrefix ||
+                restore_follow_up.reused_prompt_tokens < 1024) {
+                std::cerr << "Flash-Next forced-compound restore follow-up did not fork the "
+                             "shared source (reused "
+                          << restore_follow_up.reused_prompt_tokens << ", path "
+                          << static_cast<int>(restore_follow_up.prefix_reuse_path) << ")\n";
+                return 1;
+            }
+            const auto after = engine.runtime_stats();
+            if (after.state_h2d_count == 0 ||
+                after.pressure_shared_owners_degraded != 0 ||
+                after.pressure_shared_owners_evicted != 0 ||
+                after.pressure_checkpoints_dropped != 0 ||
+                after.pressure_private_owners_evicted != 0) {
+                std::cerr << "Flash-Next forced-compound restore follow-up did not restore the "
+                             "shared source through Host (h2d " << after.state_h2d_count
+                          << ", shared degraded " << after.pressure_shared_owners_degraded
+                          << ", shared evicted " << after.pressure_shared_owners_evicted
+                          << ", private evicted " << after.pressure_private_owners_evicted
+                          << ", dropped " << after.pressure_checkpoints_dropped << ")\n";
+                return 1;
+            }
+            std::cout << "forced compound: restore fork reused "
+                      << restore_follow_up.reused_prompt_tokens << ", h2d "
+                      << after.state_h2d_count << ", private demoted "
+                      << after.pressure_private_owners_degraded << ", dropped 0\n";
+        }
+
+        // The restored fork must match an unpressured fork token for token.
+        ninfer::Engine roomy(options_for(4));
+        auto roomy_capture = roomy.submit(roomy.prepare(capture_turn()), greedy_options(64, true));
+        auto roomy_follow_up = roomy.submit(roomy.prepare(follow_up()), greedy_options(8, true));
+        const auto roomy_capture_result   = roomy_capture.wait();
+        const auto roomy_follow_up_result = roomy_follow_up.wait();
+        if (roomy_capture_result.generated_token_ids != restore_capture.generated_token_ids ||
+            roomy_follow_up_result.generated_token_ids !=
+                restore_follow_up.generated_token_ids) {
+            std::cerr << "Flash-Next forced-compound restored fork differs from the unpressured "
+                         "fork\n";
+            print_tokens("pressured", restore_follow_up.generated_token_ids);
+            print_tokens("roomy", roomy_follow_up_result.generated_token_ids);
+            return 1;
+        }
+    }
+    return 0;
+}
+
 } // namespace
 
 int main() {
@@ -533,6 +777,7 @@ int main() {
         if (exercise_ordinary_greedy(artifact, expected_prefix) != 0) { return 1; }
         if (exercise_serving_shape(artifact) != 0) { return 1; }
         if (exercise_own_source_demote_restore(artifact) != 0) { return 1; }
+        if (exercise_forced_own_source_compound(artifact) != 0) { return 1; }
         std::cout << "OK Qwen3.8 Flash Next real Engine\n";
         return 0;
     } catch (const std::exception& error) {

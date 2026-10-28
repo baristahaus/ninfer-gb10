@@ -1,8 +1,5 @@
 #pragma once
-#include "core/weight.h"
-#include "core/tensor.h"
-#include <cuda_runtime.h>
 
-namespace ninfer::ops::detail {
-using Fp8Launch = void (*)(const Tensor&, const Weight&, Tensor&, cudaStream_t);
-}
+// Single-source header: the canonical copy lives at src/ops/linear/kernels/fp8/fp8_launch.h. This shim keeps the include path
+// stable for the consumers of this location.
+#include "../kernels/fp8/fp8_launch.h"

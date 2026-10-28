@@ -123,6 +123,14 @@ While a Chat Completions tool call is buffered for parsing, SSE may include a
 `tool_call_progress` object with cumulative `bytes` and an empty `choices` array. This observation
 is not a partial tool argument or generated text; complete tool calls retain normal event semantics.
 
+Two engine routes produce streamed tool calls. The Qwen3.5 family streams
+`tool_calls` deltas incrementally (name first, then argument fragments), so clients can
+reconstruct calls while they generate. The Qwen3.8 Flash-Next family keeps arguments private
+while generating: it emits only `tool_call_progress` observations, and each finished call
+arrives as one complete `tool_calls` delta before the terminal chunk. Both routes end with the
+normal `finish_reason: tool_calls` chunk; a client that only reads the terminal tool calls
+works with both.
+
 ## OpenAI Chat Completions
 
 ```bash

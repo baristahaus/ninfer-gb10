@@ -42,9 +42,12 @@ carries more value than the upstream exchange.
 ### Where the work lives
 
 - `master`: the Flash-Next 125B serving lane on GB10. This is the default branch.
-- `5090-test` and `gb10-field-report`: the EXL3, `qwen4_exp` and tiering work line.
-  This line does not carry the Flash-Next family yet. The integration branch is
-  `merge/work-line-integration`. Do not build that branch for Flash-Next serving.
+  As of 2026-10-27 it also carries the merged work line: EXL3/Trellis, the
+  tiering packages, serving telemetry and SP-2 constrained decoding for the
+  Qwen3.5 family.
+- `5090-test` and `gb10-field-report`: the EXL3, `qwen4_exp` and tiering work
+  line's published branches. `master` is their superset; the integration branch
+  `merge/work-line-integration` is retired.
 - `AGENTS.md` and `docs/maintainer/2026-10-12-fork-strategy.md` hold the full
   contract for human and agent contributors.
 
@@ -87,7 +90,8 @@ plus selected fixes cherry-picked from giveen/ninfer-ext (see below).
    explicit constraints. See `docs/serving.md` and
    `docs/maintainer/constrained-decoding.md`.
 3. **Lowered CUDA requirements.** The whole stack — clean build, op conformance
-   (ctest), serve, probes — is validated on the GB10 stock **CUDA 13.0.88** toolkit;
+   (ctest), serve, probes — is validated on the workstation's **CUDA 13.4.92**
+   toolkit (the stock 13.0.88 toolkit miscompiles `sm_121a`);
    upstream's validated toolkit is CUDA 13.1. CMake imposes no CUDA version floor.
 
 ### Pull requests merged since the port

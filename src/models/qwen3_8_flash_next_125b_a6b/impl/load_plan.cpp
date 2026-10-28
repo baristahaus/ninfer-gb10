@@ -190,14 +190,17 @@ Reference bind_ple_table(artifact::Binder& binder, const std::string& name) {
     const auto& binding = binder.reader().directory().bindings.at(name);
     const artifact::Shape shape{320001536, 160};
     if (!binding.whole_object || binding.parts.size() != 1) {
-        throw artifact::ArtifactError("PLE requires a complete raw FP8 table");
+        throw artifact::ArtifactError("PLE requires a complete raw table object");
     }
     const auto& object = binder.reader().directory().tensor(binding.parts.front().object);
     binder.reader().validate_object(binding.parts.front().object);
-    if (object.shape != shape || object.format != "fp8_e4m3fn" ||
-        object.layout != "contiguous_le_v1") {
+    const bool fp8_table = object.format == "fp8_e4m3fn" && object.layout == "contiguous_le_v1";
+    const bool nvfp4_table = object.format == "nvfp4" && object.layout == "block_scale_k16_v1";
+    if (object.shape != shape || (!fp8_table && !nvfp4_table)) {
         throw artifact::ArtifactError("PLE table representation is invalid");
     }
+    // The row count and hash constants are family constants; the stored row format
+    // is recipe-dependent (FP8 160 B/row vs NVFP4 90 B/row + scale_2).
     return {name, shape, binding, artifact::Residency::Host};
 }
 

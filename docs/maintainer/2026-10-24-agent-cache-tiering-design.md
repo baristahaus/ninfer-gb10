@@ -167,6 +167,17 @@ wiring lands on master; this section is the pickup list when it does.
   read/write bandwidth on the lane box (page-sized reads and writes against a real spill file)
   and add explicit `h2spill`/`spill2h` rows to the 5090 preset. The context-cost preset schema
   accepts them; the calibration bench fills them from its measured `h2d` fit until then.
+- **Tiering acceptance run (replaces the M4-style one-off for this package).** The
+  implementation is complete on master as of 2026-10-31 (slices 1-5). One 27B suite run
+  covers the behavioral acceptance: `ninfer_qwen3_5_native_transactions_test none` with
+  `NINFER_TEST_ARTIFACT=<27b artifact>` executes `state_spill_roundtrip` (full-coverage
+  spill, residency, release accounting) and `state_spill_resume_acceptance` (resumed
+  request admits the spilled prefix, prices and recomputes only the tail). Both compile
+  on the GB10 workstation and are gated from execution here only by the Qwen3.5 family's
+  compute-capability gate. Also verify the session-activity weighting behavior
+  (`ContextCacheOptions.session_activity_window`) on the same run; its unit-level fixture
+  was dropped because the resource-manager test fixture does not mirror the engine's owner
+  lifecycle (details in the beads issue).
 - **Confirmation run for the MXFP8 A16 linear suite.** `ninfer_linear_mxfp8_a16_test` is green
   on the GB10 workstation with full row comparison (every weight row of all eleven shapes) and
   workspace-envelope checks. One confirmation run on the 5090 closes the same chain the EXL3

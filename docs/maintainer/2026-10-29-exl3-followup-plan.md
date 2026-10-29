@@ -134,3 +134,41 @@ Constraints for the implementation (M2): the flag suppresses end-of-sequence sam
 requests on the instance, the help text and `docs/operations.md` mark it as a
 benchmark/measurement knob, and the flag must compose with thinking templates and speculative
 decoding the way the ordinary route does, because the suite runs the production profile.
+
+## 5090 lane execution record (2026-10-29, appended after the run)
+
+All four executable M-items are done; commits carry the details, this section is the map.
+
+- **M1 — round attribution** (commit `39d33ec6`, `docs/performance/qwen3.8-27b.md`):
+  operator-level microbench of the dispatched unit at every registered shape, weighted by the
+  512-call per-round census from the artifact (all 256 EXL3 objects are k2=4, codebook mcg).
+  Fused projections 11.39 ms per round (eager upper bound, launch overhead included); the fp8
+  KV read floor 0.6/4.8/9.6/19.1 ms at 8K/64K/128K/256K; measured rounds
+  16.6/17.7/19.1/21.7 ms. Route is projection-bound through 128K, KV-bandwidth-bound at 256K
+  (the projections overlap under the KV stream). No `nsys` on the 5090 box — the attribution
+  is the microbench plus the battery's own numbers, not a kernel trace.
+- **M2 — `--ignore-eos` + batched saturation** (commits `dd2b0559`, `ac3f92c1`): the knob
+  implemented per D1 (schema-driven, help + `docs/operations.md` marked as a benchmark knob);
+  the concurrency runner takes a repeatable `--serve-arg` passthrough (use the `=` form:
+  `--serve-arg=--ignore-eos`; argparse rejects the spaced form when the value starts with
+  `--`). Saturation with the knob: C=1/2/4/8 = 60.30/117.93/225.39/418.82 tok/s, near-linear
+  (1.96×/3.74×/6.95×), per-row 87% of solo at C=8, every wave at the output limit.
+- **M3 — real-tensor check** (commit `ddf98838`): a second refactor casualty found and fixed —
+  the converter's EXL3 writer path (codebook ids, rate validator, bank/dense geometries, the
+  EXL3 numeric format, the data-dependent payload sizing) was dead on master; the serving
+  artifact was never affected. One real 27B down_proj quantized with the production route
+  (k2=4, mcg, the campaign's calibrated Hessian, nmse 0.1208) through the production writer
+  into the revived argv mode: relative L2 0.00165 against the composed FP64 GEMM, inside the
+  2/256 criterion. Converter environment rebuilt at `~/.venvs/ninfer-convert` (torch
+  2.14.1+cu130 — newer than the campaign's recorded 2.11; the container is validated
+  numerically regardless).
+- **M4 — mxfp8 confirmation**: `ninfer_linear_mxfp8_a16_test` passes on the 5090.
+- **M5 — small-slice work**: authorized after M1; in progress at the time of writing. M1's
+  breakdown named the target: 256 of the 512 per-round dispatches are four-way row-slice
+  splits of fused parents (attention qkgv, GDN qkvz, MLP gate/up) paying per-call launch
+  floor at 130–426 GB/s; running each parent as one dispatch cuts the round by roughly
+  2 ms at C=1.
+
+Pre-existing damage outside the 5090 lane, not touched: `docs/operations.md` still documents
+`--lm-head-draft`, which no longer exists on master (the GB10 lane's doc; the live flag is
+`--proposal-head-rows`/`--proposal-head`).

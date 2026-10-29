@@ -3,14 +3,14 @@
 Context: the fused TensorFold decode landed on master (`56abf9e9`, merged with the
 remote at `4160d3d2`): decode 9.6→60.4 tok/s at 8K, saturation C=1 at 60.2 tok/s,
 bit-identical to the superseded route, conformance oracle revived and green. This
-plan covers the follow-up work split between the RTX 5090 lane (the agent on the
-local box) and the primary dev lane (twoFour). Items not listed here — the MoE
+plan covers the follow-up work split between the 5090 lane and the GB10 lane.
+Items not listed here — the MoE
 tiering packages, GB10 125B bring-up (SP-6), Qwen 4.0 readiness — stay under their
 own authorizations and are unaffected.
 
 ## Work items and ownership
 
-### 5090 lane (local box; all GPU measurement + serving changes)
+### 5090 lane (all GPU measurement + serving changes)
 
 **M1. Round attribution probe.** Profile one steady C=1 decode round of the fused
 route at 8K and at 256K context (serve's `--gpu-timing`, or the per-call CUDA-event
@@ -25,7 +25,7 @@ waves are refused because the suite's completion contract requires every stream 
 reach the 8,192-token limit and at least one stream samples EOS mid-window under
 both sampling profiles. The decode engine itself is already batch-capable: T≤8 rows
 are the fused register route's domain, so C≤8 needs no kernel work — only the
-measurement gate. Implementation depends on twoFour's contract decision (D1 below):
+measurement gate. Implementation depends on the GB10 lane's contract decision (D1 below):
 a server-level CLI flag (no protocol change; the bench runs its own server
 instance) or a request-level `ignore_eos` extension field (matches the vLLM bench
 convention; touches the advertised OpenAI surface, so the schema tests and
@@ -50,7 +50,7 @@ competes with the tiering packages and is re-evaluated against them after M1.
 Operator-level microbench only after the relevant kernel is identified; the
 end-to-end claim needs a battery rerun.
 
-### Primary lane (twoFour)
+### GB10 lane (contract and coverage decisions)
 
 **D1. EOS-knob contract decision (blocks M2).** Decide the knob's surface:
 server-level CLI (no protocol change) vs request-level `ignore_eos` field (an
@@ -65,7 +65,7 @@ in `src/ops/linear/projection/linear.cpp`). Revive it: register in
 `tests/ops/linear/tests.cmake`, port to the current DeviceBuffer/execution APIs —
 `tests/ops/linear/linear_shape_runner.cpp` (the shared shape harness, restored
 with the EXL3 fix) is the pattern and is already linked into the test support
-library. Validate on the GB10 box; the 5090 lane runs a confirmation pass (M4)
+library. Validate on GB10; the 5090 lane runs a confirmation pass (M4)
 after it lands. If the file is too stale against current APIs, rewrite it onto
 the consolidated cases runner instead of resurrecting dead scaffolding.
 
@@ -100,7 +100,7 @@ lands, so both build targets have evidence.
 - File ownership, no overlap: 5090 lane touches `src/serve/**`,
   `tools/bench/run_serve_concurrency.py`, `docs/performance/qwen3.8-27b.md`,
   `docs/serving.md` + schema tests (only if request-level), `profiles/bench/**`,
-  converter env/execution. Primary lane touches `tests/ops/linear/**` (mxfp8),
+  converter env/execution. GB10 lane touches `tests/ops/linear/**` (mxfp8),
   `docs/maintainer/**`, `tools/convert/**` docs. `tests/ops/linear/tests.cmake`
   is sequential: the EXL3 registrations are already on master; D2 appends.
 - Each lane runs its own GPU; no cross-box contention. The 5090 box keeps the

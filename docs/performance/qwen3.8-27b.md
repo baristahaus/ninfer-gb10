@@ -41,16 +41,46 @@ The workspace arena is 243.3 MiB in every configuration. Resident weight arenas 
 | MTP3 | 16.672 | 19.729 |
 | DFlash2 K=7 | 18.326 | 21.383 |
 
-### Dense EXL3 route status (October 2026)
+### Dense EXL3 route (October 2026)
 
-The `out/qwen3_8_27b_exl3.ninfer` dense route serves end to end on the merged master generation
-(revision `166a1eff` and later): startup, CUDA Graph calibration, and the streaming tool-call
-path complete. A single labeled smoke observation, not part of the September campaign: at the
-groupwise G0-shaped request (a 7-token prompt, temperature 0, tool-constrained output), the
-groupwise route decoded at 83.4 tok/s while the dense EXL3 route decoded at 9.7 tok/s
-single-stream. Battery-grade EXL3 context, speculation, and saturation numbers are pending;
-the dense EXL3 kernel route's performance is the open SP-7 work item. The GDN replay-record
-path (speculative decoding over EXL3 weights) is refused at request time.
+Measured on October 28, 2026 (America/New_York), on the same RTX 5090, with the merged master
+generation's serving binary and the `out/qwen3_8_27b_exl3.ninfer` dense artifact
+(payload digest `eaa9d921a32e…388974d`). Runs use FP8 E4M3 row-256 KV, a 1,024-token prefill
+chunk, CUDA Graphs, disabled prefix reuse, and the stochastic sampling profile. Twenty formal
+requests completed without request, CUDA, or allocation errors. These rows come from this
+campaign only and are not comparable to the September groupwise and NVFP4 rows beyond the
+shared method.
+
+#### MTP0 context-length profile
+
+| Prompt tokens | Samples | Prefill phase (tok/s) | Server TTFT (ms) | Decode phase (tok/s) |
+|---|---|---|---|---|
+| 7,680 | 5 | 1,269.1 ± 0.4 | 6,054.0 ± 1.9 | 9.6 ± 0.0 |
+| 64,512 | 5 | 1,279.3 ± 1.6 | 50,442.7 ± 62.5 | 9.5 ± 0.0 |
+| 130,048 | 5 | 1,212.1 ± 0.2 | 107,318.9 ± 19.2 | 9.4 ± 0.0 |
+| 260,096 | 5 | 1,095.1 ± 0.3 | 237,574.9 ± 73.8 | 9.2 ± 0.0 |
+
+The dense EXL3 decode rate is essentially context-independent (9.6 down to 9.2 tok/s from 8K
+to 256K); the groupwise route degrades from 84.1 to 59.2 tok/s over the same fixtures. The
+EXL3 decode cost is dominated by the per-step weight decode, which does not grow with context.
+
+#### Decode saturation
+
+| C | Steady (s) | Steady decode (tok/s) | Wave completion |
+|---|---|---|---|
+| 1 | 848.0 | 9.65 | output limit, 8,183 committed tokens |
+
+The C=1 point satisfies the suite's contract (every stream reaches the output limit). The
+C=2, 4, and 8 points are **not recorded**: under both the stochastic and the greedy profile,
+at least one stream samples a stop token inside the 8,192-token window (the greedy C=2 wave
+terminated one stream at 80 tokens), and the suite's completion contract rejects such waves.
+Because the surviving stream then runs solo for the rest of the window, these waves do not
+measure the batched decode rate either. Measuring the EXL3 batched decode scaling needs a
+window the route sustains, or an agreed relaxation of the completion contract; both are open.
+
+MTP3 and DFlash2 modes are not part of this route's record: the GDN replay-record path
+refuses speculative decoding over EXL3 weights at request time, so the speculative suites
+cannot run.
 
 ## No-speculation context profile
 

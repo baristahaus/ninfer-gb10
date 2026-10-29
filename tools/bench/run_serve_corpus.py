@@ -569,7 +569,7 @@ def build_result_record(
         prompt_tokens = int(result["prompt_tokens"])
         completion_tokens = int(result["completion_tokens"])
         prepare_seconds = float(timings["prepare"])
-        vision_seconds = float(timings["vision"])
+        vision_seconds = float(timings["vision_stream"])
         prefill_seconds = float(timings["prefill"])
         decode_seconds = float(timings["decode"])
         total_seconds = float(timings["total"])
@@ -584,6 +584,7 @@ def build_result_record(
         executor_poll_exposed_seconds = float(host_exposed["executor_poll"])
         engine_commit_output_exposed_seconds = float(host_exposed["engine_commit_output"])
         engine_maintenance_exposed_seconds = float(host_exposed["engine_maintenance"])
+        executor_flush_exposed_seconds = float(host_exposed["executor_flush"])
         engine_host_exposed_seconds = float(host_exposed["total"])
         scheduler_yield_exposed_seconds = float(engine_timing["scheduler_yield_exposed_seconds"])
         decode_host_exposed_seconds = float(decode_engine["host_exposed_seconds"])
@@ -598,6 +599,7 @@ def build_result_record(
         engine_boundary_exposed_seconds
         + session_call_exposed_seconds
         + executor_poll_exposed_seconds
+        + executor_flush_exposed_seconds
         + engine_commit_output_exposed_seconds
         + engine_maintenance_exposed_seconds
     )

@@ -117,4 +117,20 @@ NOTICE; divergence is a deliberate port, not an obligation).
 
 ## Decision record (append here)
 
-(empty — D1 goes here)
+### D1 — EOS-suppression knob surface (decided 2026-10-29)
+
+Decision: a server-level CLI flag on `ninfer-serve` (for example `--ignore-eos`), not a
+request-level `ignore_eos` field.
+
+Rationale: the decode-saturation suite runs its own server instance and needs every stream on
+that instance to decode to the full output budget, so instance scope is exactly the gate's
+semantics and no per-request routing is needed. A CLI flag changes no advertised protocol:
+`docs/serving.md`, the schema tests and every existing client stay valid, and the change stays
+inside the 5090 lane's file ownership. A request-level field remains the better long-term API
+if a real client need appears (it matches the vLLM bench convention), and adding it later is
+additive; doing it now would expand the advertised contract only to serve a measurement tool.
+
+Constraints for the implementation (M2): the flag suppresses end-of-sequence sampling for all
+requests on the instance, the help text and `docs/operations.md` mark it as a
+benchmark/measurement knob, and the flag must compose with thinking templates and speculative
+decoding the way the ordinary route does, because the suite runs the production profile.

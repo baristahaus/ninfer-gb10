@@ -36,8 +36,4 @@ void exl3_dense_dispatch(const Tensor& x, const Weight& w, Tensor& out, MemoryAr
 [[nodiscard]] Weight exl3_dense_slice(const Weight& parent, std::int32_t row_begin,
                                       std::int32_t rows);
 
-// The kernel launcher (exl3_dense.cu). The dispatch has already validated every argument.
-void launch_exl3_dense(const Tensor& x, const Weight& w, Tensor& out, void* workspace,
-                       cudaStream_t stream);
-
 } // namespace ninfer::ops::detail

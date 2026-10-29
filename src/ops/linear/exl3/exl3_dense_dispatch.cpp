@@ -1,9 +1,20 @@
 #include "ops/linear/exl3/exl3_dense_dispatch.h"
 
+#include "core/device.h"
+
 #include <cstddef>
 #include <cstdint>
 #include <stdexcept>
 #include <string>
+
+namespace ninfer_tf {
+// The TensorFold fused decode launch (tensorfold/exl3_linear.cu). Declared here, defined in
+// the vendored translation unit.
+void exl3_dense_launch_nf(const void* x, const void* payload, std::size_t trellis_offset,
+                          std::size_t suh_offset, std::size_t svh_offset, int n, int k, int tokens,
+                          int codebook, int k2, int t_n, void* y, unsigned char* scratch,
+                          cudaStream_t stream);
+}  // namespace ninfer_tf
 
 namespace ninfer::ops::detail {
 namespace {
@@ -39,11 +50,20 @@ std::size_t exl3_dense_workspace_bytes(std::int32_t n, std::int32_t k, std::int3
         throw std::invalid_argument("exl3 dense workspace: unregistered problem " +
                                     std::to_string(n) + "x" + std::to_string(k));
     }
-    // Stage 1 stages one FP32 partial z per (k chunk, output row, token); stage 2 reduces the
-    // chunks and applies the output transform.
-    const std::int64_t chunks = (static_cast<std::int64_t>(k) + 511) / 512;
-    return static_cast<std::size_t>(chunks) * static_cast<std::size_t>(n) *
-           static_cast<std::size_t>(max_tokens) * sizeof(float);
+    // The fused TensorFold route: the rotated fp16 activations, the split-K arrival counters
+    // (one per 128-column block), and the fp32 split partials.
+    const std::size_t activations =
+        (static_cast<std::size_t>(max_tokens) * static_cast<std::size_t>(k) * 2 + 15) &
+        ~std::size_t{15};
+    const std::size_t counters =
+        (static_cast<std::size_t>(n) / 128 * sizeof(int) + 15) & ~std::size_t{15};
+    const std::size_t partials = 8ULL * static_cast<std::size_t>(max_tokens) *
+                                 static_cast<std::size_t>(n) * sizeof(float);
+    // TensorFold stores y as [tokens, N] before the tiled transpose into the out view.
+    const std::size_t y_plane =
+        (static_cast<std::size_t>(max_tokens) * static_cast<std::size_t>(n) * 2 + 15) &
+        ~std::size_t{15};
+    return activations + counters + partials + y_plane;
 }
 
 std::uint32_t exl3_dense_k2(const Weight& w) {
@@ -107,7 +127,18 @@ void exl3_dense_dispatch(const Tensor& x, const Weight& w, Tensor& out, MemoryAr
     }
     auto scope = workspace->scope();
     auto scratch = workspace->alloc_bytes(exl3_dense_workspace_bytes(w.n, w.k, tokens));
-    launch_exl3_dense(x, w, out, scratch.data, stream);
+    // The fused TensorFold route (Apache-2.0; see tensorfold/NOTICE): one rotated-activation
+    // kernel plus one fused decode matmul with in-kernel split-K, replacing the two-pass SIMT
+    // decode. NInfer's k-major tile order maps onto the kernels' indexing through the two
+    // strides computed inside the adapter.
+    const int row_stride =
+        w.exl3_row_stride != 0 ? static_cast<int>(w.exl3_row_stride) : w.n;
+    ninfer_tf::exl3_dense_launch_nf(x.data, w.payload, w.exl3_trellis_offset, w.exl3_suh_offset,
+                                    w.exl3_svh_offset, w.n, w.k, tokens,
+                                    static_cast<int>(w.exl3_codebook),
+                                    static_cast<int>(exl3_dense_k2(w)), row_stride / 16, out.data,
+                                    static_cast<unsigned char*>(scratch.data), stream);
+    CUDA_CHECK(cudaGetLastError());
 }
 
 } // namespace ninfer::ops::detail

@@ -65,16 +65,16 @@ int admission_refusals() {
     // A 3INST bank has no qualified route (contract section 7).
     {
         auto packed = make_exl3_dense_weight(1024, 5120, 11U, 8, Codebook::Inst3);
-        DeviceBuffer device_weight(packed.payload.size());
-        device_weight.copy_from_host(packed.payload.data(), device_weight.bytes);
-        DeviceBuffer activation(5120 * 8 * 2);
-        DeviceBuffer output(1024 * 8 * 2);
-        Tensor x(activation.p, DType::BF16, {5120, 8});
-        Tensor out(output.p, DType::BF16, {1024, 8});
-        DeviceArena workspace(1 << 20);
+        DeviceBuffer device_weight(cuda_environment().context.device(), packed.payload.size());
+        device_weight.copy_from_host(packed.payload.data(), device_weight.size());
+        DeviceBuffer activation(cuda_environment().context.device(), 5120 * 8 * 2);
+        DeviceBuffer output(cuda_environment().context.device(), 1024 * 8 * 2);
+        Tensor x(activation.span(), DType::BF16, {5120, 8});
+        Tensor out(output.span(), DType::BF16, {1024, 8});
+        MemoryArena workspace(1 << 20);
         try {
-            ops::linear(x, packed.device_weight(device_weight.p), out,
-                        ops::LinearPolicy::A16Only, workspace, nullptr);
+            ops::linear(x, packed.device_weight(device_weight.span()), out,
+                        ops::LinearPolicy::A16Only, workspace, cuda_environment().default_execution);
             std::cerr << "exl3 dense: 3INST bank accepted\n";
             ++failures;
         } catch (const std::exception&) {
@@ -88,12 +88,12 @@ int admission_refusals() {
         bank.n = bank.shape[0] = bank.padded_shape[0] = 512;
         bank.k = bank.shape[1] = bank.padded_shape[1] = 2048;
         bank.ndim = 2;
-        DeviceBuffer activation(2048 * 2);
-        DeviceBuffer output(512 * 2);
-        Tensor x(activation.p, DType::BF16, {2048, 1});
-        Tensor out(output.p, DType::BF16, {512, 1});
+        DeviceBuffer activation(cuda_environment().context.device(), 2048 * 2);
+        DeviceBuffer output(cuda_environment().context.device(), 512 * 2);
+        Tensor x(activation.span(), DType::BF16, {2048, 1});
+        Tensor out(output.span(), DType::BF16, {512, 1});
         try {
-            ops::linear(x, bank, out, nullptr);
+            ops::linear(x, bank, out, cuda_environment().default_execution);
             std::cerr << "exl3 dense: expert bank accepted by Linear\n";
             ++failures;
         } catch (const std::exception&) {
@@ -168,9 +168,9 @@ int exl3_dense_a16_conformance() {
     // mixer shape): the slice's baked scratch must be replay-stable.
     {
         quantized_weight::PackedWeight host = make_exl3_dense_weight(2048, 5120, 907U, 4, Codebook::Mcg);
-        DeviceBuffer device_weight(host.payload.size());
-        device_weight.copy_from_host(host.payload.data(), device_weight.bytes);
-        const Weight parent = host.device_weight(device_weight.p);
+        DeviceBuffer device_weight(cuda_environment().context.device(), host.payload.size());
+        device_weight.copy_from_host(host.payload.data(), device_weight.size());
+        const Weight parent = host.device_weight(device_weight.span());
         std::vector<std::uint16_t> activation_bits(static_cast<std::size_t>(5120) * 8);
         for (std::size_t i = 0; i < activation_bits.size(); ++i) {
             const std::uint64_t hash = quantized_weight::detail::mix64(908U * 0x100000001b3ULL + i);
@@ -179,32 +179,32 @@ int exl3_dense_a16_conformance() {
             activation_bits[i] = test::f32_to_bf16(
                 (hash & 0x8000000000000000ULL) != 0 ? -magnitude : magnitude);
         }
-        DeviceBuffer device_activation(activation_bits.size() * sizeof(std::uint16_t));
-        device_activation.copy_from_host(activation_bits.data(), device_activation.bytes);
+        DeviceBuffer device_activation(cuda_environment().context.device(), activation_bits.size() * sizeof(std::uint16_t));
+        device_activation.copy_from_host(activation_bits.data(), device_activation.size());
         for (const auto [begin, rows] : {std::pair{0, 1024}, {1024, 1024}}) {
             const Weight slice = ops::detail::exl3_dense_slice(parent, begin, rows);
             const auto capacity = ops::linear_workspace_capacity_bytes(
                 QType::EXL3, rows, 5120, ops::LinearPolicy::A16Only, 8, 8);
-            DeviceArena workspace(std::max<std::size_t>(capacity, 256));
-            DeviceBuffer output(static_cast<std::size_t>(rows) * 8 * sizeof(std::uint16_t));
-            Tensor input(device_activation.p, DType::BF16, {5120, 8});
-            Tensor destination(output.p, DType::BF16, {rows, 8});
+            MemoryArena workspace(std::max<std::size_t>(capacity, 256));
+            DeviceBuffer output(cuda_environment().context.device(), static_cast<std::size_t>(rows) * 8 * sizeof(std::uint16_t));
+            Tensor input(device_activation.span(), DType::BF16, {5120, 8});
+            Tensor destination(output.span(), DType::BF16, {rows, 8});
             DecodeGraphDefinition definition;
             DecodeGraphExecutable graph;
             DeviceContext context;
             const auto launch = [&] {
                 ops::linear(input, slice, destination, ops::LinearPolicy::A16Only, workspace,
-                            context.stream);
+                            context.execution_view());
             };
             cuda_check(cudaDeviceSynchronize(), "before slice graph capture");
-            definition.capture(context.stream, launch);
+            definition.capture(context.execution_view().stream(), launch);
             graph.instantiate(definition);
             for (int replay = 0; replay < 2; ++replay) {
-                graph.launch(context.stream);
+                graph.launch(context.execution_view().stream());
             }
             cuda_check(cudaDeviceSynchronize(), "synchronize slice graph replays");
             std::vector<std::uint16_t> out_bits(static_cast<std::size_t>(rows) * 8);
-            output.copy_to_host(out_bits.data(), output.bytes);
+            output.copy_to_host(out_bits.data(), output.size());
             double worst = 0.0;
             double scale = 0.0;
             for (int r = 0; r < rows; ++r) {
@@ -247,9 +247,9 @@ int composed_route_check() {
     constexpr std::int32_t t = 8;  // decode-route cross-check first
     int failures = 0;
     quantized_weight::PackedWeight host = make_exl3_dense_weight(n, k, 907U, 4, Codebook::Mcg);
-    DeviceBuffer device_weight(host.payload.size());
-    device_weight.copy_from_host(host.payload.data(), device_weight.bytes);
-    const Weight parent = host.device_weight(device_weight.p);
+    DeviceBuffer device_weight(cuda_environment().context.device(), host.payload.size());
+    device_weight.copy_from_host(host.payload.data(), device_weight.size());
+    const Weight parent = host.device_weight(device_weight.span());
 
     // Token-major [t, k] activation bits (the linear family's addressing convention).
     std::vector<std::uint16_t> activation_bits(static_cast<std::size_t>(k) * t);
@@ -266,8 +266,8 @@ int composed_route_check() {
                 0x8000;  // f16 sign to bf16 exponent alignment: see note below
         }
     }
-    DeviceBuffer device_activation(activation_bits.size() * sizeof(std::uint16_t));
-    device_activation.copy_from_host(activation_bits.data(), device_activation.bytes);
+    DeviceBuffer device_activation(cuda_environment().context.device(), activation_bits.size() * sizeof(std::uint16_t));
+    device_activation.copy_from_host(activation_bits.data(), device_activation.size());
     // The route's activations and outputs are BF16; decode the 16-bit patterns by
     // widening to FP32, not as IEEE binary16.
     const auto bf16_value = [](std::uint16_t bits) {
@@ -288,15 +288,15 @@ int composed_route_check() {
         const std::ptrdiff_t source_row_begin = whole ? 0 : begin;
         const auto capacity = ops::linear_workspace_capacity_bytes(
             QType::EXL3, rows, k, ops::LinearPolicy::A16Only, t, t);
-        DeviceArena workspace(std::max<std::size_t>(capacity, 256));
-        DeviceBuffer output(static_cast<std::size_t>(rows) * t * sizeof(std::uint16_t));
-        Tensor input(device_activation.p, DType::BF16, {k, t});
-        Tensor destination(output.p, DType::BF16, {rows, t});
-        ops::linear(input, slice, destination, ops::LinearPolicy::A16Only, workspace, nullptr);
+        MemoryArena workspace(std::max<std::size_t>(capacity, 256));
+        DeviceBuffer output(cuda_environment().context.device(), static_cast<std::size_t>(rows) * t * sizeof(std::uint16_t));
+        Tensor input(device_activation.span(), DType::BF16, {k, t});
+        Tensor destination(output.span(), DType::BF16, {rows, t});
+        ops::linear(input, slice, destination, ops::LinearPolicy::A16Only, workspace, cuda_environment().default_execution);
         cuda_check(cudaDeviceSynchronize(), "synchronize composed slice linear");
 
         std::vector<std::uint16_t> out_bits(static_cast<std::size_t>(rows) * t);
-        output.copy_to_host(out_bits.data(), output.bytes);
+        output.copy_to_host(out_bits.data(), output.size());
 
         std::vector<float> oracle_weight(static_cast<std::size_t>(rows) * k);
         for (int r = 0; r < rows; ++r) {
@@ -365,7 +365,7 @@ int real_artifact_check(const char* path) {
         return 1;
     }
     const auto bytes = reader.read_object(tensor);
-    ninfer::DeviceBuffer device_weight(bytes.size());
+    ninfer::DeviceBuffer device_weight(cuda_environment().context.device(), bytes.size());
     device_weight.copy_from_host(bytes.data(), bytes.size());
 
     Weight w{};
@@ -374,7 +374,7 @@ int real_artifact_check(const char* path) {
     w.ndim             = 2;
     w.n = w.shape[0] = w.padded_shape[0] = static_cast<std::int32_t>(geometry.shape[0]);
     w.k = w.shape[1] = w.padded_shape[1] = static_cast<std::int32_t>(geometry.shape[1]);
-    w.payload        = device_weight.p;
+    w.payload        = device_weight.data();
     w.payload_bytes  = geometry.bytes;
     w.exl3_trellis_offset = geometry.exl3.trellis_offset;
     w.exl3_suh_offset      = geometry.exl3.suh_offset;
@@ -399,15 +399,15 @@ int real_artifact_check(const char* path) {
             static_cast<float>(static_cast<int>((i * 37 + 11) % 251) - 125) * (1.0F / 256.0F);
         activation_bits[i] = ninfer::test::f32_to_bf16(value);
     }
-    ninfer::DeviceBuffer device_activation(activation_bits.size() * 2);
-    device_activation.copy_from_host(activation_bits.data(), device_activation.bytes);
+    ninfer::DeviceBuffer device_activation(cuda_environment().context.device(), activation_bits.size() * 2);
+    device_activation.copy_from_host(activation_bits.data(), device_activation.size());
     ninfer::test::GuardedDeviceBuffer output(static_cast<std::size_t>(n) * t * 2);
-    Tensor x(device_activation.p, DType::BF16, {k, t});
-    Tensor out(output.data(), DType::BF16, {n, t});
+    Tensor x(device_activation.span(), DType::BF16, {k, t});
+    Tensor out(output.span(), DType::BF16, {n, t});
     const std::size_t capacity = ops::linear_workspace_capacity_bytes(
         QType::EXL3, n, k, ops::LinearPolicy::A16Only, t, t);
-    DeviceArena workspace(std::max<std::size_t>(capacity, 256));
-    ops::linear(x, w, out, ops::LinearPolicy::A16Only, workspace, nullptr);
+    MemoryArena workspace(std::max<std::size_t>(capacity, 256));
+    ops::linear(x, w, out, ops::LinearPolicy::A16Only, workspace, cuda_environment().default_execution);
     CUDA_CHECK(cudaDeviceSynchronize());
     int guard_failures = output.verify_guards("real check");
     if (guard_failures != 0) {

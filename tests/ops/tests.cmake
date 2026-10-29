@@ -19,3 +19,9 @@ include("${CMAKE_CURRENT_LIST_DIR}/kv_cache/tests.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/softmax_attention/tests.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/moe/tests.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/ple/tests.cmake")
+
+# Host-only: the EXL3 codec decoder against the exllamav3 fixture (skips until it is generated).
+ninfer_add_op_test(ninfer_exl3_codec_test
+  SOURCES "${CMAKE_CURRENT_LIST_DIR}/test_exl3_codec.cpp"
+  LIBRARIES ninfer::json
+  NEEDS_SOURCE_DIR)

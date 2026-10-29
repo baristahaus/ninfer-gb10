@@ -43,40 +43,48 @@ The workspace arena is 243.3 MiB in every configuration. Resident weight arenas 
 
 ### Dense EXL3 route (October 2026)
 
-Measured on October 28, 2026 (America/New_York), on the same RTX 5090, with the merged master
+Measured on October 28, 2026 (America/New_York), on the same RTX 5090, with the master
 generation's serving binary and the `out/qwen3_8_27b_exl3.ninfer` dense artifact
-(payload digest `eaa9d921a32e…388974d`). Runs use FP8 E4M3 row-256 KV, a 1,024-token prefill
-chunk, CUDA Graphs, disabled prefix reuse, and the stochastic sampling profile. Twenty formal
-requests completed without request, CUDA, or allocation errors. These rows come from this
-campaign only and are not comparable to the September groupwise and NVFP4 rows beyond the
+(payload digest `eaa9d921a32e…388974d`). This campaign runs the fused TensorFold decode
+kernel (`src/ops/linear/exl3/tensorfold/`, one rotated-activation kernel plus one fused
+tensor-core matmul with in-kernel split-K per projection, replacing the two-pass SIMT decode
+measured by the first version of this section). Runs use FP8 E4M3 row-256 KV, a 1,024-token
+prefill chunk, CUDA Graphs, disabled prefix reuse, and the stochastic sampling profile. Twenty
+formal requests completed without request, CUDA, or allocation errors. These rows come from
+this campaign only and are not comparable to the September groupwise and NVFP4 rows beyond the
 shared method.
 
 #### MTP0 context-length profile
 
 | Prompt tokens | Samples | Prefill phase (tok/s) | Server TTFT (ms) | Decode phase (tok/s) |
 |---|---|---|---|---|
-| 7,680 | 5 | 1,269.1 ± 0.4 | 6,054.0 ± 1.9 | 9.6 ± 0.0 |
-| 64,512 | 5 | 1,279.3 ± 1.6 | 50,442.7 ± 62.5 | 9.5 ± 0.0 |
-| 130,048 | 5 | 1,212.1 ± 0.2 | 107,318.9 ± 19.2 | 9.4 ± 0.0 |
-| 260,096 | 5 | 1,095.1 ± 0.3 | 237,574.9 ± 73.8 | 9.2 ± 0.0 |
+| 7,680 | 5 | 1,288.1 ± 2.0 | 5,964.8 ± 9.7 | 60.4 ± 0.2 |
+| 64,512 | 5 | 1,281.8 ± 1.6 | 50,345.6 ± 62.6 | 56.4 ± 0.0 |
+| 130,048 | 5 | 1,213.4 ± 0.2 | 107,209.7 ± 20.9 | 52.4 ± 0.1 |
+| 260,096 | 5 | 1,095.4 ± 0.1 | 237,506.1 ± 22.3 | 46.1 ± 0.0 |
 
-The dense EXL3 decode rate is essentially context-independent (9.6 down to 9.2 tok/s from 8K
-to 256K); the groupwise route degrades from 84.1 to 59.2 tok/s over the same fixtures. The
-EXL3 decode cost is dominated by the per-step weight decode, which does not grow with context.
+The fused route decodes at 60.4 down to 46.1 tok/s from 8K to 256K — 6.3× to 5.0× the
+two-pass route's 9.6–9.2 tok/s on the same fixtures. The prefill phase is unchanged within
+run-to-run variation (its composed route is untouched). The decode rate now visibly declines
+with context because the fused matmuls no longer dominate the round: attention and KV traffic
+grow with context while the projection cost stays fixed, so attention takes the share the
+slower kernels previously masked.
 
 #### Decode saturation
 
 | C | Steady (s) | Steady decode (tok/s) | Wave completion |
 |---|---|---|---|
-| 1 | 848.0 | 9.65 | output limit, 8,183 committed tokens |
+| 1 | 135.0 | 60.20 | output limit, 8,127 committed tokens |
 
-The C=1 point satisfies the suite's contract (every stream reaches the output limit). The
-C=2, 4, and 8 points are **not recorded**: under both the stochastic and the greedy profile,
-at least one stream samples a stop token inside the 8,192-token window (the greedy C=2 wave
-terminated one stream at 80 tokens), and the suite's completion contract rejects such waves.
-Because the surviving stream then runs solo for the rest of the window, these waves do not
-measure the batched decode rate either. Measuring the EXL3 batched decode scaling needs a
-window the route sustains, or an agreed relaxation of the completion contract; both are open.
+The C=1 point satisfies the suite's contract (every stream reaches the output limit); the
+8,192-token window that took 848 s under the two-pass route closes in 135 s. As in the
+two-pass campaign, the C=2, 4, and 8 points are **not recorded**: under the stochastic
+profile, at least one stream samples a stop token inside the 8,192-token window (the C=2
+wave terminated early; C=4 and C=8 refused identically), and the suite's completion contract
+rejects such waves. Because the surviving stream then runs solo for the rest of the window,
+these waves do not measure the batched decode rate either. Measuring the EXL3 batched decode
+scaling needs a window the route sustains, or an agreed relaxation of the completion
+contract; both are open.
 
 MTP3 and DFlash2 modes are not part of this route's record: the GDN replay-record path
 refuses speculative decoding over EXL3 weights at request time, so the speculative suites
@@ -84,28 +92,14 @@ cannot run.
 
 #### Where the decode time goes
 
-A per-call CUDA-event probe over the decode path (the same kernels the captured graphs
-replay) attributes the round almost entirely to the EXL3 kernels; per-dispatch host cost is
-about 10 microseconds. Each matmul runs a two-pass SIMT decode: a partial kernel (grid
-`n/128 × k/512`, 256 threads, trellis tiles decoded to FP32 in shared memory, an FP32 partial
-plane in the workspace) plus a small finish kernel. Measured per-call times against each
-shape's weight-read floor at roughly 1.7 TB/s:
-
-| Shape (T=1) | Measured (µs) | Weight-read floor (µs) | Ratio |
-|---|---|---|---|
-| 2048×5120 (projection slice) | 117 | ~2.5 | ~47× |
-| 6144×5120 (projection slice) | 118 | ~7 | ~17× |
-| 17408×5120 (gate/up half) | 334 | ~21 | ~16× |
-| 5120×17408 (down) | 336 | ~21 | ~16× |
-
-A decode round launches about eight such matmuls per layer across 64 layers plus the finish
-kernels — roughly 1,000 kernel launches per round — and their sum matches the observed
-104 ms round. The kernels are compute-bound, not bandwidth-bound: a 3-bit trellis decode
-should beat the 8-bit groupwise route on weight traffic, not lose to it by 8.7×. Closing the
-gap is kernel work in the shared ops layer (a fused single-pass tensor-core path for the
-dense objects, one matmul per projection instead of four row-sliced dispatches, and reusing
-the finished decode tiles across the two passes); it benefits the 5090 and GB10 lanes
-alike, since `sm_120a` and `sm_121a` build the same kernels.
+The fused route replaces the two-pass SIMT decode's roughly 1,000 kernel launches per round
+with about 512 fused tensor-core launches (eight projections per layer across 64 layers,
+each one rotated-activation kernel plus one fused decode matmul with in-kernel split-K, plus
+the small output transposes). The steady round drops from 104 ms to 16.5 ms, i.e. from
+roughly 200 µs to roughly 32 µs per launched projection averaged across the layer's shapes.
+The remaining per-round cost is everything outside the fused projections; the decode rate's
+decline with context (60.4 to 46.1 tok/s) is consistent with that residual being dominated by
+attention and KV traffic, which grow with context while the projection cost stays fixed.
 
 ## No-speculation context profile
 

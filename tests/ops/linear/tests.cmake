@@ -1,6 +1,7 @@
 add_library(ninfer_linear_test_support STATIC
   "${CMAKE_CURRENT_LIST_DIR}/support.cpp"
-  "${CMAKE_CURRENT_LIST_DIR}/weights.cpp")
+  "${CMAKE_CURRENT_LIST_DIR}/weights.cpp"
+  "${CMAKE_CURRENT_LIST_DIR}/linear_shape_runner.cpp")
 ninfer_test_includes(ninfer_linear_test_support)
 ninfer_op_oracle_options(ninfer_linear_test_support)
 target_link_libraries(ninfer_linear_test_support PUBLIC ninfer_ops ninfer_op_test_support)
@@ -51,3 +52,7 @@ ninfer_linear_format_tests(pair q8)
 
 ninfer_linear_suite(topk test.cpp)
 ninfer_linear_format_tests(topk q4 q8 fp8)
+
+ninfer_add_op_test(ninfer_linear_exl3_dense_a16_test
+  SOURCES "${CMAKE_CURRENT_LIST_DIR}/test_exl3_dense_a16.cpp"
+  LIBRARIES ninfer_linear_test_support ninfer_artifact)

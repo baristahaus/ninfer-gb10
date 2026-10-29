@@ -1042,9 +1042,11 @@ The table lists executable defaults. The startup example selects a long-context 
 Context-cost coefficients resolve once at startup from generic defaults, matching compiled values,
 and optional transfer or prefill entries from `--context-cost-presets FILE`. Prefill entries match
 the hardware and a signature derived from the actual Text/Vision configuration, bindings and Uses.
-A new representation without a matching measurement uses generic prefill coefficients. A malformed
-file aborts startup; the operational context-cost record and JSONL `server_start` identify the
-selected source.
+A new representation without a matching measurement uses generic prefill coefficients. The
+transfer entry prices five directions: `d2h`, `h2d`, `d2d`, and the state-tier spill directions
+`h2spill` and `spill2h`; the spill keys are optional and inherit the `h2d` entry when a
+calibration predates them. A malformed file aborts startup; the operational context-cost record
+and JSONL `server_start` identify the selected source.
 
 Engine selects sampling defaults from the loaded architecture and the request's resolved thinking mode.
 Qwen3.6-27B and Qwen3.8-27B use `1.0/0.95/20/0/0` for

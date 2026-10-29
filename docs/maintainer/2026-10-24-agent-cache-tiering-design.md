@@ -116,12 +116,18 @@ reaches.
 
 ## 4. Implementation sites
 
+Verified against the post-SP-7 master (2026-10-31). The 27B route's live context cache is the
+old-engine cache; the pre-SP-7 qwen3_5 program files named by the first draft of this table
+(`program/storage/context.cpp`, `program/planning/pressure*.cpp`) are dead sources that no build
+target compiles and that include headers absent from the tree.
+
 | Piece | Site |
 |---|---|
-| Spill arena (file-backed, host page layout) | `src/core` — sibling of `host_kv_arena`, same plane layout; transfer work reused |
-| Session records, activity weighting | `src/runtime` (SessionKey owner) + the pressure planner's prior input |
-| Spill placement in plans | `src/models/qwen3_5/program/storage/context.cpp`, `planning/pressure*.cpp` |
-| Page-in transfers at admission | the existing materialization-planning path, new transfer kind |
+| Spill arena (file-backed, host page layout) | `src/core/spill_kv_store.h/.cpp` (landed, 2026-10-31); transfer work reused |
+| Spill transfer directions and pricing | `ContextTransferDirection` + `ContextMachineCostModel` (`src/runtime/contract/resources.h`, `src/runtime/engine/context_cache/context_cost.*`) — landed 2026-10-31; old preset files inherit the h2d row for the spill directions |
+| Spill placement in plans | the live Session demotion/reclaim machinery: `src/models/qwen3_5/session/{reclaim,checkpoints}.cpp` (`quote_demotion`, `release_checkpoint` spill-out, `host_bytes_released`), plus `src/runtime/engine/context_cache/resource_manager.h` (`candidates` pricing a spill-resident alternative) |
+| Page-in transfers at admission | `ResourceManager::candidates` `SourceChoice.transfers` (cost = transfers + prefill at `resource_manager.h:134`); the binding/restore path consumes the chosen source in `src/runtime/engine/engine_schedule.inl` |
+| Session records, activity weighting | `src/runtime/engine/context_cache/` (SessionKey owner) + the retention prior consumed by `resource_manager` ranking |
 | Configuration | `include/ninfer/types.h` (`ContextCacheOptions`), CLI/serving option plumbing, documented defaults |
 | Authority revision | `resource-scheduling-and-context-cache.md` §5 (placement), §10 (retention), §11 (configuration), §12 (invariants) — touched sections translated to English |
 

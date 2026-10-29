@@ -32,31 +32,36 @@ std::vector<Invocation> a16_calls() {
 int run_mxfp8_a16() {
     int failures = 0;
     failures += run_shape("MXFP8_A16", ActivationCompute::A16, make_mxfp8_weight,
-                          {48, 2560, 831U, Comparison::Sampled, true, a16_calls()});
+                          {48, 2560, 831U, Comparison::Full, true, a16_calls()});
     failures += run_shape("MXFP8_A16", ActivationCompute::A16, make_mxfp8_weight,
-                          {512, 2560, 833U, Comparison::Sampled, true, a16_calls()});
+                          {512, 2560, 833U, Comparison::Full, true, a16_calls()});
     failures += run_shape("MXFP8_A16", ActivationCompute::A16, make_mxfp8_weight,
-                          {640, 2560, 837U, Comparison::Sampled, true, a16_calls()});
+                          {640, 2560, 837U, Comparison::Full, true, a16_calls()});
     failures += run_shape("MXFP8_A16", ActivationCompute::A16, make_mxfp8_weight,
-                          {2560, 6144, 839U, Comparison::Sampled, true, a16_calls()});
+                          {2560, 6144, 839U, Comparison::Full, true, a16_calls()});
     failures += run_shape("MXFP8_A16", ActivationCompute::A16, make_mxfp8_weight,
-                          {6144, 2560, 841U, Comparison::Sampled, true, a16_calls()});
+                          {6144, 2560, 841U, Comparison::Full, true, a16_calls()});
     failures += run_shape("MXFP8_A16", ActivationCompute::A16, make_mxfp8_weight,
-                          {10240, 2560, 843U, Comparison::Sampled, true, a16_calls()});
+                          {10240, 2560, 843U, Comparison::Full, true, a16_calls()});
     failures += run_shape("MXFP8_A16", ActivationCompute::A16, make_mxfp8_weight,
-                          {12288, 2560, 847U, Comparison::Sampled, true, a16_calls()});
+                          {12288, 2560, 847U, Comparison::Full, true, a16_calls()});
     // The post-mixer gate/up leaves are K=320: not a whole gemv warp phase, so
     // T=1 must route through the tiled MMA path and stay correct there.
     failures += run_shape("MXFP8_A16", ActivationCompute::A16, make_mxfp8_weight,
-                          {10240, 320, 853U, Comparison::Sampled, true, a16_calls()});
+                          {10240, 320, 853U, Comparison::Full, true, a16_calls()});
     failures += run_shape("MXFP8_A16", ActivationCompute::A16, make_mxfp8_weight,
-                          {320, 10240, 859U, Comparison::Sampled, true, a16_calls()});
+                          {320, 10240, 859U, Comparison::Full, true, a16_calls()});
     // The shared-expert down projection is K=640: not a whole gemv warp phase
     // either, so it also exercises the T=1 MMA route.
     failures += run_shape("MXFP8_A16", ActivationCompute::A16, make_mxfp8_weight,
-                          {2560, 640, 863U, Comparison::Sampled, true, a16_calls()});
+                          {2560, 640, 863U, Comparison::Full, true, a16_calls()});
     failures += run_shape("MXFP8_A16", ActivationCompute::A16, make_mxfp8_weight,
-                          {640, 2560, 877U, Comparison::Sampled, true, a16_calls()});
+                          {640, 2560, 877U, Comparison::Full, true, a16_calls()});
+
+    // The declared token intervals must cover every public point they contain, including the
+    // K shapes whose T=1 route differs from the tiled path.
+    failures += verify_workspace_envelopes(QType::MXFP8, 2560, 2560);
+    failures += verify_workspace_envelopes(QType::MXFP8, 10240, 320);
 
     constexpr std::array policies{ops::LinearPolicy::A16Only, ops::LinearPolicy::AllowA8,
                                   ops::LinearPolicy::AllowA4};

@@ -818,8 +818,8 @@ private:
 
     struct PressureTransition {
         PressureTransitionPhase phase = PressureTransitionPhase::HostReleases;
-        std::array<TransferWork, 3> transfer_work{};
-        std::array<std::uint32_t, 3> transfer_pages{};
+        std::array<TransferWork, runtime::kContextTransferDirectionCount> transfer_work{};
+        std::array<std::uint32_t, runtime::kContextTransferDirectionCount> transfer_pages{};
         std::uint64_t state_images = 0;
         std::uint8_t timer_mask    = 0;
     };

@@ -300,15 +300,22 @@ cost::FitResult fit_prefill(const cost::PrefillSuiteResult& samples) {
         kMaximumPrefillP95, kOrderingSignificance);
 }
 
-std::array<ninfer::runtime::ContextTransferCost, 3>
+std::array<ninfer::runtime::ContextTransferCost,
+           ninfer::runtime::kContextTransferDirectionCount>
 runtime_transfer_cost(const std::array<cost::FitResult, 3>& fits) {
-    std::array<ninfer::runtime::ContextTransferCost, 3> result;
+    std::array<ninfer::runtime::ContextTransferCost,
+               ninfer::runtime::kContextTransferDirectionCount>
+        result;
     for (std::size_t index = 0; index < fits.size(); ++index) {
         const auto& values = fits[index].quantized_coefficients;
         if (values.size() != 3) { throw std::logic_error("incomplete transfer roofline fit"); }
         result[index] = ninfer::runtime::ContextTransferCost{
             .batch_ns = values[0], .operation_ns = values[1], .ns_per_byte_q32 = values[2]};
     }
+    // Spill pages live on the host medium and are not measured by the transfer suite yet, so
+    // they inherit the measured host-to-device fit rather than a guess.
+    result[3] = result[1];
+    result[4] = result[1];
     return result;
 }
 

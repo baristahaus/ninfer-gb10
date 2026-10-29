@@ -144,6 +144,13 @@ struct ContextCacheOptions {
     // spill file location, one file per engine.
     std::filesystem::path state_spill_path;
     std::optional<std::size_t> state_spill_capacity_bytes;
+    // Agent-class session retention weighting: a bounded catalog of session records weights
+    // an ongoing session's cache coverage over closed sessions'. Activity is tracked in the
+    // cache's existing per-request order, so the window is a number of admission/completion
+    // events, not milliseconds — the design's "no new clock" rule. Absent window disables
+    // the weighting; absent catalog bound uses a default derived at startup.
+    std::optional<std::uint32_t> max_tracked_sessions;
+    std::optional<std::uint64_t> session_activity_window;
 };
 
 

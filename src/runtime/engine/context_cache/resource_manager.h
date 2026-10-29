@@ -80,14 +80,51 @@ public:
         std::uint64_t ordinal           = 0;
     };
 
-    explicit ResourceManager(bool enabled, ContextMachineCostModel costs)
-        : enabled_(enabled), costs_(std::move(costs)) {}
+    explicit ResourceManager(bool enabled, ContextMachineCostModel costs,
+                             std::optional<std::uint32_t> max_tracked_sessions = {},
+                             std::optional<std::uint64_t> activity_window = {})
+        : enabled_(enabled), costs_(std::move(costs)),
+          max_tracked_sessions_(max_tracked_sessions.value_or(0)),
+          activity_window_(activity_window.value_or(0)) {}
+
+    // Agent-class session retention weighting: one record per tracked session key, ordered by
+    // its last activity in the cache's per-request order. Retirement removes only the
+    // weighting, never state.
+    void note_activity(const std::optional<SessionKey>& key) {
+        if (!key || activity_window_ == 0) { return; }
+        const auto now = clock_;
+        auto found     = std::find_if(sessions_.begin(), sessions_.end(),
+                                      [&](const SessionRecord& record) { return record.key == *key; });
+        if (found != sessions_.end()) {
+            found->last_activity = now;
+            return;
+        }
+        sessions_.push_back(SessionRecord{*key, now});
+        if (max_tracked_sessions_ != 0 && sessions_.size() > max_tracked_sessions_) {
+            const auto oldest = std::min_element(sessions_.begin(), sessions_.end(),
+                                                 [](const SessionRecord& a, const SessionRecord& b) {
+                                                     return a.last_activity < b.last_activity;
+                                                 });
+            if (oldest->last_activity == now && sessions_.size() == 1) { return; }
+            sessions_.erase(oldest);
+        }
+    }
+
+    [[nodiscard]] bool session_active(const std::optional<SessionKey>& session) const {
+        if (!session || activity_window_ == 0) { return false; }
+        const auto found = std::find_if(sessions_.begin(), sessions_.end(),
+                                        [&](const SessionRecord& record) {
+                                            return record.key == *session;
+                                        });
+        return found != sessions_.end() && clock_ - found->last_activity <= activity_window_;
+    }
 
     [[nodiscard]] std::vector<SourceChoice>
     candidates(Session& session, const Base& base, std::uint32_t maximum_frontier = UINT32_MAX,
                std::optional<OwnerToken> own_resume = std::nullopt, std::uint64_t request = 0,
                std::uint64_t publication_order = UINT64_MAX) {
         prune(session);
+        note_activity(base.context_cache().session_key);
         std::vector<SourceChoice> result;
         if (enabled_) {
             for (const auto handle : index_.matches(session, base)) {
@@ -288,6 +325,7 @@ public:
                                    std::uint64_t publication_order,
                                    std::span<const Handle> carried = {},
                                    std::span<const Handle> retired = {}) {
+        note_activity(base.context_cache().session_key);
         for (const auto handle : retired) { forget(handle); }
         if (!enabled_ || !base.summary().publish_continuation) {
             for (const auto handle : carried) { release_unreferenced(session, handle); }
@@ -1109,6 +1147,21 @@ private:
         }
         for (const auto& proof : cursor.owners) {
             if (!proof.priority.reused) { continue; }
+            const auto* owner_record = find_owner(proof.owner);
+            // An ongoing session's coverage carries a demand prior: the session record's
+            // last activity counts as demand for its owners, a closed session loses it.
+            if (owner_record && session_active(owner_record->session)) {
+                const auto found =
+                    std::find_if(sessions_.begin(), sessions_.end(), [&](const SessionRecord& record) {
+                        return owner_record->session && record.key == *owner_record->session;
+                    });
+                if (found != sessions_.end() &&
+                    (!proof.priority.reused || found->last_activity > proof.priority.last_demand)) {
+                    include(CacheRetentionPriority{.reused      = true,
+                                                   .last_demand = found->last_activity});
+                }
+            }
+            if (!proof.priority.reused) { continue; }
             const auto* owner = find_owner(proof.owner);
             bool affected     = false;
             bool covered      = owner != nullptr;
@@ -1618,6 +1671,14 @@ private:
     static constexpr std::size_t kDemandCapacity = 256;
     std::vector<Demand> demand_;
     std::uint64_t clock_   = 0;
+
+    struct SessionRecord {
+        SessionKey key;
+        std::uint64_t last_activity = 0;
+    };
+    std::vector<SessionRecord> sessions_;
+    std::uint32_t max_tracked_sessions_ = 0;
+    std::uint64_t activity_window_      = 0;
     std::uint64_t ordinal_ = 0;
 };
 } // namespace ninfer::runtime

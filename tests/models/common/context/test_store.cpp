@@ -52,7 +52,8 @@ void test_state_store(ninfer::DeviceContext& device) {
     store::StateDirectory images({6, 4, physical.image_bytes()}, &host_backing);
     store::ContextStorage storage(physical, {}, 0, host_payload.span());
     const auto enqueue = [&](const store::StateDirectory::Transfer& transfer) {
-        storage.execute(store::ContextAction{transfer.description()}, {}, device.transfer_view());
+        storage.execute(store::ContextAction{transfer.description()}, nullptr, {},
+                        device.transfer_view());
     };
     const auto hidden_slot = [&](std::int32_t slot) {
         return physical.field(hidden_field).slice(1, slot, 1).view({8});

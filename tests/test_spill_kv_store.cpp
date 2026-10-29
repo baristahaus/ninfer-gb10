@@ -134,6 +134,24 @@ int run() {
         failures += expect_throws<std::invalid_argument>(
             [&] { static_cast<void>(store.write(impossible.data(), impossible.size())); },
             "over-capacity write");
+
+        // The split form: reserve commits capacity, write_at fills it, cancel frees an unused
+        // reservation. A canceled offset is reusable and a canceled extent cannot be written.
+        const auto reserved = store.reserve(first.size());
+        store.cancel(reserved);
+        expect_throws<std::invalid_argument>(
+            [&] { store.write_at(reserved, first.data(), first.size()); }, "canceled write_at");
+        const auto reserved_again = store.reserve(first.size());
+        if (reserved_again.offset != reserved.offset) {
+            failures += fail("canceled reservation was not reused");
+        }
+        store.write_at(reserved_again, first.data(), first.size());
+        back.assign(first.size(), std::byte{0});
+        store.read(reserved_again, back.data(), back.size());
+        if (back != first) { failures += fail("split-form round-trip is not bit-identical"); }
+        store.release(reserved_again);
+        failures += expect_throws<std::invalid_argument>(
+            [&] { static_cast<void>(store.reserve(0)); }, "empty reservation");
     } catch (const std::exception& error) {
         std::cerr << "spill store test threw: " << error.what() << '\n';
         ++failures;

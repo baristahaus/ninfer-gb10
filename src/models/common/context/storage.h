@@ -162,9 +162,11 @@ public:
     // mapping_staging remains alive and unchanged until all submitted H2D copies complete.
     void execute(const ContextActions& actions, MemorySpan mapping_staging,
                  CudaExecutionView execution) const;
-    // Returns the number of staging bytes consumed by this action.
-    std::size_t execute(const ContextAction& action, MemorySpan mapping_staging,
-                        CudaExecutionView execution) const;
+    // Returns the number of staging bytes consumed by this action. Spill actions use the
+    // caller-supplied store (the session-owned tier the actions describe); a spill action with
+    // a null store is a contract violation.
+    std::size_t execute(const ContextAction& action, SpillKVStore* spill,
+                        MemorySpan mapping_staging, CudaExecutionView execution) const;
 
 private:
     [[nodiscard]] std::span<const std::int32_t> page_indices(std::span<const PageSlot> pages) const;

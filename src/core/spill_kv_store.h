@@ -50,6 +50,14 @@ public:
     // std::runtime_error when the write is short.
     [[nodiscard]] Extent write(const std::byte* bytes, std::size_t count);
 
+    // Split form for described transfers: reserve commits the capacity and returns the extent,
+    // write_at fills it (exactly extent.bytes), cancel gives an unused reservation back. The
+    // executor of a spill-out uses this form because the describing side records the extent
+    // before the copy runs.
+    [[nodiscard]] Extent reserve(std::size_t count);
+    void write_at(const Extent& extent, const std::byte* bytes, std::size_t count);
+    void cancel(const Extent& extent) noexcept;
+
     // Reads an extent back exactly. Throws std::invalid_argument for a foreign extent and
     // std::runtime_error when the read is short.
     void read(const Extent& extent, std::byte* destination, std::size_t count) const;

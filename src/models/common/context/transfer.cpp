@@ -106,7 +106,8 @@ void ContextMigration::enqueue(const ContextActions& actions, CudaExecutionView 
     std::size_t segment = 0;
     for (std::size_t i = 0; i < actions.operations.size(); ++i) {
         if (segment < segments_.size() && segments_[segment].begin == i) timers_[segment].start();
-        const auto consumed = storage_->execute(actions.operations[i], staging, execution);
+        const auto consumed =
+            storage_->execute(actions.operations[i], actions.spill_store, staging, execution);
         if (consumed) {
             staging.data = static_cast<std::byte*>(staging.data) + consumed;
             staging.bytes -= consumed;

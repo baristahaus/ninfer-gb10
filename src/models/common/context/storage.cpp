@@ -599,8 +599,8 @@ void ContextStorage::validate(const ContextActions& actions, ConstMemorySpan sta
     }
 }
 
-std::size_t ContextStorage::execute(const ContextAction& action, MemorySpan staging,
-                                    CudaExecutionView execution) const {
+std::size_t ContextStorage::execute(const ContextAction& action, SpillKVStore* spill,
+                                    MemorySpan staging, CudaExecutionView execution) const {
     std::size_t consumed = 0;
     std::visit(
         [&](const auto& value) {
@@ -636,6 +636,19 @@ std::size_t ContextStorage::execute(const ContextAction& action, MemorySpan stag
                 consumed       = ids.size_bytes();
                 pool(value.row.pool_id)
                     .tables->publish(value.row.index, value.logical_begin, ids, staging, execution);
+            } else if constexpr (std::is_same_v<T, StateSpillOut>) {
+                if (spill == nullptr) {
+                    throw std::logic_error("spill action executed without a spill store");
+                }
+                spill->write_at(value.spill, static_cast<const std::byte*>(host_extent(value.host).data),
+                                value.spill.bytes);
+            } else if constexpr (std::is_same_v<T, StateSpillIn>) {
+                if (spill == nullptr) {
+                    throw std::logic_error("spill action executed without a spill store");
+                }
+                auto destination = host_extent(value.host);
+                spill->read(value.spill, static_cast<std::byte*>(destination.data),
+                            value.spill.bytes);
             }
         },
         action);
@@ -646,7 +659,7 @@ void ContextStorage::execute(const ContextActions& actions, MemorySpan staging,
                              CudaExecutionView execution) const {
     validate(actions, staging);
     for (const auto& action : actions.operations) {
-        const auto consumed = execute(action, staging, execution);
+        const auto consumed = execute(action, actions.spill_store, staging, execution);
         if (consumed) {
             staging.data = static_cast<std::byte*>(staging.data) + consumed;
             staging.bytes -= consumed;

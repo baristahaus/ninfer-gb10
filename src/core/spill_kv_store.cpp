@@ -46,11 +46,14 @@ SpillKVStore::~SpillKVStore() {
 }
 
 SpillKVStore::Extent SpillKVStore::write(const std::byte* bytes, std::size_t count) {
+    const Extent extent = reserve(count);
+    write_at(extent, bytes, count);
+    return extent;
+}
+
+SpillKVStore::Extent SpillKVStore::reserve(std::size_t count) {
     if (count == 0) {
         throw std::invalid_argument("spill kv store: cannot write an empty extent");
-    }
-    if (bytes == nullptr) {
-        throw std::invalid_argument("spill kv store: null write source");
     }
     const std::size_t aligned = align_up(count);
 
@@ -77,11 +80,26 @@ SpillKVStore::Extent SpillKVStore::write(const std::byte* bytes, std::size_t cou
         append_offset_ += aligned;
     }
 
-    checked_write(bytes, count, offset);
     live_.emplace(offset, next_generation_);
     reserved_bytes_ += aligned;
     return Extent{offset, count, next_generation_++};
 }
+
+void SpillKVStore::write_at(const Extent& extent, const std::byte* bytes, std::size_t count) {
+    const auto found = live_.find(extent.offset);
+    if (found == live_.end() || found->second != extent.generation) {
+        throw std::invalid_argument("spill kv store: foreign extent");
+    }
+    if (bytes == nullptr) {
+        throw std::invalid_argument("spill kv store: null write source");
+    }
+    if (count != extent.bytes) {
+        throw std::invalid_argument("spill kv store: write size does not match the extent");
+    }
+    checked_write(bytes, count, extent.offset);
+}
+
+void SpillKVStore::cancel(const Extent& extent) noexcept { release(extent); }
 
 void SpillKVStore::read(const Extent& extent, std::byte* destination, std::size_t count) const {
     const auto found = live_.find(extent.offset);

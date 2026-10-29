@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/spill_kv_store.h"
 #include "models/common/context/directory/history.h"
 #include "models/common/context/directory/state.h"
 
@@ -39,13 +40,28 @@ struct MappingUpdate {
     std::vector<PageSlot> pages;
 };
 
+// Plain host copies against the engine's spill file, executed synchronously inside the
+// migration: spill-outs run at the boundary that frees Host capacity, page-ins at admission.
+// The spill store pointer rides on ContextActions because the session owns the store and the
+// executor only borrows it for the duration of the actions.
+struct StateSpillOut {
+    HostExtent host;            // source bytes in the pinned backing
+    SpillKVStore::Extent spill; // destination extent, written by the executor
+};
+
+struct StateSpillIn {
+    SpillKVStore::Extent spill; // source extent in the engine's spill store
+    HostExtent host;            // destination bytes in the pinned backing
+};
+
 using ContextAction = std::variant<StateClear, StateCopy, StateTransferDescription, PageCopy,
-                                   PageTransfer, MappingUpdate>;
+                                   PageTransfer, MappingUpdate, StateSpillOut, StateSpillIn>;
 
 // Owns all descriptors and mapping arrays. Source leases and destination owners remain in the
 // corresponding control-side transaction until its execution dependency has retired.
 struct ContextActions {
     std::vector<ContextAction> operations;
+    SpillKVStore* spill_store = nullptr;
 
     [[nodiscard]] bool empty() const noexcept { return operations.empty(); }
 };

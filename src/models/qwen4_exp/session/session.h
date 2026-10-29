@@ -211,7 +211,7 @@ struct CapturePreparation {
     ContextResources shortage;
     std::size_t host_bytes = 0;
 };
-enum class ContextOperationKind : std::uint8_t { Bind, Capture, Demote, Pause };
+enum class ContextOperationKind : std::uint8_t { Bind, Capture, Demote, Pause, Spill };
 
 struct ContextProgress {
     ContextOperationKind kind = ContextOperationKind::Bind;

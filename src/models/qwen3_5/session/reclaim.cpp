@@ -478,6 +478,144 @@ struct DemotionBatch {
     }
 };
 
+bool SessionImpl::try_spill_checkpoint(CheckpointHandle handle) {
+    if (!state_spill || has_context_operation() || !valid_checkpoint(handle) ||
+        checkpoints[handle.index].pins) {
+        return false;
+    }
+    const auto& record = *checkpoints[handle.index].value;
+    const auto image   = record.continuation().image;
+
+    // One source per distinct Host extent whose bytes must reach the tier: the image first,
+    // then the checkpoint's pages grouped by the extent that holds them. Every extent is
+    // reserved before the transaction is built; any failure unwinds every reservation and
+    // leaves the checkpoint untouched.
+    struct Source {
+        context::HostExtent host;
+        SpillKVStore::Extent spill{};
+        std::vector<context::PageId> pages;
+        bool is_image = false;
+    };
+    std::vector<Source> sources;
+    std::optional<context::StateDirectory::Transfer> state_copy;
+    struct PendingBackup {
+        std::uint32_t pool;
+        context::PageId page;
+        context::HostPageReservation reservation;
+    };
+    std::vector<PendingBackup> backups;
+
+    const auto unwind = [&]() noexcept {
+        for (const auto& source : sources) {
+            if (source.spill.generation != 0) { state_spill->cancel(source.spill); }
+        }
+    };
+
+    try {
+        if (state_store->spill_resident(image)) {
+            // The image already lives in the tier.
+        } else if (state_store->host_resident(image)) {
+            if (state_store->device_resident(image)) { return false; }
+            sources.push_back(
+                {state_store->host_extent(image), state_spill->reserve(state_store->image_bytes()),
+                 {}, true});
+        } else if (state_store->device_resident(image)) {
+            auto transfer = state_store->reserve_device_to_host(image);
+            if (!transfer) { return false; }
+            const auto host = transfer->description().host;
+            sources.push_back(
+                {host, state_spill->reserve(state_store->image_bytes()), {}, true});
+            state_copy.emplace(std::move(*transfer));
+        } else {
+            return false;
+        }
+
+        const auto collect = [&](const context::HistoryPrefix& prefix, std::uint32_t pool_index) {
+            auto& histories = pool_index == kTextKvPool.index ? *text_kv_histories
+                                                              : *backend_kv_histories;
+            auto& pages     = pool_index == kTextKvPool.index ? *text_kv_pages : *backend_kv_pages;
+            const auto count =
+                std::min<std::uint32_t>(histories.mapped_pages(prefix.history()),
+                                        context::kv_pages_for_frontier(prefix.frontier()));
+            for (std::uint32_t position = 0; position < count; ++position) {
+                const auto page = histories.logical_page(prefix.history(), position);
+                if (pages.spill_resident(page)) { continue; }
+                if (pages.host_resident(page)) {
+                    const auto host = host_kv_extents->view(pages.host_replica(page).extent).extent;
+                    auto found      = std::find_if(sources.begin(), sources.end(),
+                                                   [&](const Source& source) {
+                                                      return !source.is_image &&
+                                                             source.host == host;
+                                                   });
+                    if (found != sources.end()) {
+                        found->pages.push_back(page);
+                    } else {
+                        sources.push_back({host, state_spill->reserve(host.bytes), {page}, false});
+                    }
+                    continue;
+                }
+                if (!pages.device_resident(page)) { return false; }
+                auto reservation = host_kv_extents->prepare(pages, std::span(&page, 1));
+                if (!reservation) { return false; }
+                const auto host = host_kv_extents->writable_view(*reservation).extent;
+                sources.push_back({host, state_spill->reserve(host.bytes), {page}, false});
+                PendingBackup entry{pool_index, page, std::move(*reservation)};
+                backups.emplace_back(std::move(entry));
+            }
+            return true;
+        };
+        if (!collect(record.text_prefix(), kTextKvPool.index)) { unwind(); return false; }
+        if (record.backend_prefix() &&
+            !collect(*record.backend_prefix(), kBackendKvPool.index)) {
+            unwind();
+            return false;
+        }
+    } catch (const std::exception&) {
+        unwind();
+        return false;
+    }
+
+    SpillOperation plan;
+    plan.checkpoint = handle;
+    plan.image      = image;
+    for (const auto& source : sources) {
+        if (source.is_image) {
+            plan.image_extent = source.spill;
+            continue;
+        }
+        for (const auto page : source.pages) plan.pages.emplace_back(page, source.spill);
+    }
+
+    // Build the transaction completely before submission: state copy first, then the page
+    // backups, then every spill-out reading the extents the earlier actions filled.
+    auto execution_reservation = executor().try_reserve(runtime::FrameKind::Context);
+    if (!execution_reservation) {
+        unwind();
+        return false;
+    }
+    auto transaction = std::make_unique<PendingContext>(directory, plan);
+    transaction->reservation.emplace(std::move(*execution_reservation));
+    auto& migration = transaction->transaction;
+    migration.use_spill_store(*state_spill);
+    if (state_copy) {
+        migration.add_state_copy(std::move(*state_copy), false);
+    }
+    for (auto& entry : backups) {
+        migration.add_backup(entry.pool, {entry.page}, std::move(entry.reservation), true);
+    }
+    for (const auto& source : sources) {
+        migration.add_spill_out(source.host, source.spill);
+    }
+    context_operation_ = std::move(transaction);
+    try {
+        (void)submit_context(*context_operation_, ContextWork{});
+    } catch (...) {
+        abort_context();
+        throw;
+    }
+    return true;
+}
+
 bool SessionImpl::start_demote(const ContextDemotion& quote) {
     if (!quote.impl || quote.impl->owner != this || has_context_operation()) { return false; }
     const auto& plan = *quote.impl;

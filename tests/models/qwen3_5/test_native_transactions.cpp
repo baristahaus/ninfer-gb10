@@ -9,6 +9,7 @@
 #include <array>
 #include <cstdint>
 #include <cstdlib>
+#include <filesystem>
 #include <iostream>
 #include <optional>
 #include <stdexcept>
@@ -1929,6 +1930,115 @@ void shared_capture_alignment(std::shared_ptr<const q35::ModelDefinition> defini
     }
 }
 
+
+void state_spill_roundtrip(std::shared_ptr<const q35::ModelDefinition> definition,
+                           std::shared_ptr<const q35::ModelShard> model,
+                           std::shared_ptr<const q35::execution::ModelProfile> profile,
+                           ninfer::models::qwen::Frontend& frontend, EngineOptions options) {
+    options.max_context                       = 128;
+    options.kv_capacity                       = KvCapacityPolicy::explicit_capacity(128);
+    options.max_concurrency                   = 1;
+    options.context_cache.enabled             = true;
+    options.context_cache.extra_state_slots   = 1;
+    options.context_cache.host_capacity_bytes = 64ULL << 20;
+    const auto spill_path =
+        std::filesystem::temp_directory_path() / "ninfer_session_spill_test.bin";
+    std::error_code ignored;
+    std::filesystem::remove(spill_path, ignored);
+    options.context_cache.state_spill_path           = spill_path;
+    options.context_cache.state_spill_capacity_bytes = 64ULL << 20;
+
+    native::NativeRankFixture rank(definition, model, profile, options, 4);
+    q35::detail::SessionImpl program(definition, std::move(rank.session_plan));
+    program.executor_ = &rank.executor();
+    native::EventDriver driver(program, rank);
+    const auto settle = [&]() { return driver.settle(); };
+    require(program.state_spill != nullptr, "session did not construct its spill tier");
+
+    // Capture a checkpoint whose coverage starts Device-resident.
+    const std::vector<TokenId> prompt(64, 198);
+    auto prepared = ninfer::models::qwen::PreparedPromptAccess::take(frontend.prepare_tokens(prompt));
+    prepared.context_cache.opportunities.push_back(
+        {.kind     = PromptCacheMarkerKind::SharedStablePrefix,
+         .evidence = SharedCandidateEvidence::ExplicitBoundary,
+         .frontier = 64});
+    runtime::ResolvedExecutionOptions request;
+    request.requested_output_tokens = 8;
+    request.allow_prefix_reuse      = true;
+    auto base = program.plan_request(std::move(prepared), request);
+    const auto root = program.inspect_source(base, std::nullopt);
+    require(root && static_cast<bool>(program.start_binding(base, {0}, *root, nullptr,
+                                                            q35::ExecutionUnitKind::Prefill, 0)),
+            "spill fixture could not bind its source writer");
+    const auto bound = settle();
+    require(bound.sequence.has_value(), "spill fixture did not publish its sequence");
+    const auto sequence = *bound.sequence;
+    const std::array<q35::ExecutionUnit, 1> units{{{sequence, q35::ExecutionUnitKind::Prefill}}};
+    require(static_cast<bool>(program.reserve_units(units)),
+            "spill fixture could not reserve its prefill unit");
+    auto step = driver.prefill(sequence);
+    require(step.processed_prompt_tokens == 64 && step.capture_ready,
+            "spill fixture did not reach its capture frontier");
+    require(program.start_capture(sequence), "spill fixture could not start its capture");
+    const auto captured = settle();
+    require(!captured.captured_checkpoints.empty(), "spill fixture captured no checkpoint");
+    const auto handle = captured.captured_checkpoints.front();
+
+    // Demote the whole coverage to Host through the ordinary reclaim path.
+    const auto image = program.checkpoint(handle).continuation().image;
+    auto shortage    = q35::ContextResources{};
+    shortage.state_slots =
+        program.physical_usage().occupied.state_slots;
+    for (auto candidates = program.plan_reclaim(std::span(&handle, 1), {}, shortage).demotions;
+         !candidates.empty(); candidates = program.plan_reclaim(std::span(&handle, 1), {}, shortage).demotions) {
+        require(program.start_demote(candidates.front()), "spill fixture could not demote its image");
+        require(settle().published, "spill fixture demotion did not complete");
+    }
+    shortage = q35::ContextResources{};
+    shortage.kv_page_groups[0] = program.physical_usage().occupied.kv_page_groups[0];
+    for (auto candidates = program.plan_reclaim(std::span(&handle, 1), {}, shortage).demotions;
+         !candidates.empty(); candidates = program.plan_reclaim(std::span(&handle, 1), {}, shortage).demotions) {
+        require(program.start_demote(candidates.front()), "spill fixture could not demote its pages");
+        require(settle().published, "spill fixture page demotion did not complete");
+    }
+    require(program.state_store->host_resident(image) && !program.state_store->device_resident(image),
+            "spill fixture coverage is not host-only before the spill");
+    const auto host_before = program.physical_usage().occupied.host_bytes;
+
+    // Spill the checkpoint; the record stays cataloged as spill-resident coverage.
+    require(program.try_spill_checkpoint(handle), "spill fixture could not spill its checkpoint");
+    const auto progress = settle();
+    require(progress.published && progress.kind == q35::ContextOperationKind::Spill,
+            "spill fixture operation did not complete");
+    require(program.state_store->spill_resident(image) && !program.state_store->host_resident(image),
+            "spill fixture image did not record its spill residency");
+    auto prefix = program.checkpoint(handle).text_prefix();
+    const auto mapped = program.text_kv_histories->mapped_pages(prefix.history());
+    for (std::uint32_t position = 0; position < mapped; ++position) {
+        const auto page = program.text_kv_histories->logical_page(prefix.history(), position);
+        require(program.text_kv_pages->spill_resident(page),
+                "spill fixture page did not record its spill residency");
+    }
+    require(program.valid_checkpoint(handle), "spill fixture dropped its checkpoint record");
+    require(program.physical_usage().occupied.host_bytes < host_before,
+            "spill fixture did not free Host capacity");
+    const auto reserved_after_spill = program.state_spill->reserved_bytes();
+    require(reserved_after_spill > 0, "spill fixture store accounting is empty");
+
+    // A second spill is a no-op; release returns the extents and erases the record.
+    require(program.try_spill_checkpoint(handle), "second spill of a spill-resident record failed");
+    require(program.state_spill->reserved_bytes() == reserved_after_spill,
+            "second spill changed the store accounting");
+    require(program.release_checkpoint(handle), "spill fixture could not release its checkpoint");
+    require(!program.valid_checkpoint(handle), "spill fixture kept a released record");
+    require(program.state_spill->reserved_bytes() == 0,
+            "checkpoint release did not return the spill extents");
+
+    require(driver.abort(sequence).status == runtime::ConsumeStatus::Consumed,
+            "spill fixture retained its sequence");
+    std::filesystem::remove(spill_path, ignored);
+}
+
 void replay_sampling_counts(std::shared_ptr<const q35::ModelDefinition> definition,
                             std::shared_ptr<const q35::ModelShard> model,
                             std::shared_ptr<const q35::execution::ModelProfile> profile,
@@ -2210,6 +2320,7 @@ int main(int argc, char** argv) {
             capture_retry_fixture.capture_retry_after_reclaim();
         }
         shared_capture_alignment(definition, model, profile, frontend, options);
+        state_spill_roundtrip(definition, model, profile, frontend, options);
         replay_sampling_counts(definition, model, profile, frontend, options);
         if (backend == SpeculativeBackend::None) {
             model.reset();

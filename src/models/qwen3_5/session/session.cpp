@@ -188,6 +188,10 @@ void Session::skip_capture(SequenceHandle h) { impl_->skip_capture(h); }
 
 bool Session::start_demote(const ContextDemotion& plan) { return impl_->start_demote(plan); }
 
+bool Session::try_spill_checkpoint(CheckpointHandle checkpoint) {
+    return impl_->try_spill_checkpoint(checkpoint);
+}
+
 ContextReclaimPlan Session::plan_reclaim(std::span<const CheckpointHandle> allowed,
                                          std::span<const CheckpointHandle> excluded,
                                          ContextResources shortage) const {

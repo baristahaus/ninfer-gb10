@@ -276,7 +276,7 @@ struct CapturePreparation {
     ContextResources shortage;
     std::size_t host_bytes = 0;
 };
-enum class ContextOperationKind : std::uint8_t { Bind, Capture, Demote, Pause };
+enum class ContextOperationKind : std::uint8_t { Bind, Capture, Demote, Pause, Spill };
 
 struct ContextProgress {
     ContextOperationKind kind = ContextOperationKind::Bind;
@@ -377,6 +377,9 @@ public:
     plan_releases(std::span<const CheckpointHandle> allowed,
                   std::span<const CheckpointHandle> excluded, ContextResources shortage) const;
     [[nodiscard]] bool start_demote(const ContextDemotion& plan);
+    // Demotes a checkpoint's whole coverage into the configured state spill tier; false when
+    // the tier is unconfigured or the coverage cannot spill completely.
+    [[nodiscard]] bool try_spill_checkpoint(CheckpointHandle checkpoint);
     [[nodiscard]] bool start_pause(SequenceHandle sequence, bool save_snapshot);
     [[nodiscard]] bool has_context_operation() const noexcept;
     void cancel_context() noexcept;

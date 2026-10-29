@@ -96,7 +96,8 @@ ContextTransaction::ContextTransaction(ContextDirectory& directory) : directory_
 ContextTransaction::ContextTransaction(ContextTransaction&& other) noexcept
     : directory_(std::exchange(other.directory_, nullptr)), stage_(other.stage_),
       cancelled_(other.cancelled_), adopted_(other.adopted_), actions_(std::move(other.actions_)),
-      state_operations_(std::move(other.state_operations_)), state_(std::move(other.state_)),
+      state_operations_(std::move(other.state_operations_)),
+      spill_operations_(std::move(other.spill_operations_)), state_(std::move(other.state_)),
       state_copies_(std::move(other.state_copies_)), bindings_(std::move(other.bindings_)),
       backups_(std::move(other.backups_)), state_readers_(std::move(other.state_readers_)),
       page_readers_(std::move(other.page_readers_)), retired_rows_(std::move(other.retired_rows_)),
@@ -181,6 +182,25 @@ void ContextTransaction::add_backup(std::uint32_t pool, std::vector<PageId> page
     backups_.push_back({pool, std::move(pages), std::move(destination), drop_device});
 }
 
+void ContextTransaction::use_spill_store(SpillKVStore& store) {
+    require_reserved();
+    actions_.spill_store = &store;
+}
+
+void ContextTransaction::add_spill_out(HostExtent host, SpillKVStore::Extent spill) {
+    require_reserved();
+    if (!host.valid() || !spill.generation || spill.bytes == 0)
+        throw std::invalid_argument("context spill-out extent is invalid");
+    spill_operations_.push_back(StateSpillOut{host, spill});
+}
+
+void ContextTransaction::add_spill_in(SpillKVStore::Extent spill, HostExtent host) {
+    require_reserved();
+    if (!host.valid() || !spill.generation || spill.bytes == 0)
+        throw std::invalid_argument("context spill-in extent is invalid");
+    spill_operations_.push_back(StateSpillIn{spill, host});
+}
+
 void ContextTransaction::retain(PageDirectory& pages, PageId page) {
     require_reserved();
     page_readers_.push_back(pages.read_device(page, 0));
@@ -241,6 +261,8 @@ void ContextTransaction::prepare_actions() {
             PageTransfer{StateCopyDirection::DeviceToHost, range.extent,
                          directory_->host().device_sources(backup.destination)});
     }
+    // Spill copies run last: they read the Host extents the earlier copies just filled.
+    for (const auto& action : spill_operations_) actions_.operations.push_back(action);
     for (auto& pending : bindings_) {
         auto& binding       = pending.value;
         const auto restores = binding.restores();
@@ -339,7 +361,9 @@ void ContextTransaction::publish() {
 
 void ContextTransaction::release_reservations() {
     actions_.operations.clear();
+    actions_.spill_store = nullptr;
     state_operations_.clear();
+    spill_operations_.clear();
     state_readers_.clear();
     page_readers_.clear();
     state_copies_.clear();

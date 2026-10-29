@@ -228,7 +228,10 @@ void EngineCore<Instance>::resolve_context_progress(
         }
         context_owner_.reset();
     }
-    if (progress.kind == decltype(progress.kind)::Demote) { scheduler_.capacity_released(); }
+    if (progress.kind == decltype(progress.kind)::Demote ||
+        progress.kind == decltype(progress.kind)::Spill) {
+        scheduler_.capacity_released();
+    }
     request_admission_check();
     return;
 }

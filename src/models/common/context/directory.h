@@ -120,6 +120,12 @@ public:
     void add_backup(std::uint32_t pool, std::vector<PageId> pages, HostPageReservation destination,
                     bool drop_device);
 
+    // Spill copies are described directly: the session reserves the extent, records the plan,
+    // and the executor moves the bytes against the store carried on the actions.
+    void use_spill_store(SpillKVStore& store);
+    void add_spill_out(HostExtent host, SpillKVStore::Extent spill);
+    void add_spill_in(SpillKVStore::Extent spill, HostExtent host);
+
     // Used by HistoryDirectory for ordinary writes, COW and ordered retirement.
     void retain(PageDirectory& pages, PageId page);
     void retain(StateDirectory& states, StateId image);
@@ -194,6 +200,7 @@ private:
     bool adopted_   = false;
     ContextActions actions_;
     std::vector<ContextAction> state_operations_;
+    std::vector<ContextAction> spill_operations_;
     std::optional<StateDirectory::Destination> state_;
     std::vector<PendingStateCopy> state_copies_;
     std::vector<PendingBinding> bindings_;

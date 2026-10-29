@@ -230,6 +230,18 @@ struct DemoteOperation {
     static constexpr auto kind = ContextOperationKind::Demote;
 };
 
+// A checkpoint demoted into the state spill tier: the transaction copies the checkpoint's
+// coverage into reserved spill extents and the completion records residency and frees the
+// Host replicas. The checkpoint record stays cataloged as spill-resident coverage.
+struct SpillOperation {
+    static constexpr auto kind = ContextOperationKind::Spill;
+    CheckpointHandle checkpoint{};
+    context::StateId image{};
+    std::optional<SpillKVStore::Extent> image_extent;
+    // Pages with the extents that hold their bytes; page pool IDs distinguish the pools.
+    std::vector<std::pair<context::PageId, SpillKVStore::Extent>> pages;
+};
+
 struct PauseOperation {
     static constexpr auto kind = ContextOperationKind::Pause;
     std::uint32_t lane;
@@ -239,7 +251,8 @@ struct PauseOperation {
 };
 
 struct PendingContext {
-    using Action = std::variant<BindOperation, CaptureOperation, DemoteOperation, PauseOperation>;
+    using Action = std::variant<BindOperation, CaptureOperation, DemoteOperation, PauseOperation,
+                                SpillOperation>;
 
     PendingContext(context::ContextDirectory& directory, Action value)
         : transaction(directory), action(std::move(value)) {}
@@ -319,6 +332,15 @@ public:
     plan_releases(std::span<const CheckpointHandle> allowed,
                   std::span<const CheckpointHandle> excluded, ContextResources shortage) const;
     [[nodiscard]] bool start_demote(const ContextDemotion& plan);
+
+    // Demotes a checkpoint's whole coverage into the state spill tier when configured: the
+    // coverage is copied into reserved extents in one transaction, completion records
+    // residency and frees the Host replicas, and the record stays cataloged as
+    // spill-resident coverage recoverable by page-in. Returns false (changing nothing) when
+    // the tier is unconfigured, a context operation is running, the checkpoint is leased or
+    // pinned, its coverage has a hole, or the tier cannot hold it.
+    [[nodiscard]] bool try_spill_checkpoint(CheckpointHandle checkpoint);
+    [[nodiscard]] bool start_spill(const SpillOperation& plan);
     [[nodiscard]] bool start_pause(SequenceHandle sequence, bool save_snapshot);
     [[nodiscard]] bool has_context_operation() const noexcept;
     [[nodiscard]] bool context_blocks(SequenceHandle sequence) const noexcept;
@@ -486,6 +508,7 @@ public:
     [[nodiscard]] bool begin_pause(SequenceHandle, bool save_snapshot);
     void continue_pause_after_normalize(SequenceHandle);
     [[nodiscard]] ResumeState complete_pause(PauseOperation&);
+    void complete_spill(SpillOperation& action);
     [[nodiscard]] bool submit_context(PendingContext&, ContextWork&&);
     void receive_context_result(runtime::ExecutionTicket, ContextResult&&);
     void retire_context(runtime::DeviceRetired);

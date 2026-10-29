@@ -82,6 +82,8 @@ void SessionImpl::retire_context(runtime::DeviceRetired retired) {
                         out.captured_checkpoints.push_back(handle);
                 } else if constexpr (std::is_same_v<Action, PauseOperation>) {
                     out.paused.emplace(complete_pause(action));
+                } else if constexpr (std::is_same_v<Action, SpillOperation>) {
+                    complete_spill(action);
                 }
             },
             operation.action);
@@ -133,11 +135,38 @@ void SessionImpl::abort_context() noexcept {
                 } else if constexpr (std::is_same_v<Action, PauseOperation>) {
                     requests[action.lane] = {};
                     invalidate_lane(action.lane);
+                } else if constexpr (std::is_same_v<Action, SpillOperation>) {
+                    if (action.image_extent) { state_spill->cancel(*action.image_extent); }
+                    for (const auto& [page, extent] : action.pages) {
+                        if (state_spill) { state_spill->cancel(extent); }
+                    }
                 }
             },
             operation.action);
         context_operation_.reset();
     } catch (...) { std::terminate(); }
+}
+
+void SessionImpl::complete_spill(SpillOperation& action) {
+    if (action.image_extent &&
+        !state_store->spill_host_replica(action.image, *action.image_extent)) {
+        throw std::logic_error("spilled State image could not record its residency");
+    }
+    std::vector<context::PageId> text;
+    std::vector<context::PageId> backend;
+    for (const auto& [page, extent] : action.pages) {
+        auto& pages = page.pool_id == kTextKvPool.index ? *text_kv_pages : *backend_kv_pages;
+        if (!pages.spill_host_replica(page, extent)) {
+            throw std::logic_error("spilled KV page could not record its residency");
+        }
+        (page.pool_id == kTextKvPool.index ? text : backend).push_back(page);
+    }
+    if (!text.empty() && !host_kv_extents->release_page_replicas(*text_kv_pages, text)) {
+        throw std::logic_error("spilled text pages did not release their Host extent");
+    }
+    if (!backend.empty() && !host_kv_extents->release_page_replicas(*backend_kv_pages, backend)) {
+        throw std::logic_error("spilled backend pages did not release their Host extent");
+    }
 }
 
 } // namespace ninfer::models::qwen3_5::detail

@@ -4,8 +4,11 @@
 # alter greedy numerics (SP-7/EXL3 integration, 2026-10-29).
 #
 # Usage: tools/gb10/golden_check.sh [build-dir]
-# Environment: NINFER_QWEN38_FLASH_NEXT_WEIGHTS must point at the fp8mtp artifact.
+# Environment: NINFER_QWEN38_FLASH_NEXT_WEIGHTS points at the fp8mtp artifact; it defaults to
+# the workstation's out/fp8mtp generation when unset.
 set -u
+: "${NINFER_QWEN38_FLASH_NEXT_WEIGHTS:=out/fp8mtp/qwen3_8_flash_next_125b_a6b_nvfp4_fp8_mtp.ninfer}"
+export NINFER_QWEN38_FLASH_NEXT_WEIGHTS
 DIR=${1:-build}
 TEST="$DIR/tests/ninfer_qwen3_8_flash_next_engine_real_test"
 [ -x "$TEST" ] || { echo "missing test binary: $TEST" >&2; exit 2; }

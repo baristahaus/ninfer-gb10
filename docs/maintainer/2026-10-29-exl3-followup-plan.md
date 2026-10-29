@@ -163,11 +163,25 @@ All four executable M-items are done; commits carry the details, this section is
   2.14.1+cu130 — newer than the campaign's recorded 2.11; the container is validated
   numerically regardless).
 - **M4 — mxfp8 confirmation**: `ninfer_linear_mxfp8_a16_test` passes on the 5090.
-- **M5 — small-slice work**: authorized after M1; in progress at the time of writing. M1's
-  breakdown named the target: 256 of the 512 per-round dispatches are four-way row-slice
-  splits of fused parents (attention qkgv, GDN qkvz, MLP gate/up) paying per-call launch
-  floor at 130–426 GB/s; running each parent as one dispatch cuts the round by roughly
-  2 ms at C=1.
+- **M5 — small-slice work**: authorized after M1 and attempted the same day; **not landed**.
+  The approach — one fused-parent dispatch per mixer instead of four row-slice dispatches,
+  with the parent row bands copied flat into the caller's tensors — is bit-identical to the
+  slice route at the operator level: the [14336, 5120] and [16384, 5120] parents were
+  verified against the row-sliced route on real artifact weights (zero-diff, all-nonzero,
+  finite), and both wrappers pass with real weights and real-scale activations in isolation.
+  Under serving graph replay the fused route deterministically decodes garbage (immediate
+  EOS), while the un-fused route reproduces the reference output hash exactly. The delta is
+  narrowed to the capture-path interplay — the fused route adds capture-time workspace
+  allocations and device-to-device memcpy nodes that the row-slice route does not have — but
+  the mechanism is not identified. The wrappers are reverted; the parent shapes stay
+  registered in the dispatch table as preparation for the reattempt.
+  Next step: instrument the capture path itself (ncu on the captured graph, or logging the
+  capture-time arena offsets versus the baked memcpy addresses) before reapplying.
+- **Pre-existing finding (not from this work): eager decode is broken on pure HEAD.** With
+  `--no-cuda-graph`, the same 27B EXL3 serving binary that decodes correctly under graphs
+  emits immediate stop tokens (empty content) on the unchanged tree, reproducibly. The
+  production profile always runs graphs, so serving is unaffected; the eager path is an
+  unvalidated route and a separate bug to investigate.
 
 Pre-existing damage outside the 5090 lane, not touched: `docs/operations.md` still documents
 `--lm-head-draft`, which no longer exists on master (the GB10 lane's doc; the live flag is

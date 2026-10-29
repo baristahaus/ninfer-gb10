@@ -26,6 +26,8 @@ constexpr int kProblems[][2] = {
     {5120, 6144},   // attention output / GDN out projections
     {6144, 5120},   // attention query and gate projections, GDN value and z
     {10240, 5120},  // GDN fused qkv projection
+    {14336, 5120},  // attention fused query/key/gate/value parent
+    {16384, 5120},  // GDN fused query/key/value/z parent
     {17408, 5120},  // MLP gate and up projections
     {5120, 17408},  // MLP down projection
 };

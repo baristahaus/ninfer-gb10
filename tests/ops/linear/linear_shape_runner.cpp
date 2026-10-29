@@ -1,5 +1,6 @@
 #include "core/weight.h"
 #include "ops/linear/linear_test_common.h"
+#include "ops/linear/weights.h"
 
 #include "core/arena.h"
 #include "core/decode_graph.h"
@@ -253,6 +254,11 @@ void cpu_linear_gemm_fp64(const float* weight, const float* activation, double* 
 }
 
 bool cuda_available() { return !test::cuda_unavailable(); }
+
+quantized_weight::PackedWeight make_mxfp8_weight(std::int32_t n, std::int32_t k,
+                                                 std::uint32_t seed) {
+    return linear_weights::make_mxfp8_weight(n, k, seed);
+}
 
 int run_shape(std::string_view label, ActivationCompute activation_compute,
               WeightGenerator generator, const ShapeCase& shape) {

@@ -56,3 +56,6 @@ ninfer_linear_format_tests(topk q4 q8 fp8)
 ninfer_add_op_test(ninfer_linear_exl3_dense_a16_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/test_exl3_dense_a16.cpp"
   LIBRARIES ninfer_linear_test_support ninfer_artifact)
+ninfer_add_op_test(ninfer_linear_mxfp8_a16_test
+  SOURCES "${CMAKE_CURRENT_LIST_DIR}/test_mxfp8_a16.cpp"
+  LIBRARIES ninfer_linear_test_support)

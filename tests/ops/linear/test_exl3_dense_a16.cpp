@@ -375,6 +375,7 @@ int real_artifact_check(const char* path) {
     w.n = w.shape[0] = w.padded_shape[0] = static_cast<std::int32_t>(geometry.shape[0]);
     w.k = w.shape[1] = w.padded_shape[1] = static_cast<std::int32_t>(geometry.shape[1]);
     w.payload        = device_weight.data();
+    w.device         = cuda_environment().context.device();
     w.payload_bytes  = geometry.bytes;
     w.exl3_trellis_offset = geometry.exl3.trellis_offset;
     w.exl3_suh_offset      = geometry.exl3.suh_offset;

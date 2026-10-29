@@ -60,8 +60,24 @@ class Nf4Format:
     group_size: int = 16
 
 
+@dataclass(frozen=True, slots=True)
+class Exl3Format:
+    """EXL3 trellis codes; numeric decode per the SP-7 contract (exl3-trellis-contract.md).
+
+    One 16-bit codebook state per weight element, decoded from a tail-biting ring
+    per 16x16 tile. The codebook (3inst, mcg, mul1) is a per-object scalar carried
+    in the EXL3 object payload, uniform within the object.
+    """
+
+    name: str
+    codebooks: tuple[str, ...] = ("3inst", "mcg", "mul1")
+
+
+EXL3 = Exl3Format("exl3")
+
 NumericFormat: TypeAlias = (
     DirectFormat | QuantFormat | Nvfp4Format | Fp8RowFormat | Fp8BlockFormat | Nf4Format
+    | Exl3Format
 )
 
 
@@ -118,6 +134,7 @@ NUMERIC_FORMATS = MappingProxyType(
         **FP8_ROW_FORMATS,
         **FP8_BLOCK_FORMATS,
         **NF4_FORMATS,
+        EXL3.name: EXL3,
     }
 )
 
@@ -206,6 +223,8 @@ __all__ = [
     "NF4_CODEBOOK",
     "NF4_FORMATS",
     "Nf4Format",
+    "Exl3Format",
+    "EXL3",
     "DIRECT_FORMATS",
     "QUANT_FORMATS",
     "NVFP4_FORMATS",

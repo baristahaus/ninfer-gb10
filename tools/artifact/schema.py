@@ -66,6 +66,8 @@ class TensorSpec:
     shape: tuple[int, ...]
     format: str
     layout: str
+    # Required for data-dependent layouts (EXL3): the object's exact payload bytes.
+    bytes: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,7 +148,7 @@ def validate_encoding(obj: ArtifactObject) -> None:
             )
         return
     try:
-        size = encoded_size(obj.layout, obj.format, obj.shape)
+        size = encoded_size(obj.layout, obj.format, obj.shape, payload_bytes=obj.bytes)
         alignment = get_layout(obj.layout).alignment
     except (TypeError, ValueError) as error:
         raise ArtifactError(f"{obj.id}: {error}") from error
@@ -171,7 +173,7 @@ def plan_objects(specs: Sequence[ObjectSpec]) -> tuple[ArtifactObject, ...]:
             dims = shape(spec.shape, name)
             try:
                 start = align_up(offset, get_layout(spec.layout).alignment)
-                size = encoded_size(spec.layout, spec.format, dims)
+                size = encoded_size(spec.layout, spec.format, dims, payload_bytes=spec.bytes)
             except (TypeError, ValueError) as error:
                 raise ArtifactError(f"{name}: {error}") from error
             obj = TensorObject(name, dims, spec.format, spec.layout, start, size)

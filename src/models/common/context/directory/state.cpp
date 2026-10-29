@@ -307,6 +307,61 @@ bool StateDirectory::drop_host_replica(StateId handle) noexcept {
     return true;
 }
 
+bool StateDirectory::spill_resident(StateId image) const {
+    return valid(image) && objects_[image.index].spill_extent.has_value();
+}
+
+bool StateDirectory::spill_host_replica(StateId image, SpillKVStore::Extent extent) {
+    Object& object = require(image);
+    if (host_ == nullptr || object.role != StateRole::CheckpointImmutable ||
+        object.device_slot || !object.host_slot || object.source_pins != 0 ||
+        object.destination_pinned || has_pending_replica(object) || object.spill_extent) {
+        return false;
+    }
+    object.spill_extent = extent;
+    release_host_slot(object.host_slot);
+    return true;
+}
+
+std::optional<HostAllocation> StateDirectory::reserve_spill_page_in(StateId image) {
+    Object& object = require(image);
+    if (host_ == nullptr || !object.spill_extent || object.host_slot || object.device_slot ||
+        object.destination_pinned || has_pending_replica(object)) {
+        return std::nullopt;
+    }
+    auto allocation = host_->allocate(image_bytes_);
+    if (!allocation) { return std::nullopt; }
+    object.destination_pinned = true;
+    return allocation;
+}
+
+bool StateDirectory::publish_spill_page_in(StateId image, HostAllocation&& allocation) {
+    Object& object = require(image);
+    if (!object.spill_extent || object.host_slot || !object.destination_pinned ||
+        has_pending_replica(object) || !allocation.valid() || !allocation.belongs_to(*host_) ||
+        allocation.bytes() != image_bytes_) {
+        return false;
+    }
+    object.host_slot.emplace(std::move(allocation));
+    ++host_images_;
+    object.spill_extent.reset();
+    object.destination_pinned = false;
+    return true;
+}
+
+void StateDirectory::abort_spill_page_in(StateId image, HostAllocation&& allocation) noexcept {
+    if (!valid(image)) { return; }
+    Object& object = objects_[image.index];
+    if (object.destination_pinned && !object.host_slot) {
+        object.destination_pinned = false;
+        (void)allocation.release();
+    }
+}
+
+std::optional<SpillKVStore::Extent> StateDirectory::spill_extent(StateId image) const {
+    return valid(image) ? objects_[image.index].spill_extent : std::nullopt;
+}
+
 void StateDirectory::split_device_replica_identity(StateId source, StateId destination) {
     Object& source_object      = require(source);
     Object& destination_object = require(destination);
@@ -516,6 +571,7 @@ bool StateDirectory::release(StateId handle) noexcept {
     }
     object.role          = StateRole::Free;
     object.content_epoch = 0;
+    object.spill_extent.reset();
     if (++object.generation == 0) { ++object.generation; }
     free_objects_[free_object_count_++] = handle.index;
     return true;

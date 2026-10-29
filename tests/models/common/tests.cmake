@@ -24,6 +24,10 @@ ninfer_add_test(ninfer_context_store_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/context/test_store.cpp"
   LIBRARIES ninfer_model_execution ninfer_core)
 
+ninfer_add_test(ninfer_state_spill_test
+  SOURCES "${CMAKE_CURRENT_LIST_DIR}/context/test_state_spill.cpp"
+  LIBRARIES ninfer_model_execution ninfer_core)
+
 ninfer_add_test(ninfer_kv_cache_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/context/test_kv_cache.cpp"
   LIBRARIES ninfer_model_execution ninfer_core)

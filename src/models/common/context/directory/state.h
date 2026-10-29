@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/spill_kv_store.h"
 #include "core/transfer_work.h"
 #include "models/common/context/directory/allocation.h"
 
@@ -191,6 +192,25 @@ public:
     [[nodiscard]] bool drop_device_replica(StateId image) noexcept;
     [[nodiscard]] bool drop_host_replica(StateId image) noexcept;
 
+    // Spill-tier residency for checkpoint StateImages. The image's last full copy lives in the
+    // spill store while neither Device nor Host holds it; the caller owns the SpillKVStore and
+    // performs the byte copies, the directory records the residency and enforces the guards.
+    // A spill-resident image is retained coverage: page-in restores it, never recomputation.
+    [[nodiscard]] bool spill_resident(StateId image) const;
+    // Records the extent (the caller has already written the image's Host bytes into the
+    // store) and drops the Host replica. Fails and leaves everything unchanged when the image
+    // is not a Device-free, quiet, checkpoint-immutable Host resident.
+    [[nodiscard]] bool spill_host_replica(StateId image, SpillKVStore::Extent extent);
+    // Reserves the Host destination for a page-in and pins the image against concurrent
+    // replica work. Copy the extent into the allocation's bytes, then publish. Roll back with
+    // abort_spill_page_in when the copy fails.
+    [[nodiscard]] std::optional<HostAllocation> reserve_spill_page_in(StateId image);
+    [[nodiscard]] bool publish_spill_page_in(StateId image, HostAllocation&& allocation);
+    void abort_spill_page_in(StateId image, HostAllocation&& allocation) noexcept;
+    // The recorded spill extent, for the owner to release when the image is dropped. Null
+    // unless the image is spill-resident.
+    [[nodiscard]] std::optional<SpillKVStore::Extent> spill_extent(StateId image) const;
+
     // A Both source retains its immutable Host identity; the destination adopts its device slot.
     void split_device_replica_identity(StateId source, StateId destination);
 
@@ -218,6 +238,7 @@ private:
         std::uint64_t content_epoch = 0;
         std::optional<std::int32_t> device_slot{};
         std::optional<HostAllocation> host_slot{};
+        std::optional<SpillKVStore::Extent> spill_extent{};
         std::uint64_t transfer_id           = 0;
         std::uint32_t checkpoint_references = 0;
         std::uint32_t source_pins           = 0;

@@ -16,7 +16,8 @@
 
 namespace ninfer::runtime {
 
-const std::array<ContextTransferCost, 3>& generic_context_transfer_cost();
+const std::array<ContextTransferCost, kContextTransferDirectionCount>&
+generic_context_transfer_cost();
 const ContextPrefillCost& generic_context_prefill_cost();
 const std::vector<ContextCostMachinePreset>& compiled_context_cost_defaults();
 
@@ -93,7 +94,8 @@ std::string require_nonempty_string(const Json& value, std::string_view context)
     return value.get<std::string>();
 }
 
-void validate_transfer(const std::array<ContextTransferCost, 3>& transfer,
+void validate_transfer(
+    const std::array<ContextTransferCost, kContextTransferDirectionCount>& transfer,
                        std::string_view context) {
     for (std::size_t index = 0; index < transfer.size(); ++index) {
         const ContextTransferCost& value = transfer[index];
@@ -128,12 +130,23 @@ ContextTransferCost parse_transfer_direction(const Json& value, std::string_view
     return result;
 }
 
-std::array<ContextTransferCost, 3> parse_transfer(const Json& value, std::string_view context) {
-    require_exact_members(value, {"d2h", "h2d", "d2d"}, {}, context);
+std::array<ContextTransferCost, kContextTransferDirectionCount>
+parse_transfer(const Json& value, std::string_view context) {
+    // The spill directions price host-file bandwidth; when a calibration predates them they
+    // inherit the host-to-device cost, which is the conservative same-medium estimate.
+    require_exact_members(value, {"d2h", "h2d", "d2d"}, {"h2spill", "spill2h"}, context);
+    const ContextTransferCost host_to_device =
+        parse_transfer_direction(value.at("h2d"), std::string(context) + ".h2d");
     return {
         parse_transfer_direction(value.at("d2h"), std::string(context) + ".d2h"),
-        parse_transfer_direction(value.at("h2d"), std::string(context) + ".h2d"),
+        host_to_device,
         parse_transfer_direction(value.at("d2d"), std::string(context) + ".d2d"),
+        value.contains("h2spill")
+            ? parse_transfer_direction(value.at("h2spill"), std::string(context) + ".h2spill")
+            : host_to_device,
+        value.contains("spill2h")
+            ? parse_transfer_direction(value.at("spill2h"), std::string(context) + ".spill2h")
+            : host_to_device,
     };
 }
 
@@ -163,10 +176,12 @@ Json transfer_direction_json(const ContextTransferCost& value) {
                 {"ns_per_byte_q32", value.ns_per_byte_q32}};
 }
 
-Json transfer_json(const std::array<ContextTransferCost, 3>& value) {
+Json transfer_json(const std::array<ContextTransferCost, kContextTransferDirectionCount>& value) {
     return Json{{"d2h", transfer_direction_json(value[0])},
                 {"h2d", transfer_direction_json(value[1])},
-                {"d2d", transfer_direction_json(value[2])}};
+                {"d2d", transfer_direction_json(value[2])},
+                {"h2spill", transfer_direction_json(value[3])},
+                {"spill2h", transfer_direction_json(value[4])}};
 }
 
 Json prefill_json(const ContextPrefillCost& value) {
@@ -347,7 +362,7 @@ std::uint64_t ContextMachineCostModel::transfer_batches_ns(
     std::span<const TransferBatchWork> batches) const noexcept {
     constexpr std::size_t kPhaseCount =
         static_cast<std::size_t>(MaterializationCopyPhase::Candidate) + 1U;
-    constexpr std::size_t kDirectionCount = 3;
+    constexpr std::size_t kDirectionCount = kContextTransferDirectionCount;
     std::array<TransferWork, kPhaseCount * kDirectionCount> coalesced{};
     for (const TransferBatchWork& batch : batches) {
         const std::size_t phase     = static_cast<std::size_t>(batch.phase);
@@ -379,6 +394,8 @@ price_materialization_machine_work(const ContextMachineCostModel& model,
         ContextTransferDirection::DeviceToHost,
         ContextTransferDirection::HostToDevice,
         ContextTransferDirection::DeviceToDevice,
+        ContextTransferDirection::HostToSpill,
+        ContextTransferDirection::SpillToHost,
     };
     const auto phase_ns = [&](const CoalescedTransferWork& phase) {
         std::uint64_t result = 0;
@@ -417,6 +434,8 @@ std::uint64_t price_checkpoint_recovery_work(
         ContextTransferDirection::DeviceToHost,
         ContextTransferDirection::HostToDevice,
         ContextTransferDirection::DeviceToDevice,
+        ContextTransferDirection::HostToSpill,
+        ContextTransferDirection::SpillToHost,
     };
     std::uint64_t best = std::numeric_limits<std::uint64_t>::max();
     for (const CheckpointRecoveryAlternativeWork& alternative : alternatives) {
@@ -433,7 +452,7 @@ std::uint64_t price_checkpoint_recovery_work(
 std::uint64_t price_context_transfer_requirements(
     const ContextMachineCostModel& model,
     std::span<const ContextTransferRequirement> requirements) noexcept {
-    std::array<TransferWork, 3> coalesced{};
+    std::array<TransferWork, kContextTransferDirectionCount> coalesced{};
     for (const ContextTransferRequirement& requirement : requirements) {
         const std::size_t index = direction_index(requirement.direction);
         if (index >= coalesced.size()) { return std::numeric_limits<std::uint64_t>::max(); }
@@ -450,6 +469,8 @@ std::uint64_t price_context_transfer_requirements(
         ContextTransferDirection::DeviceToHost,
         ContextTransferDirection::HostToDevice,
         ContextTransferDirection::DeviceToDevice,
+        ContextTransferDirection::HostToSpill,
+        ContextTransferDirection::SpillToHost,
     };
     std::uint64_t total = 0;
     for (std::size_t index = 0; index < coalesced.size(); ++index) {
@@ -603,7 +624,8 @@ resolve_context_machine_cost(const ContextCostIdentity& identity,
 
 void upsert_context_transfer_cost_atomic(const std::filesystem::path& path,
                                          std::string_view hardware_class,
-                                         const std::array<ContextTransferCost, 3>& transfer,
+                                         const std::array<ContextTransferCost,
+                                         kContextTransferDirectionCount>& transfer,
                                          std::string_view provenance_json) {
     if (path.empty()) { throw std::invalid_argument("context-cost preset output is empty"); }
     if (hardware_class.empty()) {

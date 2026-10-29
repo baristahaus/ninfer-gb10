@@ -56,8 +56,8 @@ struct ContextPrefillCost {
 };
 
 struct ContextMachineCostModel {
-    // Direction order is DeviceToHost, HostToDevice, DeviceToDevice.
-    std::array<ContextTransferCost, 3> transfer{};
+    // Direction order is DeviceToHost, HostToDevice, DeviceToDevice, HostToSpill, SpillToHost.
+    std::array<ContextTransferCost, kContextTransferDirectionCount> transfer{};
     ContextPrefillCost prefill;
 
     // max(batch + copy_operations * operation, payload_bytes * ns_per_byte)
@@ -107,7 +107,7 @@ struct ContextPrefillPreset {
 
 struct ContextCostMachinePreset {
     std::string hardware_class;
-    std::optional<std::array<ContextTransferCost, 3>> transfer;
+    std::optional<std::array<ContextTransferCost, kContextTransferDirectionCount>> transfer;
     std::vector<ContextPrefillPreset> prefill;
 };
 
@@ -132,7 +132,7 @@ resolve_context_machine_cost(const ContextCostIdentity& identity,
 // Calibration updates one independently measurable component and preserves every other component.
 void upsert_context_transfer_cost_atomic(const std::filesystem::path& path,
                                          std::string_view hardware_class,
-                                         const std::array<ContextTransferCost, 3>& transfer,
+                                         const std::array<ContextTransferCost, kContextTransferDirectionCount>& transfer,
                                          std::string_view provenance_json);
 void upsert_context_prefill_cost_atomic(const std::filesystem::path& path,
                                         const ContextCostIdentity& identity,

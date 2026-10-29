@@ -23,16 +23,23 @@ constexpr ContextPrefillCost kNvfp4Fp8Prefill{
 
 } // namespace
 
-const std::array<ContextTransferCost, 3>& generic_context_transfer_cost() {
+const std::array<ContextTransferCost, kContextTransferDirectionCount>&
+generic_context_transfer_cost() {
     // Conservative but useful on an unmeasured machine. These values preserve numerical ranking;
-    // they are not a switch that disables the cost model.
-    static constexpr std::array<ContextTransferCost, 3> value{
+    // they are not a switch that disables the cost model. The spill directions reuse the
+    // host-to-device row: spill pages live on the same host medium and no spill measurement
+    // exists yet.
+    static constexpr std::array<ContextTransferCost, kContextTransferDirectionCount> value{
         ContextTransferCost{
             .batch_ns = 100'000, .operation_ns = 12'000, .ns_per_byte_q32 = 107'374'182},
         ContextTransferCost{
             .batch_ns = 50'000, .operation_ns = 12'000, .ns_per_byte_q32 = 107'374'182},
         ContextTransferCost{
             .batch_ns = 25'000, .operation_ns = 12'000, .ns_per_byte_q32 = 42'949'673},
+        ContextTransferCost{
+            .batch_ns = 50'000, .operation_ns = 12'000, .ns_per_byte_q32 = 107'374'182},
+        ContextTransferCost{
+            .batch_ns = 50'000, .operation_ns = 12'000, .ns_per_byte_q32 = 107'374'182},
     };
     return value;
 }
@@ -59,6 +66,10 @@ const std::vector<ContextCostMachinePreset>& compiled_context_cost_defaults() {
                         .batch_ns = 0, .operation_ns = 8'457, .ns_per_byte_q32 = 83'354'284},
                     ContextTransferCost{
                         .batch_ns = 3'343, .operation_ns = 9'520, .ns_per_byte_q32 = 2'658'314},
+                    ContextTransferCost{
+                        .batch_ns = 0, .operation_ns = 8'457, .ns_per_byte_q32 = 83'354'284},
+                    ContextTransferCost{
+                        .batch_ns = 0, .operation_ns = 8'457, .ns_per_byte_q32 = 83'354'284},
                 },
             // Existing measurements apply to these Text bindings with Vision disabled/enabled.
             // The signature excludes trained values and the selected speculative backend; it

@@ -130,6 +130,8 @@ enum class ContextTransferDirection : std::uint8_t {
     DeviceToHost,
     HostToDevice,
     DeviceToDevice,
+    HostToSpill,
+    SpillToHost,
 };
 
 enum class ContextResourceClass : std::uint8_t {
@@ -193,7 +195,8 @@ struct KvCapacityResolution {
 };
 
 
-inline constexpr std::size_t kContextTransferDirectionCount = 3;
+// Direction order: DeviceToHost, HostToDevice, DeviceToDevice, HostToSpill, SpillToHost.
+inline constexpr std::size_t kContextTransferDirectionCount = 5;
 using CoalescedTransferWork = std::array<TransferWork, kContextTransferDirectionCount>;
 
 // Master-generation contract vocabulary: the pressure, materialization, checkpoint and

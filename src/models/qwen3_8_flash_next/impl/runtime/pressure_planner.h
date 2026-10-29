@@ -56,6 +56,10 @@ inline std::size_t planning_direction_index(runtime::ContextTransferDirection di
         return 1;
     case runtime::ContextTransferDirection::DeviceToDevice:
         return 2;
+    case runtime::ContextTransferDirection::HostToSpill:
+        return 3;
+    case runtime::ContextTransferDirection::SpillToHost:
+        return 4;
     }
     throw std::logic_error("materialization transfer direction is invalid");
 }

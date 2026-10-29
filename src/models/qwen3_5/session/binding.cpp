@@ -323,6 +323,23 @@ BindingReservation SessionImpl::start_binding(const RequestBasePlan& base, runti
             const auto destination = tx.state_action == StateBindingAction::Move
                                          ? source_image
                                          : migration.state_destination().image();
+            // A spill-resident source page-ins first: the spill-in action runs ahead of the
+            // copies in this transaction, so the Host replica the restore reads is filled in
+            // order. Failure means the planner priced a candidate whose coverage cannot be
+            // recovered.
+            if (state_store->spill_resident(source_image)) {
+                auto reservation = state_store->reserve_spill_page_in(source_image);
+                if (!reservation) {
+                    throw std::logic_error("spilled State page-in lost its Host destination");
+                }
+                const auto extent = state_store->spill_extent(source_image);
+                migration.use_spill_store(*state_spill);
+                migration.add_spill_in(*extent, reservation->extent());
+                if (!state_store->publish_spill_page_in(source_image, std::move(*reservation))) {
+                    throw std::logic_error("spilled State page-in publish failed");
+                }
+                tx.consumed_spill.push_back(*extent);
+            }
             auto transfer          = state_store->reserve_host_to_device(source_image, destination);
             if (!transfer) throw std::logic_error("Host State restore reservation failed");
             migration.add_state_copy(std::move(*transfer), true);
@@ -400,6 +417,8 @@ void SessionImpl::install_binding(BindOperation& tx) {
 void SessionImpl::complete_binding(BindOperation& tx, context::ContextTransaction& migration,
                                    ContextProgress& out) {
     install_binding(tx);
+    for (const auto& extent : tx.consumed_spill) { state_spill->release(extent); }
+    tx.consumed_spill.clear();
     auto& state = sequences[tx.lane];
     const auto source_image =
         tx.source ? checkpoint(*tx.source).continuation().image : context::StateId{};

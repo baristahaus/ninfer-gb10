@@ -358,6 +358,18 @@ void StateDirectory::abort_spill_page_in(StateId image, HostAllocation&& allocat
     }
 }
 
+bool StateDirectory::revert_spill_page_in(StateId image, SpillKVStore::Extent extent) noexcept {
+    if (!valid(image)) { return false; }
+    Object& object = objects_[image.index];
+    if (object.spill_extent || !object.host_slot || object.device_slot ||
+        object.destination_pinned || has_pending_replica(object)) {
+        return false;
+    }
+    release_host_slot(object.host_slot);
+    object.spill_extent = extent;
+    return true;
+}
+
 std::optional<SpillKVStore::Extent> StateDirectory::spill_extent(StateId image) const {
     return valid(image) ? objects_[image.index].spill_extent : std::nullopt;
 }

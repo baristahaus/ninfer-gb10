@@ -140,6 +140,11 @@ SessionImpl::inspect_source(const RequestBasePlan& base, std::optional<Checkpoin
     if (!state_store->device_resident(record.continuation().image)) {
         candidate.transfers.push_back(context::state_transfer_requirement(
             plan.state_transfer, runtime::ContextTransferDirection::HostToDevice));
+        if (state_store->spill_resident(record.continuation().image)) {
+            // The page-in that restores the Host replica before the copy above.
+            candidate.transfers.push_back(context::state_transfer_requirement(
+                plan.state_transfer, runtime::ContextTransferDirection::SpillToHost));
+        }
     } else if (candidate.state_action != StateBindingAction::Move &&
                candidate.state_action != StateBindingAction::Split &&
                candidate.state_action != StateBindingAction::BackupSplit &&
@@ -150,7 +155,7 @@ SessionImpl::inspect_source(const RequestBasePlan& base, std::optional<Checkpoin
     const auto scan = [&](const context::HistoryDirectory& histories,
                           const context::PageDirectory& pages, context::HistoryId address,
                           std::uint32_t frontier, runtime::ContextTransferResource resource,
-                          std::uint32_t tail_copies) {
+                          std::uint32_t tail_copies) -> bool {
         const auto count      = context::kv_pages_for_frontier(frontier);
         const auto& transfer  = pages.transfer_profile();
         std::uint32_t missing = 0, run_pages = 0;
@@ -165,6 +170,10 @@ SessionImpl::inspect_source(const RequestBasePlan& base, std::optional<Checkpoin
         for (std::uint32_t index = 0; index < count; ++index) {
             const auto page = histories.logical_page(address, index);
             if (pages.device_resident(page)) { continue; }
+            // Spilled pages are not yet restorable by the binding machinery: refuse the
+            // candidate rather than silently recomputing their coverage. The page-in
+            // integration for pages is tracked with the spill wiring.
+            if (pages.spill_resident(page)) { return false; }
             const auto replica = pages.host_replica(page);
             if (previous && (previous->extent != replica.extent ||
                              previous->page_offset + 1 != replica.page_offset)) {
@@ -184,12 +193,17 @@ SessionImpl::inspect_source(const RequestBasePlan& base, std::optional<Checkpoin
                 resource, runtime::ContextTransferDirection::DeviceToDevice, 1,
                 transfer.device_copy_work(1)));
         }
+        return true;
     };
-    scan(*text_kv_histories, *text_kv_pages, record.history().text, record.frontier(),
-         runtime::ContextTransferResource{kTextKvPool}, main_binding.tail_copies);
-    if (record.history().backend) {
-        scan(*backend_kv_histories, *backend_kv_pages, *record.history().backend, backend_frontier,
-             runtime::ContextTransferResource{kBackendKvPool}, backend_binding.tail_copies);
+    if (!scan(*text_kv_histories, *text_kv_pages, record.history().text, record.frontier(),
+              runtime::ContextTransferResource{kTextKvPool}, main_binding.tail_copies)) {
+        return std::nullopt;
+    }
+    if (record.history().backend &&
+        !scan(*backend_kv_histories, *backend_kv_pages, *record.history().backend,
+              backend_frontier, runtime::ContextTransferResource{kBackendKvPool},
+              backend_binding.tail_copies)) {
+        return std::nullopt;
     }
     return candidate;
 }

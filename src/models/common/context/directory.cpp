@@ -97,7 +97,8 @@ ContextTransaction::ContextTransaction(ContextTransaction&& other) noexcept
     : directory_(std::exchange(other.directory_, nullptr)), stage_(other.stage_),
       cancelled_(other.cancelled_), adopted_(other.adopted_), actions_(std::move(other.actions_)),
       state_operations_(std::move(other.state_operations_)),
-      spill_operations_(std::move(other.spill_operations_)), state_(std::move(other.state_)),
+      spill_in_operations_(std::move(other.spill_in_operations_)),
+      spill_out_operations_(std::move(other.spill_out_operations_)), state_(std::move(other.state_)),
       state_copies_(std::move(other.state_copies_)), bindings_(std::move(other.bindings_)),
       backups_(std::move(other.backups_)), state_readers_(std::move(other.state_readers_)),
       page_readers_(std::move(other.page_readers_)), retired_rows_(std::move(other.retired_rows_)),
@@ -191,14 +192,14 @@ void ContextTransaction::add_spill_out(HostExtent host, SpillKVStore::Extent spi
     require_reserved();
     if (!host.valid() || !spill.generation || spill.bytes == 0)
         throw std::invalid_argument("context spill-out extent is invalid");
-    spill_operations_.push_back(StateSpillOut{host, spill});
+    spill_out_operations_.push_back(StateSpillOut{host, spill});
 }
 
 void ContextTransaction::add_spill_in(SpillKVStore::Extent spill, HostExtent host) {
     require_reserved();
     if (!host.valid() || !spill.generation || spill.bytes == 0)
         throw std::invalid_argument("context spill-in extent is invalid");
-    spill_operations_.push_back(StateSpillIn{spill, host});
+    spill_in_operations_.push_back(StateSpillIn{spill, host});
 }
 
 void ContextTransaction::retain(PageDirectory& pages, PageId page) {
@@ -252,6 +253,9 @@ void ContextTransaction::reserve_after_retirement(HistoryDirectory& histories, H
 
 void ContextTransaction::prepare_actions() {
     require_reserved();
+    // Page-ins run first: the copies below read the Host extents they fill. Spill-outs run
+    // last: they read the Host extents the earlier copies just filled.
+    for (const auto& action : spill_in_operations_) actions_.operations.push_back(action);
     for (const auto& copy : state_copies_)
         actions_.operations.emplace_back(copy.transfer.description());
     for (const auto& action : state_operations_) actions_.operations.push_back(action);
@@ -261,8 +265,7 @@ void ContextTransaction::prepare_actions() {
             PageTransfer{StateCopyDirection::DeviceToHost, range.extent,
                          directory_->host().device_sources(backup.destination)});
     }
-    // Spill copies run last: they read the Host extents the earlier copies just filled.
-    for (const auto& action : spill_operations_) actions_.operations.push_back(action);
+    for (const auto& action : spill_out_operations_) actions_.operations.push_back(action);
     for (auto& pending : bindings_) {
         auto& binding       = pending.value;
         const auto restores = binding.restores();
@@ -363,7 +366,8 @@ void ContextTransaction::release_reservations() {
     actions_.operations.clear();
     actions_.spill_store = nullptr;
     state_operations_.clear();
-    spill_operations_.clear();
+    spill_in_operations_.clear();
+    spill_out_operations_.clear();
     state_readers_.clear();
     page_readers_.clear();
     state_copies_.clear();

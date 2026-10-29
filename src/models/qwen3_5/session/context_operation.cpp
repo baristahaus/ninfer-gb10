@@ -110,7 +110,14 @@ void SessionImpl::abort_context() noexcept {
                 using Action = std::decay_t<decltype(action)>;
                 if constexpr (std::is_same_v<Action, BindOperation>) {
                     auto& state = sequences[action.lane];
-                    if (!closing && operation.ticket && state.residency.generation)
+                    if (action.source) {
+                        const auto image = checkpoint(*action.source).continuation().image;
+                        for (const auto& extent : action.consumed_spill) {
+                            (void)state_store->revert_spill_page_in(image, extent);
+                        }
+                    }
+                    action.consumed_spill.clear();
+                    if (closing && operation.ticket && state.residency.generation)
                         release_residency(state.residency);
                     release_sequence_state(state);
                     release_sequence_kv(state);

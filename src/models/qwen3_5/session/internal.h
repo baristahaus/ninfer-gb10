@@ -216,6 +216,9 @@ struct BindOperation {
     bool take_private               = false;
     bool resume_snapshot            = false;
     bool source_tail_hidden         = false;
+    // Spill extents whose bytes this binding's page-ins restore; the completion releases
+    // them back to the store.
+    std::vector<SpillKVStore::Extent> consumed_spill;
 };
 
 struct CaptureOperation {

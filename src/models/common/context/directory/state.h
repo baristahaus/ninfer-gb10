@@ -207,6 +207,9 @@ public:
     [[nodiscard]] std::optional<HostAllocation> reserve_spill_page_in(StateId image);
     [[nodiscard]] bool publish_spill_page_in(StateId image, HostAllocation&& allocation);
     void abort_spill_page_in(StateId image, HostAllocation&& allocation) noexcept;
+    // Aborted-binding rollback for an already-published spill page-in: drops the Host
+    // replica whose bytes never arrived and restores the spill record.
+    bool revert_spill_page_in(StateId image, SpillKVStore::Extent extent) noexcept;
     // The recorded spill extent, for the owner to release when the image is dropped. Null
     // unless the image is spill-resident.
     [[nodiscard]] std::optional<SpillKVStore::Extent> spill_extent(StateId image) const;

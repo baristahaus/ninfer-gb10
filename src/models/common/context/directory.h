@@ -200,7 +200,8 @@ private:
     bool adopted_   = false;
     ContextActions actions_;
     std::vector<ContextAction> state_operations_;
-    std::vector<ContextAction> spill_operations_;
+    std::vector<ContextAction> spill_in_operations_;
+    std::vector<ContextAction> spill_out_operations_;
     std::optional<StateDirectory::Destination> state_;
     std::vector<PendingStateCopy> state_copies_;
     std::vector<PendingBinding> bindings_;

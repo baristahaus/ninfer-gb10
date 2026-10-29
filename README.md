@@ -86,9 +86,14 @@ The second build lane is the RTX 5090 (`sm_120a`). It carries the tiering work: 
 than the card run across GPU, RAM, and disk. The EXL3/Trellis quantization lever, serving
 telemetry, and constrained decoding for the Qwen3.5 family landed on `master` in the October
 2026 integration. The 27B-class models serve fully hot on that lane and are the regression
-baseline. The tiering lane's current work (the SP-7 strategy packages) lives on the
-`5090-test` branch on the remote; it is not yet merged into `master`. Older work-line and
-verification branches were archived as `archive/*` tags in October 2026.
+baseline. The tiering lane's SP-7 packages — the artifact tiering machinery (binder,
+placement, materializer) and the EXL3 dense and expert-bank routes — merged into `master` in
+October 2026, and the EXL3 27B artifact now serves end to end on that lane: a streaming
+tool-call smoke decodes at roughly 10 tok/s single-stream against roughly 83 tok/s for the
+groupwise route at the same request shape, so the dense EXL3 kernel route's performance
+remains the open SP-7 work item. What stays on the `5090-test` line is the model-load tier
+drive and the SP-4 adaptive-cache runtime that consume the merged machinery. Older work-line
+and verification branches were archived as `archive/*` tags in October 2026.
 
 ## Build and run
 

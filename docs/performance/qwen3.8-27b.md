@@ -41,6 +41,17 @@ The workspace arena is 243.3 MiB in every configuration. Resident weight arenas 
 | MTP3 | 16.672 | 19.729 |
 | DFlash2 K=7 | 18.326 | 21.383 |
 
+### Dense EXL3 route status (October 2026)
+
+The `out/qwen3_8_27b_exl3.ninfer` dense route serves end to end on the merged master generation
+(revision `166a1eff` and later): startup, CUDA Graph calibration, and the streaming tool-call
+path complete. A single labeled smoke observation, not part of the September campaign: at the
+groupwise G0-shaped request (a 7-token prompt, temperature 0, tool-constrained output), the
+groupwise route decoded at 83.4 tok/s while the dense EXL3 route decoded at 9.7 tok/s
+single-stream. Battery-grade EXL3 context, speculation, and saturation numbers are pending;
+the dense EXL3 kernel route's performance is the open SP-7 work item. The GDN replay-record
+path (speculative decoding over EXL3 weights) is refused at request time.
+
 ## No-speculation context profile
 
 G0/N0 use the [single-request method](methodology.md#single-request-phases): five fixed seeds per fixture, thinking disabled, and a 128-token output budget.

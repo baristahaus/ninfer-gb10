@@ -237,6 +237,9 @@ StartupConfigurationView view(const LaunchOptions& launch, EntryPoint entry, con
         case Field::Cors:
             value = server->enable_cors;
             break;
+        case Field::IgnoreEos:
+            value = server->ignore_eos;
+            break;
         case Field::MaxRequestSize:
             value = std::uint64_t{server->max_request_bytes};
             break;

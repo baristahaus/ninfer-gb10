@@ -92,6 +92,9 @@ struct ServeOptions {
     std::string api_key;
     std::optional<std::string> model_id_override;
     bool enable_cors                       = false;
+    // Benchmark/measurement knob: suppress the model's default end-of-sequence stop tokens for
+    // every request on the instance. Explicit per-request stop strings still apply.
+    bool ignore_eos                          = false;
     std::size_t max_request_bytes          = kDefaultMaxRequestBytes;
     std::size_t response_store_max_records = kDefaultResponseStoreRecords;
     std::size_t response_store_max_bytes   = kDefaultResponseStoreBytes;

@@ -47,6 +47,7 @@ enum class Field {
     ApiKey,
     ModelId,
     Cors,
+    IgnoreEos,
     MaxRequestSize,
     ResponseRecords,
     ResponseSize,

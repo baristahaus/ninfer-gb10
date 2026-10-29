@@ -155,6 +155,7 @@ Operational flag subset (defaults in the right column; the full table is in
 | `--api-key KEY` | required bearer / `x-api-key`; `/health` stays open | unset |
 | `--vision` | media input (extra weights and workspace) | off → **on** |
 | `--no-thinking` / `--preserve-thinking` | thinking default / closed-turn reasoning | thinking on / off |
+| `--ignore-eos` | suppress the model's end-of-sequence stop tokens for every request on the instance; benchmark/measurement knob for decode-rate runs — every stream decodes to its output budget | off |
 
 Long-prefill policy (the three behaviors above interact; measured on GB10):
 

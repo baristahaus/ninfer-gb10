@@ -160,6 +160,13 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--port", type=int, default=8080, help="loopback serving port")
     parser.add_argument("--device", type=int, default=0, help="CUDA device index")
     parser.add_argument(
+        "--serve-arg",
+        action="append",
+        default=[],
+        metavar="ARG",
+        help="pass one extra argument through to the launched ninfer-serve; repeatable",
+    )
+    parser.add_argument(
         "--dry-run", action="store_true", help="print point commands and request counts only"
     )
     return parser.parse_args(argv)
@@ -354,6 +361,7 @@ def server_command(
                 "0",
             ]
         )
+    command.extend(args.serve_arg)
     return command
 
 

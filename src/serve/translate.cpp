@@ -314,6 +314,9 @@ ninfer::RequestOptions to_request_options(const GenerationRequest& request,
     options.output.tool_name_max_length = static_cast<std::uint32_t>(request.tool_name_max_length);
     options.stop.strings.reserve(request.stop_strings.size() *
                                  (request.stop_strings_apply_to_reasoning ? 2U : 1U));
+    // The server-level benchmark knob suppresses the model's default end-of-sequence stop
+    // tokens for every request on the instance; the caller's stop strings still apply.
+    options.stop.include_model_defaults = !server.ignore_eos;
     for (const std::string& stop : request.stop_strings) {
         if (!stop.empty()) {
             options.stop.strings.push_back(

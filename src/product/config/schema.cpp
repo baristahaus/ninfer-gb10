@@ -86,6 +86,9 @@ constexpr FieldSpec kFields[] = {
      "Public model alias; empty uses the artifact name.", Scope::Serve},
     {Field::Cors, "server.cors", "--cors", "--no-cors", "", "Permissive CORS headers.",
      Scope::Serve},
+    {Field::IgnoreEos, "server.ignore_eos", "--ignore-eos", "--no-ignore-eos", "",
+     "Suppress model end-of-sequence stop tokens on this instance; benchmark knob.",
+     Scope::Serve},
     {Field::MaxRequestSize, "server.max_request_size", "--max-request-size", "", "SIZE",
      "HTTP body limit before JSON parsing (384MiB).", Scope::Serve, ConfigurationUnit::Bytes},
     {Field::ResponseRecords, "server.responses.max_records", "--response-store-max-records", "",
@@ -303,6 +306,7 @@ FieldValue parse_field_value(Field field, const RawValue& value, bool command_li
     case Field::Thinking:
     case Field::PreserveThinking:
     case Field::Cors:
+    case Field::IgnoreEos:
     case Field::RawOutput:
     case Field::PrintTokenIds:
         if (const auto* boolean = std::get_if<bool>(&value)) return *boolean;

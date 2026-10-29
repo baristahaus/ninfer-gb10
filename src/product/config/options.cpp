@@ -490,6 +490,9 @@ ParsedOptions parse(int argc, char** argv, EntryPoint entry,
         case Field::Cors:
             parsed.serve.enable_cors = boolean();
             break;
+        case Field::IgnoreEos:
+            parsed.serve.ignore_eos = boolean();
+            break;
         case Field::MaxRequestSize:
             parsed.serve.max_request_bytes = u64();
             break;

@@ -438,6 +438,7 @@ void PageDirectory::attach_host_replica(PageId handle, HostPageReplica replica,
     }
     page.host_replica = replica;
     page.host_owner   = &owner;
+    page.spill_extent.reset();
 }
 
 void PageDirectory::rebind_host_replica(PageId handle, HostPageReplica expected,
@@ -490,7 +491,29 @@ void PageDirectory::release_descriptor(PageId handle, Page& page) noexcept {
     page.occupied                           = false;
     page.host_replica.reset();
     page.host_owner = nullptr;
+    page.spill_extent.reset();
     if (++page.generation == 0) { ++page.generation; }
     free_[free_count_++] = handle.index;
+}
+
+bool PageDirectory::spill_resident(PageId handle) const noexcept {
+    return valid(handle) && pages_[handle.index].spill_extent.has_value();
+}
+
+bool PageDirectory::spill_host_replica(PageId handle, SpillKVStore::Extent extent) noexcept {
+    if (!valid(handle)) { return false; }
+    Page& page = pages_[handle.index];
+    // Recording only: the caller spills the bytes first, then frees the Host extent through
+    // the ordinary release path, whose last-copy guard spill residency relaxes.
+    if (!page.host_replica || page.host_readers != 0 || page.host_transfer_pending ||
+        page.spill_extent) {
+        return false;
+    }
+    page.spill_extent = extent;
+    return true;
+}
+
+std::optional<SpillKVStore::Extent> PageDirectory::spill_extent(PageId handle) const noexcept {
+    return valid(handle) ? pages_[handle.index].spill_extent : std::nullopt;
 }
 } // namespace ninfer::models::context

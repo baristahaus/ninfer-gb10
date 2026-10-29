@@ -224,7 +224,8 @@ void HostDirectory::abort(HostPageReservation& reservation) noexcept {
 bool HostDirectory::can_release_page_replica(PageDirectory& pages, PageId page) const noexcept {
     if (!pages.valid(page) || !pages.host_resident(page) ||
         pages.require(page).host_owner != this || pages.require(page).host_readers != 0 ||
-        (!pages.device_resident(page) && pages.history_references(page) != 0)) {
+        (!pages.device_resident(page) && pages.history_references(page) != 0 &&
+         !pages.spill_resident(page))) {
         return false;
     }
     const HostPageReplica replica = pages.host_replica(page);

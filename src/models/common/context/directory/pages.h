@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/paged_kv_geometry.h"
+#include "core/spill_kv_store.h"
 #include "models/common/context/directory/allocation.h"
 
 #include <array>
@@ -245,6 +246,16 @@ public:
 
     [[nodiscard]] bool host_replica_current(PageId handle) const noexcept;
 
+    // Spill-tier residency for logical KV pages, the page analog of the StateDirectory
+    // primitive. The caller owns the SpillKVStore and performs the byte copies through the
+    // action pipeline; the directory records the residency, relaxes the last-copy detach
+    // guard exactly because the spill extent now holds the bytes, and clears the record when
+    // a Host replica re-attaches. Page-in rebuilds the replica through the ordinary
+    // HostDirectory prepare/publish path using the page's own epoch and coverage.
+    [[nodiscard]] bool spill_resident(PageId handle) const noexcept;
+    [[nodiscard]] bool spill_host_replica(PageId handle, SpillKVStore::Extent extent) noexcept;
+    [[nodiscard]] std::optional<SpillKVStore::Extent> spill_extent(PageId handle) const noexcept;
+
     [[nodiscard]] bool can_drop_device_replica(PageId handle) const noexcept;
 
     void retain_active_reference(PageId handle);
@@ -300,6 +311,7 @@ private:
         bool occupied           = false;
         std::optional<PageLease> device_replica;
         std::optional<HostPageReplica> host_replica;
+        std::optional<SpillKVStore::Extent> spill_extent;
         HostDirectory* host_owner = nullptr;
     };
 

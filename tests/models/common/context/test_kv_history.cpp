@@ -4,6 +4,8 @@
 #include "models/common/context/transfer.h"
 #include "models/common/context/snapshot.h"
 #include "models/common/context/physical_reclaim.h"
+
+#include <filesystem>
 #include "models/common/qwen/recovery_store.h"
 #include "models/qwen3_5/session/internal.h"
 #include "models/qwen4_exp/session/internal.h"
@@ -1154,6 +1156,78 @@ void accepted_frontier_and_retirement(DeviceContext& device) {
 
 } // namespace
 
+void page_spill_roundtrip(DeviceContext& device) {
+    Fixture f(device);
+    auto owner  = f.create(130);
+    auto prefix = f.histories->retain_prefix(owner.handle(), 130);
+    const auto original = f.logical(owner.handle());
+    owner.reset();
+    const auto extent = f.backup(original);
+    const auto replica = f.pages->host_replica(original[0]);
+    const auto before  = f.host_view(f.host->view(replica.extent));
+    std::vector<std::byte> expected(static_cast<const std::byte*>(before.data),
+                                    static_cast<const std::byte*>(before.data) + before.bytes);
+
+    const std::filesystem::path path =
+        std::filesystem::temp_directory_path() / "ninfer_page_spill_test.bin";
+    std::error_code ignored;
+    std::filesystem::remove(path, ignored);
+    ninfer::SpillKVStore store(path, 4 * f.host_layout.page_stride);
+
+    // Spill-out through the action pipeline while the source replica is still attached.
+    const auto spill = store.reserve(expected.size());
+    context::ContextActions out;
+    out.spill_store = &store;
+    out.operations.push_back(context::StateSpillOut{f.host->view(replica.extent).extent, spill});
+    f.migration->submit(out);
+    while (!f.migration->ready()) std::this_thread::yield();
+    f.migration->finish();
+
+    for (const auto page : original) {
+        expect(f.pages->spill_host_replica(page, spill), "host page refused to spill");
+        expect(f.pages->spill_resident(page), "page spill residency was not recorded");
+    }
+    expect(f.host->release_page_replicas(*f.pages, original),
+           "spilled pages did not release their Host extent");
+    for (const auto page : original) {
+        expect(!f.pages->host_resident(page) && f.pages->spill_resident(page),
+               "released page lost its spill residency");
+    }
+    std::vector<std::byte> back(expected.size());
+    store.read(spill, back.data(), back.size());
+    expect(back == expected, "page spill round-trip is not bit-identical");
+    expect(!f.pages->spill_host_replica(original[0], spill), "double page spill was accepted");
+
+    // Page-in through the ordinary prepare/publish path, filled by a spill action.
+    auto reservation = f.host->prepare(*f.pages, original);
+    expect(reservation.has_value(), "spill page-in reservation failed");
+    context::ContextActions in;
+    in.spill_store = &store;
+    in.operations.push_back(
+        context::StateSpillIn{spill, f.host->writable_view(*reservation).extent});
+    f.migration->submit(in);
+    while (!f.migration->ready()) std::this_thread::yield();
+    f.migration->finish();
+    f.host->publish(std::move(*reservation));
+    for (const auto page : original) {
+        expect(f.pages->host_resident(page) && !f.pages->spill_resident(page) &&
+                   !f.pages->spill_extent(page).has_value(),
+               "page-in did not restore Host residency");
+    }
+    store.release(spill);
+    const auto restored = f.pages->host_replica(original[0]);
+    const auto after    = f.host_view(f.host->view(restored.extent));
+    expect(std::vector<std::byte>(static_cast<const std::byte*>(after.data),
+                                  static_cast<const std::byte*>(after.data) + after.bytes) ==
+               expected,
+           "page-in did not restore the original bytes");
+
+    f.host->release_page_replicas(*f.pages, original);
+    prefix.reset();
+    f.empty();
+    std::filesystem::remove(path, ignored);
+}
+
 int main() {
     try {
         int count        = 0;
@@ -1173,6 +1247,7 @@ int main() {
         prefix_bytes(device, PagedKVPlaneOrder::PageMajor, true);
         migration_reader_lifetime(device);
         host_reader_survives_extent_partition(device);
+        page_spill_roundtrip(device);
         migration_restore_chain(device, PagedKVPlaneOrder::PageMajor);
         migration_restore_chain(device, PagedKVPlaneOrder::HeadMajor);
         mixed_snapshot(device);

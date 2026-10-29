@@ -82,6 +82,31 @@ MTP3 and DFlash2 modes are not part of this route's record: the GDN replay-recor
 refuses speculative decoding over EXL3 weights at request time, so the speculative suites
 cannot run.
 
+#### Where the decode time goes
+
+A per-call CUDA-event probe over the decode path (the same kernels the captured graphs
+replay) attributes the round almost entirely to the EXL3 kernels; per-dispatch host cost is
+about 10 microseconds. Each matmul runs a two-pass SIMT decode: a partial kernel (grid
+`n/128 × k/512`, 256 threads, trellis tiles decoded to FP32 in shared memory, an FP32 partial
+plane in the workspace) plus a small finish kernel. Measured per-call times against each
+shape's weight-read floor at roughly 1.7 TB/s:
+
+| Shape (T=1) | Measured (µs) | Weight-read floor (µs) | Ratio |
+|---|---|---|---|
+| 2048×5120 (projection slice) | 117 | ~2.5 | ~47× |
+| 6144×5120 (projection slice) | 118 | ~7 | ~17× |
+| 17408×5120 (gate/up half) | 334 | ~21 | ~16× |
+| 5120×17408 (down) | 336 | ~21 | ~16× |
+
+A decode round launches about eight such matmuls per layer across 64 layers plus the finish
+kernels — roughly 1,000 kernel launches per round — and their sum matches the observed
+104 ms round. The kernels are compute-bound, not bandwidth-bound: a 3-bit trellis decode
+should beat the 8-bit groupwise route on weight traffic, not lose to it by 8.7×. Closing the
+gap is kernel work in the shared ops layer (a fused single-pass tensor-core path for the
+dense objects, one matmul per projection instead of four row-sliced dispatches, and reusing
+the finished decode tiles across the two passes); it benefits the 5090 and GB10 lanes
+alike, since `sm_120a` and `sm_121a` build the same kernels.
+
 ## No-speculation context profile
 
 G0/N0 use the [single-request method](methodology.md#single-request-phases): five fixed seeds per fixture, thinking disabled, and a 128-token output budget.

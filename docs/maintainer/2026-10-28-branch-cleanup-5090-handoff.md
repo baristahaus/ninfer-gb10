@@ -17,6 +17,11 @@ records from September and October. On 2026-10-28 they were cleaned up:
 - What remains as branches: `master`, `5090-test`, `q38fn-bank-shapes`, and the seven
   `upstream/*` provenance mirrors. `5090-test` stays because it is live work, not a record: it
   carries 98 commits of SP-7 strategy and tiering work that is not yet merged into `master`.
+- 2026-10-28 update: the SP-7 work merged into `master` (the EXL3 routes serve there now), and
+  the upstream mirrors were cleared after upstream parked the repo. Every deleted
+  `origin/upstream/*` tip is preserved as a pushed `archive/upstream-*` tag (nine tags), and
+  the `upstream` remote itself was removed. Re-add the remote if a goodwill fix ever needs to
+  travel back.
 
 If you need any archived content, read it from the tag: `git log archive/<name>` or
 `git checkout archive/<name>`.

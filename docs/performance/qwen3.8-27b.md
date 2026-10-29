@@ -71,19 +71,24 @@ attribution below quantifies the split.
 
 #### Decode saturation
 
-| C | Steady (s) | Steady decode (tok/s) | Wave completion |
-|---|---|---|---|
-| 1 | 135.0 | 60.20 | output limit, 8,127 committed tokens |
+Measured with the `--ignore-eos` server knob (a benchmark knob that suppresses
+end-of-sequence stop tokens on the instance, so every stream decodes to the full
+8,192-token budget and the suite's completion contract holds at every C):
 
-The C=1 point satisfies the suite's contract (every stream reaches the output limit); the
-8,192-token window that took 848 s under the two-pass route closes in 135 s. As in the
-two-pass campaign, the C=2, 4, and 8 points are **not recorded**: under the stochastic
-profile, at least one stream samples a stop token inside the 8,192-token window (the C=2
-wave terminated early; C=4 and C=8 refused identically), and the suite's completion contract
-rejects such waves. Because the surviving stream then runs solo for the rest of the window,
-these waves do not measure the batched decode rate either. Measuring the EXL3 batched decode
-scaling needs a window the route sustains, or an agreed relaxation of the completion
-contract; both are open.
+| C | Steady (s) | Steady decode (tok/s) | Mean decode batch | Wave completion |
+|---|---|---|---|---|
+| 1 | 135.0 | 60.30 | 1.0 | output limit, 8,141 tokens/stream |
+| 2 | 138.0 | 117.93 | 2.0 | output limit, 8,137 tokens/stream |
+| 4 | 144.0 | 225.39 | 4.0 | output limit, 8,114 tokens/stream |
+| 8 | 156.0 | 418.82 | 8.0 | output limit, 8,167 tokens/stream |
+
+Batched decode scales near-linearly: 1.96× at C=2, 3.74× at C=4, 6.95× at C=8,
+with the per-row rate at C=8 at 52.4 tok/s (87% of the solo rate). Every stream in
+every wave reaches the output limit; the batched EXL3 decode scaling that the
+two-pass campaign could not measure is now recorded. Without the knob, the same
+waves are refused by the completion contract: under the stochastic profile at
+least one stream samples a stop token inside the 8,192-token window, the surviving
+stream then runs solo, and the wave measures no batched rate.
 
 MTP3 and DFlash2 modes are not part of this route's record: the GDN replay-record path
 refuses speculative decoding over EXL3 weights at request time, so the speculative suites

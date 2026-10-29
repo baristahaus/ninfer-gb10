@@ -280,6 +280,10 @@ SessionImpl::SessionImpl(std::shared_ptr<const ModelDefinition> definition_in, S
       backend_kv_pages(directory.pool_count() > 1 ? &directory.pool(1).pages() : nullptr),
       host_kv_extents(plan.context.host.extent_count ? &directory.host() : nullptr),
       host_context_arena(plan.context.host.bytes ? &directory.host_allocation() : nullptr),
+      state_spill(plan.context_cache.state_spill_capacity_bytes && !plan.context_cache.state_spill_path.empty()
+                      ? std::make_unique<SpillKVStore>(plan.context_cache.state_spill_path,
+                                                       *plan.context_cache.state_spill_capacity_bytes)
+                      : nullptr),
       capacity(plan.capacity), max_concurrency(plan.max_concurrency),
       prefill_chunk(plan.prefill_chunk), draft_window(plan.draft_window),
       speculative_backend(plan.speculative_backend), context_cache(plan.context_cache),

@@ -138,6 +138,12 @@ struct ContextCacheOptions {
     std::optional<std::uint32_t> max_shared_prefixes;
     // Bounded per-continuation long-anchor count. Absent lets the cache use its default.
     std::optional<std::uint32_t> max_long_anchors_per_continuation;
+    // State spill tier for agent-class retention: a file-backed cache of checkpoint coverage
+    // below Host, truncated at startup because it is a cache rather than a record. Absent
+    // capacity disables the tier entirely; set capacity and path together. The path is the
+    // spill file location, one file per engine.
+    std::filesystem::path state_spill_path;
+    std::optional<std::size_t> state_spill_capacity_bytes;
 };
 
 

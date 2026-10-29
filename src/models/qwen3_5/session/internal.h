@@ -2,6 +2,7 @@
 
 #include "models/qwen3_5/session/session.h"
 #include "models/qwen3_5/state/continuation.h"
+#include "core/spill_kv_store.h"
 #include "models/common/context/snapshot.h"
 #include "models/common/context/work.h"
 #include "models/common/qwen/prefix_identity.h"
@@ -360,6 +361,8 @@ public:
     context::PageDirectory* backend_kv_pages;
     context::HostDirectory* host_kv_extents;
     context::HostAllocator* host_context_arena;
+    // Owns the state spill tier when ContextCacheOptions configures it; null otherwise.
+    std::unique_ptr<ninfer::SpillKVStore> state_spill;
     const std::uint32_t capacity;
     const std::uint32_t max_concurrency;
     const std::uint32_t prefill_chunk;

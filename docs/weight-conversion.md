@@ -483,3 +483,20 @@ support is checked by consumers during preparation, resource queries, warmup or 
 valid file may need additional Op support before its chosen combination can run. Exercise the
 phases and optional components you intend to use through the normal [CLI](cli.md) or
 [serving](serving.md) route.
+
+## Converter environment
+
+The converter is plain Python over PyTorch: it needs Python 3.11, a torch build whose CUDA
+matches the lane that runs the conversion, and numpy. No package installs happen inside the
+repository, and there is no requirements file: create an environment next to your checkout, for
+example with `uv venv --python 3.11`, activate it, and install `torch` (the CUDA build for your
+lane) plus `numpy`. The EXL3 and Flash-Next conversions record their exact torch wheel in the
+conversion report beside each artifact; read that report first when you reproduce an old
+conversion, and prefer the recorded wheel over a newer one.
+
+`tools/convert/sources/exllamav3.py` reimplements the EXL3/Trellis encoding the converter uses,
+so no external exllamav3 package is needed. Everything under `tools/convert/sources/` is
+vendored for the same reason.
+
+If a conversion environment is lost, rebuild it from this section and the conversion report of
+the artifact you want to reproduce; do not guess versions.

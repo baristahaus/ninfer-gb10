@@ -65,10 +65,9 @@ shared method.
 
 The fused route decodes at 60.4 down to 46.1 tok/s from 8K to 256K — 6.3× to 5.0× the
 two-pass route's 9.6–9.2 tok/s on the same fixtures. The prefill phase is unchanged within
-run-to-run variation (its composed route is untouched). The decode rate now visibly declines
-with context because the fused matmuls no longer dominate the round: attention and KV traffic
-grow with context while the projection cost stays fixed, so attention takes the share the
-slower kernels previously masked.
+run-to-run variation (its composed route is untouched). The decode rate declines with
+context because the growing KV stream crosses over the fixed projection cost; the
+attribution below quantifies the split.
 
 #### Decode saturation
 
@@ -92,14 +91,44 @@ cannot run.
 
 #### Where the decode time goes
 
-The fused route replaces the two-pass SIMT decode's roughly 1,000 kernel launches per round
-with about 512 fused tensor-core launches (eight projections per layer across 64 layers,
-each one rotated-activation kernel plus one fused decode matmul with in-kernel split-K, plus
-the small output transposes). The steady round drops from 104 ms to 16.5 ms, i.e. from
-roughly 200 µs to roughly 32 µs per launched projection averaged across the layer's shapes.
-The remaining per-round cost is everything outside the fused projections; the decode rate's
-decline with context (60.4 to 46.1 tok/s) is consistent with that residual being dominated by
-attention and KV traffic, which grow with context while the projection cost stays fixed.
+Two measured levels, no kernel probe in between. The projection level is an operator-level
+microbench of the dispatched unit — one rotated-activation kernel, one fused decode matmul
+with in-kernel split-K, one output transpose — timed at every registered decode shape with
+the artifact's real geometry (all 256 EXL3 objects are k2=4, codebook mcg; the per-round
+dispatch census below sums to exactly 512 calls, eight per layer across 64 layers):
+
+| Shape (T=1, k2=4) | Calls per round | Measured (µs/call) | Effective weight BW (GB/s) |
+|---|---|---|---|
+| 1024×5120 | 32 | 10.2 | 130 |
+| 2048×5120 | 96 | 10.2 | 259 |
+| 6144×5120 | 128 | 18.5 | 426 |
+| 5120×6144 | 64 | 15.8 | 498 |
+| 17408×5120 | 128 | 36.8 | 606 |
+| 5120×17408 | 64 | 31.1 | 719 |
+
+Weighted by the census, the fused projections cost 11.39 ms per round. This is an eager
+upper bound — each call carries roughly 3–6 µs of launch/dispatch overhead that the
+serving path's graph replay removes — so the graph-replayed share is somewhat lower. The
+end-to-end level is the battery: a 16.6 ms mean round at 8K (60.4 tok/s), i.e. a ~5.2 ms
+residual for everything else (attention compute, KV reads, LM head, per-round schedule).
+The fp8 KV read floor gives the context dependence: 0.125 MiB per token (64 layers ×
+1,024 × K+V) means ~1.0 GB at 8K (0.6 ms), ~8.5 GB at 64K (4.8 ms), ~17.1 GB at 128K
+(9.6 ms), and ~34.2 GB at 256K (19.1 ms at the 1.79 TB/s peak). The measured rounds
+(16.6 / 17.7 / 19.1 / 21.7 ms) fit that shape: through 128K the fixed projection cost is
+the critical path and the KV stream grows underneath it; by 256K the KV floor alone
+(19.1 ms) exceeds the projection cost, the round becomes KV-bound, and the projections
+overlap under the KV stream — which is also why the round grows by only 5.1 ms over a
+32× larger context. The 16.5 ms steady round at 8K therefore splits into roughly 11.4 ms
+of fused projections (the upper bound including launch overhead), under 1 ms of KV and
+attention floor, and ~4 ms of fixed per-round work (LM head, norms, GDN recurrence,
+sampling, schedule).
+
+Two ceilings follow. At short contexts the route is projection-bound: the effective
+weight bandwidth of the small slices (130–260 GB/s against the 719 GB/s of the largest)
+says the per-call launch floor, not the kernel, is what costs on the 1,024- and 2,048-row
+slices — 128 of the 512 calls are the 17408×5120 pair at 606 GB/s, so batching or fusing
+the small slices is the candidate there. At 256K the route is KV-bandwidth-bound and
+projection work is irrelevant; that lane is the tiering machinery's, not the kernel's.
 
 ## No-speculation context profile
 

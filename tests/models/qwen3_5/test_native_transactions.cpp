@@ -2039,6 +2039,130 @@ void state_spill_roundtrip(std::shared_ptr<const q35::ModelDefinition> definitio
     std::filesystem::remove(spill_path, ignored);
 }
 
+
+void state_spill_resume_acceptance(std::shared_ptr<const q35::ModelDefinition> definition,
+                                   std::shared_ptr<const q35::ModelShard> model,
+                                   std::shared_ptr<const q35::execution::ModelProfile> profile,
+                                   ninfer::models::qwen::Frontend& frontend,
+                                   EngineOptions options) {
+    // Slice 5 behavioral acceptance (design 2026-10-24 section 5): a long shared prefix is
+    // spilled under host pressure, and a resumed request admits from the spill-resident
+    // candidate and prefills only the tail.
+    options.max_context                       = 128;
+    options.kv_capacity                       = KvCapacityPolicy::explicit_capacity(256);
+    options.max_concurrency                   = 2;
+    options.context_cache.enabled             = true;
+    options.context_cache.extra_state_slots   = 2;
+    options.context_cache.host_capacity_bytes = 64ULL << 20;
+    const auto spill_path =
+        std::filesystem::temp_directory_path() / "ninfer_spill_resume_test.bin";
+    std::error_code ignored;
+    std::filesystem::remove(spill_path, ignored);
+    options.context_cache.state_spill_path           = spill_path;
+    options.context_cache.state_spill_capacity_bytes = 64ULL << 20;
+
+    native::NativeRankFixture rank(definition, model, profile, options, 4);
+    q35::detail::SessionImpl program(definition, std::move(rank.session_plan));
+    program.executor_ = &rank.executor();
+    native::EventDriver driver(program, rank);
+    const auto settle = [&]() { return driver.settle(); };
+    const auto advance = [&](q35::SequenceHandle sequence) {
+        const std::array<q35::ExecutionUnit, 1> units{{{sequence, q35::ExecutionUnitKind::Prefill}}};
+        require(static_cast<bool>(program.reserve_units(units)),
+                "spill acceptance could not reserve its prefill unit");
+        auto step = driver.prefill(sequence);
+        if (step.pending) {
+            const std::array<runtime::CommitDecision, 1> accepted{{{.accepted_tokens = 1}}};
+            const auto committed = driver.commit(std::move(*step.pending), accepted);
+            step.capture_ready   = committed.capture_ready[0];
+        }
+        return step;
+    };
+
+    // Capture the 64-token shared prefix.
+    const std::vector<TokenId> shared(64, 198);
+    auto prepared = ninfer::models::qwen::PreparedPromptAccess::take(frontend.prepare_tokens(shared));
+    prepared.context_cache.opportunities.push_back(
+        {.kind     = PromptCacheMarkerKind::SharedStablePrefix,
+         .evidence = SharedCandidateEvidence::ExplicitBoundary,
+         .frontier = 64});
+    runtime::ResolvedExecutionOptions capture_request;
+    capture_request.requested_output_tokens = 8;
+    capture_request.allow_prefix_reuse      = true;
+    auto capture_base = program.plan_request(std::move(prepared), capture_request);
+    const auto root   = program.inspect_source(capture_base, std::nullopt);
+    require(root && static_cast<bool>(program.start_binding(
+                        capture_base, {0}, *root, nullptr, q35::ExecutionUnitKind::Prefill, 0)),
+            "spill acceptance could not bind its capture writer");
+    const auto bound = settle();
+    require(bound.sequence.has_value(), "spill acceptance did not publish its capture writer");
+    const auto writer = *bound.sequence;
+    const auto captured_step = advance(writer);
+    require(captured_step.processed_prompt_tokens == 64 && captured_step.capture_ready,
+            "spill acceptance did not reach its capture frontier");
+    require(program.start_capture(writer), "spill acceptance could not start its capture");
+    const auto captured = settle();
+    require(!captured.captured_checkpoints.empty(), "spill acceptance captured no checkpoint");
+    const auto handle = captured.captured_checkpoints.front();
+    require(driver.abort(writer).status == runtime::ConsumeStatus::Consumed,
+            "spill acceptance retained its capture writer");
+
+    // Demote the whole coverage to Host, then spill it: the prefix now lives only in the tier.
+    const auto image = program.checkpoint(handle).continuation().image;
+    auto shortage    = q35::ContextResources{};
+    shortage.state_slots = program.physical_usage().occupied.state_slots;
+    for (auto candidates = program.plan_reclaim(std::span(&handle, 1), {}, shortage).demotions;
+         !candidates.empty();
+         candidates = program.plan_reclaim(std::span(&handle, 1), {}, shortage).demotions) {
+        require(program.start_demote(candidates.front()),
+                "spill acceptance could not demote its image");
+        require(settle().published, "spill acceptance demotion did not complete");
+    }
+    shortage = q35::ContextResources{};
+    shortage.kv_page_groups[0] = program.physical_usage().occupied.kv_page_groups[0];
+    for (auto candidates = program.plan_reclaim(std::span(&handle, 1), {}, shortage).demotions;
+         !candidates.empty();
+         candidates = program.plan_reclaim(std::span(&handle, 1), {}, shortage).demotions) {
+        require(program.start_demote(candidates.front()),
+                "spill acceptance could not demote its pages");
+        require(settle().published, "spill acceptance page demotion did not complete");
+    }
+    require(program.try_spill_checkpoint(handle), "spill acceptance could not spill its coverage");
+    require(settle().published, "spill acceptance spill did not complete");
+    require(program.state_store->spill_resident(image),
+            "spill acceptance coverage did not record its spill residency");
+
+    // Resume: a new request shares the 64-token prefix and adds a 16-token tail.
+    auto resumed_prompt = shared;
+    resumed_prompt.insert(resumed_prompt.end(), 16, 199);
+    auto resumed = ninfer::models::qwen::PreparedPromptAccess::take(
+        frontend.prepare_tokens(resumed_prompt));
+    runtime::ResolvedExecutionOptions resume_request;
+    resume_request.requested_output_tokens = 8;
+    resume_request.allow_prefix_reuse      = true;
+    auto resume_base = program.plan_request(std::move(resumed), resume_request);
+    const auto source = program.inspect_source(resume_base, handle);
+    require(source && source->reused_tokens == 64,
+            "spill acceptance did not admit the full spilled prefix");
+    require(source->remaining_work.tokens == 16,
+            "spill acceptance did not price the tail as the only remaining prefill");
+    require(static_cast<bool>(program.start_binding(resume_base, {1}, *source, nullptr,
+                                                    q35::ExecutionUnitKind::Prefill, 0)),
+            "spill acceptance could not bind its resumed request");
+    const auto resumed_bound = settle();
+    require(resumed_bound.sequence.has_value(), "spill acceptance resume did not publish");
+    const auto resumed_sequence = *resumed_bound.sequence;
+    const auto resumed_step = advance(resumed_sequence);
+    require(resumed_step.processed_prompt_tokens == 16,
+            "spill acceptance recomputed the spilled prefix instead of page-in restoration");
+    require(driver.abort(resumed_sequence).status == runtime::ConsumeStatus::Consumed,
+            "spill acceptance retained its resumed request");
+    require(program.release_checkpoint(handle), "spill acceptance could not release its checkpoint");
+    require(program.state_spill->reserved_bytes() == 0,
+            "spill acceptance leaked its spill extents");
+    std::filesystem::remove(spill_path, ignored);
+}
+
 void replay_sampling_counts(std::shared_ptr<const q35::ModelDefinition> definition,
                             std::shared_ptr<const q35::ModelShard> model,
                             std::shared_ptr<const q35::execution::ModelProfile> profile,
@@ -2321,6 +2445,7 @@ int main(int argc, char** argv) {
         }
         shared_capture_alignment(definition, model, profile, frontend, options);
         state_spill_roundtrip(definition, model, profile, frontend, options);
+        state_spill_resume_acceptance(definition, model, profile, frontend, options);
         replay_sampling_counts(definition, model, profile, frontend, options);
         if (backend == SpeculativeBackend::None) {
             model.reset();

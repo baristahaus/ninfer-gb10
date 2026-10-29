@@ -167,13 +167,35 @@ SessionImpl::inspect_source(const RequestBasePlan& base, std::optional<Checkpoin
             run_pages = 0;
         };
         std::optional<context::HostPageReplica> previous;
+        std::uint32_t spilled_pages = 0, spilled_runs = 0;
+        TransferWork spill_work;
+        const auto spill_stride = pages.host_page_layout().page_stride;
+        const auto finish_spill_run = [&] {
+            if (!spilled_pages) { return; }
+            spill_work.payload_bytes += static_cast<std::uint64_t>(spilled_pages) * spill_stride;
+            spill_work.copy_operations += spilled_runs;
+            candidate.transfers.push_back(context::kv_transfer_requirement(
+                resource, runtime::ContextTransferDirection::SpillToHost, spilled_pages,
+                spill_work));
+            spilled_pages = 0;
+            spilled_runs  = 0;
+            spill_work    = {};
+        };
         for (std::uint32_t index = 0; index < count; ++index) {
             const auto page = histories.logical_page(address, index);
-            if (pages.device_resident(page)) { continue; }
-            // Spilled pages are not yet restorable by the binding machinery: refuse the
-            // candidate rather than silently recomputing their coverage. The page-in
-            // integration for pages is tracked with the spill wiring.
-            if (pages.spill_resident(page)) { return false; }
+            if (pages.device_resident(page)) {
+                finish_spill_run();
+                continue;
+            }
+            // A spilled page restores through a page-in (SpillToHost) followed by the same
+            // Host-to-device restore the host replicas use; both are priced.
+            if (pages.spill_resident(page)) {
+                finish_run();
+                previous.reset();
+                ++spilled_pages;
+                ++spilled_runs;
+                continue;
+            }
             const auto replica = pages.host_replica(page);
             if (previous && (previous->extent != replica.extent ||
                              previous->page_offset + 1 != replica.page_offset)) {
@@ -188,6 +210,7 @@ SessionImpl::inspect_source(const RequestBasePlan& base, std::optional<Checkpoin
             candidate.transfers.push_back(context::kv_transfer_requirement(
                 resource, runtime::ContextTransferDirection::HostToDevice, missing, restore_work));
         }
+        finish_spill_run();
         if (tail_copies) {
             candidate.transfers.push_back(context::kv_transfer_requirement(
                 resource, runtime::ContextTransferDirection::DeviceToDevice, 1,

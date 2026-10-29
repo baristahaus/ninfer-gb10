@@ -640,13 +640,20 @@ std::size_t ContextStorage::execute(const ContextAction& action, SpillKVStore* s
                 if (spill == nullptr) {
                     throw std::logic_error("spill action executed without a spill store");
                 }
-                spill->write_at(value.spill, static_cast<const std::byte*>(host_extent(value.host).data),
+                const auto source = host_extent(value.host);
+                if (source.bytes < value.spill.bytes) {
+                    throw std::logic_error("spill-out extent is smaller than its reservation");
+                }
+                spill->write_at(value.spill, static_cast<const std::byte*>(source.data),
                                 value.spill.bytes);
             } else if constexpr (std::is_same_v<T, StateSpillIn>) {
                 if (spill == nullptr) {
                     throw std::logic_error("spill action executed without a spill store");
                 }
                 auto destination = host_extent(value.host);
+                if (destination.bytes < value.spill.bytes) {
+                    throw std::logic_error("spill-in extent is smaller than its reservation");
+                }
                 spill->read(value.spill, static_cast<std::byte*>(destination.data),
                             value.spill.bytes);
             }

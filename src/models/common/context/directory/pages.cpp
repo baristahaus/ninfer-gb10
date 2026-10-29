@@ -441,6 +441,20 @@ void PageDirectory::attach_host_replica(PageId handle, HostPageReplica replica,
     page.spill_extent.reset();
 }
 
+void PageDirectory::attach_restored_host_replica(PageId handle, HostPageReplica replica,
+                                                 HostDirectory& owner) {
+    Page& page = require(handle);
+    if (!replica.extent.valid() ||
+        replica.membership_node == std::numeric_limits<std::uint32_t>::max() ||
+        !page.spill_extent || page.host_replica || replica.content_epoch != page.content_epoch ||
+        replica.committed_columns > page.committed_columns) {
+        throw std::logic_error("logical KV restored Host replica is not publishable");
+    }
+    page.host_replica = replica;
+    page.host_owner   = &owner;
+    page.spill_extent.reset();
+}
+
 void PageDirectory::rebind_host_replica(PageId handle, HostPageReplica expected,
                                         HostPageReplica replacement) noexcept {
     if (!valid(handle)) { std::terminate(); }

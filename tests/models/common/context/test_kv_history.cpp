@@ -1222,7 +1222,42 @@ void page_spill_roundtrip(DeviceContext& device) {
                expected,
            "page-in did not restore the original bytes");
 
-    f.host->release_page_replicas(*f.pages, original);
+    // The dedicated page-in form on a single page: re-spill from the live Host replica,
+    // free the page's Host extent, then prepare_page_in + StateSpillIn + publish_page_in.
+    const std::size_t page_stride = f.host_layout.page_stride;
+    const std::vector<std::byte> first_page(expected.begin(), expected.begin() + page_stride);
+    const auto spill_again = store.write(first_page.data(), first_page.size());
+    expect(f.pages->spill_host_replica(original[0], spill_again),
+           "the page refused to re-spill for the page-in form");
+    const std::array<context::PageId, 1> single{original[0]};
+    expect(f.host->release_page_replicas(*f.pages, single), "re-spilled release failed");
+    expect(!f.pages->host_resident(original[0]) && f.pages->spill_resident(original[0]),
+           "the released page lost its spill residency");
+    auto in_reservation = f.host->prepare_page_in(*f.pages, single);
+    expect(in_reservation.has_value(), "page-in reservation failed");
+    {
+        auto refused = f.host->prepare(*f.pages, single);
+        expect(!refused.has_value(), "backup reservation accepted a spill-resident page");
+    }
+    context::ContextActions page_in;
+    page_in.spill_store = &store;
+    page_in.operations.push_back(
+        context::StateSpillIn{spill_again, f.host->writable_view(*in_reservation).extent});
+    f.migration->submit(page_in);
+    while (!f.migration->ready()) std::this_thread::yield();
+    f.migration->finish();
+    f.host->publish_page_in(std::move(*in_reservation));
+    expect(f.pages->host_resident(original[0]) && !f.pages->spill_resident(original[0]),
+           "page-in form did not restore Host residency");
+    const auto restored_again = f.pages->host_replica(original[0]);
+    const auto after_again    = f.host_view(f.host->view(restored_again.extent));
+    expect(std::vector<std::byte>(static_cast<const std::byte*>(after_again.data),
+                                  static_cast<const std::byte*>(after_again.data) +
+                                      after_again.bytes) == first_page,
+           "page-in form did not restore the original bytes");
+    store.release(spill_again);
+    f.host->release_page_replicas(*f.pages, single);
+
     prefix.reset();
     f.empty();
     std::filesystem::remove(path, ignored);

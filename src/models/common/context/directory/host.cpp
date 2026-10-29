@@ -198,7 +198,136 @@ HostReplicaId HostDirectory::publish(HostPageReservation&& reservation) noexcept
     return capability;
 }
 
+std::optional<HostPageReservation>
+HostDirectory::prepare_page_in(PageDirectory& pages, std::span<const PageId> membership) {
+    if (membership.empty() || free_count_ == 0 || membership.size() > free_membership_count_) {
+        return std::nullopt;
+    }
+    page_scratch_.clear();
+    for (const PageId page : membership) {
+        if (!pages.valid(page) || !pages.spill_resident(page) || pages.host_resident(page) ||
+            pages.require(page).host_readers || pages.require(page).host_transfer_pending ||
+            pages.require(page).destination_pinned) {
+            fprintf(stderr, "DBG page_in reject: valid=%d spill=%d host=%d readers=%u pending=%d pinned=%d\n",
+                    (int)pages.valid(page), (int)pages.spill_resident(page),
+                    (int)pages.host_resident(page), pages.require(page).host_readers,
+                    (int)pages.require(page).host_transfer_pending,
+                    (int)pages.require(page).destination_pinned);
+            return std::nullopt;
+        }
+        page_scratch_.push_back(page);
+    }
+    std::sort(page_scratch_.begin(), page_scratch_.end(),
+              [](PageId a, PageId b) { return a.index < b.index; });
+    if (std::adjacent_find(page_scratch_.begin(), page_scratch_.end()) != page_scratch_.end()) {
+        return std::nullopt;
+    }
+
+    const HostKVPageLayout& layout = page_layout(pages);
+    std::optional<HostAllocation> allocation =
+        allocator_->allocate(layout.page_stride * membership.size());
+    if (!allocation) { return std::nullopt; }
+
+    const std::uint32_t descriptor = free_[--free_count_];
+    Extent& extent                 = extents_[descriptor];
+    if (extent.state != ExtentState::Free) { std::terminate(); }
+    extent.state      = ExtentState::Reserved;
+    extent.page_store = &pages;
+    extent.allocation = std::move(*allocation);
+    occupied_bytes_ += extent.allocation.bytes();
+    for (const PageId page : membership) {
+        const std::uint32_t node = take_membership();
+        if (node == kInvalidIndex) { std::terminate(); }
+        Membership& entry = memberships_[node];
+        entry.page        = page;
+        entry.epoch       = pages.content_epoch(page);
+        entry.coverage    = pages.committed_columns(page);
+        entry.extent      = descriptor;
+        entry.offset      = extent.page_count;
+        entry.next        = kInvalidIndex;
+        if (extent.tail == kInvalidIndex) {
+            extent.head = node;
+        } else {
+            memberships_[extent.tail].next = node;
+        }
+        extent.tail = node;
+        ++extent.page_count;
+        pages.require(page).host_transfer_pending = true;
+    }
+
+    HostPageReservation reservation;
+    reservation.owner_      = this;
+    reservation.descriptor_ = descriptor;
+    reservation.generation_ = extent.generation;
+    reservation.page_store_ = &pages;
+    reservation.page_in_    = true;
+    return reservation;
+}
+
+HostReplicaId HostDirectory::publish_page_in(HostPageReservation&& reservation) {
+    validate(reservation);
+    Extent& extent = extents_[reservation.descriptor_];
+    page_scratch_.clear();
+    std::uint32_t node = extent.head;
+    for (std::uint32_t index = 0; index < extent.page_count; ++index) {
+        if (node == kInvalidIndex) { std::terminate(); }
+        const Membership& entry = memberships_[node];
+        auto& pages             = *extent.page_store;
+        if (pages.content_epoch(entry.page) != entry.epoch ||
+            pages.committed_columns(entry.page) < entry.coverage ||
+            !pages.require(entry.page).host_transfer_pending ||
+            !pages.spill_resident(entry.page)) {
+            std::terminate();
+        }
+        page_scratch_.push_back(entry.page);
+        node = entry.next;
+    }
+    extent.allocation.publish();
+    extent.state = ExtentState::Published;
+    const HostReplicaId capability{allocator_->pool_id(), reservation.descriptor_,
+                                   extent.generation};
+    node = extent.head;
+    for (std::uint32_t index = 0; index < extent.page_count; ++index) {
+        Membership& entry = memberships_[node];
+        auto& pages       = *extent.page_store;
+        extent.page_store->attach_restored_host_replica(
+            entry.page,
+            HostPageReplica{.extent            = capability,
+                            .page_offset       = index,
+                            .membership_node   = node,
+                            .content_epoch     = entry.epoch,
+                            .committed_columns = entry.coverage},
+            *this);
+        node = entry.next;
+    }
+    auto* pages = extent.page_store;
+    consume(reservation);
+    for (auto page : page_scratch_) {
+        pages->require(page).host_transfer_pending = false;
+    }
+    return capability;
+}
+
+void HostDirectory::abort_page_in(HostPageReservation& reservation) noexcept {
+    if (!valid(reservation)) {
+        consume(reservation);
+        return;
+    }
+    Extent& extent     = extents_[reservation.descriptor_];
+    std::uint32_t node = extent.head;
+    for (std::uint32_t index = 0; index < extent.page_count; ++index) {
+        if (node == kInvalidIndex) { std::terminate(); }
+        const PageId page = memberships_[node].page;
+        if (!extent.page_store->valid(page)) { std::terminate(); }
+        extent.page_store->require(page).host_transfer_pending = false;
+        node = memberships_[node].next;
+    }
+    release_descriptor(reservation.descriptor_, extent);
+    consume(reservation);
+}
+
 void HostDirectory::abort(HostPageReservation& reservation) noexcept {
+    if (reservation.page_in_) { abort_page_in(reservation); return; }
     if (!valid(reservation)) {
         consume(reservation);
         return;

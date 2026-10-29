@@ -288,6 +288,36 @@ BindingReservation SessionImpl::start_binding(const RequestBasePlan& base, runti
                 if (const auto clone = reserve_checkpoint())
                     tx.carried_clones.emplace_back(point, *clone);
         }
+        // Page in spilled coverage before the bindings reserve their restores: the spill-in
+        // actions run first in this transaction, so the Host replicas the restore copies read
+        // are filled in order.
+        const auto page_in_spilled = [&](const context::HistoryPrefix* source_prefix,
+                                         std::uint32_t frontier, context::HistoryDirectory& histories,
+                                         context::PageDirectory& pages) {
+            if (!source_prefix || !host_kv_extents) { return; }
+            const auto count = std::min<std::uint32_t>(
+                histories.mapped_pages(source_prefix->history()),
+                context::kv_pages_for_frontier(frontier));
+            for (std::uint32_t position = 0; position < count; ++position) {
+                const auto page = histories.logical_page(source_prefix->history(), position);
+                if (!pages.spill_resident(page)) { continue; }
+                const auto spill = pages.spill_extent(page);
+                auto reservation = host_kv_extents->prepare_page_in(pages, std::span(&page, 1));
+                if (!reservation || !spill) {
+                    throw std::logic_error("spilled page-in lost its Host extent");
+                }
+                const auto host = host_kv_extents->writable_view(*reservation).extent;
+                migration.use_spill_store(*state_spill);
+                migration.add_spill_in(*spill, host);
+                host_kv_extents->publish_page_in(std::move(*reservation));
+                tx.consumed_page_spill.emplace_back(page, *spill);
+            }
+        };
+        page_in_spilled(main_source, tx.reuse_frontier, *text_kv_histories, *text_kv_pages);
+        if (backend_kv_histories && backend_source) {
+            page_in_spilled(backend_source, tx.backend_frontier, *backend_kv_histories,
+                            *backend_kv_pages);
+        }
         migration.add_binding(kTextKvPool.index,
                               text_kv_histories->prepare_binding(
                                   main_source, tx.reuse_frontier,
@@ -419,6 +449,8 @@ void SessionImpl::complete_binding(BindOperation& tx, context::ContextTransactio
     install_binding(tx);
     for (const auto& extent : tx.consumed_spill) { state_spill->release(extent); }
     tx.consumed_spill.clear();
+    for (const auto& [page, extent] : tx.consumed_page_spill) { state_spill->release(extent); }
+    tx.consumed_page_spill.clear();
     auto& state = sequences[tx.lane];
     const auto source_image =
         tx.source ? checkpoint(*tx.source).continuation().image : context::StateId{};

@@ -47,6 +47,7 @@ private:
     std::uint32_t descriptor_  = 0;
     std::uint32_t generation_  = 0;
     PageDirectory* page_store_ = nullptr;
+    bool page_in_              = false;   // spill page-in form: abort must not unpin Device
 };
 
 // Owns Host page membership and byte ranges. Replicas retain their fixed byte offsets when an
@@ -89,6 +90,15 @@ public:
 
     [[nodiscard]] HostReplicaId publish(HostPageReservation&& reservation) noexcept;
     void abort(HostPageReservation& reservation) noexcept;
+
+    // Spill page-in form: reserves Host extents for pages whose bytes live in the spill
+    // tier. No Device source is pinned; the pages must be spill-resident, quiet, and free of
+    // Host work. Fill the writable view from the spill store, then publish_page_in; abort
+    // releases the extent without touching the pages' Device state.
+    [[nodiscard]] std::optional<HostPageReservation>
+    prepare_page_in(PageDirectory& pages, std::span<const PageId> membership);
+    [[nodiscard]] HostReplicaId publish_page_in(HostPageReservation&& reservation);
+    void abort_page_in(HostPageReservation& reservation) noexcept;
 
     [[nodiscard]] bool valid(HostReplicaId replica) const noexcept {
         return replica.valid() && replica.pool_id == allocator_->pool_id() &&

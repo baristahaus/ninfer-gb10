@@ -219,6 +219,9 @@ struct BindOperation {
     // Spill extents whose bytes this binding's page-ins restore; the completion releases
     // them back to the store.
     std::vector<SpillKVStore::Extent> consumed_spill;
+    // Spilled pages the binding paged in: the abort path re-records their residency and
+    // frees the Host extents; the completion releases the extents like the state ones.
+    std::vector<std::pair<context::PageId, SpillKVStore::Extent>> consumed_page_spill;
 };
 
 struct CaptureOperation {

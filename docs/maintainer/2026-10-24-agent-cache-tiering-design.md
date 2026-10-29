@@ -155,3 +155,28 @@ prices transfers, and the acceptance asserts a spill hit actually wins admission
 should; (b) capacity accounting must not double-bill a page present in host and spill during a
 boundary's transition window — the target-seal semantics (single logical end state per
 decision) already covers this if the spill axis enters the same resource revision.
+
+## 7. Handoff to the 5090 lane (2026-10-31)
+
+For the workstation running the 5090/tiering lane. No action is needed until the session-level
+wiring lands on master; this section is the pickup list when it does.
+
+- **Spill transfer calibration.** The spill directions currently inherit the `h2d` row of every
+  cost table (generic defaults, the compiled 5090 preset, and any preset JSON without explicit
+  keys — see the schema note in section 4). When the wiring is live, measure host-file
+  read/write bandwidth on the lane box (page-sized reads and writes against a real spill file)
+  and add explicit `h2spill`/`spill2h` rows to the 5090 preset. The context-cost preset schema
+  accepts them; the calibration bench fills them from its measured `h2d` fit until then.
+- **Confirmation run for the MXFP8 A16 linear suite.** `ninfer_linear_mxfp8_a16_test` is green
+  on the GB10 workstation with full row comparison (every weight row of all eleven shapes) and
+  workspace-envelope checks. One confirmation run on the 5090 closes the same chain the EXL3
+  suites got (follow-up plan M4). No fixture changes are expected; the test is self-contained.
+- **Flash-Next spill primitive.** The 125B route's `state_image_store.h` does not have the
+  spill residency the shared `StateDirectory` gained (`b3d1fb42`). Porting the same primitive
+  there is deliberately left to the lane that owns that tree; do it after the convergence
+  settles, and reuse the shape (guards mirror the replica rules; byte copies stay with the
+  caller).
+- **Dead-source decision still open.** `src/models/qwen3_5/program/{program_impl.cpp,
+  prefill.cpp, storage/context.cpp, transactions/commit.cpp, grammar_masks.cpp}` include
+  headers that do not exist and are in no build target (orphaned by the SP-7 merge `e0a0c214`).
+  Delete or restore — the tiering work routes around them either way.

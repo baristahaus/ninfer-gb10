@@ -426,3 +426,40 @@ the child-graph uploads against arena memory whose addresses the earlier capture
 launch. If the repro reproduces with the child-swap cycle and passes without it, the bug is
 the child-graph update path under a shared arena — engine-side, `DecodeGraphDefinition`
 /`update_child` ownership in `program/text_graph.cpp` and the graph RAII in `src/core`.
+
+### GB10 bisection of the repro (2026-10-30 21:5xZ, twoFour)
+
+The profile-swap repro was rebuilt and run on the GB10 (reproduces identically:
+relative error 1, the diagnostic prints). Instrumented bisection findings:
+
+- **The poison is the capture act, not the exl3 body.** Capturing a TRIVIAL
+  one-memset graph after the good capture+replays corrupts the good graph's
+  subsequent replays exactly like the full dispatch capture does.
+- **Not the toolchain.** Identical corruption on a CUDA 13.4.92 build
+  (`build-134`, sm_121a) — the 13.0 miscompile class is ruled out for this.
+- **Not memory errors.** compute-sanitizer memcheck: 0 errors.
+- **Not data.** The fixture payload and input were checksummed stable across
+  the corrupting step; a standalone raw-kernel repro fed the EXACT fixture
+  bytes does NOT corrupt — the trigger lives in the repo test's process
+  state, not in the kernel inputs.
+- **Deterministic, not a race.** The wrong/right pattern is stable across
+  runs at fixed positions in the sequence.
+- **The failure signature**: outputs for tokens 0-3 bit-exact, tokens 4-7
+  fully wrong; the z split partials are the good run's EVEN-token rows
+  compressed 2:1 (bad z row d == good z row 2d, 32/32 floats exact); xh
+  bit-identical; dispatch args identical between good and bad launches.
+- **The state flaps**: the first fused capture+replay in the fresh process is
+  already wrong; after roughly ten more capture/instantiate/replay/destroy
+  cycles a later capture+replay is oracle-correct; the NEXT capture corrupts
+  again. Warmup executions between captures do not prevent the corruption.
+- A standalone single-TU harness (raw kernel + adapter, fixture bytes) passes
+  cleanly including the second-capture probe — the delta to the repo test is
+  the repo's dispatch wrapper, the surrounding sections' state, or the
+  DecodeGraphCapture RAII usage pattern.
+
+Instrumented harness (all probes, reverted from master) preserved at
+`/tmp/tf_ab/test_exl3_dense_a16_INSTRUMENTED.cpp` on the GB10; the CUDA 13.4
+build tree is `build-134`. Next step: diff the standalone's capture usage
+against `DecodeGraphCapture` (stream, capture mode, instantiation timing) and
+walk the repo test toward the standalone until the poison appears — the first
+delta that flips it is the mechanism.

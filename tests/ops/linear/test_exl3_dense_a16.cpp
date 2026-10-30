@@ -230,6 +230,69 @@ int exl3_dense_a16_conformance() {
         }
     }
 
+    // The graph-replayed decode route on the fused parent: one dispatch for the whole
+    // [2048, 5120] problem, replayed like the engine's captured mixer. Replay-stability
+    // of the fused single-dispatch form is part of the route's contract once wrappers
+    // dispatch parents at decode shapes.
+    {
+        quantized_weight::PackedWeight host = make_exl3_dense_weight(2048, 5120, 907U, 4, Codebook::Mcg);
+        DeviceBuffer device_weight(cuda_environment().context.device(), host.payload.size());
+        device_weight.copy_from_host(host.payload.data(), device_weight.size());
+        const Weight parent = host.device_weight(device_weight.span());
+        std::vector<std::uint16_t> activation_bits(static_cast<std::size_t>(5120) * 8);
+        for (std::size_t i = 0; i < activation_bits.size(); ++i) {
+            const std::uint64_t hash = quantized_weight::detail::mix64(908U * 0x100000001b3ULL + i);
+            const float magnitude = std::ldexp(1.0F + static_cast<float>(hash & 0xffU) / 256.0F,
+                                               -static_cast<int>((hash >> 8) % 4));
+            activation_bits[i] = test::f32_to_bf16(
+                (hash & 0x8000000000000000ULL) != 0 ? -magnitude : magnitude);
+        }
+        DeviceBuffer device_activation(cuda_environment().context.device(), activation_bits.size() * sizeof(std::uint16_t));
+        device_activation.copy_from_host(activation_bits.data(), device_activation.size());
+        const auto capacity = ops::detail::exl3_dense_workspace_bytes(2048, 5120, 8);
+        MemoryArena workspace(std::max<std::size_t>(capacity, 256));
+        DeviceBuffer output(cuda_environment().context.device(), static_cast<std::size_t>(2048) * 8 * sizeof(std::uint16_t));
+        Tensor input(device_activation.span(), DType::BF16, {5120, 8});
+        Tensor destination(output.span(), DType::BF16, {2048, 8});
+        DecodeGraphDefinition definition;
+        DecodeGraphExecutable graph;
+        DeviceContext context;
+        const auto launch = [&] {
+            ops::detail::exl3_dense_dispatch(input, parent, destination, &workspace,
+                                             context.execution_view().stream());
+        };
+        cuda_check(cudaDeviceSynchronize(), "before fused parent graph capture");
+        definition.capture(context.execution_view().stream(), launch);
+        graph.instantiate(definition);
+        for (int replay = 0; replay < 2; ++replay) {
+            graph.launch(context.execution_view().stream());
+        }
+        cuda_check(cudaDeviceSynchronize(), "synchronize fused parent graph replays");
+        std::vector<std::uint16_t> out_bits(static_cast<std::size_t>(2048) * 8);
+        output.copy_to_host(out_bits.data(), output.size());
+        double worst = 0.0;
+        double scale = 0.0;
+        for (int r = 0; r < 2048; ++r) {
+            for (int col = 0; col < 8; ++col) {
+                double reference = 0.0;
+                for (int c = 0; c < 5120; ++c) {
+                    reference += quantized_weight::logical_weight_fp64(host, r, c) *
+                                 static_cast<double>(test::bf16_to_f32(
+                                     activation_bits[static_cast<std::size_t>(col) * 5120 + c]));
+                }
+                const double produced =
+                    static_cast<double>(test::bf16_to_f32(
+                        out_bits[static_cast<std::size_t>(col) * 2048 + r]));
+                worst = std::max(worst, std::abs(produced - reference));
+                scale = std::max(scale, std::abs(reference));
+            }
+        }
+        if (worst > 0.05 * scale) {
+            std::cerr << "exl3 graph fused parent: relative error " << worst / scale << "\n";
+            ++failures;
+        }
+    }
+
     failures += composed_route_check();
     // Capacity is monotone in the token interval and constant across the registered decode
     // shapes, so any declared interval inside 1..8 covers its points by construction; the

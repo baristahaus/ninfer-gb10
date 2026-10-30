@@ -215,6 +215,40 @@ the model is 64 layers, 48 linear-attention (GDN) + 16 full-attention — and th
 the capture to see which code path the recorded graph actually contains. The experiment
 edits were reverted; the tree is clean at master.
 
+## M5 record continued (2026-10-30, the marker and replay experiments)
+
+twoFour's engine answer (recorded upstream): the captured graph cannot contain pre-fusion
+code — capture is once at startup in `Graphs::prepare`, launches are baked, and the
+wrapper's branch is a pure function of fixed inputs. The marker experiment then settled the
+census: with fused-vs-sliced prints in the wrapper's decode branch, a serving request shows
+**224 `ATTN-FUSED cols=1` launches** (16 full-attention layers × 14 decode rounds — the
+fused branch IS baked and running), plus later `cols=2`/`cols=5` captures and the prefill's
+`ATTN-SLICED cols=51/52`. The earlier census misread is resolved: the slice-grid launches
+were the unfused GDN's four slices (q/k 2048, v/z 6144) and the MLP, not the attention;
+the grid-64 shape the attention k/v slices would produce never appears because the
+attention really is fused.
+
+With the fused branch proven live, the remaining suspects were eliminated one by one:
+the placement copies (kernel-copy variant: no change), the capture-time arena allocation
+(persistent-bump variant: no change), and the arena capacity account (the capacity now
+also covers `exl3_dense_workspace_bytes(14336, 5120, T)`; no change — and
+`MemoryArena::alloc_bytes` throws `bad_alloc` on overflow rather than corrupting, so an
+undersized account would fail loudly at capture, not silently at replay).
+
+The decisive new instrument: `tests/ops/linear/test_exl3_dense_a16.cpp` now runs the
+**fused single-dispatch [2048, 5120] problem through a real CUDA graph capture,
+instantiation, and two replays** against the FP64 reference — the same mechanics the
+engine's mixer capture uses — and it passes. The fused dispatch is replay-stable in
+isolation. The serving delta is therefore the multi-profile capture interleave: the
+markers prove T=2 and T=5 profiles are captured lazily during the first request (not
+only at startup), all against one shared plan-sized arena, and the serving replay of the
+T=1 profile still decodes garbage while an isolated capture-replay of the same dispatch
+is bit-stable. Next step for the reattempt: reproduce the breakage with a multi-profile
+capture sequence in the test harness (capture T=1, then T=2/T=5 against the same arena,
+then replay T=1), which turns the remaining engine-side question into a seconds-per-cycle
+test instead of 4-minute serve cycles. The fusion, markers, and capacity edit are reverted;
+the graph-replay test coverage is kept (passing).
+
 Pre-existing damage outside the 5090 lane, not touched: `docs/operations.md` still documents
 `--lm-head-draft`, which no longer exists on master (the GB10 lane's doc; the live flag is
 `--proposal-head-rows`/`--proposal-head`).

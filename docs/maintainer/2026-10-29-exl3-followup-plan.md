@@ -249,6 +249,23 @@ then replay T=1), which turns the remaining engine-side question into a seconds-
 test instead of 4-minute serve cycles. The fusion, markers, and capacity edit are reverted;
 the graph-replay test coverage is kept (passing).
 
+## M5 verdict: the profile-swap repro lands engine-side (2026-10-30)
+
+The harness repro twoFour specified — capture T=1, then T=2 and T=5 against the same
+arena with `MemoryArena::reset()` between them (the engine's child-swap cycle via
+`update_child` + `executable.upload` with `resources.work.reset()`), then replay T=1 —
+**reproduces the serving corruption: relative error 1, complete garbage**, in
+`test_exl3_dense_a16.cpp` (the block after the single-graph replay check). The same
+dispatch replays bit-stably before the swap cycle in the same test. Per the agreed
+criterion this is the child-graph update path under a shared arena — engine-side, the
+GB10 lane's to fix in `text_graph.cpp` / `src/core` graph RAII.
+
+The repro block is committed as a diagnostic (it prints and does not count a failure)
+until the graph-RAII fix lands, at which point the GB10 lane flips it to a hard failure.
+M5's fusion reattempt resumes after that fix: the kernel, the dispatch, and the wrapper
+are exonerated; the single-graph replay is proven bit-stable; only the swap-cycle
+replay-stability remains.
+
 Pre-existing damage outside the 5090 lane, not touched: `docs/operations.md` still documents
 `--lm-head-draft`, which no longer exists on master (the GB10 lane's doc; the live flag is
 `--proposal-head-rows`/`--proposal-head`).

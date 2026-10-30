@@ -291,6 +291,65 @@ int exl3_dense_a16_conformance() {
             std::cerr << "exl3 graph fused parent: relative error " << worst / scale << "\n";
             ++failures;
         }
+
+        // The engine's profile-swap cycle: the T=1 graph is captured, then later
+        // token-count profiles are captured against the same arena with
+        // resources.work.reset() rewinding it between profiles, then execution swaps
+        // back to the T=1 graph. Model that cycle and re-check the T=1 replay.
+        struct ProfileGraph {
+            DecodeGraphDefinition definition;
+            DecodeGraphExecutable graph;
+            DeviceBuffer output;
+            std::uint32_t tokens;
+        };
+        std::vector<ProfileGraph> profiles;
+        for (const std::uint32_t tokens : {1U, 2U, 5U}) {
+            workspace.reset();
+            ProfileGraph profile;
+            profile.tokens  = tokens;
+            profile.output  = DeviceBuffer(cuda_environment().context.device(),
+                                           static_cast<std::size_t>(2048) * tokens * sizeof(std::uint16_t));
+            Tensor profile_input(device_activation.span(), DType::BF16, {5120, static_cast<std::int32_t>(tokens)});
+            Tensor profile_destination(profile.output.span(), DType::BF16, {2048, static_cast<std::int32_t>(tokens)});
+            const auto profile_launch = [&] {
+                ops::detail::exl3_dense_dispatch(profile_input, parent, profile_destination,
+                                                 &workspace, context.execution_view().stream());
+            };
+            cuda_check(cudaDeviceSynchronize(), "before profile capture");
+            profile.definition.capture(context.execution_view().stream(), profile_launch);
+            profile.graph.instantiate(profile.definition);
+            profiles.push_back(std::move(profile));
+        }
+        cuda_check(cudaDeviceSynchronize(), "before swap-back replay");
+        for (int replay = 0; replay < 3; ++replay) {
+            profiles.front().graph.launch(context.execution_view().stream());
+        }
+        cuda_check(cudaDeviceSynchronize(), "synchronize swap-back replays");
+        std::vector<std::uint16_t> replay_bits(static_cast<std::size_t>(2048) * 1);
+        profiles.front().output.copy_to_host(replay_bits.data(), replay_bits.size());
+        worst = 0.0;
+        scale = 0.0;
+        for (int r = 0; r < 2048; ++r) {
+            double reference = 0.0;
+            for (int c = 0; c < 5120; ++c) {
+                reference += quantized_weight::logical_weight_fp64(host, r, c) *
+                             static_cast<double>(test::bf16_to_f32(activation_bits[c]));
+            }
+            const double produced =
+                static_cast<double>(test::bf16_to_f32(replay_bits[static_cast<std::size_t>(r)]));
+            worst = std::max(worst, std::abs(produced - reference));
+            scale = std::max(scale, std::abs(reference));
+        }
+        // ENGINE-SIDE REPRO (tracked with the GB10 lane, pending the graph-RAII fix in
+        // text_graph.cpp / src/core): the T=1 graph decodes garbage after later
+        // token-count profiles are captured against the same arena with a reset between
+        // them — the engine's profile-swap cycle (update_child + executable.upload with
+        // resources.work.reset()). Until the fix lands this block only reports; flip it
+        // to ++failures with the fix.
+        if (worst > 0.05 * scale) {
+            std::cerr << "exl3 graph fused parent after profile swap: relative error "
+                      << worst / scale << " (known engine-side capture-swap repro)\n";
+        }
     }
 
     failures += composed_route_check();

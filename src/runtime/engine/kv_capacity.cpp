@@ -76,7 +76,10 @@ std::size_t SequenceCapacityCurve::reservation_bytes(std::uint32_t main_page_gro
     validate_curve(*this);
     if (main_page_groups < minimum_main_page_groups ||
         main_page_groups > maximum_main_page_groups) {
-        throw std::invalid_argument("Main KV page count is outside the target capacity curve");
+        throw std::invalid_argument("Main KV page count " + std::to_string(main_page_groups) +
+                                    " is outside the target capacity curve [" +
+                                    std::to_string(minimum_main_page_groups) + ", " +
+                                    std::to_string(maximum_main_page_groups) + "]");
     }
     const std::size_t additional =
         static_cast<std::size_t>(main_page_groups - minimum_main_page_groups);
@@ -90,7 +93,10 @@ std::uint32_t SequenceCapacityCurve::resolved_tokens(std::uint32_t main_page_gro
     validate_curve(*this);
     if (main_page_groups < minimum_main_page_groups ||
         main_page_groups > maximum_main_page_groups) {
-        throw std::invalid_argument("Main KV page count is outside the target capacity curve");
+        throw std::invalid_argument("Main KV page count " + std::to_string(main_page_groups) +
+                                    " is outside the target capacity curve [" +
+                                    std::to_string(minimum_main_page_groups) + ", " +
+                                    std::to_string(maximum_main_page_groups) + "]");
     }
     const std::uint64_t tokens =
         static_cast<std::uint64_t>(main_page_groups) * main_page_tokens;

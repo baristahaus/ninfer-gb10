@@ -63,6 +63,9 @@ void finalize_mappings(ContextActions& actions) {
     // Coalescing also bounds pinned upload storage by the total execution-table size.
     for (auto& row : rows)
         for (auto& range : row.ranges) ordered.operations.emplace_back(std::move(range));
+    // The rebuild must carry the transaction's spill store: use_spill_store runs during
+    // assembly, before this coalescing pass, and the spill actions execute through it.
+    ordered.spill_store = actions.spill_store;
     actions = std::move(ordered);
 }
 } // namespace

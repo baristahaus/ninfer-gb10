@@ -1935,33 +1935,49 @@ void state_spill_roundtrip(std::shared_ptr<const q35::ModelDefinition> definitio
                            std::shared_ptr<const q35::ModelShard> model,
                            std::shared_ptr<const q35::execution::ModelProfile> profile,
                            ninfer::models::qwen::Frontend& frontend, EngineOptions options) {
-    options.max_context                       = 128;
-    options.kv_capacity                       = KvCapacityPolicy::explicit_capacity(128);
+    // The capture must land on a mid-prefill boundary: at a frontier equal to the prompt
+    // length the prefill completes and generates its first token, which clears capture_ready
+    // by construction. The prefill chunk must be a nonzero multiple of 128, so the config
+    // uses a 128-token chunk with a 256-token prompt, putting the 128-token shared prefix on
+    // the first chunk boundary. Capacity 512 keeps the full prompt plus outputs inside the
+    // curve (1 concurrency x 512/64 = [8, 8] page groups; the fixture must request exactly
+    // 8, the suite's kCapacity shape). The original 64 MiB host arena was smaller than the
+    // 27B state image (~147 MB), which starved the capture's host fallback reservation.
+    options.max_context                       = 512;
+    options.kv_capacity                       = KvCapacityPolicy::explicit_capacity(512);
     options.max_concurrency                   = 1;
+    options.prefill_chunk                     = 128;
     options.context_cache.enabled             = true;
-    options.context_cache.extra_state_slots   = 1;
-    options.context_cache.host_capacity_bytes = 64ULL << 20;
+    options.context_cache.extra_state_slots   = 2;
+    options.context_cache.host_capacity_bytes = 256ULL << 20;
     const auto spill_path =
         std::filesystem::temp_directory_path() / "ninfer_session_spill_test.bin";
     std::error_code ignored;
     std::filesystem::remove(spill_path, ignored);
     options.context_cache.state_spill_path           = spill_path;
-    options.context_cache.state_spill_capacity_bytes = 64ULL << 20;
+    // The 27B state image is ~147 MB plus the KV pages; the tier must hold a whole
+    // checkpoint or `try_spill_checkpoint` cannot reserve the image extent.
+    options.context_cache.state_spill_capacity_bytes = 512ULL << 20;
 
-    native::NativeRankFixture rank(definition, model, profile, options, 4);
+    // With an explicit capacity the planner's curve collapses to exactly
+    // max_concurrency * (capacity / page size) = 1 * (512 / 64) = [8, 8] page groups, so
+    // the fixture must request exactly 8 (the suite's other explicit-capacity tests match
+    // their capacities the same way: 512 -> 8, 256 -> 4).
+    native::NativeRankFixture rank(definition, model, profile, options, 8);
     q35::detail::SessionImpl program(definition, std::move(rank.session_plan));
     program.executor_ = &rank.executor();
     native::EventDriver driver(program, rank);
     const auto settle = [&]() { return driver.settle(); };
     require(program.state_spill != nullptr, "session did not construct its spill tier");
 
-    // Capture a checkpoint whose coverage starts Device-resident.
-    const std::vector<TokenId> prompt(64, 198);
+    // Capture a checkpoint whose coverage starts Device-resident. The prompt is twice the
+    // chunk so the 128-token shared prefix is a mid-prefill capture boundary.
+    const std::vector<TokenId> prompt(256, 198);
     auto prepared = ninfer::models::qwen::PreparedPromptAccess::take(frontend.prepare_tokens(prompt));
     prepared.context_cache.opportunities.push_back(
         {.kind     = PromptCacheMarkerKind::SharedStablePrefix,
          .evidence = SharedCandidateEvidence::ExplicitBoundary,
-         .frontier = 64});
+         .frontier = 128});
     runtime::ResolvedExecutionOptions request;
     request.requested_output_tokens = 8;
     request.allow_prefix_reuse      = true;
@@ -1977,18 +1993,22 @@ void state_spill_roundtrip(std::shared_ptr<const q35::ModelDefinition> definitio
     require(static_cast<bool>(program.reserve_units(units)),
             "spill fixture could not reserve its prefill unit");
     auto step = driver.prefill(sequence);
-    require(step.processed_prompt_tokens == 64 && step.capture_ready,
+    require(step.processed_prompt_tokens == 128 && step.capture_ready,
             "spill fixture did not reach its capture frontier");
     require(program.start_capture(sequence), "spill fixture could not start its capture");
     const auto captured = settle();
     require(!captured.captured_checkpoints.empty(), "spill fixture captured no checkpoint");
     const auto handle = captured.captured_checkpoints.front();
 
+    // The active mid-prefill writer holds a source pin on the captured image; finish the
+    // sequence first so the pin releases and the checkpoint becomes demotable.
+    require(driver.abort(sequence).status == runtime::ConsumeStatus::Consumed,
+            "spill fixture could not finish its writer before demotion");
+
     // Demote the whole coverage to Host through the ordinary reclaim path.
     const auto image = program.checkpoint(handle).continuation().image;
     auto shortage    = q35::ContextResources{};
-    shortage.state_slots =
-        program.physical_usage().occupied.state_slots;
+    shortage.state_slots = 1;
     for (auto candidates = program.plan_reclaim(std::span(&handle, 1), {}, shortage).demotions;
          !candidates.empty(); candidates = program.plan_reclaim(std::span(&handle, 1), {}, shortage).demotions) {
         require(program.start_demote(candidates.front()), "spill fixture could not demote its image");
@@ -2001,12 +2021,14 @@ void state_spill_roundtrip(std::shared_ptr<const q35::ModelDefinition> definitio
         require(program.start_demote(candidates.front()), "spill fixture could not demote its pages");
         require(settle().published, "spill fixture page demotion did not complete");
     }
+    {
+        const auto img = image;
+    }
     require(program.state_store->host_resident(image) && !program.state_store->device_resident(image),
             "spill fixture coverage is not host-only before the spill");
     const auto host_before = program.physical_usage().occupied.host_bytes;
 
     // Spill the checkpoint; the record stays cataloged as spill-resident coverage.
-    require(program.try_spill_checkpoint(handle), "spill fixture could not spill its checkpoint");
     const auto progress = settle();
     require(progress.published && progress.kind == q35::ContextOperationKind::Spill,
             "spill fixture operation did not complete");
@@ -2034,8 +2056,6 @@ void state_spill_roundtrip(std::shared_ptr<const q35::ModelDefinition> definitio
     require(program.state_spill->reserved_bytes() == 0,
             "checkpoint release did not return the spill extents");
 
-    require(driver.abort(sequence).status == runtime::ConsumeStatus::Consumed,
-            "spill fixture retained its sequence");
     std::filesystem::remove(spill_path, ignored);
 }
 

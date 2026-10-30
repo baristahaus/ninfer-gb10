@@ -183,6 +183,38 @@ All four executable M-items are done; commits carry the details, this section is
   production profile always runs graphs, so serving is unaffected; the eager path is an
   unvalidated route and a separate bug to investigate.
 
+## M5 capture-path investigation record (2026-10-30, appended after the run)
+
+The fusion was reapplied and re-tested under the full-build-only protocol (the earlier
+bisection had used `--target` builds, which are unreliable; every conclusion below is from
+full builds). Findings:
+
+1. **The serving breakage reproduces cleanly** with the fusion alone (three consecutive
+   immediate-EOS decodes), so it is real, not a build artifact.
+2. **The placement copies are not the cause.** Replacing all `cudaMemcpyAsync`/2D placements
+   with a capturable elementwise copy kernel changed nothing (after fixing a destination-
+   stride bug in the first kernel variant). The copies are bit-correct in isolation.
+3. **The capture-time arena allocation is not the cause.** Allocating the fused parent
+   outside the op scope (persistent bump, no rewind) changes nothing.
+4. **GPU performance counters are now enabled on this box** (the profiling-permission
+   modprobe option is set and the driver was reloaded); ncu works.
+5. **First ncu census of `tf_exl3_linear_4_1_8` launches during a fused-route serving
+   request (300 profiled launches):** the decode rounds show a periodic per-layer block of
+   eight launches with the SLICE-era shapes — grids 128×2, 384×2 (n=2048/6144: the
+   attention k/v and q/gate slices), 320, 1088×2, 320 (n=5120/17408: the MLP down and
+   gate/up) — while the fused-parent shape (grid 896, n=14336) appears only ten times,
+   scattered, not per-layer-per-round. For a 64-layer model with the attention fused, the
+   parent should launch every full-attention decode round.
+
+The census is the live question for the reattempt: the decode is executing the old
+slice-shaped launches, and the fused parent appears far too rarely. Either the captured
+graph was recorded before the fused wrappers ran (a capture-path ordering question), or
+the fused branch is not being taken for most layers under the capture. Next step: correlate
+the ten parent launches with their phase (prefill vs decode rounds) and layer indices —
+the model is 64 layers, 48 linear-attention (GDN) + 16 full-attention — and then instrument
+the capture to see which code path the recorded graph actually contains. The experiment
+edits were reverted; the tree is clean at master.
+
 Pre-existing damage outside the 5090 lane, not touched: `docs/operations.md` still documents
 `--lm-head-draft`, which no longer exists on master (the GB10 lane's doc; the live flag is
 `--proposal-head-rows`/`--proposal-head`).

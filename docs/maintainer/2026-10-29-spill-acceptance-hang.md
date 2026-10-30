@@ -105,3 +105,28 @@ Fix: the `try_spill_checkpoint` call is restored and the residue removed. Separa
 `EventDriver::wait` now checks its deadline before pumping, so an event pumped on the final
 pass is still matched instead of being lost to the throw. That edge case did not cause this
 hang.
+
+## Resolution continued (2026-10-30, after the restore)
+
+With the submission restored, the suite ran the spill for real and surfaced three engine
+guards that still refused spill-resident pages, each the same shape the residency commit
+(e88db8b3) had relaxed elsewhere. All fixed in 0fcf4d79:
+
+- `HostDirectory` extent partitioning refused to release a partition with a referenced,
+  non-device page even when that page is spill-resident, so `complete_spill` could not
+  return the Host extents the spill replaced.
+- `PageDirectory::detach_host_replica` refused the same pages, terminating inside the
+  release run once partitioning allowed it.
+- `HistoryDirectory::binding_demand` demanded a device or Host replica for every reused
+  prefix page, but the binding assembly page-ins spilled coverage only after the demand is
+  computed, so a resumed request sharing a fully spilled prefix could not bind. A
+  spill-resident page now counts as restorable.
+
+`state_spill_resume_acceptance` carried the same authored-blind sizing as the roundtrip
+fixture (64 MiB host arena and spill tier against a ~147 MB state image); sized to
+256 MiB and 512 MiB.
+
+Final state on the 5090 lane: the full native transactions suite passes end to end with
+the artifact (`OK native transaction cancellation, paused ownership and replay recovery`),
+including both spill behavioral tests, and the eight context/spill unit suites stay green.
+The tiering epic's 5090 acceptance run is complete.

@@ -23,9 +23,9 @@ struct Variant {
     using ModelView                      = RuntimeModelView;
     using FullAttentionProjectionWeights = ops::FlashNextQsaWeights;
     using GdnProjectionWeights           = qwen3_8_flash_next_125b_a6b::GdnWeights;
-    using PostMixerWeights               = ops::FlashNextMoeWeights;
+    using PostMixerWeights               = MoeWeights;
     using MtpAttentionProjectionWeights  = ops::FlashNextQsaWeights;
-    using MtpPostMixerWeights            = ops::FlashNextMoeWeights;
+    using MtpPostMixerWeights            = MoeWeights;
     using VisionWeights                  = qwen3_8_flash_next::VisionWeights;
     using GraphExecutionProfile          = detail::GraphExecutionProfile;
 

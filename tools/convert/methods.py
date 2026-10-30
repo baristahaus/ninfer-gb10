@@ -25,9 +25,20 @@ from tools.artifact.formats import (
 from tools.artifact.schema import TensorSpec
 from tools.artifact.tensor_output import TensorOutput
 
+import numpy as np
+
+from tools.artifact.layouts import (
+    EXL3_CODEBOOK_IDS,
+    exl3_bank_geometry,
+    exl3_dense_geometry,
+    validate_exl3_rate,
+)
+
+from .quantization.exl3 import decode_tiles
 from .quantization.fp8_row import quantize_bf16_rows
 from .quantization.groupwise import quantize_matrix
 from .quantization.stored_scale import quantize_stored_scale
+from .sources.exllamav3 import Exl3ExpertSource
 from .sources.logical import EncodedRows, LogicalSource
 
 UseKey = tuple[str, str]
@@ -401,10 +412,459 @@ def stored_scale_mse(request: PrepareRequest) -> PreparedMethod:
     return request.job(produce=produce)
 
 
+_LAYER_CACHE: dict[str, dict] = {}
+
+EXL3_TILE = 16
+
+
+def pack_exl3_bank_quantized(request: PrepareRequest) -> PreparedMethod:
+    """Emit one (layer, projection) EXL3 expert bank from the bank quantize campaign.
+
+    Every input is one expert's logical source in expert-id order (all sharing one
+    [n, k]); the method parameters carry `{"layer_file": path, "projection": name,
+    "k2": rate}` pointing at the `convert_model_banks` layer file. The bank planes
+    re-verify sampled tiles against the campaign trellis before writing (the import
+    route's exact-oracle discipline); deep verification against the BF16 source is
+    the real-check tool's job.
+    """
+
+    if request.target.format != "exl3" or request.target.layout != "exl3_expert_bank":
+        raise ValueError("pack_exl3_bank_quantized requires the EXL3 expert bank target")
+    layer_file = request.parameters.get("layer_file")
+    projection = request.parameters.get("projection")
+    k2 = request.parameters.get("k2")
+    if not isinstance(layer_file, str) or not isinstance(projection, str) or k2 is None:
+        raise ValueError(
+            "pack_exl3_bank_quantized requires layer_file, projection and k2 parameters")
+    k2 = int(k2)
+    if not request.inputs:
+        raise ValueError("an EXL3 bank requires at least one expert")
+    shapes = [item.source.shape for item in request.inputs]
+    if any(len(shape) != 2 or shape != shapes[0] for shape in shapes):
+        raise ValueError("a bank's experts must share one [n, k] logical shape")
+    n, k = shapes[0]
+    experts = len(request.inputs)
+    if (geometry_experts := prod(request.target.shape) // (n * k)) != experts:
+        raise ValueError("bank parent and logical expert shapes disagree")
+    codebook = "mcg"
+    validate_exl3_rate(k2, codebook)
+    geometry = exl3_bank_geometry(n, k, [k2] * experts, codebook)
+    if (geometry.experts * n, k) != tuple(request.target.shape):
+        raise ValueError("bank parent shape is not the stacked expert rows [E*n, k]")
+
+    results = _layer_file(torch.load, layer_file)[projection]
+    if not isinstance(results, list) or len(results) != experts:
+        raise ValueError(f"{layer_file}:{projection}: expert count disagrees with the group")
+    trellis_planes = []
+    suh = torch.empty((experts, k), dtype=torch.float16)
+    svh = torch.empty((experts, n), dtype=torch.float16)
+    for expert, result in enumerate(results):
+        stored_n, stored_k = result["weight_shape"]
+        if (stored_n, stored_k) != (n, k):
+            raise ValueError(
+                f"{layer_file}:{projection}: expert {expert} shape "
+                f"{(stored_n, stored_k)} differs from the logical {(n, k)}")
+        trellis = result["trellis"].detach().cpu().contiguous()
+        if trellis.dtype != torch.int16 or trellis.shape != (k // 16, n // 16, 8 * k2):
+            raise ValueError(
+                f"{layer_file}:{projection}: expert {expert} trellis shape disagrees "
+                f"with the rate")
+        trellis_planes.append(trellis)
+        suh[expert] = result["suh"].detach().cpu().to(torch.float16)
+        svh[expert] = result["svh"].detach().cpu().to(torch.float16)
+
+    def verify_expert(expert: int, extent: memoryview) -> None:
+        tiles_n, tiles_k = k // EXL3_TILE, n // EXL3_TILE
+        positions = [(0, 0), (tiles_n - 1, tiles_k - 1)]
+        generator = torch.Generator().manual_seed(
+            20261014 + 7919 * expert + 104729 * tiles_n * tiles_k)
+        picks = torch.randint(0, tiles_n * tiles_k, (14,), generator=generator)
+        positions += [(int(pick) // tiles_k, int(pick) % tiles_k) for pick in picks.tolist()]
+        words = k2 * 8
+        emitted = torch.frombuffer(
+            bytearray(extent[: tiles_n * tiles_k * words * 2]), dtype=torch.int16
+        ).reshape(tiles_n, tiles_k, words)
+        emitted_tiles = decode_tiles(emitted, k2, codebook)
+        source_tiles = decode_tiles(trellis_planes[expert], k2, codebook)
+        for tile_n, tile_k in positions:
+            if not np.array_equal(emitted_tiles[tile_n, tile_k], source_tiles[tile_n, tile_k]):
+                raise ValueError(
+                    f"expert {expert} tile ({tile_n},{tile_k}) differs from its source")
+
+    def produce(output):
+        directory = bytearray(geometry.directory_bytes)
+        for expert, (offset, extent, rate) in enumerate(geometry.directory_entries()):
+            struct.pack_into("<QIBBBB", directory, expert * 16, offset, extent, rate, 0, 0, 0)
+        output.write_bytes(geometry.directory_offset, bytes(directory))
+        if geometry.trellis_offset > geometry.directory_bytes:
+            output.write_bytes(
+                geometry.directory_bytes,
+                bytes(geometry.trellis_offset - geometry.directory_bytes),
+            )
+        for expert, (offset, extent, _rate) in enumerate(geometry.directory_entries()):
+            data = trellis_planes[expert].numpy().tobytes()
+            if len(data) != n * k * k2 // 16:
+                raise ValueError(f"expert {expert}: trellis bytes disagree with the rate")
+            packed = data + bytes(extent - len(data))
+            verify_expert(expert, memoryview(packed))
+            output.write_bytes(offset, packed)
+        output.write_bytes(geometry.suh_offset, suh.numpy().tobytes())
+        suh_end = geometry.suh_offset + geometry.suh_bytes
+        if geometry.svh_offset > suh_end:
+            output.write_bytes(suh_end, bytes(geometry.svh_offset - suh_end))
+        output.write_bytes(geometry.svh_offset, svh.numpy().tobytes())
+        output.write_bytes(
+            geometry.codebook_offset,
+            EXL3_CODEBOOK_IDS[codebook].to_bytes(4, "little"),
+        )
+
+    return request.job(produce=produce)
+
+
+pack_exl3_bank_quantized.quantized_bank = True
+
+
+def _exl3_bank_spec_bytes(items, parameters) -> int:
+    """The bank payload is data-dependent: resolve it from the group's shape contract.
+
+    `items` are the recipe's (parameter, source) pairs; a MethodInput also fits through
+    its `source` attribute.
+    """
+
+    def _shape(item):
+        # The recipe passes (parameter, Selection) pairs; a MethodInput fits directly.
+        value = item[1] if isinstance(item, tuple) else item
+        return value.source.shape
+
+    shapes = [_shape(item) for item in items]
+    if any(len(shape) != 2 or shape != shapes[0] for shape in shapes):
+        raise ValueError("a bank's experts must share one [n, k] logical shape")
+    n, k = shapes[0]
+    codebook = "mcg"
+    k2 = int(parameters["k2"])
+    validate_exl3_rate(k2, codebook)
+    return exl3_bank_geometry(n, k, [k2] * len(items), codebook).payload_bytes
+
+
+pack_exl3_bank_quantized.spec_bytes = _exl3_bank_spec_bytes
+
+
+def _layer_file(loader, path: str) -> dict:
+    """Layer files are immutable campaign outputs; one assembly reads each many times."""
+
+    cached = _LAYER_CACHE.get(path)
+    if cached is None:
+        cached = _LAYER_CACHE[path] = loader(path, map_location="cpu", weights_only=False)
+    return cached
+
+
+
+
+def import_exl3_bank(request: PrepareRequest) -> PreparedMethod:
+    """Repack one (layer, projection) EXL3 expert bank verbatim (contract 6.1 step 3).
+
+    Every input is one expert's EXL3 linear (an `Exl3ExpertSource`); the parent is
+    the bank `[E*n, k]`. Trellis bytes and suh/svh are copied unchanged, packed
+    experts are expanded, and the emitted planes are verified against the source
+    tensors with the exact codec oracle before the produced bytes are written.
+    """
+
+    if request.target.format != "exl3" or request.target.layout != "exl3_expert_bank":
+        raise ValueError("import_exl3_bank requires the EXL3 expert bank target")
+    if request.parameters:
+        raise ValueError("import_exl3_bank accepts no method parameters")
+    sources = []
+    for item in request.inputs:
+        if not isinstance(item.source, Exl3ExpertSource):
+            raise ValueError(
+                f"{item.parameter}: import_exl3_bank requires EXL3 expert sources"
+            )
+        sources.append(item.source)
+    if not sources:
+        raise ValueError("an EXL3 bank requires at least one expert")
+    codebooks = {source.linear.codebook for source in sources}
+    if len(codebooks) != 1:
+        raise ValueError(
+            f"a bank's codebook must be uniform; got {sorted(codebooks)}"
+        )
+    codebook = sources[0].linear.codebook
+    n, k = sources[0].shape
+    if any(source.shape != (n, k) for source in sources):
+        raise ValueError("a bank's experts must share one [n, k] shape")
+    if prod(request.target.shape) != len(sources) * n * k:
+        raise ValueError("bank parent and logical expert shapes disagree")
+    rates = tuple(source.linear.k2 for source in sources)
+    for rate in rates:
+        validate_exl3_rate(rate, codebook)
+    geometry = exl3_bank_geometry(n, k, rates, codebook)
+    if (geometry.experts * n, k) != tuple(request.target.shape):
+        raise ValueError("bank parent shape is not the stacked expert rows [E*n, k]")
+
+    # Directory-aware load validation (contract 4) checked at emission: offsets
+    # increase in expert order, are 256-byte aligned, and match the extents.
+    offsets = [entry[0] for entry in geometry.directory_entries()]
+    if offsets != sorted(offsets) or any(
+        offset % 256 or extent % 256
+        for offset, extent in zip(offsets, geometry.trellis_extents)
+    ):
+        raise ValueError("trellis extents violate the load validation")
+
+    def verify_expert(expert: int, extent: memoryview) -> None:
+        """Contract 6.1 step 4: sampled tiles decode bit-identically from the emitted
+        extent and the source trellis; every emitted suh/svh row equals its source."""
+
+        source = sources[expert]
+        tiles_n, tiles_k = k // EXL3_TILE, n // EXL3_TILE
+        positions = [(0, 0), (tiles_n - 1, tiles_k - 1)]
+        generator = torch.Generator().manual_seed(
+            20261014 + 7919 * expert + 104729 * tiles_n * tiles_k
+        )
+        picks = torch.randint(0, tiles_n * tiles_k, (14,), generator=generator)
+        positions += [(
+            int(pick) // tiles_k, int(pick) % tiles_k
+        ) for pick in picks.tolist()]
+        words = rates[expert] * 8
+        emitted = torch.frombuffer(
+            bytearray(extent[: tiles_n * tiles_k * words * 2]), dtype=torch.int16
+        ).reshape(tiles_n, tiles_k, words)
+        emitted_tiles = decode_tiles(emitted, rates[expert], codebook)
+        source_tiles = decode_tiles(source.linear.trellis, rates[expert], codebook)
+        for tile_n, tile_k in positions:
+            if not np.array_equal(
+                emitted_tiles[tile_n, tile_k], source_tiles[tile_n, tile_k]
+            ):
+                raise ValueError(
+                    f"expert {expert} tile ({tile_n},{tile_k}) differs from its source"
+                )
+
+    def produce(output):
+        directory = bytearray(geometry.directory_bytes)
+        for expert, (offset, extent, rate) in enumerate(geometry.directory_entries()):
+            struct.pack_into("<QIBBBB", directory, expert * 16, offset, extent, rate, 0, 0, 0)
+        output.write_bytes(geometry.directory_offset, bytes(directory))
+        if geometry.trellis_offset > geometry.directory_bytes:
+            output.write_bytes(
+                geometry.directory_bytes,
+                bytes(geometry.trellis_offset - geometry.directory_bytes),
+            )
+        suh = torch.empty((geometry.experts, k), dtype=torch.float16)
+        svh = torch.empty((geometry.experts, n), dtype=torch.float16)
+        for expert, source in enumerate(sources):
+            offset, extent, _ = geometry.directory_entries()[expert]
+            data = source.linear.trellis.numpy().tobytes()
+            if len(data) != n * k * rates[expert] // 16:
+                raise ValueError(f"expert {expert}: trellis bytes disagree with its rate")
+            packed = data + bytes(extent - len(data))
+            verify_expert(expert, memoryview(packed))
+            output.write_bytes(offset, packed)
+            suh[expert] = source.linear.suh
+            svh[expert] = source.linear.svh
+        if not torch.equal(
+            suh, torch.stack([source.linear.suh for source in sources])
+        ) or not torch.equal(
+            svh, torch.stack([source.linear.svh for source in sources])
+        ):
+            raise ValueError("emitted suh/svh rows differ from their sources")
+        output.write_bytes(geometry.suh_offset, suh.numpy().tobytes())
+        suh_end = geometry.suh_offset + geometry.suh_bytes
+        if geometry.svh_offset > suh_end:
+            output.write_bytes(suh_end, bytes(geometry.svh_offset - suh_end))
+        output.write_bytes(geometry.svh_offset, svh.numpy().tobytes())
+        output.write_bytes(
+            geometry.codebook_offset,
+            EXL3_CODEBOOK_IDS[codebook].to_bytes(4, "little"),
+        )
+
+    return request.job(produce=produce)
+
+
+
+def _exl3_import_spec_bytes(items, parameters) -> int:
+    """Resolve the verbatim bank payload from the experts' own rates."""
+
+    def _source(item):
+        value = item[1] if isinstance(item, tuple) else item
+        return value.source
+
+    sources = [_source(item) for item in items]
+    n, k = sources[0].shape
+    rates = tuple(source.linear.k2 for source in sources)
+    return exl3_bank_geometry(n, k, rates, sources[0].linear.codebook).payload_bytes
+
+
+import_exl3_bank.spec_bytes = _exl3_import_spec_bytes
+
+
+def pack_exl3_dense(request: PrepareRequest) -> PreparedMethod:
+    """Emit one dense linear as an `exl3_dense_v1` object from a convert_model result.
+
+    The method parameters carry `{"layer_file": path, "tensor": name}` pointing at the
+    quantizer's layer file (the SP-7 quantize route's output); the request's logical source
+    (the BF16 checkpoint tensor) validates the [n, k] orientation only. The packed payload is
+    byte-identical to `pack_dense`'s, and the emitted planes are re-checked against the layer
+    file's own metrics (shape, bitrate, codebook, suh/svh extents) before writing. Deep
+    per-tensor verification against the composed weight is the real-check tool's job
+    (`exl3_real_check.py` + the conformance binary's argv mode), not the campaign writer's.
+    """
+
+    if request.target.format != "exl3" or request.target.layout != "exl3_dense_v1":
+        raise ValueError("pack_exl3_dense requires the exl3_dense_v1 target")
+    layer_file = request.parameters.get("layer_file")
+    tensor = request.parameters.get("tensor")
+    if not isinstance(layer_file, str) or not isinstance(tensor, str):
+        raise ValueError("pack_exl3_dense requires layer_file and tensor parameters")
+    if len(request.inputs) != 1:
+        raise ValueError("pack_exl3_dense requires exactly one logical source")
+    n, k = request.target.shape
+
+    result = _layer_file(torch.load, layer_file)[tensor]
+    stored_n, stored_k = result["weight_shape"]
+    if (stored_n, stored_k) != (n, k):
+        raise ValueError(
+            f"{layer_file}:{tensor}: converted shape {(stored_n, stored_k)} differs from "
+            f"the logical parameter {(n, k)}"
+        )
+    k2 = int(result["k2"])
+    codebook = "mcg"
+    geometry = exl3_dense_geometry(n, k, k2, codebook)
+    if geometry.payload_bytes < 256 + 4:
+        raise ValueError("pack_exl3_dense: degenerate payload")
+
+    trellis = result["trellis"].detach().cpu().contiguous()
+    if trellis.dtype != torch.int16 or trellis.ndim != 3:
+        raise ValueError(f"{layer_file}:{tensor}: trellis must be int16 [k/16, n/16, 8*k2]")
+    if trellis.shape != (k // 16, n // 16, 8 * k2):
+        raise ValueError(
+            f"{layer_file}:{tensor}: trellis shape {tuple(trellis.shape)} disagrees with "
+            f"[{k // 16}, {n // 16}, {8 * k2}]"
+        )
+    suh = result["suh"].detach().cpu().to(torch.float16).contiguous()
+    svh = result["svh"].detach().cpu().to(torch.float16).contiguous()
+    if tuple(suh.shape) != (k,) or tuple(svh.shape) != (n,):
+        raise ValueError(f"{layer_file}:{tensor}: suh/svh planes disagree with the trellis")
+
+    def produce(output):
+        trellis_bytes = trellis.numpy().tobytes()
+        if len(trellis_bytes) != geometry.trellis_bytes:
+            raise ValueError(f"{layer_file}:{tensor}: trellis bytes disagree with the bitrate")
+        output.write_bytes(0, trellis_bytes)
+        padded = geometry.suh_offset - len(trellis_bytes)
+        if padded:
+            output.write_bytes(len(trellis_bytes), bytes(padded))
+        output.write_bytes(geometry.suh_offset, suh.numpy().tobytes())
+        output.write_bytes(geometry.svh_offset, svh.numpy().tobytes())
+        output.write_bytes(
+            geometry.codebook_offset, EXL3_CODEBOOK_IDS[codebook].to_bytes(4, "little")
+        )
+
+    return request.job(produce=produce)
+
+
+def _exl3_dense_spec_bytes(items, parameters) -> int:
+    """Resolve the dense payload from the layer file's own stored shape and rate."""
+
+    result = _layer_file(torch.load, parameters["layer_file"])[parameters["tensor"]]
+    n, k = result["weight_shape"]
+    return exl3_dense_geometry(n, k, int(result["k2"]), "mcg").payload_bytes
+
+
+pack_exl3_dense.spec_bytes = _exl3_dense_spec_bytes
+
+
+def pack_exl3_dense_group(request: PrepareRequest) -> PreparedMethod:
+    """Emit one fused dense EXL3 object from a group of logical parameters (SP-7).
+
+    The fused quantize campaign stores each mixer/FFN group as ONE exl3 linear in the
+    binding row order (attention: query, key, gate, value; GDN: query, key, value, z;
+    MLP: gate, up); the model's packing group binds each parameter to its row range of
+    this object. The method parameters carry `{"layer_file": path, "tensor": name}` of
+    the fused group tensor; the request's inputs are the group's logical sources in
+    order, and their stacked shape must match the stored [n, k]. Deep per-tensor
+    verification against the composed weight stays with the real-check tool.
+    """
+
+    if request.target.format != "exl3" or request.target.layout != "exl3_dense_v1":
+        raise ValueError("pack_exl3_dense_group requires the exl3_dense_v1 target")
+    layer_file = request.parameters.get("layer_file")
+    tensor = request.parameters.get("tensor")
+    if not isinstance(layer_file, str) or not isinstance(tensor, str):
+        raise ValueError("pack_exl3_dense_group requires layer_file and tensor parameters")
+    if not request.inputs:
+        raise ValueError("pack_exl3_dense_group requires the group's logical sources")
+    n = sum(prod(item.source.shape[:1]) for item in request.inputs)
+    k = prod(request.inputs[0].source.shape[1:2]) if request.inputs[0].source.shape else 0
+    for item in request.inputs:
+        shape = item.source.shape
+        if len(shape) != 2 or shape[1] != request.inputs[0].source.shape[1]:
+            raise ValueError("pack_exl3_dense_group: group members must share one [., k] shape")
+
+    result = _layer_file(torch.load, layer_file)[tensor]
+    stored_n, stored_k = result["weight_shape"]
+    if (stored_n, stored_k) != (n, k):
+        raise ValueError(
+            f"{layer_file}:{tensor}: converted shape {(stored_n, stored_k)} differs from "
+            f"the fused group {(n, k)}"
+        )
+    k2 = int(result["k2"])
+    codebook = "mcg"
+    geometry = exl3_dense_geometry(n, k, k2, codebook)
+
+    trellis = result["trellis"].detach().cpu().contiguous()
+    if trellis.dtype != torch.int16 or trellis.shape != (k // 16, n // 16, 8 * k2):
+        raise ValueError(f"{layer_file}:{tensor}: trellis shape disagrees with the fused group")
+    suh = result["suh"].detach().cpu().to(torch.float16).contiguous()
+    svh = result["svh"].detach().cpu().to(torch.float16).contiguous()
+    if tuple(suh.shape) != (k,) or tuple(svh.shape) != (n,):
+        raise ValueError(f"{layer_file}:{tensor}: suh/svh planes disagree with the fused group")
+
+    def produce(output):
+        trellis_bytes = trellis.numpy().tobytes()
+        if len(trellis_bytes) != geometry.trellis_bytes:
+            raise ValueError(f"{layer_file}:{tensor}: trellis bytes disagree with the bitrate")
+        output.write_bytes(0, trellis_bytes)
+        padded = geometry.suh_offset - len(trellis_bytes)
+        if padded:
+            output.write_bytes(len(trellis_bytes), bytes(padded))
+        output.write_bytes(geometry.suh_offset, suh.numpy().tobytes())
+        output.write_bytes(geometry.svh_offset, svh.numpy().tobytes())
+        output.write_bytes(
+            geometry.codebook_offset, EXL3_CODEBOOK_IDS[codebook].to_bytes(4, "little")
+        )
+
+    return request.job(produce=produce)
+
+
+def _exl3_dense_group_spec_bytes(items, parameters) -> int:
+    """Resolve the fused group payload from the layer file's own stored shape."""
+
+    def _rows(item):
+        value = item[1] if isinstance(item, tuple) else item
+        return prod(value.source.shape[:1])
+
+    n = sum(_rows(item) for item in items)
+    value = items[0][1] if isinstance(items[0], tuple) else items[0]
+    k = value.source.shape[1]
+    result = _layer_file(torch.load, parameters["layer_file"])[parameters["tensor"]]
+    stored_n, stored_k = result["weight_shape"]
+    if (stored_n, stored_k) != (n, k):
+        raise ValueError(
+            f"{parameters['layer_file']}:{parameters['tensor']}: converted shape "
+            f"{(stored_n, stored_k)} differs from the group {(n, k)}"
+        )
+    return exl3_dense_geometry(n, k, int(result["k2"]), "mcg").payload_bytes
+
+
+pack_exl3_dense_group.spec_bytes = _exl3_dense_group_spec_bytes
+
+
 METHODS: dict[str, Method] = {
     "cast_direct": cast_direct,
     "grouped_absmax": grouped_absmax,
     "fp8_row_maxabs": fp8_row_maxabs,
     "import_encoded": import_encoded,
+    "import_exl3_bank": import_exl3_bank,
+    "pack_exl3_dense": pack_exl3_dense,
+    "pack_exl3_dense_group": pack_exl3_dense_group,
+    "pack_exl3_bank_quantized": pack_exl3_bank_quantized,
     "stored_scale_mse": stored_scale_mse,
 }

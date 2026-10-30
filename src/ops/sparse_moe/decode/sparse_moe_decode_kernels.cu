@@ -16,6 +16,7 @@
 #include "ops/sparse_moe/small_t/sparse_moe_small_t.h"
 
 #include <cuda_bf16.h>
+#include <cuda_fp8.h>
 #include <cuda_runtime.h>
 
 #include <cstdint>
@@ -56,20 +57,23 @@ __device__ __forceinline__ float dot_bf16_eight(const __nv_bfloat16* a, const __
     return sum;
 }
 
+// The router row dot: each warp walks its slice in ascending k with the same
+// dot_bf16_eight stride as before. The 35B slice (2048/8 = 256) admits exactly one 256-value
+// vector per lane, so the runtime loop reproduces the previous fixed-trip accumulation order
+// bit for bit; the 125B slice (2560/8 = 320) is not a multiple of 256 and needs the loop.
+template <int Hidden>
 __device__ __forceinline__ float router_row_dot(const __nv_bfloat16* x, const __nv_bfloat16* row) {
-    constexpr int kSlice = kHidden / kD1Warps;
-    constexpr int kVecs  = kSlice / (32 * 8);
+    constexpr int kSlice = Hidden / kD1Warps;
     const int warp       = static_cast<int>(threadIdx.x) >> 5;
     const int lane       = static_cast<int>(threadIdx.x) & 31;
     float sum            = 0.0f;
-#pragma unroll
-    for (int vector = 0; vector < kVecs; ++vector) {
-        const int k = warp * kSlice + vector * 32 * 8 + lane * 8;
+    for (int k = warp * kSlice + lane * 8; k + 8 <= (warp + 1) * kSlice; k += 32 * 8) {
         sum += dot_bf16_eight(row + k, x + k);
     }
     return warp_reduce_sum(sum);
 }
 
+template <int Hidden>
 __global__ void sparse_moe_d1_kernel(const __nv_bfloat16* __restrict__ x,
                                      const __nv_bfloat16* __restrict__ router,
                                      float* __restrict__ scores,
@@ -79,7 +83,7 @@ __global__ void sparse_moe_d1_kernel(const __nv_bfloat16* __restrict__ x,
     const int row   = static_cast<int>(blockIdx.x);
     const int warp  = static_cast<int>(threadIdx.x) >> 5;
     const int lane  = static_cast<int>(threadIdx.x) & 31;
-    const float dot = router_row_dot(x, router + static_cast<std::int64_t>(row) * kHidden);
+    const float dot = router_row_dot<Hidden>(x, router + static_cast<std::int64_t>(row) * Hidden);
     if (lane == 0) { partial[warp] = dot; }
     __syncthreads();
     if (warp == 0) {
@@ -106,6 +110,37 @@ __global__ void sparse_moe_d2_warp_kernel(const float* __restrict__ scores, int*
     if (threadIdx.x == 0) { pdl::trigger_dependents(); }
     sparse_moe_select_top8_warp(scores, ids, alpha, shared_scale, selected_logits,
                                 expert_activations);
+}
+
+// The general-shape top-k D2 (single token, one warp). The 125B geometry (512 experts,
+// top-10) runs here; the 35B geometry stays on sparse_moe_d2_warp_kernel above.
+template <int Experts, int TopK>
+__global__ void sparse_moe_d2_topk_warp_kernel(const float* __restrict__ scores, int* __restrict__ ids,
+                                               float* __restrict__ alpha,
+                                               float* __restrict__ shared_scale,
+                                               std::uint32_t* __restrict__ expert_activations) {
+    __shared__ float selected_logits[TopK];
+    if (threadIdx.x == 0) { pdl::trigger_dependents(); }
+    sparse_moe_select_topk_warp<Experts, TopK>(scores, ids, alpha, shared_scale, selected_logits,
+                                               expert_activations);
+}
+
+// Dispatches the top-k selection on the admitted bank shapes; anything else is refused.
+void launch_d2_topk(const float* scores, int* ids, float* alpha, float* shared_scale,
+                    std::uint32_t* expert_activations, const SparseMoeShape& shape,
+                    cudaStream_t stream) {
+    if (shape.experts == kSparseMoe35B.experts && shape.top_k == kSparseMoe35B.top_k) {
+        sparse_moe_d2_warp_kernel<<<1, 32, 0, stream>>>(scores, ids, alpha, shared_scale,
+                                                        expert_activations);
+    } else if (shape.experts == kSparseMoe125B.experts && shape.top_k == kSparseMoe125B.top_k) {
+        sparse_moe_d2_topk_warp_kernel<kSparseMoe125B.experts, kSparseMoe125B.top_k>
+            <<<1, 32, 0, stream>>>(scores, ids, alpha, shared_scale, expert_activations);
+    } else {
+        throw std::invalid_argument("sparse_moe: unsupported sparse-MoE shape (experts " +
+                                    std::to_string(shape.experts) + ", top_k " +
+                                    std::to_string(shape.top_k) + ")");
+    }
+    CUDA_CHECK(cudaGetLastError());
 }
 
 struct Q4Codec {
@@ -155,7 +190,8 @@ struct Q8Codec {
 
     __device__ static __forceinline__ float load_one(const std::uint8_t* codes,
                                                      const std::uint8_t* scales,
-                                                     std::int64_t group_index, int lane) {
+                                                     std::int64_t group_index, int lane, int row) {
+        (void)row;  // Q8's scales are per group; the owning row is meaningless.
         const float scale = __half2float(
             __ushort_as_half(*reinterpret_cast<const std::uint16_t*>(scales + group_index * 2)));
         return static_cast<float>(static_cast<std::int8_t>(codes[group_index * kGroupK + lane])) *
@@ -164,8 +200,47 @@ struct Q8Codec {
 
     __device__ static __forceinline__ void
     load_pair(const std::uint8_t* codes, const std::uint8_t* high, const std::uint8_t* scales,
-              std::int64_t group_index, int lane, float& w0, float& w1) {
+              std::int64_t group_index, int lane, int row, float& w0, float& w1) {
+        (void)row;  // Q8's scales are per group; the owning row is meaningless.
         Q8ScalarDecodeAtom::load_pair(codes, high, scales, group_index, lane, w0, w1);
+    }
+};
+
+// The row-scaled FP8 shared-expert codec (Flash-Next 125B shared experts): one byte of FP8
+// E4M3 per K value and one BF16 row scale per output row, so weight = float(fp8) * float(scale).
+// The owning row arrives per call, so the scale needs no division. kGroupK = 32: both admitted
+// shapes keep kHidden and kIntermediate divisible by 32.
+struct Fp8RowCodec {
+    static constexpr int kGroupK                = 32;
+    static constexpr bool kD3SingleValuePerLane = true;
+    static constexpr bool kD3PackedWord8        = false;
+    static constexpr bool kPackedWord8          = false;
+
+    __device__ static __forceinline__ float row_scale(const std::uint8_t* scales, int row) {
+        return __bfloat162float(
+            *reinterpret_cast<const __nv_bfloat16*>(scales + static_cast<std::int64_t>(row) * 2));
+    }
+
+    __device__ static __forceinline__ float fp8_weight(std::uint8_t code) {
+        const __half_raw raw = __nv_cvt_fp8_to_halfraw(code, __NV_E4M3);
+        return __half2float(__half(raw));
+    }
+
+    __device__ static __forceinline__ float load_one(const std::uint8_t* codes,
+                                                     const std::uint8_t* scales,
+                                                     std::int64_t group_index, int lane, int row) {
+        const float scale = row_scale(scales, row);
+        return fp8_weight(codes[group_index * kGroupK + lane]) * scale;
+    }
+
+    __device__ static __forceinline__ void
+    load_pair(const std::uint8_t* codes, const std::uint8_t* high, const std::uint8_t* scales,
+              std::int64_t group_index, int lane, int row, float& w0, float& w1) {
+        (void)high;  // no high plane: the row scale plane replaces it.
+        const float scale = row_scale(scales, row);
+        const std::int64_t base = group_index * kGroupK + lane * 2;
+        w0                      = fp8_weight(codes[base]) * scale;
+        w1                      = fp8_weight(codes[base + 1]) * scale;
     }
 };
 
@@ -216,8 +291,8 @@ __device__ __forceinline__ void dot_two_rows(const std::uint8_t* codes, const st
         for (int group = first_group; group < last_group; ++group) {
             const std::int64_t index0 = static_cast<std::int64_t>(row0) * kGroups + group;
             const std::int64_t index1 = static_cast<std::int64_t>(row1) * kGroups + group;
-            const float w0            = Codec::load_one(codes, scales, index0, lane);
-            const float w1            = Codec::load_one(codes, scales, index1, lane);
+            const float w0            = Codec::load_one(codes, scales, index0, lane, row0);
+            const float w1            = Codec::load_one(codes, scales, index1, lane, row1);
             const float xv            = __bfloat162float(x[group * Codec::kGroupK + lane]);
             acc0                      = fmaf(w0, xv, acc0);
             acc1                      = fmaf(w1, xv, acc1);
@@ -226,9 +301,9 @@ __device__ __forceinline__ void dot_two_rows(const std::uint8_t* codes, const st
         for (int group = first_group; group < last_group; ++group) {
             float w00, w01, w10, w11;
             Codec::load_pair(codes, high, scales, static_cast<std::int64_t>(row0) * kGroups + group,
-                             lane, w00, w01);
+                             lane, row0, w00, w01);
             Codec::load_pair(codes, high, scales, static_cast<std::int64_t>(row1) * kGroups + group,
-                             lane, w10, w11);
+                             lane, row1, w10, w11);
             const int k     = group * Codec::kGroupK + lane * 2;
             const float2 xv = __bfloat1622float2(load_vec<__nv_bfloat162>(x + k));
             acc0            = fmaf(w00, xv.x, acc0);
@@ -353,12 +428,12 @@ __global__ void sparse_moe_d3_path_tiled_kernel(
     }
 }
 
-template <class Codec, int Rows>
+template <class Codec, int K, int Rows>
 __device__ __forceinline__ void dot_fp32_rows(const std::uint8_t* codes, const std::uint8_t* high,
                                               const std::uint8_t* scales, int row_base,
                                               const float* x, int first_group, int last_group,
                                               float (&result)[Rows]) {
-    constexpr int kGroups = kIntermediate / Codec::kGroupK;
+    constexpr int kGroups = K / Codec::kGroupK;
     const int lane        = static_cast<int>(threadIdx.x) & 31;
     float acc[Rows];
 #pragma unroll
@@ -394,7 +469,7 @@ __device__ __forceinline__ void dot_fp32_rows(const std::uint8_t* codes, const s
                 float w0, w1;
                 Codec::load_pair(codes, high, scales,
                                  static_cast<std::int64_t>(row_base + row) * kGroups + group, lane,
-                                 w0, w1);
+                                 row_base + row, w0, w1);
                 acc[row] = fmaf(w0, xv.x, acc[row]);
                 acc[row] = fmaf(w1, xv.y, acc[row]);
             }
@@ -426,7 +501,7 @@ __global__ void sparse_moe_d4_nine_warp_kernel(
         int tier_row = expert;
         sparse_moe_residency(expert_residency, expert, warm, tier_row);
         float dot[Rows];
-        dot_fp32_rows<RoutedCodec, Rows>(warm ? warm_codes : routed_codes,
+        dot_fp32_rows<RoutedCodec, kIntermediate, Rows>(warm ? warm_codes : routed_codes,
                                          warm ? warm_high : routed_high,
                                          warm ? warm_scales : routed_scales,
                                          tier_row * kHidden + row_base,
@@ -438,7 +513,7 @@ __global__ void sparse_moe_d4_nine_warp_kernel(
         }
     } else {
         float dot[Rows];
-        dot_fp32_rows<Q8Codec, Rows>(shared_codes, nullptr, shared_scales, row_base,
+        dot_fp32_rows<Q8Codec, kIntermediate, Rows>(shared_codes, nullptr, shared_scales, row_base,
                                      act + static_cast<std::int64_t>(kTopK) * kIntermediate, 0,
                                      kIntermediate / Q8Codec::kGroupK, dot);
         if (lane == 0) {
@@ -502,7 +577,7 @@ __global__ void sparse_moe_d4_token_kernel(
             int tier_row = expert;
             sparse_moe_residency(expert_residency, expert, warm, tier_row);
             float dot[Rows];
-            dot_fp32_rows<RoutedCodec, Rows>(warm ? warm_codes : routed_codes,
+            dot_fp32_rows<RoutedCodec, kIntermediate, Rows>(warm ? warm_codes : routed_codes,
                                              warm ? warm_high : routed_high,
                                              warm ? warm_scales : routed_scales,
                                              tier_row * kHidden + row_base,
@@ -516,7 +591,7 @@ __global__ void sparse_moe_d4_token_kernel(
             }
         } else {
             float dot[Rows];
-            dot_fp32_rows<Q8Codec, Rows>(shared_codes, nullptr, shared_scales, row_base,
+            dot_fp32_rows<Q8Codec, kIntermediate, Rows>(shared_codes, nullptr, shared_scales, row_base,
                                          act + static_cast<std::int64_t>(kTopK) * kIntermediate, 0,
                                          kIntermediate / Q8Codec::kGroupK, dot);
             if (lane == 0) {
@@ -540,14 +615,31 @@ __global__ void sparse_moe_d4_token_kernel(
 }
 
 void launch_d1(const Tensor& x, const SparseMoeWeights& weights,
-               const SparseMoeDecodeWorkspace& workspace, cudaStream_t stream) {
-    sparse_moe_d1_kernel<<<kRouterRows, kD1Warps * 32, 0, stream>>>(
-        static_cast<const __nv_bfloat16*>(x.data),
-        static_cast<const __nv_bfloat16*>(weights.router_shared_gate.qdata),
-        static_cast<float*>(workspace.scratch.data),
-        static_cast<const char*>(weights.shared_down.qdata),
-        static_cast<unsigned long long>(kHidden) * kIntermediate);
-    CUDA_CHECK(cudaGetLastError());
+               const SparseMoeDecodeWorkspace& workspace, const SparseMoeShape& shape,
+               cudaStream_t stream) {
+    const unsigned long long prefetch_bytes =
+        static_cast<unsigned long long>(shape.hidden) * shape.intermediate;
+    switch (shape.hidden) {
+    case kSparseMoe35B.hidden:
+        sparse_moe_d1_kernel<kSparseMoe35B.hidden><<<shape.experts + 1, kD1Warps * 32, 0, stream>>>(
+            static_cast<const __nv_bfloat16*>(x.data),
+            static_cast<const __nv_bfloat16*>(weights.router_shared_gate.qdata),
+            static_cast<float*>(workspace.scratch.data),
+            static_cast<const char*>(weights.shared_down.qdata), prefetch_bytes);
+        CUDA_CHECK(cudaGetLastError());
+        return;
+    case kSparseMoe125B.hidden:
+        sparse_moe_d1_kernel<kSparseMoe125B.hidden><<<shape.experts + 1, kD1Warps * 32, 0, stream>>>(
+            static_cast<const __nv_bfloat16*>(x.data),
+            static_cast<const __nv_bfloat16*>(weights.router_shared_gate.qdata),
+            static_cast<float*>(workspace.scratch.data),
+            static_cast<const char*>(weights.shared_down.qdata), prefetch_bytes);
+        CUDA_CHECK(cudaGetLastError());
+        return;
+    default:
+        throw std::invalid_argument("sparse_moe: unsupported router hidden size " +
+                                    std::to_string(shape.hidden));
+    }
 }
 
 template <class Codec>
@@ -751,8 +843,6 @@ void launch_d4_small_t_codec(const SparseMoeWeights& weights, Tensor& destinatio
 // expert's directory entry resolves its trellis extent and bitrate at runtime, so mixed-width
 // banks stay on this one route (contract section 7).
 
-constexpr int kExl3GateRowGroups = 4;    // 512 gate/up rows as 4 groups of 128
-constexpr int kExl3DownRowGroups = 8;    // 2048 down rows per group of 256
 constexpr int kExl3MaxTileWords  = 64;   // 4 * k2 at the k2 = 16 (K = 8) maximum
 
 struct Exl3Entry {
@@ -808,36 +898,38 @@ __device__ __forceinline__ void exl3_input_transform_block(const float* x, const
         });
 }
 
-// D3a: the gate and up inner products. Grid (9 paths, 8 row-groups), 256 threads. Paths
-// 0..7 are the selected EXL3 experts (their own suh and trellis extents); path 8 is the
-// shared expert on the existing groupwise Q8 route, writing its activation slot directly.
+// D3a: the gate and up inner products. Grid (top_k+1 paths, intermediate/128 row-groups), 256
+// threads. Paths 0..top_k-1 are the selected EXL3 experts (their own suh and trellis extents);
+// path top_k is the shared expert, writing its activation slot directly. The shared expert runs
+// on the codec its weight carries: groupwise Q8 (35B) or row-scaled FP8 (125B).
+template <int kH, int kTK, int kI, class SharedCodec>
 __global__ void sparse_moe_d3a_exl3_kernel(
     const __nv_bfloat16* __restrict__ x, const int* __restrict__ ids,
     float* __restrict__ exl3_z, float* __restrict__ scratch,
     const std::uint8_t* __restrict__ gate_payload, const std::uint8_t* __restrict__ up_payload,
     std::uint64_t gate_suh_offset, std::uint64_t up_suh_offset, std::uint32_t gate_codebook,
     std::uint32_t up_codebook, const std::uint8_t* __restrict__ shared_codes,
-    const std::uint8_t* __restrict__ shared_scales) {
-    __shared__ __align__(16) __nv_bfloat16 x_shared[kHidden];
-    __shared__ float u_gate[kHidden];
-    __shared__ float u_up[kHidden];
+    const std::uint8_t* __restrict__ shared_high, const std::uint8_t* __restrict__ shared_scales) {
+    __shared__ __align__(16) __nv_bfloat16 x_shared[kH];
+    __shared__ float u_gate[kH];
+    __shared__ float u_up[kH];
     __shared__ std::uint32_t tile_words[8][2][kExl3MaxTileWords];
     const int tid = static_cast<int>(threadIdx.x);
     const int warp = tid >> 5, lane = tid & 31;
     const int path = static_cast<int>(blockIdx.x);
     const int group = static_cast<int>(blockIdx.y);
     if (tid == 0) { pdl::trigger_dependents(); }
-    for (int vector = tid; vector < kHidden / 8; vector += 256) {
+    for (int vector = tid; vector < kH / 8; vector += 256) {
         store_vec(x_shared + vector * 8, load_vec<uint4>(x + vector * 8));
     }
     __syncthreads();
-    if (path == kTopK) {
+    if (path == kTK) {
         pdl::wait_for_dependencies();
         for (int j = group * 128 + warp * 16, end = j + 16; j < end; ++j) {
             float gate = 0.0f, up = 0.0f;
-            dot_two_rows<Q8Codec, kHidden>(shared_codes, nullptr, shared_scales, j,
-                                            kIntermediate + j, x_shared, 0, kHidden, gate, up);
-            scratch[8 * kIntermediate + j] = silu(gate) * up;
+            dot_two_rows<SharedCodec, kH>(shared_codes, shared_high, shared_scales, j,
+                                            kI + j, x_shared, 0, kH, gate, up);
+            scratch[kTK * kI + j] = silu(gate) * up;
         }
         return;
     }
@@ -847,35 +939,35 @@ __global__ void sparse_moe_d3a_exl3_kernel(
     const Exl3Entry up_entry = exl3_entry(up_payload, expert);
     const __half* gate_suh =
         reinterpret_cast<const __half*>(gate_payload + gate_suh_offset) +
-        static_cast<std::int64_t>(expert) * kHidden;
+        static_cast<std::int64_t>(expert) * kH;
     const __half* up_suh =
         reinterpret_cast<const __half*>(up_payload + up_suh_offset) +
-        static_cast<std::int64_t>(expert) * kHidden;
+        static_cast<std::int64_t>(expert) * kH;
     // The input transforms: sixteen gate blocks then sixteen up blocks, four per warp.
-    for (int block = warp; block < 2 * (kHidden / 128); block += 8) {
-        if (block < kHidden / 128) {
+    for (int block = warp; block < 2 * (kH / 128); block += 8) {
+        if (block < kH / 128) {
             exl3_input_transform_block(x, gate_suh, u_gate, block);
         } else {
-            exl3_input_transform_block(x, up_suh, u_up, block - kHidden / 128);
+            exl3_input_transform_block(x, up_suh, u_up, block - kH / 128);
         }
     }
     __syncthreads();
     // The dot sweep: warp w owns the output row-tile (group * 8 + w) - sixteen outputs of
-    // sixteen input columns per input tile, two lanes per output (the column halves). The 4
-    // groups x 8 warps x one row-tile cover the 512 rows exactly once. The trellis is
-    // [K/16, N/16] input-major, so tile (tc, row_tile) sits at tc * (N/16) + row_tile;
+    // sixteen input columns per input tile, two lanes per output (the column halves). The
+    // row-groups x 8 warps x one row-tile cover the intermediate rows exactly once. The trellis
+    // is [K/16, N/16] input-major, so tile (tc, row_tile) sits at tc * (kI/16) + row_tile;
     // inside the tile, the element order maps the input-intra (the lane's c) to the trellis
     // row role and the output-intra (r) to its column role (contract 2.3).
     const int row_tile = group * 8 + warp;
     const int r = lane >> 1, half = lane & 1;
     float acc_gate = 0.0f;
     float acc_up = 0.0f;
-    for (int tc = 0; tc < kHidden / 16; ++tc) {
+    for (int tc = 0; tc < kH / 16; ++tc) {
         const std::int64_t gate_tile =
-            (static_cast<std::int64_t>(tc) * (kIntermediate / 16) + row_tile) *
+            (static_cast<std::int64_t>(tc) * (kI / 16) + row_tile) *
             gate_entry.words_per_tile;
         const std::int64_t up_tile =
-            (static_cast<std::int64_t>(tc) * (kIntermediate / 16) + row_tile) *
+            (static_cast<std::int64_t>(tc) * (kI / 16) + row_tile) *
             up_entry.words_per_tile;
         // Staged bit-reversed: the ring's bit order is MSB-first within each stored word.
         for (int word = lane; word < gate_entry.words_per_tile; word += 32) {
@@ -906,15 +998,16 @@ __global__ void sparse_moe_d3a_exl3_kernel(
     const float up_row = acc_up + __shfl_xor_sync(0xffffffffu, acc_up, 1);
     if (half == 0) {
         const int row = row_tile * 16 + r;
-        exl3_z[(static_cast<std::int64_t>(path) * 2 + 0) * kIntermediate + row] = gate_row;
-        exl3_z[(static_cast<std::int64_t>(path) * 2 + 1) * kIntermediate + row] = up_row;
+        exl3_z[(static_cast<std::int64_t>(path) * 2 + 0) * kI + row] = gate_row;
+        exl3_z[(static_cast<std::int64_t>(path) * 2 + 1) * kI + row] = up_row;
     }
 }
 
 // D4a: the gate/up output transforms and SiLU, the down input transform and the down inner
-// products. Grid (9 paths, 8 down row-groups), 256 threads. Paths 0..7 stage their raw down
-// inner products (D4b applies the output transform); path 8 is the shared expert's groupwise
-// Q8 down product, already scaled, into its staging slot.
+// products. Grid (top_k+1 paths, hidden/256 down row-groups), 256 threads. Paths 0..top_k-1
+// stage their raw down inner products (D4b applies the output transform); path top_k is the
+// shared expert's down product, already scaled, into its staging slot.
+template <int kH, int kTK, int kI, class SharedCodec>
 __global__ void sparse_moe_d4a_exl3_kernel(
     const int* __restrict__ ids, const float* __restrict__ alpha,
     const float* __restrict__ shared_scale, const float* __restrict__ exl3_z,
@@ -923,42 +1016,41 @@ __global__ void sparse_moe_d4a_exl3_kernel(
     const std::uint8_t* __restrict__ down_payload, std::uint64_t gate_svh_offset,
     std::uint64_t up_svh_offset, std::uint64_t down_suh_offset, std::uint32_t down_codebook,
     const std::uint8_t* __restrict__ shared_codes, const std::uint8_t* __restrict__ shared_scales) {
-    __shared__ __align__(16) float gate[kIntermediate];
-    __shared__ __align__(16) float up[kIntermediate];
-    __shared__ float activation[kIntermediate];
-    __shared__ float u_down[kIntermediate];
+    __shared__ __align__(16) float gate[kI];
+    __shared__ __align__(16) float up[kI];
+    __shared__ float activation[kI];
+    __shared__ float u_down[kI];
     __shared__ std::uint32_t tile_words[8][kExl3MaxTileWords];
     const int tid = static_cast<int>(threadIdx.x);
     const int warp = tid >> 5, lane = tid & 31;
     const int path = static_cast<int>(blockIdx.x);
     const int group = static_cast<int>(blockIdx.y);
     if (tid == 0) { pdl::trigger_dependents(); }
-    if (path == kTopK) {
+    if (path == kTK) {
         pdl::wait_for_dependencies();
-        // The shared expert: the groupwise Q8 down rows, scaled, into staging slot 8.
+        // The shared expert: the codec-decoded down rows, scaled, into staging slot top_k.
         for (int row = group * 256 + warp * 32, end = row + 32; row < end; ++row) {
             float dot[1] = {0.0f};
-            dot_fp32_rows<Q8Codec, 1>(shared_codes, nullptr, shared_scales, row,
-                                      scratch + 8 * kIntermediate, 0,
-                                      kIntermediate / Q8Codec::kGroupK, dot);
-            exl3_down[8 * kHidden + row] = *shared_scale * dot[0];
+            dot_fp32_rows<SharedCodec, kI, 1>(shared_codes, nullptr, shared_scales, row,
+                                          scratch + kTK * kI, 0, kI / SharedCodec::kGroupK, dot);
+            exl3_down[kTK * kH + row] = *shared_scale * dot[0];
         }
         return;
     }
     pdl::wait_for_dependencies();
     const int expert = ids[path];
-    // The gate and up output transforms: z ⊙ svh per projection (four 128-blocks each), then
-    // the SiLU product into the activation staging.
+    // The gate and up output transforms: z ⊙ svh per projection (intermediate/128 blocks each),
+    // then the SiLU product into the activation staging.
     {
-        const float* z_gate = exl3_z + (static_cast<std::int64_t>(path) * 2 + 0) * kIntermediate;
-        const float* z_up = exl3_z + (static_cast<std::int64_t>(path) * 2 + 1) * kIntermediate;
+        const float* z_gate = exl3_z + (static_cast<std::int64_t>(path) * 2 + 0) * kI;
+        const float* z_up = exl3_z + (static_cast<std::int64_t>(path) * 2 + 1) * kI;
         const __half* gate_svh =
             reinterpret_cast<const __half*>(gate_payload + gate_svh_offset) +
-            static_cast<std::int64_t>(expert) * kIntermediate;
+            static_cast<std::int64_t>(expert) * kI;
         const __half* up_svh =
             reinterpret_cast<const __half*>(up_payload + up_svh_offset) +
-            static_cast<std::int64_t>(expert) * kIntermediate;
-        for (int block = warp; block < kIntermediate / 128; block += 8) {
+            static_cast<std::int64_t>(expert) * kI;
+        for (int block = warp; block < kI / 128; block += 8) {
             const int base = block * 128 + 4 * lane;
             hadamard::warp_transform_128(
                 [&](float (&v)[4]) {
@@ -984,7 +1076,7 @@ __global__ void sparse_moe_d4a_exl3_kernel(
                 });
         }
         __syncthreads();
-        for (int c = tid; c < kIntermediate; c += 256) {
+        for (int c = tid; c < kI; c += 256) {
             activation[c] = silu(gate[c]) * up[c];
         }
         __syncthreads();
@@ -992,14 +1084,14 @@ __global__ void sparse_moe_d4a_exl3_kernel(
     const Exl3Entry down_entry = exl3_entry(down_payload, expert);
     const __half* down_suh =
         reinterpret_cast<const __half*>(down_payload + down_suh_offset) +
-        static_cast<std::int64_t>(expert) * kIntermediate;
-    for (int block = warp; block < kIntermediate / 128; block += 8) {
+        static_cast<std::int64_t>(expert) * kI;
+    for (int block = warp; block < kI / 128; block += 8) {
         exl3_input_transform_block(activation, down_suh, u_down, block);
     }
     __syncthreads();
     // The down dot sweep: warp w owns the output row-tiles (group * 16 + 2w, +1) - two tiles
-    // of sixteen outputs each, sweeping the 512-wide input's 32 tiles. The trellis is
-    // [K/16, N/16] with K = 512 and N = 2048, so tile (tc, row_tile) sits at tc * (N/16) +
+    // of sixteen outputs each, sweeping the intermediate-wide input's kI/16 tiles. The trellis
+    // is [K/16, N/16] with K = kI and N = kH, so tile (tc, row_tile) sits at tc * (kH/16) +
     // row_tile; the element order maps the input-intra (the lane's c) to the trellis row
     // role and the output-intra (r) to its column role.
     const int r = lane >> 1, half = lane & 1;
@@ -1008,9 +1100,9 @@ __global__ void sparse_moe_d4a_exl3_kernel(
     for (int tile_pair = 0; tile_pair < 2; ++tile_pair) {
         const int row_tile = group * 16 + warp * 2 + tile_pair;
         float acc = 0.0f;
-        for (int tc = 0; tc < kIntermediate / 16; ++tc) {
+        for (int tc = 0; tc < kI / 16; ++tc) {
             const std::int64_t tile =
-                (static_cast<std::int64_t>(tc) * (kHidden / 16) + row_tile) *
+                (static_cast<std::int64_t>(tc) * (kH / 16) + row_tile) *
                 down_entry.words_per_tile;
             // Staged bit-reversed: the ring's bit order is MSB-first within each stored word.
             for (int word = lane; word < down_entry.words_per_tile; word += 32) {
@@ -1037,40 +1129,40 @@ __global__ void sparse_moe_d4a_exl3_kernel(
         const int row_tile = group * 16 + warp * 2 + tile_pair;
         if (half == 0) {
             const int row = row_tile * 16 + r;
-            exl3_down[static_cast<std::int64_t>(path) * kHidden + row] =
+            exl3_down[static_cast<std::int64_t>(path) * kH + row] =
                 accumulators[tile_pair][r];
         }
     }
 }
 
 // D4b: the block-diagonal output transform, the per-expert svh and route weights, the shared
-// expert and the residual, folded into the BF16 destination. Grid (16 output blocks), 256
-// threads: warp p applies path p's transform to the staged down products of its block.
+// expert and the residual, folded into the BF16 destination. Grid (hidden/128 output blocks),
+// top_k*32 threads: warp p applies path p's transform to the staged down products of its block.
+template <int kH, int kTK>
 __global__ void sparse_moe_d4b_exl3_kernel(
     const int* __restrict__ ids, const float* __restrict__ alpha,
     const float* __restrict__ exl3_down, const std::uint8_t* __restrict__ down_payload,
     std::uint64_t down_svh_offset, const __nv_bfloat16* __restrict__ residual,
     __nv_bfloat16* __restrict__ destination, const char* __restrict__ prefetch_data,
     unsigned long long prefetch_bytes) {
-    __shared__ float block_accumulator[8][128];
+    __shared__ float block_accumulator[kTK][128];
     const int tid = static_cast<int>(threadIdx.x);
     const int warp = tid >> 5, lane = tid & 31;
     const int block = static_cast<int>(blockIdx.x);
     if (tid == 0) { pdl::trigger_dependents(); }
     pdl::wait_for_dependencies();
     const int expert = ids[warp];
-    const int base = block * 128 + 4 * lane;
     hadamard::warp_transform_128(
         [&](float (&v)[4]) {
             const float* staged =
-                exl3_down + static_cast<std::int64_t>(warp) * kHidden + block * 128 + 4 * lane;
+                exl3_down + static_cast<std::int64_t>(warp) * kH + block * 128 + 4 * lane;
 #pragma unroll
             for (int q = 0; q < 4; ++q) { v[q] = staged[q]; }
         },
         [&](const float (&v)[4]) {
             const int expert_base = block * 128 + 4 * lane;
             const __half* svh = reinterpret_cast<const __half*>(down_payload + down_svh_offset) +
-                                 static_cast<std::int64_t>(expert) * kHidden;
+                                 static_cast<std::int64_t>(expert) * kH;
 #pragma unroll
             for (int q = 0; q < 4; ++q) {
                 block_accumulator[warp][4 * lane + q] =
@@ -1080,8 +1172,8 @@ __global__ void sparse_moe_d4b_exl3_kernel(
     __syncthreads();
     for (int j = tid; j < 128; j += 256) {
         float value = static_cast<float>(residual[block * 128 + j]);
-        for (int path = 0; path < kTopK; ++path) { value += block_accumulator[path][j]; }
-        value += exl3_down[8 * kHidden + block * 128 + j];
+        for (int path = 0; path < kTK; ++path) { value += block_accumulator[path][j]; }
+        value += exl3_down[kTK * kH + block * 128 + j];
         destination[block * 128 + j] = __float2bfloat16(value);
     }
     if (prefetch_data != nullptr) {
@@ -1095,41 +1187,68 @@ __global__ void sparse_moe_d4b_exl3_kernel(
     }
 }
 
-void launch_d3a_exl3(const Tensor& x, const SparseMoeWeights& weights,
-                     const SparseMoeDecodeWorkspace& workspace, cudaStream_t stream);
-
-void launch_d2_exl3_d3a(const Tensor& x, const SparseMoeWeights& weights,
-                         const SparseMoeDecodeWorkspace& workspace, cudaStream_t stream) {
-    const auto* scores = static_cast<const float*>(workspace.scratch.data);
-    auto* ids = static_cast<int*>(workspace.ids.data);
-    auto* alpha = static_cast<float*>(workspace.alpha.data);
-    auto* shared_scale = static_cast<float*>(workspace.shared_scale.data);
-    sparse_moe_d2_warp_kernel<<<1, 32, 0, stream>>>(scores, ids, alpha, shared_scale,
-                                                    weights.expert_activations);
-    CUDA_CHECK(cudaGetLastError());
-    launch_d3a_exl3(x, weights, workspace, stream);
-}
-
-void launch_d3a_exl3(const Tensor& x, const SparseMoeWeights& weights,
-                     const SparseMoeDecodeWorkspace& workspace, cudaStream_t stream) {
+template <int kH, int kTK, int kI>
+void launch_d3a_exl3_shape(const Tensor& x, const SparseMoeWeights& weights,
+                           const SparseMoeDecodeWorkspace& workspace, cudaStream_t stream) {
     const auto* input = static_cast<const __nv_bfloat16*>(x.data);
     const auto* ids = static_cast<const int*>(workspace.ids.data);
     auto* exl3_z = static_cast<float*>(workspace.exl3_z.data);
     auto* scratch = static_cast<float*>(workspace.scratch.data);
     const auto* gate_payload = static_cast<const std::uint8_t*>(weights.exl3_routed_gate.payload);
     const auto* up_payload = static_cast<const std::uint8_t*>(weights.exl3_routed_up.payload);
-    CUDA_CHECK(pdl::launch_dependent(
-        {dim3(kTopK + 1, kExl3GateRowGroups), dim3(256), 0, stream},
-        sparse_moe_d3a_exl3_kernel, input, ids, exl3_z, scratch, gate_payload, up_payload,
-        weights.exl3_routed_gate.exl3_suh_offset, weights.exl3_routed_up.exl3_suh_offset,
-        weights.exl3_routed_gate.exl3_codebook, weights.exl3_routed_up.exl3_codebook,
-        static_cast<const std::uint8_t*>(weights.shared_gate_up.qdata),
-        static_cast<const std::uint8_t*>(weights.shared_gate_up.scales)));
+    const auto* shared_codes =
+        static_cast<const std::uint8_t*>(weights.shared_gate_up.qdata);
+    const auto* shared_high = static_cast<const std::uint8_t*>(weights.shared_gate_up.qhigh);
+    const auto* shared_scales = static_cast<const std::uint8_t*>(weights.shared_gate_up.scales);
+    switch (weights.shared_gate_up.qtype) {
+    case QType::Q8_G32_FP16:
+        CUDA_CHECK(pdl::launch_dependent(
+            {dim3(kTK + 1, kI / 128), dim3(256), 0, stream},
+            sparse_moe_d3a_exl3_kernel<kH, kTK, kI, Q8Codec>, input, ids, exl3_z, scratch,
+            gate_payload, up_payload, weights.exl3_routed_gate.exl3_suh_offset,
+            weights.exl3_routed_up.exl3_suh_offset, weights.exl3_routed_gate.exl3_codebook,
+            weights.exl3_routed_up.exl3_codebook, shared_codes, shared_high, shared_scales));
+        return;
+    case QType::FP8_E4M3FN_ROW_BF16:
+        CUDA_CHECK(pdl::launch_dependent(
+            {dim3(kTK + 1, kI / 128), dim3(256), 0, stream},
+            sparse_moe_d3a_exl3_kernel<kH, kTK, kI, Fp8RowCodec>, input, ids, exl3_z, scratch,
+            gate_payload, up_payload, weights.exl3_routed_gate.exl3_suh_offset,
+            weights.exl3_routed_up.exl3_suh_offset, weights.exl3_routed_gate.exl3_codebook,
+            weights.exl3_routed_up.exl3_codebook, shared_codes, shared_high, shared_scales));
+        return;
+    default:
+        throw std::invalid_argument(
+            "sparse_moe: unsupported EXL3 shared gate/up codec (expected Q8_G32_FP16 or "
+            "FP8_E4M3FN_ROW_BF16)");
+    }
 }
 
-void launch_d4_exl3(const SparseMoeWeights& weights, Tensor& destination,
-                    const SparseMoeDecodeWorkspace& workspace, cudaStream_t stream,
-                    const void* prefetch_data, std::size_t prefetch_bytes) {
+void launch_d3a_exl3(const Tensor& x, const SparseMoeWeights& weights,
+                     const SparseMoeDecodeWorkspace& workspace, const SparseMoeShape& shape,
+                     cudaStream_t stream) {
+    if (shape.hidden == kSparseMoe35B.hidden && shape.top_k == kSparseMoe35B.top_k &&
+        shape.intermediate == kSparseMoe35B.intermediate) {
+        launch_d3a_exl3_shape<kSparseMoe35B.hidden, kSparseMoe35B.top_k,
+                              kSparseMoe35B.intermediate>(x, weights, workspace, stream);
+        return;
+    }
+    if (shape.hidden == kSparseMoe125B.hidden && shape.top_k == kSparseMoe125B.top_k &&
+        shape.intermediate == kSparseMoe125B.intermediate) {
+        launch_d3a_exl3_shape<kSparseMoe125B.hidden, kSparseMoe125B.top_k,
+                              kSparseMoe125B.intermediate>(x, weights, workspace, stream);
+        return;
+    }
+    throw std::invalid_argument("sparse_moe: unsupported EXL3 bank shape (hidden " +
+                                std::to_string(shape.hidden) + ", top_k " +
+                                std::to_string(shape.top_k) + ", intermediate " +
+                                std::to_string(shape.intermediate) + ")");
+}
+
+template <int kH, int kTK, int kI>
+void launch_d4_exl3_shape(const SparseMoeWeights& weights, Tensor& destination,
+                          const SparseMoeDecodeWorkspace& workspace, cudaStream_t stream,
+                          const void* prefetch_data, std::size_t prefetch_bytes) {
     const auto* ids = static_cast<const int*>(workspace.ids.data);
     const auto* alpha = static_cast<const float*>(workspace.alpha.data);
     const auto* shared_scale = static_cast<const float*>(workspace.shared_scale.data);
@@ -1139,20 +1258,73 @@ void launch_d4_exl3(const SparseMoeWeights& weights, Tensor& destination,
     const auto* gate_payload = static_cast<const std::uint8_t*>(weights.exl3_routed_gate.payload);
     const auto* up_payload = static_cast<const std::uint8_t*>(weights.exl3_routed_up.payload);
     const auto* down_payload = static_cast<const std::uint8_t*>(weights.routed_down.payload);
-    CUDA_CHECK(pdl::launch_dependent(
-        {dim3(kTopK + 1, kExl3DownRowGroups), dim3(256), 0, stream}, sparse_moe_d4a_exl3_kernel,
-        ids, alpha, shared_scale, exl3_z, scratch, exl3_down, gate_payload, up_payload,
-        down_payload, weights.exl3_routed_gate.exl3_svh_offset, weights.exl3_routed_up.exl3_svh_offset,
-        weights.routed_down.exl3_suh_offset, weights.routed_down.exl3_codebook,
-        static_cast<const std::uint8_t*>(weights.shared_down.qdata),
-        static_cast<const std::uint8_t*>(weights.shared_down.scales)));
+    const auto* shared_codes = static_cast<const std::uint8_t*>(weights.shared_down.qdata);
+    const auto* shared_scales = static_cast<const std::uint8_t*>(weights.shared_down.scales);
+    switch (weights.shared_down.qtype) {
+    case QType::Q8_G32_FP16:
+        CUDA_CHECK(pdl::launch_dependent(
+            {dim3(kTK + 1, kH / 256), dim3(256), 0, stream},
+            sparse_moe_d4a_exl3_kernel<kH, kTK, kI, Q8Codec>, ids, alpha, shared_scale, exl3_z,
+            scratch, exl3_down, gate_payload, up_payload, down_payload,
+            weights.exl3_routed_gate.exl3_svh_offset, weights.exl3_routed_up.exl3_svh_offset,
+            weights.routed_down.exl3_suh_offset, weights.routed_down.exl3_codebook, shared_codes,
+            shared_scales));
+        break;
+    case QType::FP8_E4M3FN_ROW_BF16:
+        CUDA_CHECK(pdl::launch_dependent(
+            {dim3(kTK + 1, kH / 256), dim3(256), 0, stream},
+            sparse_moe_d4a_exl3_kernel<kH, kTK, kI, Fp8RowCodec>, ids, alpha, shared_scale,
+            exl3_z, scratch, exl3_down, gate_payload, up_payload, down_payload,
+            weights.exl3_routed_gate.exl3_svh_offset, weights.exl3_routed_up.exl3_svh_offset,
+            weights.routed_down.exl3_suh_offset, weights.routed_down.exl3_codebook, shared_codes,
+            shared_scales));
+        break;
+    default:
+        throw std::invalid_argument(
+            "sparse_moe: unsupported EXL3 shared down codec (expected Q8_G32_FP16 or "
+            "FP8_E4M3FN_ROW_BF16)");
+    }
     const auto* residual = static_cast<const __nv_bfloat16*>(destination.data);
     auto* output = static_cast<__nv_bfloat16*>(destination.data);
     CUDA_CHECK(pdl::launch_dependent(
-        {dim3(kHidden / 128), dim3(kTopK * 32), 0, stream}, sparse_moe_d4b_exl3_kernel,
+        {dim3(kH / 128), dim3(kTK * 32), 0, stream}, sparse_moe_d4b_exl3_kernel<kH, kTK>,
         static_cast<const int*>(workspace.ids.data), alpha, exl3_down, down_payload,
         weights.routed_down.exl3_svh_offset, residual, output,
         static_cast<const char*>(prefetch_data), static_cast<unsigned long long>(prefetch_bytes)));
+}
+
+void launch_d4_exl3(const SparseMoeWeights& weights, Tensor& destination,
+                    const SparseMoeDecodeWorkspace& workspace, const SparseMoeShape& shape,
+                    cudaStream_t stream, const void* prefetch_data, std::size_t prefetch_bytes) {
+    if (shape.hidden == kSparseMoe35B.hidden && shape.top_k == kSparseMoe35B.top_k &&
+        shape.intermediate == kSparseMoe35B.intermediate) {
+        launch_d4_exl3_shape<kSparseMoe35B.hidden, kSparseMoe35B.top_k,
+                             kSparseMoe35B.intermediate>(weights, destination, workspace, stream,
+                                                         prefetch_data, prefetch_bytes);
+        return;
+    }
+    if (shape.hidden == kSparseMoe125B.hidden && shape.top_k == kSparseMoe125B.top_k &&
+        shape.intermediate == kSparseMoe125B.intermediate) {
+        launch_d4_exl3_shape<kSparseMoe125B.hidden, kSparseMoe125B.top_k,
+                             kSparseMoe125B.intermediate>(weights, destination, workspace, stream,
+                                                          prefetch_data, prefetch_bytes);
+        return;
+    }
+    throw std::invalid_argument("sparse_moe: unsupported EXL3 bank shape (hidden " +
+                                std::to_string(shape.hidden) + ", top_k " +
+                                std::to_string(shape.top_k) + ", intermediate " +
+                                std::to_string(shape.intermediate) + ")");
+}
+
+void launch_d2_exl3_d3a(const Tensor& x, const SparseMoeWeights& weights,
+                        const SparseMoeDecodeWorkspace& workspace, const SparseMoeShape& shape,
+                        cudaStream_t stream) {
+    const auto* scores = static_cast<const float*>(workspace.scratch.data);
+    auto* ids = static_cast<int*>(workspace.ids.data);
+    auto* alpha = static_cast<float*>(workspace.alpha.data);
+    auto* shared_scale = static_cast<float*>(workspace.shared_scale.data);
+    launch_d2_topk(scores, ids, alpha, shared_scale, weights.expert_activations, shape, stream);
+    launch_d3a_exl3(x, weights, workspace, shape, stream);
 }
 
 } // namespace
@@ -1220,15 +1392,16 @@ void sparse_moe_decode_launch_d4_small_t(const SparseMoeWeights& weights, Tensor
 
 void sparse_moe_decode_launch(const Tensor& x, const SparseMoeWeights& weights, Tensor& destination,
                               const SparseMoeDecodePlan& plan,
-                              const SparseMoeDecodeWorkspace& workspace, cudaStream_t stream) {
+                              const SparseMoeDecodeWorkspace& workspace,
+                              const SparseMoeShape& shape, cudaStream_t stream) {
     if (weights.exl3_routed_gate.payload != nullptr) {
-        launch_d1(x, weights, workspace, stream);
-        launch_d2_exl3_d3a(x, weights, workspace, stream);
-        launch_d4_exl3(weights, destination, workspace, stream, plan.next_weight_prefetch,
-                       plan.next_weight_prefetch_bytes);
+        launch_d1(x, weights, workspace, shape, stream);
+        launch_d2_exl3_d3a(x, weights, workspace, shape, stream);
+        launch_d4_exl3(weights, destination, workspace, shape, stream,
+                       plan.next_weight_prefetch, plan.next_weight_prefetch_bytes);
         return;
     }
-    launch_d1(x, weights, workspace, stream);
+    launch_d1(x, weights, workspace, kSparseMoe35B, stream);
     launch_d2_d3(x, weights, workspace, stream);
     launch_d4_dependent(weights, destination, workspace, stream, plan.next_weight_prefetch,
                         plan.next_weight_prefetch_bytes);

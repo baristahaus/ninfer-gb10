@@ -33,6 +33,11 @@ struct MoePlan {
     artifact::ParameterReference routed_gate_up_input_divisors;
     artifact::ParameterReference routed_down;
     artifact::ParameterReference routed_down_input_divisors;
+    // EXL3 route: separate trellis banks for the routed gate and up projections; a set `exl3`
+    // marks the route and `routed_down` carries the EXL3 down bank.
+    artifact::ParameterReference exl3_gate;
+    artifact::ParameterReference exl3_up;
+    bool exl3 = false;
 };
 
 struct FullAttentionPlan {

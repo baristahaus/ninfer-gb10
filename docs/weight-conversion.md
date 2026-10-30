@@ -500,3 +500,10 @@ vendored for the same reason.
 
 If a conversion environment is lost, rebuild it from this section and the conversion report of
 the artifact you want to reproduce; do not guess versions.
+
+The converter test suites (`tests/convert`) need the same environment plus `pytest` and
+`safetensors`. Verified combination (2026-10-30): Python 3.11 via `uv venv`, torch
+2.14.1+cu130 (the aarch64 CUDA wheel runs on the GB10 unified-memory lane), numpy,
+safetensors, pytest; the full `tests/convert` suite passes in it (106 passed, 1 skipped).
+The quantize and calibrate suites hardcode `device="cuda"`, so a CPU-only torch build runs
+the emit/recipe/import suites but not those.

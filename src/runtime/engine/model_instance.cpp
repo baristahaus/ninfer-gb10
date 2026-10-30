@@ -244,8 +244,14 @@ ConstructedModel construct_flash_next(const EngineOptions& options, DeviceContex
                                     "--chat-template is unsupported");
     }
     artifact::Binder binder(reader);
-    auto plan        = Model::plan_load(binder, options, Model::WeightsProfile::Nvfp4);
-    auto planner     = Model::make_sequence_planner(device, options, Model::WeightsProfile::Nvfp4);
+    // The EXL3 recipe binds the routed banks as `experts.gate`/`experts.up`/`experts.down`;
+    // its presence selects the EXL3 route and its profile across load, planning, and program.
+    const bool exl3_banks =
+        reader.directory().bindings.contains("model.language_model.layers.0.mlp.experts.gate");
+    const auto profile =
+        exl3_banks ? Model::WeightsProfile::Exl3 : Model::WeightsProfile::Nvfp4;
+    auto plan        = Model::plan_load(binder, options, profile);
+    auto planner     = Model::make_sequence_planner(device, options, profile);
     const auto curve = planner.capacity_curve();
     const auto free  = obtainable_device_bytes(device, options, true);
     if (plan.materialization().device_capacity_bytes > free) {
@@ -284,7 +290,9 @@ ConstructedModel construct_flash_next(const EngineOptions& options, DeviceContex
     summary.architecture = "Qwen3_8FlashNextForCausalLM";
     summary.output_constraints = FlashNextInstance::kOutputConstraints;
     summary.model_name   = reader.directory().metadata.value("name", "qwen3.8-flash-next-125b-a6b");
-    summary.prefill_signature = "qwen3_8_flash_next_125b_a6b-nvfp4-v3-1";
+    summary.prefill_signature =
+        exl3_banks ? "qwen3_8_flash_next_125b_a6b-exl3-v1-1"
+                   : "qwen3_8_flash_next_125b_a6b-nvfp4-v3-1";
     summary.weight_formats.assign(formats.begin(), formats.end());
     summary.load_seconds         = std::chrono::duration<double>(Clock::now() - start).count();
     summary.upload_seconds       = stats.upload_seconds;

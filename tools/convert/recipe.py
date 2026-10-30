@@ -421,9 +421,15 @@ class Recipe:
             dims, sources = parent_shape(items, chosen)
             selection = items[0][1]
             layout = selection.layout or default_layout(selection.format)
-            encoded_size(layout, selection.format, dims)
+            # Data-dependent layouts (EXL3) take their exact payload bytes from the
+            # method's shape-contract declaration; nothing else can size them.
+            declared = None
+            spec_bytes = getattr(selection.method, "spec_bytes", None)
+            if spec_bytes is not None:
+                declared = spec_bytes(items, selection.parameters)
+            encoded_size(layout, selection.format, dims, payload_bytes=declared)
             spec = TensorSpec(
-                f"weight/{len(weights):06d}", dims, selection.format, layout
+                f"weight/{len(weights):06d}", dims, selection.format, layout, bytes=declared
             )
             inputs = tuple(
                 MethodInput(

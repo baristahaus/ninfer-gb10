@@ -20,6 +20,7 @@ _DTYPES = {
     "F16": (torch.float16, 2),
     "F32": (torch.float32, 4),
     "F64": (torch.float64, 8),
+    "I16": (torch.int16, 2),
     "I32": (torch.int32, 4),
     "I64": (torch.int64, 8),
     "I8": (torch.int8, 1),

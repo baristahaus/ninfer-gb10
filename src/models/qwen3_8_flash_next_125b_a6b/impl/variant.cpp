@@ -1,10 +1,12 @@
 #include "models/qwen3_8_flash_next_125b_a6b/impl/variant.h"
 
+#include "core/device.h"
 #include "ninfer/ops/flash_next_qsa.h"
 #include "ninfer/ops/gdn_gating.h"
 #include "ninfer/ops/linear.h"
 #include "ninfer/ops/residual_add.h"
 #include "ninfer/ops/rmsnorm.h"
+#include "ninfer/ops/sparse_moe.h"
 
 #include <algorithm>
 #include <stdexcept>
@@ -179,7 +181,16 @@ void Variant::post_mixer(const Tensor& hidden, const PostMixerWeights& weights, 
     cudaStream_t stream = execution.stream();
     auto scope   = workspace.scope();
     Tensor delta = workspace.alloc(DType::BF16, {TextConfig::hidden, hidden.ne[1]});
-    ops::flash_next_moe(hidden, weights, delta, workspace, execution);
+    if (const auto* sparse = std::get_if<ops::SparseMoeWeights>(&weights)) {
+        // sparse_moe's AddResidual epilogue adds the destination's incoming value, so the
+        // zeroed scratch turns the epilogue into flash_next_moe's plain overwrite.
+        CUDA_CHECK(cudaMemsetAsync(delta.data, 0, delta.bytes(), execution.stream()));
+        ops::sparse_moe(hidden, *sparse, ops::SparseMoeEpilogue::AddResidual, delta, workspace,
+                        execution.stream());
+    } else {
+        ops::flash_next_moe(hidden, std::get<ops::FlashNextMoeWeights>(weights), delta, workspace,
+                            execution);
+    }
     ops::residual_add(delta, residual, execution);
 }
 
@@ -241,17 +252,28 @@ std::size_t Variant::gdn_norm_control_projection_workspace_capacity_bytes(std::i
     return static_cast<std::size_t>(96) * last * sizeof(std::uint16_t);
 }
 
-std::size_t Variant::post_mixer_workspace_capacity_bytes(WeightsProfile,
+std::size_t Variant::post_mixer_workspace_capacity_bytes(WeightsProfile profile,
                                                          qwen3_8_flash_next::TextPhase,
-                                                         std::int32_t, std::int32_t last) {
-    return static_cast<std::size_t>(TextConfig::hidden) * last * sizeof(std::uint16_t) +
-           ops::flash_next_moe_workspace_capacity_bytes(last);
+                                                         std::int32_t first, std::int32_t last) {
+    const std::size_t delta =
+        static_cast<std::size_t>(TextConfig::hidden) * static_cast<std::size_t>(last) *
+        sizeof(std::uint16_t);
+    if (profile == WeightsProfile::Exl3) {
+        return delta + ops::sparse_moe_workspace_capacity_bytes(QType::EXL3, QType::EXL3, first,
+                                                                last, ops::kSparseMoe125B);
+    }
+    return delta + ops::flash_next_moe_workspace_capacity_bytes(last);
 }
 
 std::size_t Variant::mtp_post_mixer_workspace_capacity_bytes(std::int32_t first,
                                                              std::int32_t last) {
-    return post_mixer_workspace_capacity_bytes(WeightsProfile::Nvfp4,
-                                               qwen3_8_flash_next::TextPhase::Verify, first, last);
+    // The MTP banks' route (native flash_next_moe or EXL3 sparse_moe) is a load-time choice
+    // this signature cannot see; size for whichever route the artifact binds.
+    const std::size_t nvfp4 = post_mixer_workspace_capacity_bytes(
+        WeightsProfile::Nvfp4, qwen3_8_flash_next::TextPhase::Verify, first, last);
+    const std::size_t exl3 = post_mixer_workspace_capacity_bytes(
+        WeightsProfile::Exl3, qwen3_8_flash_next::TextPhase::Verify, first, last);
+    return std::max(nvfp4, exl3);
 }
 
 } // namespace ninfer::models::qwen3_8_flash_next_125b_a6b::detail

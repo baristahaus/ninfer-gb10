@@ -15,8 +15,10 @@
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <numeric>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -241,10 +243,13 @@ Weight dense_bf16_weight(void* data, std::int32_t rows, std::int32_t columns) {
     return result;
 }
 
-struct RoutePattern {
-    std::array<int, kTopK> selected;
+template <std::int32_t TopK>
+struct RoutePatternT {
+    std::array<int, TopK> selected;
     int tied_excluded = -1;
 };
+
+using RoutePattern = RoutePatternT<kTopK>;
 
 constexpr std::array<RoutePattern, 3> kRoutePatterns{{
     {{{255, 0, 17, 31, 63, 127, 191, 223}}, -1},
@@ -252,59 +257,81 @@ constexpr std::array<RoutePattern, 3> kRoutePatterns{{
     {{{223, 191, 127, 63, 31, 17, 0, 255}}, -1},
 }};
 
-std::vector<float> make_input(int pattern) {
-    std::vector<float> input(kHidden);
+// The second admitted geometry's route patterns: the same three scenarios (the intended route,
+// the tie boundary with the higher id excluded, and the reverse ordering) over 512 experts and
+// top-10, with the two extra ids drawn from the upper half of the expert range.
+constexpr std::array<int, 11> kExl3RouteExpertIds125B{
+    {0, 17, 31, 63, 127, 191, 223, 254, 255, 383, 511}};
+constexpr std::array<RoutePatternT<10>, 3> kRoutePatterns125B{{
+    {{{511, 0, 17, 31, 63, 127, 191, 223, 254, 383}}, -1},
+    {{{0, 17, 31, 63, 127, 191, 223, 254, 255, 383}}, 511},
+    {{{223, 191, 127, 63, 31, 17, 0, 511, 383, 255}}, -1},
+}};
+
+template <std::int32_t Hidden, std::size_t PatternCount>
+std::vector<float> make_input_rows(int pattern) {
+    std::vector<float> input(Hidden);
     input[0] = 1.0f;
-    for (int column = 1; column < kHidden; ++column) {
+    for (int column = 1; column < Hidden; ++column) {
         input[column] = 0.025f + static_cast<float>((column * 7 + pattern * 11) % 19) * 0.002f;
     }
-    for (std::size_t marker = 0; marker < kRoutePatterns.size(); ++marker) {
-        input[kHidden - static_cast<int>(kRoutePatterns.size()) + static_cast<int>(marker)] = 0.0f;
+    for (std::size_t marker = 0; marker < PatternCount; ++marker) {
+        input[Hidden - static_cast<int>(PatternCount) + static_cast<int>(marker)] = 0.0f;
     }
-    input[kHidden - static_cast<int>(kRoutePatterns.size()) + pattern] = 1.0f;
+    input[Hidden - static_cast<int>(PatternCount) + pattern] = 1.0f;
     round_to_bf16(input);
     return input;
 }
 
-std::vector<float> make_residual(int pattern) {
-    std::vector<float> residual(kHidden);
-    for (int row = 0; row < kHidden; ++row) {
+std::vector<float> make_input(int pattern) {
+    return make_input_rows<kHidden, kRoutePatterns.size()>(pattern);
+}
+
+template <std::int32_t Hidden>
+std::vector<float> make_residual_rows(int pattern) {
+    std::vector<float> residual(Hidden);
+    for (int row = 0; row < Hidden; ++row) {
         residual[row] = 0.125f + static_cast<float>((row * 5 + pattern * 13) % 23) * 0.003f;
     }
     round_to_bf16(residual);
     return residual;
 }
 
-std::vector<float> make_router() {
-    std::vector<float> router(static_cast<std::size_t>(kExperts + 1) * kHidden);
-    for (int row = 0; row < kExperts + 1; ++row) {
-        for (int column = 0; column < kHidden; ++column) {
+std::vector<float> make_residual(int pattern) { return make_residual_rows<kHidden>(pattern); }
+
+template <std::int32_t Hidden, std::int32_t Experts, std::int32_t TopK, std::size_t PatternCount>
+std::vector<float> make_router_rows(
+    const std::array<RoutePatternT<TopK>, PatternCount>& patterns) {
+    std::vector<float> router(static_cast<std::size_t>(Experts + 1) * Hidden);
+    for (int row = 0; row < Experts + 1; ++row) {
+        for (int column = 0; column < Hidden; ++column) {
             const int pattern = (column * 13 + 5) % 17 - 8;
-            router[static_cast<std::size_t>(row) * kHidden + column] =
+            router[static_cast<std::size_t>(row) * Hidden + column] =
                 static_cast<float>(pattern) * 0.001f;
         }
     }
-    for (int expert = 0; expert < kExperts; ++expert) {
-        router[static_cast<std::size_t>(expert) * kHidden] -= 8.0f;
+    for (int expert = 0; expert < Experts; ++expert) {
+        router[static_cast<std::size_t>(expert) * Hidden] -= 8.0f;
     }
-    for (std::size_t pattern = 0; pattern < kRoutePatterns.size(); ++pattern) {
-        const int marker =
-            kHidden - static_cast<int>(kRoutePatterns.size()) + static_cast<int>(pattern);
-        const RoutePattern& route = kRoutePatterns[pattern];
-        for (int rank = 0; rank < kTopK; ++rank) {
+    for (std::size_t pattern = 0; pattern < PatternCount; ++pattern) {
+        const int marker = Hidden - static_cast<int>(PatternCount) + static_cast<int>(pattern);
+        const RoutePatternT<TopK>& route = patterns[pattern];
+        for (int rank = 0; rank < TopK; ++rank) {
             const float score =
-                rank == kTopK - 1 && route.tied_excluded >= 0 ? 2.0f : 4.0f - 0.25f * rank;
-            router[static_cast<std::size_t>(route.selected[rank]) * kHidden + marker] +=
+                rank == TopK - 1 && route.tied_excluded >= 0 ? 2.0f : 4.0f - 0.25f * rank;
+            router[static_cast<std::size_t>(route.selected[rank]) * Hidden + marker] +=
                 score + 8.0f;
         }
         if (route.tied_excluded >= 0) {
-            router[static_cast<std::size_t>(route.tied_excluded) * kHidden + marker] += 10.0f;
+            router[static_cast<std::size_t>(route.tied_excluded) * Hidden + marker] += 10.0f;
         }
     }
-    router[static_cast<std::size_t>(kExperts) * kHidden] += 0.375f;
+    router[static_cast<std::size_t>(Experts) * Hidden] += 0.375f;
     round_to_bf16(router);
     return router;
 }
+
+std::vector<float> make_router() { return make_router_rows<kHidden, kExperts, kTopK>(kRoutePatterns); }
 
 std::vector<float> make_gate_up(std::int32_t rows, std::int32_t columns, std::uint32_t seed,
                                 float expert_factor) {
@@ -380,31 +407,36 @@ double dot_fp64(const std::vector<float>& matrix, std::int32_t row, std::int32_t
     return result;
 }
 
-// The public routing, shared by every SparseMoe oracle: FP64 router scores, the ordered top-8
+// The public routing, shared by every SparseMoe oracle: FP64 router scores, the ordered top-k
 // with softmax weights, and the shared-expert sigmoid scale. Throws when the router does not
-// produce the test's intended ordered top-8.
-struct SparseMoeRouting {
-    std::array<int, kTopK> selected{};
-    std::array<double, kTopK> route_weight{};
+// produce the test's intended ordered top-k.
+template <std::int32_t TopK>
+struct SparseMoeRoutingT {
+    std::array<int, TopK> selected{};
+    std::array<double, TopK> route_weight{};
     double shared_scale = 0.0;
 };
 
-SparseMoeRouting route_sparse_moe(const std::vector<float>& input, const std::vector<float>& router,
-                                  const RoutePattern& intended_route) {
-    const std::vector<double> x(input.begin(), input.end());
-    std::vector<double> scores(kExperts + 1);
-    parallel_rows(kExperts + 1,
-                  [&](std::int32_t row) { scores[row] = dot_fp64(router, row, kHidden, x); });
+using SparseMoeRouting = SparseMoeRoutingT<kTopK>;
 
-    std::vector<int> ranked(kExperts);
+template <std::int32_t Hidden, std::int32_t Experts, std::int32_t TopK>
+SparseMoeRoutingT<TopK> route_sparse_moe_rows(const std::vector<float>& input,
+                                              const std::vector<float>& router,
+                                              const RoutePatternT<TopK>& intended_route) {
+    const std::vector<double> x(input.begin(), input.end());
+    std::vector<double> scores(Experts + 1);
+    parallel_rows(Experts + 1,
+                  [&](std::int32_t row) { scores[row] = dot_fp64(router, row, Hidden, x); });
+
+    std::vector<int> ranked(Experts);
     std::iota(ranked.begin(), ranked.end(), 0);
     std::sort(ranked.begin(), ranked.end(), [&](int left, int right) {
         return scores[left] > scores[right] || (scores[left] == scores[right] && left < right);
     });
 
-    SparseMoeRouting routing;
+    SparseMoeRoutingT<TopK> routing;
     double route_denominator = 0.0;
-    for (int route = 0; route < kTopK; ++route) {
+    for (int route = 0; route < TopK; ++route) {
         routing.selected[route] = ranked[route];
         routing.route_weight[route] =
             std::exp(scores[routing.selected[route]] - scores[routing.selected[0]]);
@@ -412,10 +444,15 @@ SparseMoeRouting route_sparse_moe(const std::vector<float>& input, const std::ve
     }
     for (double& weight : routing.route_weight) { weight /= route_denominator; }
     if (routing.selected != intended_route.selected) {
-        throw std::logic_error("sparse_moe test router did not create its intended ordered top-8");
+        throw std::logic_error("sparse_moe test router did not create its intended ordered top-k");
     }
-    routing.shared_scale = 1.0 / (1.0 + std::exp(-scores[kExperts]));
+    routing.shared_scale = 1.0 / (1.0 + std::exp(-scores[Experts]));
     return routing;
+}
+
+SparseMoeRouting route_sparse_moe(const std::vector<float>& input, const std::vector<float>& router,
+                                  const RoutePattern& intended_route) {
+    return route_sparse_moe_rows<kHidden, kExperts, kTopK>(input, router, intended_route);
 }
 
 // The groupwise SparseMoe oracle. It directly evaluates the complete public formula from
@@ -726,19 +763,20 @@ struct Exl3ExpertSource {
 // suh [experts, k] and svh [experts, n] planes. Experts without trellis data keep a
 // zero-filled extent at their computed offset: the layout stays valid and neither the
 // kernel nor the oracle reads unselected experts.
-Exl3BankLayout append_exl3_bank(std::vector<std::uint8_t>& payload, std::int32_t k,
-                                std::int32_t n, const std::vector<Exl3ExpertSource>& experts,
+Exl3BankLayout append_exl3_bank(std::vector<std::uint8_t>& payload, std::int32_t experts,
+                                std::int32_t k, std::int32_t n,
+                                const std::vector<Exl3ExpertSource>& experts_sources,
                                 const std::vector<std::uint16_t>& suh,
                                 const std::vector<std::uint16_t>& svh) {
-    if (static_cast<int>(experts.size()) != kExperts || k % 16 != 0 || n % 16 != 0) {
+    if (static_cast<int>(experts_sources.size()) != experts || k % 16 != 0 || n % 16 != 0) {
         throw std::logic_error("sparse_moe test: invalid EXL3 bank geometry");
     }
     const auto align256 = [](std::size_t value) { return (value + 255) / 256 * 256; };
-    std::vector<std::uint64_t> offsets(kExperts);
-    std::vector<std::uint32_t> extents(kExperts);
-    std::size_t cursor = static_cast<std::size_t>(kExperts) * 16;
-    for (int expert = 0; expert < kExperts; ++expert) {
-        const int k2 = experts[expert].k2;
+    std::vector<std::uint64_t> offsets(experts);
+    std::vector<std::uint32_t> extents(experts);
+    std::size_t cursor = static_cast<std::size_t>(experts) * 16;
+    for (int expert = 0; expert < experts; ++expert) {
+        const int k2 = experts_sources[expert].k2;
         if (k2 < 2 || k2 > 16) { throw std::logic_error("sparse_moe test: invalid EXL3 2K"); }
         const std::size_t extent = static_cast<std::size_t>(k) * n * k2 / 16;
         offsets[expert]          = cursor;
@@ -746,29 +784,29 @@ Exl3BankLayout append_exl3_bank(std::vector<std::uint8_t>& payload, std::int32_t
         cursor                   = align256(cursor + extent);
     }
     const std::uint64_t suh_offset = cursor;
-    cursor = align256(cursor + static_cast<std::size_t>(kExperts) * k * 2);
+    cursor = align256(cursor + static_cast<std::size_t>(experts) * k * 2);
     const std::uint64_t svh_offset = cursor;
-    cursor = align256(cursor + static_cast<std::size_t>(kExperts) * n * 2);
+    cursor = align256(cursor + static_cast<std::size_t>(experts) * n * 2);
     payload.assign(cursor, 0);
-    for (int expert = 0; expert < kExperts; ++expert) {
+    for (int expert = 0; expert < experts; ++expert) {
         std::uint8_t* entry = payload.data() + static_cast<std::size_t>(expert) * 16;
         std::memcpy(entry, &offsets[expert], 8);
         std::memcpy(entry + 8, &extents[expert], 4);
-        entry[12] = static_cast<std::uint8_t>(experts[expert].k2);
+        entry[12] = static_cast<std::uint8_t>(experts_sources[expert].k2);
     }
-    for (int expert = 0; expert < kExperts; ++expert) {
-        const std::vector<std::uint16_t>* trellis = experts[expert].trellis;
+    for (int expert = 0; expert < experts; ++expert) {
+        const std::vector<std::uint16_t>* trellis = experts_sources[expert].trellis;
         if (trellis == nullptr) { continue; }
         const std::size_t expected = static_cast<std::size_t>(k) / 16 *
                                      static_cast<std::size_t>(n / 16) *
-                                     static_cast<std::size_t>(8 * experts[expert].k2);
+                                     static_cast<std::size_t>(8 * experts_sources[expert].k2);
         if (trellis->size() != expected) {
             throw std::logic_error("sparse_moe test: EXL3 trellis size mismatch");
         }
         std::memcpy(payload.data() + offsets[expert], trellis->data(), expected * 2);
     }
-    if (suh.size() != static_cast<std::size_t>(kExperts) * k ||
-        svh.size() != static_cast<std::size_t>(kExperts) * n) {
+    if (suh.size() != static_cast<std::size_t>(experts) * k ||
+        svh.size() != static_cast<std::size_t>(experts) * n) {
         throw std::logic_error("sparse_moe test: EXL3 plane size mismatch");
     }
     std::memcpy(payload.data() + suh_offset, suh.data(), suh.size() * 2);
@@ -777,14 +815,15 @@ Exl3BankLayout append_exl3_bank(std::vector<std::uint8_t>& payload, std::int32_t
 }
 
 Weight exl3_bank_weight(const DeviceBuffer& bank, const Exl3BankLayout& layout,
-                        std::int32_t rows_per_expert, std::int32_t k, std::uint32_t codebook) {
+                        std::int32_t experts, std::int32_t rows_per_expert, std::int32_t k,
+                        std::uint32_t codebook) {
     Weight result{};
     result.payload         = bank.p;
     result.payload_bytes   = layout.payload_bytes;
     result.qtype           = QType::EXL3;
     result.layout          = QuantLayout::Exl3ExpertBank;
     result.ndim            = 2;
-    result.n               = kExperts * rows_per_expert;
+    result.n               = experts * rows_per_expert;
     result.k               = k;
     result.shape[0]        = result.n;
     result.shape[1]        = k;
@@ -794,7 +833,7 @@ Weight exl3_bank_weight(const DeviceBuffer& bank, const Exl3BankLayout& layout,
     result.exl3_suh_offset      = layout.suh_offset;
     result.exl3_svh_offset      = layout.svh_offset;
     result.exl3_codebook        = codebook;
-    result.exl3_experts         = kExperts;
+    result.exl3_experts         = static_cast<std::uint32_t>(experts);
     result.exl3_rows_per_expert = static_cast<std::uint32_t>(rows_per_expert);
     return result;
 }
@@ -810,7 +849,8 @@ struct Exl3DecodedExpert {
     std::vector<double> w_down;  // [kIntermediate, kHidden]
 };
 
-Exl3DecodedExpert decode_exl3_expert(int id, int k2, exl3_ref::Codebook codebook,
+Exl3DecodedExpert decode_exl3_expert(int id, int k2, exl3_ref::Codebook codebook, int hidden,
+                                      int intermediate,
                                       const std::vector<std::uint16_t>& gate_trellis,
                                       const std::vector<std::uint16_t>& up_trellis,
                                       const std::vector<std::uint16_t>& down_trellis,
@@ -823,67 +863,71 @@ Exl3DecodedExpert decode_exl3_expert(int id, int k2, exl3_ref::Codebook codebook
     Exl3DecodedExpert expert;
     expert.id     = id;
     expert.w_gate = exl3_ref::linear_weight(
-        exl3_ref::decode_inner(gate_trellis.data(), kHidden, kIntermediate, k2, codebook),
-        gate_suh, gate_svh, kHidden, kIntermediate);
+        exl3_ref::decode_inner(gate_trellis.data(), hidden, intermediate, k2, codebook),
+        gate_suh, gate_svh, hidden, intermediate);
     expert.w_up = exl3_ref::linear_weight(
-        exl3_ref::decode_inner(up_trellis.data(), kHidden, kIntermediate, k2, codebook), up_suh,
-        up_svh, kHidden, kIntermediate);
+        exl3_ref::decode_inner(up_trellis.data(), hidden, intermediate, k2, codebook), up_suh,
+        up_svh, hidden, intermediate);
     expert.w_down = exl3_ref::linear_weight(
-        exl3_ref::decode_inner(down_trellis.data(), kIntermediate, kHidden, k2, codebook),
-        down_suh, down_svh, kIntermediate, kHidden);
+        exl3_ref::decode_inner(down_trellis.data(), intermediate, hidden, k2, codebook),
+        down_suh, down_svh, intermediate, hidden);
     return expert;
 }
 
 // The EXL3 SparseMoe oracle: FP64 routing (shared with the groupwise oracle), the expert
-// projections as x^T W over the composed semantic weights, the SiLU product, the shared Q8
-// expert unchanged, and FP64 accumulation into the residual.
-std::vector<double> sparse_moe_exl3_oracle(
+// projections as x^T W over the composed semantic weights, the SiLU product, the shared expert
+// unchanged (groupwise Q8 or row-scaled FP8), and FP64 accumulation into the residual.
+template <std::int32_t Hidden, std::int32_t Experts, std::int32_t TopK, std::int32_t Intermediate,
+          std::size_t PatternCount>
+std::vector<double> sparse_moe_exl3_oracle_rows(
     const std::vector<float>& input, const std::vector<float>& residual,
     const std::vector<float>& router, const std::vector<Exl3DecodedExpert>& experts,
     const quantized_weight::PackedWeight& shared_gate_up,
-    const quantized_weight::PackedWeight& shared_down, const RoutePattern& intended_route) {
-    const SparseMoeRouting routing = route_sparse_moe(input, router, intended_route);
+    const quantized_weight::PackedWeight& shared_down,
+    const std::array<RoutePatternT<TopK>, PatternCount>& intended_routes, int pattern) {
+    const SparseMoeRoutingT<TopK> routing =
+        route_sparse_moe_rows<Hidden, Experts, TopK>(input, router, intended_routes[pattern]);
     const std::vector<double> x(input.begin(), input.end());
 
-    std::array<std::vector<double>, kTopK> routed_activation;
-    for (int route = 0; route < kTopK; ++route) {
+    std::array<std::vector<double>, TopK> routed_activation;
+    for (int route = 0; route < TopK; ++route) {
         const Exl3DecodedExpert& expert = find_expert(experts, routing.selected[route]);
-        routed_activation[route].resize(kIntermediate);
-        parallel_rows(kIntermediate, [&](std::int32_t row) {
+        routed_activation[route].resize(Intermediate);
+        parallel_rows(Intermediate, [&](std::int32_t row) {
             const double* gate_column = expert.w_gate.data() + row;
             const double* up_column   = expert.w_up.data() + row;
             double gate               = 0.0;
             double up                 = 0.0;
-            for (std::int32_t i = 0; i < kHidden; ++i) {
-                gate += x[i] * gate_column[static_cast<std::size_t>(i) * kIntermediate];
-                up += x[i] * up_column[static_cast<std::size_t>(i) * kIntermediate];
+            for (std::int32_t i = 0; i < Hidden; ++i) {
+                gate += x[i] * gate_column[static_cast<std::size_t>(i) * Intermediate];
+                up += x[i] * up_column[static_cast<std::size_t>(i) * Intermediate];
             }
             routed_activation[route][row] = (gate / (1.0 + std::exp(-gate))) * up;
         });
     }
 
-    std::vector<double> shared_activation(kIntermediate);
-    parallel_rows(kIntermediate, [&](std::int32_t row) {
-        const double gate = dot_fp64(shared_gate_up.dequant, row, kHidden, x);
-        const double up   = dot_fp64(shared_gate_up.dequant, kIntermediate + row, kHidden, x);
+    std::vector<double> shared_activation(Intermediate);
+    parallel_rows(Intermediate, [&](std::int32_t row) {
+        const double gate = dot_fp64(shared_gate_up.dequant, row, Hidden, x);
+        const double up   = dot_fp64(shared_gate_up.dequant, Intermediate + row, Hidden, x);
         shared_activation[row] = (gate / (1.0 + std::exp(-gate))) * up;
     });
 
-    std::vector<double> output(kHidden);
-    parallel_rows(kHidden, [&](std::int32_t row) {
+    std::vector<double> output(Hidden);
+    parallel_rows(Hidden, [&](std::int32_t row) {
         double value = static_cast<double>(residual[row]);
-        for (int route = 0; route < kTopK; ++route) {
+        for (int route = 0; route < TopK; ++route) {
             const Exl3DecodedExpert& expert = find_expert(experts, routing.selected[route]);
             const double* down_column       = expert.w_down.data() + row;
             double y                        = 0.0;
-            for (std::int32_t c = 0; c < kIntermediate; ++c) {
+            for (std::int32_t c = 0; c < Intermediate; ++c) {
                 y += routed_activation[route][c] *
-                     down_column[static_cast<std::size_t>(c) * kHidden];
+                     down_column[static_cast<std::size_t>(c) * Hidden];
             }
             value += routing.route_weight[route] * y;
         }
         value += routing.shared_scale *
-                 dot_fp64(shared_down.dequant, row, kIntermediate, shared_activation);
+                 dot_fp64(shared_down.dequant, row, Intermediate, shared_activation);
         output[row] = value;
     });
     return output;
@@ -891,15 +935,15 @@ std::vector<double> sparse_moe_exl3_oracle(
 
 // One admission expectation: the call must reject the route with std::invalid_argument.
 int expect_exl3_rejected(const ops::SparseMoeWeights& weights, std::int32_t tokens,
-                          const std::string& label) {
+                          std::int32_t hidden, const std::string& label) {
     try {
-        std::vector<float> input(static_cast<std::size_t>(tokens) * kHidden, 0.5f);
+        std::vector<float> input(static_cast<std::size_t>(tokens) * hidden, 0.5f);
         round_to_bf16(input);
         const std::vector<std::uint16_t> bits = bf16_bits(input);
         DeviceBuffer device_input              = to_device(bits);
         GuardedBf16Output destination_storage(input.size());
-        Tensor x(device_input.p, DType::BF16, {kHidden, tokens});
-        Tensor destination(destination_storage.data(), DType::BF16, {kHidden, tokens});
+        Tensor x(device_input.p, DType::BF16, {hidden, tokens});
+        Tensor destination(destination_storage.data(), DType::BF16, {hidden, tokens});
         const std::size_t workspace_bytes =
             ops::sparse_moe_workspace_capacity_bytes(QType::EXL3, QType::EXL3, 1, 1);
         WorkspaceArena workspace(workspace_bytes);
@@ -914,35 +958,130 @@ int expect_exl3_rejected(const ops::SparseMoeWeights& weights, std::int32_t toke
     return 1;
 }
 
-class SparseMoeExl3Fixture {
+// Row-scaled FP8 shared experts live on the device as their packed payload (codes plane then
+// the 256-aligned BF16 scale plane), so the fixture keeps one device copy and repoints the
+// registered weight at it.
+class DevicePackedWeight {
 public:
-    SparseMoeExl3Fixture(exl3_ref::Codebook codebook, const char* name)
-        : name_(name), codebook_(codebook),
-          rates_(codebook == exl3_ref::Codebook::Mcg ? kExl3McgRates : kExl3Mul1Rates),
-          router_(make_router()), router_bits_(bf16_bits(router_)),
-          device_router_(to_device(router_bits_)),
-          shared_gate_(QType::Q8_G32_FP16, kSharedGateRows, kHidden),
-          shared_down_device_(QType::Q8_G32_FP16, kHidden, kIntermediate) {
-        for (int pattern = 0; pattern < static_cast<int>(kRoutePatterns.size()); ++pattern) {
-            inputs_.push_back(make_input(pattern));
-            residuals_.push_back(make_residual(pattern));
+    explicit DevicePackedWeight(const quantized_weight::PackedWeight& packed)
+        : device_(to_device(packed.payload)), weight_(packed.weight) {
+        weight_.payload = device_.p;
+        weight_.qdata   = device_.p;
+        weight_.scales  = static_cast<const std::uint8_t*>(device_.p) + packed.scale_plane_offset;
+    }
+
+    const Weight& weight() const noexcept { return weight_; }
+
+    const DeviceBuffer& device() const noexcept { return device_; }
+
+private:
+    DeviceBuffer device_;
+    Weight weight_{};
+};
+
+// Host decodes for the row-scaled FP8 shared-expert oracle: every finite FP8 E4M3 value is
+// exact in binary32, and the BF16 row scales are exact too, so the oracle's dequantized
+// matrix is bit-identical to the kernel's decoded weights.
+float fp8_e4m3_value(std::uint8_t code) {
+    const bool negative = (code & 0x80U) != 0U;
+    const int exponent  = (code >> 3) & 0xFU;
+    const int mantissa  = code & 0x7U;
+    double value        = 0.0;
+    if (exponent == 0) {
+        value = std::ldexp(static_cast<double>(mantissa), -9);
+    } else if (exponent == 15 && mantissa == 7) {
+        value = std::numeric_limits<double>::quiet_NaN();
+    } else {
+        value = std::ldexp(1.0 + static_cast<double>(mantissa) / 8.0, exponent - 7);
+    }
+    return static_cast<float>(negative ? -value : value);
+}
+
+float bf16_value(std::uint16_t bits) {
+    const std::uint32_t widened = static_cast<std::uint32_t>(bits) << 16;
+    float value                 = 0.0F;
+    std::memcpy(&value, &widened, sizeof(value));
+    return value;
+}
+
+void decode_fp8_row_scale(const quantized_weight::PackedWeight& packed, std::int32_t n,
+                          std::int32_t k, std::vector<float>& dequant) {
+    dequant.assign(static_cast<std::size_t>(n) * k, 0.0F);
+    for (std::int32_t row = 0; row < n; ++row) {
+        const std::size_t scale_offset = packed.scale_plane_offset + static_cast<std::size_t>(row) * 2;
+        const std::uint16_t scale_bits = static_cast<std::uint16_t>(
+            packed.payload[scale_offset] |
+            (static_cast<std::uint16_t>(packed.payload[scale_offset + 1]) << 8));
+        const float scale = bf16_value(scale_bits);
+        for (std::int32_t column = 0; column < k; ++column) {
+            dequant[static_cast<std::size_t>(row) * k + column] =
+                fp8_e4m3_value(packed.payload[static_cast<std::size_t>(row) * k + column]) * scale;
         }
-        shared_gate_host_ = quantized_weight::pack_q8_g32_row_split(
-            make_gate_up(kSharedGateRows, kHidden, 0x9a1U, 0.91f), kSharedGateRows, kHidden);
-        shared_down_host_ = quantized_weight::pack_q8_g32_row_split(
-            make_down(kHidden, kIntermediate, 0x9c3U, 0.88f), kHidden, kIntermediate);
-        shared_gate_.copy_rows(shared_gate_host_, 0);
-        shared_down_device_.copy_rows(shared_down_host_, 0);
+    }
+}
+
+template <std::int32_t TopK, std::size_t PatternCount>
+std::array<RoutePatternT<TopK>, PatternCount>
+patterns_span(std::span<const RoutePatternT<TopK>, PatternCount> patterns) {
+    std::array<RoutePatternT<TopK>, PatternCount> out;
+    std::copy_n(patterns.begin(), PatternCount, out.begin());
+    return out;
+}
+
+template <std::int32_t Hidden, std::int32_t Experts, std::int32_t TopK, std::int32_t Intermediate>
+class SparseMoeExl3Fixture {
+    static constexpr std::int32_t kSharedGateRows = 2 * Intermediate;
+    static constexpr int kFixturePatterns = 3;
+
+public:
+    SparseMoeExl3Fixture(exl3_ref::Codebook codebook, const char* name, QType shared_qtype,
+                         std::span<const int> route_ids,
+                         std::span<const RoutePatternT<TopK>, kFixturePatterns> patterns)
+        : name_(name), codebook_(codebook), shared_qtype_(shared_qtype),
+          route_ids_(route_ids.begin(), route_ids.end()),
+          rates_(codebook == exl3_ref::Codebook::Mcg ? kExl3McgRates : kExl3Mul1Rates),
+          router_(make_router_rows<Hidden, Experts, TopK>(patterns_span(patterns))),
+          router_bits_(bf16_bits(router_)),
+          device_router_(to_device(router_bits_)),
+          shared_gate_(QType::Q8_G32_FP16, kSharedGateRows, Hidden),
+          shared_down_device_(QType::Q8_G32_FP16, Hidden, Intermediate) {
+        for (int pattern = 0; pattern < kFixturePatterns; ++pattern) {
+            inputs_.push_back(make_input_rows<Hidden, kFixturePatterns>(pattern));
+            residuals_.push_back(make_residual_rows<Hidden>(pattern));
+        }
+        if (shared_qtype_ == QType::Q8_G32_FP16) {
+            shared_gate_host_ = quantized_weight::pack_q8_g32_row_split(
+                make_gate_up(kSharedGateRows, Hidden, 0x9a1U, 0.91f), kSharedGateRows, Hidden);
+            shared_down_host_ = quantized_weight::pack_q8_g32_row_split(
+                make_down(Hidden, Intermediate, 0x9c3U, 0.88f), Hidden, Intermediate);
+            shared_gate_.copy_rows(shared_gate_host_, 0);
+            shared_down_device_.copy_rows(shared_down_host_, 0);
+        } else {
+            shared_gate_host_ = quantized_weight::make_patterned_weight(
+                QType::FP8_E4M3FN_ROW_BF16, kSharedGateRows, Hidden, 0x9a1U);
+            decode_fp8_row_scale(shared_gate_host_, kSharedGateRows, Hidden,
+                                 shared_gate_host_.dequant);
+            shared_down_host_ = quantized_weight::make_patterned_weight(
+                QType::FP8_E4M3FN_ROW_BF16, Hidden, Intermediate, 0x9c3U);
+            decode_fp8_row_scale(shared_down_host_, Hidden, Intermediate,
+                                 shared_down_host_.dequant);
+            shared_gate_fp8_.emplace(shared_gate_host_);
+            shared_down_fp8_.emplace(shared_down_host_);
+        }
+        gate_trellis_.resize(Experts);
+        up_trellis_.resize(Experts);
+        down_trellis_.resize(Experts);
         build_banks();
         decode_experts();
-        for (int pattern = 0; pattern < static_cast<int>(kRoutePatterns.size()); ++pattern) {
-            references_.push_back(sparse_moe_exl3_oracle(
+        for (int pattern = 0; pattern < kFixturePatterns; ++pattern) {
+            references_.push_back(sparse_moe_exl3_oracle_rows<Hidden, Experts, TopK, Intermediate,
+                                                              kFixturePatterns>(
                 inputs_[pattern], residuals_[pattern], router_, experts_, shared_gate_host_,
-                shared_down_host_, kRoutePatterns[pattern]));
+                shared_down_host_, patterns_span(patterns), pattern));
         }
     }
 
-    // One single-token decode per route pattern (the tie boundary, the tie-excluded reorder,
+    // One decode per route pattern (the tie boundary, the tie-excluded reorder,
     // and the reverse ordering of the same experts), pattern 1 captured and replayed as a graph.
     int run(int pattern, bool graph_replay) {
         const std::string label         = std::string(name_) + " pattern " + std::to_string(pattern);
@@ -960,10 +1099,11 @@ public:
                    "seed SparseMoe destination");
 
         const ops::SparseMoeWeights weights = make_weights();
-        Tensor x(device_input.p, DType::BF16, {kHidden, 1});
-        Tensor destination(destination_storage.data(), DType::BF16, {kHidden, 1});
+        Tensor x(device_input.p, DType::BF16, {Hidden, 1});
+        Tensor destination(destination_storage.data(), DType::BF16, {Hidden, 1});
+        const ops::SparseMoeShape shape{Hidden, Experts, TopK, Intermediate};
         const std::size_t workspace_bytes =
-            ops::sparse_moe_workspace_capacity_bytes(QType::EXL3, QType::EXL3, 1, 1);
+            ops::sparse_moe_workspace_capacity_bytes(QType::EXL3, QType::EXL3, 1, 1, shape);
         WorkspaceArena workspace(workspace_bytes);
 
         if (graph_replay) {
@@ -1013,8 +1153,20 @@ public:
         failures += verify_exact((prefix + " router preservation").c_str(),
                                  from_device<std::uint16_t>(device_router_, router_bits_.size()),
                                  router_bits_);
-        failures += shared_gate_.verify_rows(prefix + " shared gate", shared_gate_host_, 0);
-        failures += shared_down_device_.verify_rows(prefix + " shared down", shared_down_host_, 0);
+        if (shared_qtype_ == QType::Q8_G32_FP16) {
+            failures += shared_gate_.verify_rows(prefix + " shared gate", shared_gate_host_, 0);
+            failures +=
+                shared_down_device_.verify_rows(prefix + " shared down", shared_down_host_, 0);
+        } else {
+            failures += verify_exact((prefix + " shared gate fp8 preservation").c_str(),
+                                     from_device<std::uint8_t>(shared_gate_fp8_->device(),
+                                                               shared_gate_host_.payload.size()),
+                                     shared_gate_host_.payload);
+            failures += verify_exact((prefix + " shared down fp8 preservation").c_str(),
+                                     from_device<std::uint8_t>(shared_down_fp8_->device(),
+                                                               shared_down_host_.payload.size()),
+                                     shared_down_host_.payload);
+        }
         failures += verify_exact((prefix + " exl3 gate bank preservation").c_str(),
                                  from_device<std::uint8_t>(gate_bank_, gate_payload_.size()),
                                  gate_payload_);
@@ -1027,8 +1179,8 @@ public:
         return failures;
     }
 
-    // The route's admission contract: 3INST banks are refused, the route is single-token,
-    // the fused and warm banks stay null, the route stays untiered, bank shapes are hard
+    // The route's admission contract: 3INST banks are refused, the fused and warm banks stay
+    // null, the route stays untiered, bank shapes are hard
     // checked, and the workspace query refuses unpaired EXL3 banks.
     int run_admission() {
         int failures = 0;
@@ -1036,29 +1188,32 @@ public:
         {
             ops::SparseMoeWeights mutated  = base;
             mutated.exl3_routed_gate.exl3_codebook = 0;
-            failures += expect_exl3_rejected(mutated, 1, std::string(name_) + " 3inst codebook");
+            failures += expect_exl3_rejected(mutated, 1, Hidden,
+                                             std::string(name_) + " 3inst codebook");
         }
-        failures += expect_exl3_rejected(base, 2, std::string(name_) + " multi-token decode");
         {
             ops::SparseMoeWeights mutated = base;
             mutated.routed_gate_up        = shared_gate_.weight();
             failures +=
-                expect_exl3_rejected(mutated, 1, std::string(name_) + " fused bank conflict");
+                expect_exl3_rejected(mutated, 1, Hidden,
+                                     std::string(name_) + " fused bank conflict");
         }
         {
             ops::SparseMoeWeights mutated = base;
             mutated.tiered_hot_experts    = 8;
             failures +=
-                expect_exl3_rejected(mutated, 1, std::string(name_) + " tiered conflict");
+                expect_exl3_rejected(mutated, 1, Hidden,
+                                     std::string(name_) + " tiered conflict");
         }
         {
             ops::SparseMoeWeights mutated           = base;
-            mutated.exl3_routed_up.exl3_rows_per_expert = kIntermediate - 1;
-            failures += expect_exl3_rejected(mutated, 1,
+            mutated.exl3_routed_up.exl3_rows_per_expert = Intermediate - 1;
+            failures += expect_exl3_rejected(mutated, 1, Hidden,
                                              std::string(name_) + " wrong rows per expert");
         }
         try {
-            (void)ops::sparse_moe_workspace_capacity_bytes(QType::EXL3, QType::Q4_G64_FP16, 1, 1);
+            (void)ops::sparse_moe_workspace_capacity_bytes(QType::EXL3, QType::Q4_G64_FP16, 1, 1,
+                                                           ops::SparseMoeShape{Hidden, Experts, TopK, Intermediate});
         } catch (const std::invalid_argument&) {
             std::cout << "  rejected as expected: " << name_ << " unpaired EXL3 workspace\n";
             return failures;
@@ -1070,71 +1225,77 @@ public:
 private:
     void build_banks() {
         const std::uint32_t codebook = codebook_ == exl3_ref::Codebook::Mcg ? 1u : 2u;
-        std::vector<Exl3ExpertSource> gate_sources(kExperts), up_sources(kExperts),
-            down_sources(kExperts);
-        for (int expert = 0; expert < kExperts; ++expert) {
+        std::vector<Exl3ExpertSource> gate_sources(Experts), up_sources(Experts),
+            down_sources(Experts);
+        for (int expert = 0; expert < Experts; ++expert) {
             gate_sources[expert].k2 = rates_[expert % 4];
             up_sources[expert].k2   = rates_[expert % 4];
             down_sources[expert].k2 = rates_[expert % 4];
         }
-        for (const int id : kExl3RouteExpertIds) {
+        for (const int id : route_ids_) {
             const int k2       = rates_[id % 4];
-            gate_trellis_[id] = make_exl3_trellis(kHidden, kIntermediate, k2, 1000u + id);
-            up_trellis_[id]   = make_exl3_trellis(kHidden, kIntermediate, k2, 2000u + id);
-            down_trellis_[id] = make_exl3_trellis(kIntermediate, kHidden, k2, 3000u + id);
+            gate_trellis_[id] = make_exl3_trellis(Hidden, Intermediate, k2, 1000u + id);
+            up_trellis_[id]   = make_exl3_trellis(Hidden, Intermediate, k2, 2000u + id);
+            down_trellis_[id] = make_exl3_trellis(Intermediate, Hidden, k2, 3000u + id);
             gate_sources[id].trellis = &gate_trellis_[id];
             up_sources[id].trellis   = &up_trellis_[id];
             down_sources[id].trellis = &down_trellis_[id];
         }
-        gate_suh_ = make_exl3_fp16_plane(kExperts, kHidden, 41);
-        gate_svh_ = make_exl3_fp16_plane(kExperts, kIntermediate, 42);
-        up_suh_   = make_exl3_fp16_plane(kExperts, kHidden, 43);
-        up_svh_   = make_exl3_fp16_plane(kExperts, kIntermediate, 44);
-        down_suh_ = make_exl3_fp16_plane(kExperts, kIntermediate, 45);
-        down_svh_ = make_exl3_fp16_plane(kExperts, kHidden, 46);
+        gate_suh_ = make_exl3_fp16_plane(Experts, Hidden, 41);
+        gate_svh_ = make_exl3_fp16_plane(Experts, Intermediate, 42);
+        up_suh_   = make_exl3_fp16_plane(Experts, Hidden, 43);
+        up_svh_   = make_exl3_fp16_plane(Experts, Intermediate, 44);
+        down_suh_ = make_exl3_fp16_plane(Experts, Intermediate, 45);
+        down_svh_ = make_exl3_fp16_plane(Experts, Hidden, 46);
 
-        gate_layout_ = append_exl3_bank(gate_payload_, kHidden, kIntermediate, gate_sources,
-                                        gate_suh_, gate_svh_);
-        up_layout_   = append_exl3_bank(up_payload_, kHidden, kIntermediate, up_sources, up_suh_,
-                                        up_svh_);
-        down_layout_ = append_exl3_bank(down_payload_, kIntermediate, kHidden, down_sources,
-                                         down_suh_, down_svh_);
+        gate_layout_ = append_exl3_bank(gate_payload_, Experts, Hidden, Intermediate,
+                                        gate_sources, gate_suh_, gate_svh_);
+        up_layout_   = append_exl3_bank(up_payload_, Experts, Hidden, Intermediate, up_sources,
+                                        up_suh_, up_svh_);
+        down_layout_ = append_exl3_bank(down_payload_, Experts, Intermediate, Hidden,
+                                        down_sources, down_suh_, down_svh_);
         gate_bank_    = to_device(gate_payload_);
         up_bank_      = to_device(up_payload_);
         down_bank_    = to_device(down_payload_);
-        exl3_gate_    = exl3_bank_weight(gate_bank_, gate_layout_, kIntermediate, kHidden, codebook);
-        exl3_up_      = exl3_bank_weight(up_bank_, up_layout_, kIntermediate, kHidden, codebook);
-        exl3_down_    = exl3_bank_weight(down_bank_, down_layout_, kHidden, kIntermediate, codebook);
+        exl3_gate_    = exl3_bank_weight(gate_bank_, gate_layout_, Experts, Intermediate, Hidden, codebook);
+        exl3_up_      = exl3_bank_weight(up_bank_, up_layout_, Experts, Intermediate, Hidden, codebook);
+        exl3_down_    = exl3_bank_weight(down_bank_, down_layout_, Experts, Hidden, Intermediate, codebook);
     }
 
     void decode_experts() {
-        experts_.resize(kExl3RouteExpertIds.size());
+        experts_.resize(route_ids_.size());
         const auto plane_row = [](const std::vector<std::uint16_t>& plane, int id, int columns) {
             return std::vector<std::uint16_t>(
                 plane.begin() + static_cast<std::size_t>(id) * columns,
                 plane.begin() + static_cast<std::size_t>(id + 1) * columns);
         };
-        parallel_rows(static_cast<std::int32_t>(kExl3RouteExpertIds.size()),
+        parallel_rows(static_cast<std::int32_t>(route_ids_.size()),
                       [&](std::int32_t index) {
-                          const int id = kExl3RouteExpertIds[index];
+                          const int id = route_ids_[index];
                           const int k2 = rates_[id % 4];
                           experts_[index] = decode_exl3_expert(
-                              id, k2, codebook_, gate_trellis_[id], up_trellis_[id],
-                              down_trellis_[id], plane_row(gate_suh_, id, kHidden),
-                              plane_row(gate_svh_, id, kIntermediate),
-                              plane_row(up_suh_, id, kHidden),
-                              plane_row(up_svh_, id, kIntermediate),
-                              plane_row(down_suh_, id, kIntermediate),
-                              plane_row(down_svh_, id, kHidden));
+                              id, k2, codebook_, Hidden, Intermediate, gate_trellis_[id],
+                              up_trellis_[id], down_trellis_[id],
+                              plane_row(gate_suh_, id, Hidden),
+                              plane_row(gate_svh_, id, Intermediate),
+                              plane_row(up_suh_, id, Hidden),
+                              plane_row(up_svh_, id, Intermediate),
+                              plane_row(down_suh_, id, Intermediate),
+                              plane_row(down_svh_, id, Hidden));
                       });
     }
 
     ops::SparseMoeWeights make_weights() const {
         ops::SparseMoeWeights weights;
-        weights.router_shared_gate = dense_bf16_weight(device_router_.p, kExperts + 1, kHidden);
+        weights.router_shared_gate = dense_bf16_weight(device_router_.p, Experts + 1, Hidden);
         weights.routed_down       = exl3_down_;
-        weights.shared_gate_up    = shared_gate_.weight();
-        weights.shared_down       = shared_down_device_.weight();
+        if (shared_qtype_ == QType::Q8_G32_FP16) {
+            weights.shared_gate_up    = shared_gate_.weight();
+            weights.shared_down       = shared_down_device_.weight();
+        } else {
+            weights.shared_gate_up    = shared_gate_fp8_->weight();
+            weights.shared_down       = shared_down_fp8_->weight();
+        }
         weights.exl3_routed_gate  = exl3_gate_;
         weights.exl3_routed_up    = exl3_up_;
         return weights;
@@ -1142,20 +1303,22 @@ private:
 
     const char* name_;
     exl3_ref::Codebook codebook_;
+    QType shared_qtype_;
+    std::vector<int> route_ids_;
     std::array<int, 4> rates_;
     std::vector<float> router_;
     std::vector<std::uint16_t> router_bits_;
     DeviceBuffer device_router_;
     DeviceRowSplit shared_gate_;
     DeviceRowSplit shared_down_device_;
+    std::optional<DevicePackedWeight> shared_gate_fp8_;
+    std::optional<DevicePackedWeight> shared_down_fp8_;
     quantized_weight::PackedWeight shared_gate_host_;
     quantized_weight::PackedWeight shared_down_host_;
     std::vector<std::vector<float>> inputs_;
     std::vector<std::vector<float>> residuals_;
     std::vector<std::vector<double>> references_;
-    std::array<std::vector<std::uint16_t>, kExperts> gate_trellis_;
-    std::array<std::vector<std::uint16_t>, kExperts> up_trellis_;
-    std::array<std::vector<std::uint16_t>, kExperts> down_trellis_;
+    std::vector<std::vector<std::uint16_t>> gate_trellis_, up_trellis_, down_trellis_;
     std::vector<std::uint16_t> gate_suh_, gate_svh_, up_suh_, up_svh_, down_suh_, down_svh_;
     std::vector<std::uint8_t> gate_payload_, up_payload_, down_payload_;
     Exl3BankLayout gate_layout_, up_layout_, down_layout_;
@@ -1189,20 +1352,40 @@ int main() {
 
     // SP-7 EXL3 (single-token decode route): both codebooks with mixed per-expert bitrates
     // (the mul1 fixture covers the MUL1-only half-integer rates), graph replay on pattern 1,
-    // persistent-input preservation, and the route's admission contract.
+    // persistent-input preservation, and the route's admission contract. The 125B geometry
+    // runs the same three route patterns over 512 experts with the row-scaled FP8 shared
+    // expert the Flash-Next artifact carries.
     {
-        SparseMoeExl3Fixture mcg(exl3_ref::Codebook::Mcg, "sparse_moe exl3 mcg a16");
+        SparseMoeExl3Fixture<kHidden, kExperts, kTopK, kIntermediate>
+            mcg(exl3_ref::Codebook::Mcg, "sparse_moe exl3 mcg a16", QType::Q8_G32_FP16,
+                kExl3RouteExpertIds, kRoutePatterns);
         for (int pattern = 0; pattern < static_cast<int>(kRoutePatterns.size()); ++pattern) {
             failures += mcg.run(pattern, pattern == 1);
         }
         failures += mcg.verify_persistent_inputs();
         failures += mcg.run_admission();
 
-        SparseMoeExl3Fixture mul1(exl3_ref::Codebook::Mul1, "sparse_moe exl3 mul1 a16");
+        SparseMoeExl3Fixture<kHidden, kExperts, kTopK, kIntermediate>
+            mul1(exl3_ref::Codebook::Mul1, "sparse_moe exl3 mul1 a16", QType::Q8_G32_FP16,
+                 kExl3RouteExpertIds, kRoutePatterns);
         for (int pattern = 0; pattern < static_cast<int>(kRoutePatterns.size()); ++pattern) {
             failures += mul1.run(pattern, pattern == 1);
         }
         failures += mul1.verify_persistent_inputs();
+    }
+
+    {
+        constexpr std::int32_t kHidden125B = ops::kSparseMoe125B.hidden;
+        constexpr std::int32_t kExperts125B = ops::kSparseMoe125B.experts;
+        constexpr std::int32_t kTopK125B = ops::kSparseMoe125B.top_k;
+        constexpr std::int32_t kIntermediate125B = ops::kSparseMoe125B.intermediate;
+        SparseMoeExl3Fixture<kHidden125B, kExperts125B, kTopK125B, kIntermediate125B>
+            flash_next(exl3_ref::Codebook::Mcg, "sparse_moe exl3 125b fp8 shared a16",
+                       QType::FP8_E4M3FN_ROW_BF16, kExl3RouteExpertIds125B, kRoutePatterns125B);
+        for (int pattern = 0; pattern < static_cast<int>(kRoutePatterns125B.size()); ++pattern) {
+            failures += flash_next.run(pattern, pattern == 1);
+        }
+        failures += flash_next.verify_persistent_inputs();
     }
 
     std::cout << (failures == 0 ? "OK" : "FAIL") << " sparse_moe correctness\n";

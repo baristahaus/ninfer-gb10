@@ -268,3 +268,66 @@ needs the EOS gate off; the bench runs its own server instance, so a server-leve
 lowest contract cost. A request-level `ignore_eos` extension stays available if a serving
 consumer ever needs per-request control; until then the OpenAI/Anthropic schema tests and
 `docs/serving.md` stay untouched.
+
+### Engine-side capture-path answer (2026-10-30, twoFour, from master 8887b550)
+
+Question: can the recorded decode graph contain the pre-fusion wrapper code — capture
+ordering relative to wrapper selection, per-layer capture specialization, a cached
+first-capture — and is attn_input_proj's decode dispatch reachable other than through the
+modified wrapper?
+
+**1. No capture-ordering hazard, no cached first-capture, no per-layer specialization.**
+Graphs are captured once at startup (`Graphs::prepare`, `src/models/qwen3_5/program/graphs.cpp`):
+each phase's body runs once as warmup, then `definition.capture(device.stream(), body)` records
+the same calls, and replay never re-dispatches — kernels and launch shapes are baked at
+capture. Each phase graph captures the whole layer loop in one body (batch/token-count are the
+only specializations, via `prepare_main(Main, Ordinary)` and the segment profiles). The
+wrapper's branch is a pure function of the weight view and `x.ne[1]`, both fixed before
+capture. Whatever the wrapper dispatched at capture is what replays forever.
+
+**2. The census's slice-era block is master's decode behavior, not a stale graph.** On
+master, every EXL3 decode dispatch is row-sliced:
+
+| route | wrapper (decode branch, `cols <= 8`) | launches per layer-round |
+|---|---|---|
+| attention | `src/ops/wrapper/attn_input_proj.cpp` EXL3 branch: `exl3_dense_slice` q(6144)/k(1024)/gate(6144)/v(1024), four `exl3_dense_dispatch` calls | 4 tf launches (grids 384x2 x2, small x2) |
+| GDN | `src/ops/wrapper/gdn_input_proj_exl3.cpp`: q(2048)/k(2048)/v(6144)/z(6144) slices + four dispatches + 2D placement copies | 4 tf launches (128x2 x2, 384x2 x2) |
+| MLP | `src/ops/wrapper/linear_swiglu.cpp` EXL3 branch: gate/up halves (17408 each) of the [34816] object, then down | 2x 1088x2 + 1x 320 |
+
+That is exactly the census's periodic per-layer block. On master **nothing** launches the
+[14336] attention parent at decode — the wrapper always slices it.
+
+**3. The attention decode dispatch is NOT reachable through anything but
+`src/ops/wrapper/attn_input_proj.cpp`.** `attention_projection`
+(`src/models/qwen3_5/execution/attention.cpp`) takes `ops::attn_input_proj` for the single
+EXL3 weight; the alternative `linear_split` route has **no EXL3 case** and throws
+(`src/ops/linear/split/dispatch.cpp`), so an EXL3 27B artifact cannot route around the
+wrapper. GDN has its own wrapper (`gdn_input_proj_exl3.cpp`) — if the fusion was made
+there for the attention parent by mistake, it never runs for attention.
+
+**Consequence for the M5 attempt:** if a fused build's captured decode graphs still contain
+slice launches, the fused branch was not on the capture path. The fusion must replace the
+four `detail::exl3_dense_dispatch` calls inside the wrapper's `cols <= 8` branch (not the
+prefill branch, not the dispatch layer). Cheapest verification: a one-line capture-time
+marker (log/NVTX) in that branch printing fused-vs-sliced — the serving log then shows what
+got baked into Main and Ordinary.
+
+**4. The ten fused-parent launches are predicted to be the eager rounds.** The round(s)
+executed outside the captured graphs (the pre-replay round(s) after start, or any
+non-capturable fallback) run the live wrapper; if the fusion took effect eagerly but the
+capture preceded it — or vice versa — the sample window shows a scattered handful of parent
+launches. The planned parent-launch-to-phase correlation should confirm: they should all sit
+in one phase boundary, not distributed per round.
+
+**5. One more suspect for the serving breakage itself: workspace capacity, not placement.**
+`attention_projection_workspace_bytes` sizes the caller's arena from the per-slice route
+(`ops::attn_input_proj_workspace_capacity_bytes(first_profile.n, ...)`). If the fused branch
+allocates or touches more than the slice-sum capacity (the TensorFold route's scratch scales
+with N: rotated activations, split-K counters, fp32 partials, and the [tokens, N] staging
+before the tiled transpose), replay overruns the arena and corrupts adjacent state — a
+plausible mechanism for deterministic immediate-EOS under graphs while the kernel stays
+bit-identical in isolation. The allocation-outside-the-scope change (finding 3 in the record
+above) moves the allocation but does not fix a capacity account computed for the slices.
+Check `attn_input_proj_workspace_capacity_bytes` against the fused parent's requirements, and
+run one eager fused decode under compute-sanitizer memcheck; a graph-replay overrun needs the
+capacity account fixed first.

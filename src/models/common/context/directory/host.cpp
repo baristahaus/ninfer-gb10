@@ -474,7 +474,8 @@ void HostDirectory::partition_extent(std::uint32_t index) {
         const bool release = release_marks_[node] == release_stamp_;
         if (release &&
             (pages->require(entry.page).host_readers != 0 ||
-             (!pages->device_resident(entry.page) && pages->history_references(entry.page) != 0))) {
+             (!pages->device_resident(entry.page) && pages->history_references(entry.page) != 0 &&
+              !pages->spill_resident(entry.page)))) {
             throw std::logic_error("Host KV partition contains an unreleasable page");
         }
         if (partition_runs_.empty() || partition_runs_.back().release != release) {

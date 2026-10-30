@@ -477,7 +477,7 @@ bool PageDirectory::detach_host_replica(PageId handle, HostReplicaId extent) noe
     if (!valid(handle)) { return false; }
     Page& page = pages_[handle.index];
     if (!page.host_replica || page.host_replica->extent != extent || page.host_readers != 0 ||
-        (!page.device_replica && page.references != 0)) {
+        (!page.device_replica && page.references != 0 && !page.spill_extent)) {
         return false;
     }
     page.host_replica.reset();

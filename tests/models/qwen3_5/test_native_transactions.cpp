@@ -2071,13 +2071,16 @@ void state_spill_resume_acceptance(std::shared_ptr<const q35::ModelDefinition> d
     options.max_concurrency                   = 2;
     options.context_cache.enabled             = true;
     options.context_cache.extra_state_slots   = 2;
-    options.context_cache.host_capacity_bytes = 64ULL << 20;
+    // The 27B state image is ~147 MB: the host arena must back the image demotion and the
+    // spill tier must hold a whole checkpoint (the original 64 MiB values were authored on
+    // a workstation that cannot execute this family).
+    options.context_cache.host_capacity_bytes = 256ULL << 20;
     const auto spill_path =
         std::filesystem::temp_directory_path() / "ninfer_spill_resume_test.bin";
     std::error_code ignored;
     std::filesystem::remove(spill_path, ignored);
     options.context_cache.state_spill_path           = spill_path;
-    options.context_cache.state_spill_capacity_bytes = 64ULL << 20;
+    options.context_cache.state_spill_capacity_bytes = 512ULL << 20;
 
     native::NativeRankFixture rank(definition, model, profile, options, 4);
     q35::detail::SessionImpl program(definition, std::move(rank.session_plan));

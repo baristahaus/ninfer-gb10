@@ -465,7 +465,10 @@ HistoryDirectory::binding_demand(const HistoryPrefix* source, std::uint32_t fron
         auto page         = membership(history, i);
         const auto needed = coverage(frontier, i);
         if (!pages_->device_covers(page, needed)) {
-            if (!pages_->host_covers(page, needed))
+            // A spill-resident page has no replica yet, but the binding assembly page-ins
+            // spilled coverage before the restores it demands here execute, so it counts
+            // as restorable like a host-covered page.
+            if (!pages_->host_covers(page, needed) && !pages_->spill_resident(page))
                 throw std::logic_error("KV prefix has no covering replica");
             ++result.restore_pages;
         }

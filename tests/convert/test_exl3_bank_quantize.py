@@ -5,10 +5,10 @@ Two synthetic geometries run the same helpers:
 
 - the 35B-shaped case (4 experts, hidden 256, intermediate 128), with the real
   uncalibrated `convert_model_banks` campaign, and
-- a 512-expert case approximating the 125B Flash-Next MoE directory scale (the
-  real geometry's hidden 2560 / intermediate 640 are out of budget here; the
-  point is the 512-entry directory, the 512-row suh/svh planes and the 512-member
-  fused group). Its campaign expands one genuine per-role `quantize_linear`
+    - a 512-expert case approximating the 125B Flash-Next MoE directory scale (the real
+    2560/640 shapes run separately in `test_bank_quantize_route_125b_geometry`; here the
+    point is the 512-entry directory, the 512-row suh/svh planes and the 512-member
+    fused group). Its campaign expands one genuine per-role `quantize_linear`
   result -- the same helper `convert_model_banks` calls -- to the full expert
   count by sign negation, because the real 512-expert campaign is compute-bound
   in the per-expert Viterbi (~hours on CPU) while the emit path under test is
@@ -123,6 +123,7 @@ def _campaign_expanded(base, converted, k2, experts):
     """
 
     from tools.convert.quantization import exl3_quantize as q
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     tensors = load_file(Path(base) / "model-00001-of-00001.safetensors")
     gate_up = tensors["model.language_model.layers.0.mlp.experts.gate_up_proj"].float()
     down = tensors["model.language_model.layers.0.mlp.experts.down_proj"].float()
@@ -135,7 +136,11 @@ def _campaign_expanded(base, converted, k2, experts):
                          ("routed_down", down[0])):
         su = torch.sign(torch.randn(weight.shape[1], generator=generator))
         sv = torch.sign(torch.randn(weight.shape[0], generator=generator))
-        out = q.quantize_linear(weight.T.contiguous(), k2, CODEBOOK, su, sv)
+        out = q.quantize_linear(weight.to(device).T.contiguous(), k2, CODEBOOK,
+                                su.to(device), sv.to(device))
+        # The emit path re-verifies the planes in host memory; everything comes back.
+        out = {key: value.cpu() if torch.is_tensor(value) else value
+               for key, value in out.items()}
         out["weight_shape"] = tuple(weight.shape)
         suh0, svh0 = out["suh"], out["svh"]
         entries = []
@@ -254,6 +259,17 @@ def test_bank_quantize_route_assembles_and_verifies(tmp_path):
 
 def test_bank_quantize_route_512_experts(tmp_path):
     main(str(tmp_path), experts=512, layers=1, top_k=10, campaign=_campaign_expanded)
+
+
+def test_bank_quantize_route_125b_geometry(tmp_path):
+    """The real 125B Flash-Next bank shapes (hidden 2560, intermediate 640, 512
+    experts) through the same emit path. The genuine per-role `quantize_linear`
+    runs once at the real shape (minutes even accelerated; the full 512-expert
+    Viterbi campaign stays out of scope) and the expert set expands by the
+    sign-negation identity, so this proves the bank geometry, the emit
+    re-verification and the artifact binding at production scale."""
+    main(str(tmp_path), hidden=2560, intermediate=640, experts=512, layers=1,
+         top_k=10, campaign=_campaign_expanded)
 
 
 def test_bank_geometry_rejects_non_128_multiple_dims(tmp_path):

@@ -2021,14 +2021,12 @@ void state_spill_roundtrip(std::shared_ptr<const q35::ModelDefinition> definitio
         require(program.start_demote(candidates.front()), "spill fixture could not demote its pages");
         require(settle().published, "spill fixture page demotion did not complete");
     }
-    {
-        const auto img = image;
-    }
     require(program.state_store->host_resident(image) && !program.state_store->device_resident(image),
             "spill fixture coverage is not host-only before the spill");
     const auto host_before = program.physical_usage().occupied.host_bytes;
 
     // Spill the checkpoint; the record stays cataloged as spill-resident coverage.
+    require(program.try_spill_checkpoint(handle), "spill fixture could not spill its checkpoint");
     const auto progress = settle();
     require(progress.published && progress.kind == q35::ContextOperationKind::Spill,
             "spill fixture operation did not complete");

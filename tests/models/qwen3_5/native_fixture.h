@@ -178,9 +178,11 @@ public:
                     return result;
                 }
             }
-            pump(decision);
+            // Check the deadline before pumping so an event pumped on the last pass is
+            // still matched by the scan above instead of being dropped by the throw.
             if (std::chrono::steady_clock::now() > deadline)
                 throw std::runtime_error("native execution did not produce its expected event");
+            pump(decision);
         }
     }
 

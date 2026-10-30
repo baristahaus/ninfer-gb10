@@ -83,3 +83,25 @@ NINFER_TEST_ARTIFACT=out/qwen3_8_27b_exl3.ninfer \
 
 Fails after ~3.5 minutes (earlier stages + 2-minute settle deadline). Requires the RTX
 5090 lane (Qwen3.5 compute-capability gate); the GB10 workstation cannot execute it.
+
+## Resolution (2026-10-30)
+
+The hang came from the fixture, not the engine. Commit 862b12cb deleted the
+`require(program.try_spill_checkpoint(handle), ...)` line that comes just before the spill
+`settle()`. The debugging residue `{ const auto img = image; }` took its place. In the
+committed test, nothing submits a spill, so `wait<ContextProgress>` has nothing to receive.
+The executor is idle and every `pump` returns empty until the 2-minute deadline.
+
+The "contradiction" goes away once ticket numbering is taken into account. `ExecutionTicket::id`
+comes from one executor counter (`++next_execution_`) shared by every frame kind. The
+numbering is: bind=1, prefill=2, capture=3, the abort's residency release=4, image
+demotion=5, page demotion=6. "Ticket 6, variant 5" was the page demotion's
+ContextProgress, which its own `settle()` received, so the pre-spill marker printed. It was
+not the spill. No release-frame/spill-frame interleaving exists: `driver.abort()` ends in
+`idle()`, which waits until `release_ticket` and `releases` are drained, before any
+demotion starts.
+
+Fix: the `try_spill_checkpoint` call is restored and the residue removed. Separately,
+`EventDriver::wait` now checks its deadline before pumping, so an event pumped on the final
+pass is still matched instead of being lost to the throw. That edge case did not cause this
+hang.

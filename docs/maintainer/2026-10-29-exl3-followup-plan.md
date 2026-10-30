@@ -382,3 +382,47 @@ above) moves the allocation but does not fix a capacity account computed for the
 Check `attn_input_proj_workspace_capacity_bytes` against the fused parent's requirements, and
 run one eager fused decode under compute-sanitizer memcheck; a graph-replay overrun needs the
 capacity account fixed first.
+
+### Capture-site inventory and the multi-profile interleave (2026-10-30, twoFour, second pass)
+
+Reconciling the marker evidence (cols=2/5 captures observed during the first request) with
+the engine source, master's capture sites are exactly:
+
+- `RankProgramImpl::initialize_graphs` (`program/graph_bodies.cpp:9`) → `Graphs::prepare`
+  (`program/graphs.cpp:267`): the Main/Ordinary/Verify phase graphs, the Draft/Sample/Accept
+  segments, and the mtp-history graphs (graphs.cpp:335, :366). Triggered from
+  `create_rank_program` inside the engine's `ProgramInitialize` startup phase
+  (`src/runtime/engine/startup.inl:106`) — server startup, before any request.
+- `TextGraph::prepare` (`program/text_graph.cpp:108`), called from `Graphs::prepare`:
+  **Resident** (no MoE schedule — the dense 27B route): per-profile per-layer mixer child
+  graphs all captured at prepare (:154), the main graph with profile-0 children appended
+  (:158), then per-profile `update_child` + `executable.upload` swaps (:168) and a final
+  swap-back to profile 0 (:172-175). **Offloaded** (MoE schedule present): per-layer captures
+  through `schedule->capture_layer(...)` (:216), which may capture lazily under the MoE
+  pressure machinery — this is the only lazy capture path in the program.
+
+So "capture is once at startup" needs one refinement: there is no request-time capture path
+for a dense (Resident) program; if the fused build's markers show captures inside the first
+request, either that build created the rank program at first request (engine-side deferral
+or the **two-attempt budget loop** in startup.inl:90 — a failed memory-budget check re-runs
+the whole program creation, a second full capture pass), or the served route took the
+Offloaded path. The startup observer's phase log discriminates: count
+`StartupPhase::CudaGraphPrepare` occurrences.
+
+The harness repro should mirror the Resident interleave exactly — the current isolated test
+captures one dispatch, which is why it passes. The engine sequence is:
+
+1. capture the per-layer mixer child graphs for profile 0 (T=1) from the shared arena;
+2. capture the main graph with those children appended (baked arena addresses);
+3. for each later profile (T=2, T=5, ...): `update_child` swaps the child references and
+   `executable.upload` re-uploads — against the **same arena the earlier captures baked**,
+   with `resources.work.reset()` rewinding the arena between prepare bodies;
+4. swap the children back to profile 0 and re-upload;
+5. replay profile 0.
+
+Two concrete hazards fall out of that sequence, either of which the harness repro can hit:
+the child-graph uploads against arena memory whose addresses the earlier captures baked
+(rewind-and-reuse across profiles), and the final swap-back upload racing the first replay
+launch. If the repro reproduces with the child-swap cycle and passes without it, the bug is
+the child-graph update path under a shared arena — engine-side, `DecodeGraphDefinition`
+/`update_child` ownership in `program/text_graph.cpp` and the graph RAII in `src/core`.

@@ -186,3 +186,53 @@ All four executable M-items are done; commits carry the details, this section is
 Pre-existing damage outside the 5090 lane, not touched: `docs/operations.md` still documents
 `--lm-head-draft`, which no longer exists on master (the GB10 lane's doc; the live flag is
 `--proposal-head-rows`/`--proposal-head`).
+
+## Status and campaign split (2026-10-30)
+
+Verified state, by item:
+
+- **D2 (mxfp8 conformance revival): CLOSED.** `test_mxfp8_a16.cpp` is registered in
+  `tests/ops/linear/tests.cmake` (landed with `48174f71`/`8c66f403`); built and green on
+  GB10 (`ninfer_linear_mxfp8_a16_test`, passed 12.45 s, 2026-10-30). The 5090-side
+  confirmation pass (M4 for this test) is all that remains.
+- **D3 (converter-environment recipe): CLOSED.** `docs/weight-conversion.md` now carries
+  the rebuild recipe plus the verified 2026-10-30 combination (Python 3.11 `uv venv`,
+  torch 2.14.1+cu130 aarch64 on GB10, numpy, safetensors, pytest). M3's environment
+  prerequisite is satisfied; the recorded 2.11.0+cu130 pin is stale but the local
+  exllamav3 reimplementation keeps the route self-contained.
+- **Converter route restoration:** the v3 refactors had gutted the converter-side EXL3/QAD
+  routes the SP-7 tests bind. Restored to master in `c6b0126b`: four exl3 conversion
+  methods, the dense (fused) and bank official recipes, the QAD layouts and mxfp8/fp8
+  formats, the I16 dtype, the Flash-Next v2 upgrade route, the SourceInputs campaign
+  pass-through, and the data-dependent payload-size declaration (`spec_bytes`). Full
+  `tests/convert`: 106 passed, 1 skipped.
+
+New work item:
+
+- **N1. Bank-route real-shape emit proof (GB10 lane).** The bank emit/import routes are
+  proven only at synthetic shapes. Add a real-geometry variant of the bank oracle at the
+  125B Flash-Next scale (hidden 2560, intermediate 640, 512-expert directory): one genuine
+  `quantize_linear` result per role at the real shape, expanded to the full expert count by
+  the sign-negation identity the 512-expert test already uses (the full per-expert Viterbi
+  campaign stays out of scope — it is compute-bound and exercises nothing the emit path
+  depends on). Acceptance: the emit path produces a loadable bank at real [n, k], the tile
+  re-verification stays exact, and the C++ bank loader accepts the directory geometry.
+  This closes the last synthetic-only gap in the restored route before the EXL3 serving
+  work (issue `ninfer-gb10-6qd`) leans on it.
+
+Ownership and lanes:
+
+- GB10 lane (this machine): N1; the D1 decision below; GB10 battery reruns as EXL3 fixes land.
+- 5090 lane (Trueno, mid-port — do not double-run): the `ninfer-gb10-6qd` P1 root-cause,
+  then M1, M3 (environment ready per D3), M2 after D1, M4/M5 per the original split.
+- Upstream: nothing to port for this package. The local `tools/convert/sources/exllamav3.py`
+  reimplementation is the working oracle; Spark presets stay parked until a Spark cutover
+  is authorized (ratified strategy). The GB10 field report remains an un-sent goodwill
+  offer, held until the `ninfer-gb10-6qd` divergence is resolved.
+
+**D1 recorded decision (2026-10-30): server-level CLI flag.** The decode-saturation suite
+needs the EOS gate off; the bench runs its own server instance, so a server-level flag
+(`--ignore-eos`, no protocol change, no advertised-surface touch) satisfies M2 at the
+lowest contract cost. A request-level `ignore_eos` extension stays available if a serving
+consumer ever needs per-request control; until then the OpenAI/Anthropic schema tests and
+`docs/serving.md` stay untouched.

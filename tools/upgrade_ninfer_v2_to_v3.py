@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One-time, standard-library upgrade of the seven known official NInfer v2 inputs.
+"""One-time, standard-library upgrade of known official and Flash-Next NInfer v2 inputs.
 
 Run: python3 upgrade_ninfer_v2_to_v3.py INPUT.ninfer OUTPUT.ninfer
 Weight bytes are preserved and the maintained Qwen chat template is installed.
@@ -17,8 +17,11 @@ import struct
 import tempfile
 import uuid
 
+from tools.convert.qwen3_8_flash_next_125b_a6b.descriptor import describe as describe_flash_next
+
 FORMATS = {
     "BF16": "bf16",
+    "FP8_E4M3FN": "fp8_e4m3fn",
     "FP32": "fp32",
     "I32": "int32",
     "Q4G64_F16S": "q4_g64_fp16",
@@ -33,6 +36,7 @@ LAYOUTS = {
     "row-split-k128-v1": "row_split_k128_v1",
     "blockscale-k16-m128x4-v1": "block_scale_k16_m128x4_v1",
     "row-scale-v1": "row_scale_v1",
+    "expert-blockscale-k16-m128x4-v1": "expert_block_scale_k16_m128x4_v1",
 }
 KNOWN_COUNTS = {
     ("qwen3.6-27b", "groupwise-int"): (1124,),
@@ -140,6 +144,13 @@ def draft_config(second):
 
 
 def encoded_bytes(obj):
+    if obj["format"] == "fp8_e4m3fn" and obj["layout"] == "contiguous_le_v1":
+        return math.prod(obj["shape"])
+    if obj["format"] == "nvfp4" and obj["layout"] == "expert_block_scale_k16_m128x4_v1":
+        e, n, k = obj["shape"]
+        if min(e, n, k) <= 0 or n % 128 or k % 64:
+            raise ValueError("invalid expert bank geometry")
+        return align(e*n*k//2, 256) + e*n*k//16 + e*4
     dims, format, layout = obj["shape"], obj["format"], obj["layout"]
     if any(type(d) is not int or d <= 0 for d in dims):
         raise ValueError(f"{obj['id']}: invalid shape")
@@ -260,7 +271,33 @@ def _input_names(name, components):
     return []
 
 
+def flash_next_directory(identity, old_objects):
+    if identity != {"model_id": "qwen3.8-flash-next-125b-a6b", "weights_id": "nvfp4"}:
+        raise ValueError("unsupported Flash-Next v2 identity")
+    objects = []
+    names = {o["name"] for o in old_objects}
+    if len(names) != len(old_objects):
+        raise ValueError("duplicate Flash-Next objects")
+    for value in old_objects:
+        name = value["name"]
+        obj = {"id": name, "kind": value["kind"], "offset": value["offset"], "bytes": value["bytes"]}
+        if obj["kind"] == "resource":
+            if value["encoding"] != "raw-bytes-v1" or not name.startswith("frontend/"):
+                raise ValueError("unsupported Flash-Next resource")
+            obj["encoding"] = "raw_bytes_v1"
+        else:
+            obj.update(shape=value["shape"], format=FORMATS[value["format"]], layout=LAYOUTS[value["layout"]])
+            if obj["offset"] % 256 or obj["bytes"] != encoded_bytes(obj):
+                raise ValueError(f"{name}: invalid Flash-Next encoded geometry")
+        objects.append(obj)
+    return {**describe_flash_next(objects), "objects": objects,
+            "metadata": {"name": identity["model_id"]},
+            "provenance": {"upgraded_from": {"version": 2, **identity}}}
+
+
 def make_directory(identity, old_objects):
+    if identity["model_id"] == "qwen3.8-flash-next-125b-a6b":
+        return flash_next_directory(identity, old_objects)
     key = (identity["model_id"], identity["weights_id"])
     if key not in KNOWN_COUNTS or len(old_objects) not in KNOWN_COUNTS[key]:
         raise ValueError(f"unsupported v2 input {key} with {len(old_objects)} objects")
@@ -771,14 +808,18 @@ def upgrade(input_path, output_path):
         raise ValueError("input and output must differ")
     old, source_start, source_payload = read_v2(input_path)
     directory = make_directory(old["identity"], old["objects"])
-    template_name = (
-        "qwen3_8.jinja"
-        if old["identity"]["model_id"].startswith("qwen3.8-")
-        else "qwen3_6.jinja"
-    )
-    template = (
-        Path(__file__).resolve().parent / "chat_templates" / template_name
-    ).read_bytes()
+    flash_next = old["identity"]["model_id"] == "qwen3.8-flash-next-125b-a6b"
+    template_name = "preserved Flash-Next template" if flash_next else (
+        "qwen3_8.jinja" if old["identity"]["model_id"].startswith("qwen3.8-") else "qwen3_6.jinja")
+    if flash_next:
+        source_template = next(o for o in old["objects"] if o["name"] == "frontend/chat_template.jinja")
+        with input_path.open("rb") as source:
+            source.seek(source_start + source_template["offset"])
+            template = source.read(source_template["bytes"])
+    else:
+        template = (
+            Path(__file__).resolve().parent / "chat_templates" / template_name
+        ).read_bytes()
     template_id = directory["components"]["text"]["resources"]["chat_template.jinja"]
     template_object = next(
         obj for obj in directory["objects"] if obj["id"] == template_id

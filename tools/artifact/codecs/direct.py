@@ -16,6 +16,7 @@ _DIRECT_DTYPES = {
     "bf16": torch.bfloat16,
     "fp32": torch.float32,
     "int32": torch.int32,
+    "fp8_e4m3fn": torch.float8_e4m3fn,
 }
 
 

@@ -110,6 +110,11 @@ def _checkpoint(path: Path, tensors) -> SafetensorsSource:
     path.mkdir(parents=True)
     (path / "config.json").write_text(json.dumps(_dense_config()))
     save_file(tensors, path / "model-00001-of-00001.safetensors")
+    (path / "model.safetensors.index.json").write_text(json.dumps(
+        {"metadata": {"total_size": sum(t.numel() * t.element_size()
+                                        for t in tensors.values())},
+         "weight_map": {name: "model-00001-of-00001.safetensors"
+                        for name in tensors}}))
     for role, value in {
         "tokenizer.json": {"model": {"vocab": {str(i): i for i in range(8)}}},
         "tokenizer_config.json": {},
@@ -238,6 +243,7 @@ def test_source_inputs_provenance_covers_campaign_dir(tmp_path):
 
     class FakeBase:
         path = Path("/base/checkpoint")
+        root = Path("/base/checkpoint")
         config: dict = {}
 
     with ExitStack() as stack:

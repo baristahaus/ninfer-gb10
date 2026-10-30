@@ -37,6 +37,19 @@ class Nvfp4Format:
 
 
 @dataclass(frozen=True, slots=True)
+class Mxfp8Format:
+    """E4M3FN weights with one UE8M0 exponent word per K-axis group.
+
+    A UE8M0 word is an unsigned 8-bit biased exponent: the stored group scale is
+    exactly ``2^(word - 127)``. The scale carries no mantissa, so no separate
+    global scale field is required.
+    """
+
+    name: str
+    group_size: int
+
+
+@dataclass(frozen=True, slots=True)
 class Fp8RowFormat:
     """E4M3FN weights with one BF16 multiplier per logical row."""
 
@@ -76,8 +89,8 @@ class Exl3Format:
 EXL3 = Exl3Format("exl3")
 
 NumericFormat: TypeAlias = (
-    DirectFormat | QuantFormat | Nvfp4Format | Fp8RowFormat | Fp8BlockFormat | Nf4Format
-    | Exl3Format
+    DirectFormat | QuantFormat | Nvfp4Format | Mxfp8Format | Fp8RowFormat | Fp8BlockFormat
+    | Nf4Format | Exl3Format
 )
 
 
@@ -89,7 +102,9 @@ Q4_G64_FP16 = QuantFormat("q4_g64_fp16", 4, 64, -8, 7)
 Q5_G64_FP16 = QuantFormat("q5_g64_fp16", 5, 64, -16, 15)
 Q6_G64_FP16 = QuantFormat("q6_g64_fp16", 6, 64, -32, 31)
 Q8_G32_FP16 = QuantFormat("q8_g32_fp16", 8, 32, -127, 127)
+FP8_E4M3FN = DirectFormat("fp8_e4m3fn", 1)
 NVFP4 = Nvfp4Format("nvfp4", 16)
+MXFP8 = Mxfp8Format("mxfp8", 32)
 FP8_E4M3FN_ROW_BF16 = Fp8RowFormat("fp8_e4m3fn_row_bf16")
 FP8_E4M3FN_BLOCK128X128_BF16 = Fp8BlockFormat("fp8_e4m3fn_block128x128_bf16")
 NF4_G16_E4M3FN = Nf4Format("nf4_g16_e4m3fn")
@@ -116,11 +131,12 @@ NF4_CODEBOOK = tuple(
 )
 
 
-DIRECT_FORMATS = MappingProxyType({item.name: item for item in (BF16, FP32, INT32)})
+DIRECT_FORMATS = MappingProxyType({item.name: item for item in (BF16, FP32, INT32, FP8_E4M3FN)})
 QUANT_FORMATS = MappingProxyType(
     {item.name: item for item in (Q4_G64_FP16, Q5_G64_FP16, Q6_G64_FP16, Q8_G32_FP16)}
 )
 NVFP4_FORMATS = MappingProxyType({NVFP4.name: NVFP4})
+MXFP8_FORMATS = MappingProxyType({MXFP8.name: MXFP8})
 FP8_ROW_FORMATS = MappingProxyType({FP8_E4M3FN_ROW_BF16.name: FP8_E4M3FN_ROW_BF16})
 FP8_BLOCK_FORMATS = MappingProxyType(
     {FP8_E4M3FN_BLOCK128X128_BF16.name: FP8_E4M3FN_BLOCK128X128_BF16}
@@ -131,6 +147,7 @@ NUMERIC_FORMATS = MappingProxyType(
         **DIRECT_FORMATS,
         **QUANT_FORMATS,
         **NVFP4_FORMATS,
+        **MXFP8_FORMATS,
         **FP8_ROW_FORMATS,
         **FP8_BLOCK_FORMATS,
         **NF4_FORMATS,

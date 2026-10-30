@@ -82,9 +82,14 @@ def _write_checkpoint(tmp, hidden, intermediate, experts, layers, top_k):
             f"{p}.mlp.experts.down_proj": tensor((experts, hidden, intermediate)),
         })
     (base := tmp / 'base').mkdir(exist_ok=True)
+    save_file(tensors, base / "model-00001-of-00001.safetensors")
+    (base / "model.safetensors.index.json").write_text(json.dumps(
+        {"metadata": {"total_size": sum(t.numel() * t.element_size()
+                                        for t in tensors.values())},
+         "weight_map": {name: "model-00001-of-00001.safetensors"
+                        for name in tensors}}))
     (base / "config.json").write_text(json.dumps(
         _config(hidden, intermediate, experts, layers, top_k)))
-    save_file(tensors, base / "model-00001-of-00001.safetensors")
     for role, value in {"tokenizer.json": {"model": {"vocab": {str(i): i for i in range(8)}}},
                         "tokenizer_config.json": {}, "generation_config.json": {}}.items():
         (base / role).write_text(json.dumps(value))

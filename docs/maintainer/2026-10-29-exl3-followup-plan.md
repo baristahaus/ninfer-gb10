@@ -602,3 +602,28 @@ end to end: 1288 device objects = the text body plus the draft's 76, zero MTP te
 (the DFlash2 backend replaces MTP as the speculative lane); the refusal path on the
 component-less artifact is unchanged. The only remaining DFlash2 work is stage 2C (the
 draft execution and its schedule hooks).
+
+### DFlash2 stage 2C: corrected scope — the conv kernels do not cover the draft geometry (2026-11-01, twoFour)
+
+Implementing the DFlash2 forward surfaced two kernel-level blockers the earlier 2C map missed
+(it wrongly claimed the existing `dynamic_grouped_conv` ops cover the draft):
+
+1. **Geometry.** `dynamic_grouped_conv` is hardcoded to the text hidden: `kHidden = 5120`,
+   `kGroups = 320`, with the add op's input rows restricted to {4096, 17408}
+   (`src/ops/dynamic_grouped_conv/operands.{h,cpp}`). The DFlash2 draft is hidden **2560**
+   (groups 160) with the MLP branch's projection input at **7680** (intermediate), so both the
+   prepare and add kernels need generalization to (H=2560, G=160, C in {4096, 7680}) — the
+   kernels use kHidden/kGroups as constexprs throughout the tiling, Q8 geometry and schedules,
+   so this is kernel work with new oracle coverage at the new shapes, not a parameter tweak.
+2. **Format.** The add op requires its projection weight to be `Q8_G32_FP16`
+   (`validate_add_weight`). The stage-1 route emits the draft's `attention/output` and
+   `mlp/down` as BF16 — the draft's conv path needs them quantized Q8 in the container (the
+   qwen3_5 draft route does the same), which also means the converted artifact must be
+   regenerated with the Q8 form.
+
+Corrected remaining scope for a served DFlash2: (a) the conv kernel generalization + oracles;
+(b) the Q8 draft-projection container change + reconversion; (c) the propose forward;
+(d) the frames/layouts proposal arrays; (e) the backend plumbing through
+program_impl/request_plan_impl; (f) the acceptance run. Estimate: 4-6 focused sessions, of which
+(a) and (b) are independent, testable units that can land first. The binding-level work
+(stages 0/1/2B/2D-conversion) remains complete and verified.

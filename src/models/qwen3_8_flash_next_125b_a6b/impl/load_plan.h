@@ -107,6 +107,35 @@ struct MtpPlan {
     FinalHyperConnectionPlan final_hc;
 };
 
+struct DFlash2Plan {
+    artifact::ParameterReference feature_projection;
+    artifact::ParameterReference context_norm;
+    artifact::ParameterReference final_norm;
+    struct Layer {
+        artifact::ParameterReference input_norm;
+        artifact::ParameterReference post_attention_norm;
+        artifact::ParameterReference query;
+        artifact::ParameterReference key;
+        artifact::ParameterReference value;
+        artifact::ParameterReference context_key;
+        artifact::ParameterReference context_value;
+        artifact::ParameterReference query_norm;
+        artifact::ParameterReference key_norm;
+        artifact::ParameterReference output;
+        artifact::ParameterReference attention_conv_base_kernel;
+        artifact::ParameterReference attention_conv_kernel_projection;
+        artifact::ParameterReference mlp_conv_base_kernel;
+        artifact::ParameterReference mlp_conv_kernel_projection;
+        artifact::ParameterReference mlp_gate;
+        artifact::ParameterReference mlp_up;
+        artifact::ParameterReference mlp_down;
+    };
+    std::array<Layer, 5> layers;
+    artifact::ParameterReference selector_hidden_projection;
+    artifact::ParameterReference selector_predecessor_codebook;
+    artifact::ParameterReference selector_successor_codebook;
+};
+
 struct VisionPlan {
     artifact::ParameterReference patch_embedding;
     artifact::ParameterReference patch_embedding_bias;
@@ -147,6 +176,7 @@ struct BindingPlan {
     artifact::ParameterReference optimized_proposal_head;
     artifact::ParameterReference optimized_proposal_token_ids;
     MtpPlan mtp;
+    DFlash2Plan dflash2;
     VisionPlan vision;
 };
 

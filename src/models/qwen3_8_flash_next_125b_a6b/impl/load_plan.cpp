@@ -1,6 +1,7 @@
 #include "models/qwen3_8_flash_next_125b_a6b/impl/load_plan.h"
 
 #include "artifact/formats.h"
+#include "models/qwen3_8_flash_next_125b_a6b/impl/config.h"
 
 #include <array>
 #include <cstdint>
@@ -152,6 +153,80 @@ MoePlan bind_main_moe(artifact::Binder& binder, const std::string& prefix) {
 // The MTP layer's routed experts are the checkpoint's BF16 banks (`experts.gate_up_proj`/
 // `.down_proj`), NVFP4 banks in the main layers' representation (`experts.gate_up`/`.down`
 // with activation divisors), or EXL3 trellis banks (`experts.gate`/`experts.up`/`experts.down`).
+// The DFlash2 draft's non-projection tables (the two-tap conv base kernels and the
+// candidate selector's codebooks) carry no mathematical use: bind them directly.
+Reference dflash2_table(artifact::Binder& binder, std::string_view name,
+                        std::initializer_list<std::uint64_t> shape, Placement placement) {
+    if (placement == Placement::Disabled) { return {}; }
+    return binder.parameter(name, {shape.begin(), shape.end()}, artifact::Residency::Device,
+                            QType::BF16);
+}
+
+DFlash2Plan bind_dflash2(artifact::Binder& binder, Placement placement) {
+    using detail::DFlash2Config;
+    constexpr DFlash2Config dflash2{};
+    DFlash2Plan out;
+    out.feature_projection =
+        device(binder, "dflash2/feature_projection", QType::BF16,
+               {dflash2.hidden, dflash2.feature_projection_cols}, placement);
+    out.context_norm =
+        device(binder, "dflash2/context_norm", QType::BF16, {dflash2.hidden}, placement);
+    out.final_norm =
+        device(binder, "dflash2/final_norm", QType::BF16, {dflash2.hidden}, placement);
+    for (int i = 0; i < dflash2.layers; ++i) {
+        const std::string p     = "dflash2/layers/" + std::to_string(i) + "/";
+        const std::string sp    = "layers." + std::to_string(i) + ".";
+        auto& layer             = out.layers[i];
+        layer.input_norm        = device(binder, p + "input_norm", QType::BF16, {dflash2.hidden}, placement);
+        layer.post_attention_norm =
+            device(binder, p + "post_attention_norm", QType::BF16, {dflash2.hidden}, placement);
+        layer.query = device(binder, p + "attention/query", QType::BF16,
+                             {dflash2.query_size, dflash2.hidden}, placement);
+        layer.key   = device(binder, p + "attention/key", QType::BF16,
+                             {dflash2.kv_size, dflash2.hidden}, placement);
+        layer.value = device(binder, p + "attention/value", QType::BF16,
+                             {dflash2.kv_size, dflash2.hidden}, placement);
+        layer.context_key = device(binder, p + "attention/context_key", QType::BF16,
+                                   {dflash2.kv_size, dflash2.hidden}, placement);
+        layer.context_value = device(binder, p + "attention/context_value", QType::BF16,
+                                     {dflash2.kv_size, dflash2.hidden}, placement);
+        layer.query_norm =
+            device(binder, p + "attention/query_norm", QType::BF16, {dflash2.head_dim}, placement);
+        layer.key_norm =
+            device(binder, p + "attention/key_norm", QType::BF16, {dflash2.head_dim}, placement);
+        layer.output = device(binder, p + "attention/output", QType::BF16,
+                              {dflash2.hidden, dflash2.query_size}, placement);
+        layer.attention_conv_base_kernel =
+            dflash2_table(binder, p + "attention_conv/base_kernel",
+                          {2, dflash2.conv_kernel_size, dflash2.hidden}, placement);
+        layer.attention_conv_kernel_projection =
+            device(binder, p + "attention_conv/kernel_projection", QType::BF16,
+                   {dflash2.conv_projection_rows, dflash2.hidden}, placement);
+        layer.mlp_conv_base_kernel =
+            dflash2_table(binder, p + "mlp_conv/base_kernel",
+                          {2, dflash2.conv_kernel_size, dflash2.hidden}, placement);
+        layer.mlp_conv_kernel_projection =
+            device(binder, p + "mlp_conv/kernel_projection", QType::BF16,
+                   {dflash2.conv_projection_rows, dflash2.hidden}, placement);
+        layer.mlp_gate = device(binder, p + "mlp/gate", QType::BF16,
+                                {dflash2.intermediate, dflash2.hidden}, placement);
+        layer.mlp_up   = device(binder, p + "mlp/up", QType::BF16,
+                                {dflash2.intermediate, dflash2.hidden}, placement);
+        layer.mlp_down = device(binder, p + "mlp/down", QType::BF16,
+                                {dflash2.hidden, dflash2.intermediate}, placement);
+    }
+    out.selector_hidden_projection =
+        device(binder, "dflash2/candidate_selector/hidden_projection", QType::BF16,
+               {dflash2.selector_rank, dflash2.hidden}, placement);
+    out.selector_predecessor_codebook =
+        dflash2_table(binder, "dflash2/candidate_selector/predecessor_codebook",
+                      {248320, dflash2.selector_rank}, placement);
+    out.selector_successor_codebook =
+        dflash2_table(binder, "dflash2/candidate_selector/successor_codebook",
+                      {248320, dflash2.selector_rank}, placement);
+    return out;
+}
+
 // The artifact's recorded parameter selects the route; the plan's `exl3` flag and the bank's
 // format select the consuming Op route.
 MoePlan bind_mtp_moe(artifact::Binder& binder, const std::string& prefix, Placement placement) {
@@ -334,6 +409,34 @@ ArtifactLoadPlan plan_artifact(artifact::Binder& binder,
             throw artifact::ArtifactError("Flash-Next requires its matching MTP component");
         }
     }
+    if (features.dflash2()) {
+        if (!directory.components.contains("dflash2")) {
+            throw artifact::ArtifactError("Flash-Next requires its matching DFlash2 component");
+        }
+        const auto& dflash2 = directory.component("dflash2");
+        const bool valid =
+            dflash2.target == "text" &&
+            dflash2.config.value("architectures", artifact::Json{}) ==
+                artifact::Json::array({"DFlash2DraftModel"}) &&
+            dflash2.config.value("hidden_size", 0) == detail::DFlash2Config::hidden &&
+            dflash2.config.value("vocab_size", 0) == 248320 &&
+            dflash2.config.value("num_hidden_layers", 0) == detail::DFlash2Config::layers;
+        if (!valid) {
+            throw artifact::ArtifactError("Flash-Next requires its matching DFlash2 component");
+        }
+        const auto& draft = dflash2.config.value("dflash_config", artifact::Json{});
+        if (!draft.contains("target_layer_ids") || !draft["target_layer_ids"].is_array() ||
+            draft["target_layer_ids"].size() != detail::DFlash2Config::target_layers) {
+            throw artifact::ArtifactError("Flash-Next DFlash2 tap geometry mismatch");
+        }
+        for (std::size_t i = 0; i < detail::DFlash2Config::target_layers; ++i) {
+            const auto& tap = draft["target_layer_ids"][i];
+            if (!tap.is_number_integer() ||
+                tap.get<int>() != detail::DFlash2Config::target_layer_ids[i]) {
+                throw artifact::ArtifactError("Flash-Next DFlash2 tap geometry mismatch");
+            }
+        }
+    }
     if (features.vision) {
         const auto& vision = directory.component("vision");
         if (vision.target != "text" ||
@@ -407,6 +510,9 @@ ArtifactLoadPlan plan_artifact(artifact::Binder& binder,
     mtp.mlp_hc       = bind_hc(binder, "mtp.layers.0.mlp_hyper_connection.", mtp_placement);
     mtp.moe          = bind_mtp_moe(binder, "mtp.layers.0.mlp.", mtp_placement);
     mtp.final_hc     = bind_final_hc(binder, "mtp.hyper_connection_mixer.", mtp_placement);
+    const Placement dflash2_placement =
+        features.dflash2() ? Placement::Device : Placement::Disabled;
+    out.bindings.dflash2 = bind_dflash2(binder, dflash2_placement);
     const Placement vision_placement = features.vision ? Placement::Device : Placement::Disabled;
     out.bindings.vision              = bind_vision(binder, vision_placement);
 

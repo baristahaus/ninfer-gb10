@@ -46,6 +46,19 @@ int main() {
         if (full_plan.device_objects.size() != text_objects + mtp_objects + 333) {
             throw std::runtime_error("Vision load plan did not upload exactly the Vision tensors");
         }
+        // The DFlash2 option on an artifact without the component must be refused up
+        // front (the draft execution is a separate work item; the load plan binds only
+        // a matching component).
+        ninfer::artifact::Binder dflash2_binder(reader);
+        try {
+            (void)ninfer::models::qwen3_8_flash_next_125b_a6b::plan_artifact(
+                dflash2_binder, {.speculative = ninfer::SpeculativeBackend::DFlash2});
+        } catch (const ninfer::artifact::ArtifactError& error) {
+            if (std::string(error.what()).find("DFlash2 component") == std::string::npos) {
+                throw;
+            }
+            std::cout << "dflash2 refused as expected: " << error.what() << '\n';
+        }
         std::cout << "device_objects=" << plan.device_objects.size()
                   << " mtp_objects=" << mtp_plan.device_objects.size()
                   << " full_objects=" << full_plan.device_objects.size()

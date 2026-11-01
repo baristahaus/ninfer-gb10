@@ -68,11 +68,39 @@ struct DFlashConfig {
     static constexpr int kv_size        = 0;
 };
 
+// The published DFlash2 draft for Flash-Next (incoai/Qwen3.8-Flash-Next-DFlash2):
+// five sliding-attention layers, block-diffusion drafting with a candidate path
+// selector and two-tap dynamic convolutions, tapping the target's hidden states at
+// layers 5/15/25/35/45. Load/bind support only; the draft execution and its
+// schedule hooks are a separate work item.
+struct DFlash2Config {
+    static constexpr bool supported              = true;
+    static constexpr int layers                  = 5;
+    static constexpr int hidden                  = 2560;
+    static constexpr int intermediate            = 7680;
+    static constexpr int query_heads             = 32;
+    static constexpr int kv_heads                = 8;
+    static constexpr int head_dim                = 128;
+    static constexpr int query_size              = query_heads * head_dim;
+    static constexpr int kv_size                 = kv_heads * head_dim;
+    static constexpr int conv_kernel_size        = 2;
+    static constexpr int conv_group_size         = 16;
+    static constexpr int conv_projection_rows    = 2 * conv_kernel_size * (hidden / conv_group_size);
+    static constexpr int selector_rank           = 256;
+    static constexpr int selector_top_k          = 16;
+    static constexpr int block_size              = 8;
+    static constexpr int mask_token_id           = 248077;
+    static constexpr std::size_t target_layers   = 5;
+    static constexpr int feature_projection_cols = target_layers * hidden;
+    static constexpr std::array<int, target_layers> target_layer_ids = {5, 15, 25, 35, 45};
+};
+
 inline constexpr float kAttentionScale                   = 0.0625F;
 inline constexpr float kGdnScale                         = 0.08838834764831845F;
 inline constexpr std::uint32_t kPrefillChunkAlignment    = 128;
 inline constexpr std::uint32_t kMaximumMtpDraftTokens    = 3;
-inline constexpr std::uint32_t kMaximumDFlashDraftTokens = 0;
+inline constexpr std::uint32_t kMaximumDFlashDraftTokens  = 0;
+inline constexpr std::uint32_t kMaximumDFlash2DraftTokens = DFlash2Config::block_size - 1;
 inline constexpr std::uint32_t kNativeContext            = 262144;
 
 } // namespace ninfer::models::qwen3_8_flash_next_125b_a6b::detail

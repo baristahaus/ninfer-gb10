@@ -16,6 +16,8 @@ namespace ninfer::models::qwen3_8_flash_next {
 inline constexpr std::uint32_t kMtpDecodeMaximumDrafts    = 5;
 inline constexpr std::uint32_t kMtpDecodeMaximumWidth     = kMtpDecodeMaximumDrafts + 1;
 inline constexpr std::uint32_t kDFlashDecodeMaximumDrafts = 15;
+// The DFlash2 candidate selector's per-position rank (the published draft's top-k).
+inline constexpr std::int32_t kDFlash2SelectorTopK = 16;
 inline constexpr std::uint32_t kDFlashDecodeMaximumWidth  = kDFlashDecodeMaximumDrafts + 1;
 
 struct RoundStateSpec {
@@ -184,6 +186,10 @@ struct DFlashDecodeStateLayout {
     TensorRegion target_logits;
     TensorRegion target_hidden;
     TensorRegion target_continuation_hidden;
+    // The DFlash2 draft's per-position candidate block and the selector's proposal draws.
+    TensorRegion proposal_candidates;
+    TensorRegion proposal_scores;
+    TensorRegion proposal_q;
 };
 
 struct RoundStateLayout {
@@ -332,6 +338,9 @@ struct DFlashDecodeState {
     Tensor target_logits;
     Tensor target_hidden;
     Tensor target_continuation_hidden;
+    Tensor proposal_candidates;
+    Tensor proposal_scores;
+    Tensor proposal_q;
 
     DFlashDecodeState() = default;
     DFlashDecodeState(MemorySpan backing, const DFlashDecodeStateLayout& layout,

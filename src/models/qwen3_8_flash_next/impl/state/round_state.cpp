@@ -249,6 +249,16 @@ void complete_round_state_layout(LayoutBuilder& builder, RoundStateLayout& layou
             builder, DType::BF16, {layout.spec.hidden, columns, batch}, "DFlash target hidden");
         decode.target_continuation_hidden = add_tensor(
             builder, DType::BF16, {layout.spec.hidden, batch}, "DFlash target continuation hidden");
+        // The DFlash2 draft's candidate block and the selector's draws; rank is fastest.
+        decode.proposal_candidates =
+            add_tensor(builder, DType::I32, {kDFlash2SelectorTopK, columns - 1, batch},
+                       "DFlash2 proposal candidates");
+        decode.proposal_scores =
+            add_tensor(builder, DType::FP32, {kDFlash2SelectorTopK, columns - 1, batch},
+                       "DFlash2 proposal scores");
+        decode.proposal_q =
+            add_tensor(builder, DType::FP32, {kDFlash2SelectorTopK, columns - 1, batch},
+                       "DFlash2 proposal probabilities");
     }
     layout.complete = true;
 }
@@ -418,6 +428,9 @@ DFlashDecodeState::DFlashDecodeState(MemorySpan backing, const DFlashDecodeState
     target_logits              = layout.target_logits.bind(backing);
     target_hidden              = layout.target_hidden.bind(backing);
     target_continuation_hidden = layout.target_continuation_hidden.bind(backing);
+    proposal_candidates        = layout.proposal_candidates.bind(backing);
+    proposal_scores            = layout.proposal_scores.bind(backing);
+    proposal_q                 = layout.proposal_q.bind(backing);
 }
 
 RoundState::RoundState(MemorySpan backing, const RoundStateLayout& layout) {

@@ -65,6 +65,31 @@ int main() {
                   << " file_backed="
                   << plan.bindings.ple_mapping.size()
                   << '\n';
+        // The DFlash2-enabled load plan: runs only against a dflash2-carrying artifact
+        // (the 5090-side conversion's output, NINFER_QWEN38_FLASH_NEXT_DFLASH2_WEIGHTS).
+        // Asserts the draft's 85 device bindings plus the refusal-free component
+        // validation; skips when the artifact is absent.
+        const char* dflash2_path = std::getenv("NINFER_QWEN38_FLASH_NEXT_DFLASH2_WEIGHTS");
+        if (dflash2_path != nullptr && *dflash2_path != '\0') {
+            ninfer::artifact::Reader dflash2_reader{std::filesystem::path(dflash2_path)};
+            ninfer::artifact::Binder dflash2_binder(dflash2_reader);
+            const auto dflash2_plan = ninfer::models::qwen3_8_flash_next_125b_a6b::plan_artifact(
+                dflash2_binder, {.speculative = ninfer::SpeculativeBackend::DFlash2});
+            const std::size_t expected_draft_objects = 85;
+            if (dflash2_plan.device_objects.size() <
+                text_objects + mtp_objects + expected_draft_objects) {
+                throw std::runtime_error(
+                    "DFlash2 load plan did not upload exactly the draft tensors");
+            }
+            if (dflash2_plan.bindings.dflash2.feature_projection.name.empty() ||
+                dflash2_plan.bindings.dflash2.feature_projection.name !=
+                    "dflash2/feature_projection") {
+                throw std::runtime_error("DFlash2 feature projection is unbound");
+            }
+            std::cout << "dflash2_objects="
+                      << dflash2_plan.device_objects.size()
+                      << '\n';
+        }
         return 0;
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';

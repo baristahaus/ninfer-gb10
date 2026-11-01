@@ -590,7 +590,15 @@ using it would silently move the PLE component to the wrong layer. The Qwen FP8 
 (172.8 GiB) is the wrong format for the codes-preserving route, and the BF16 base
 (335.3 GiB) does not fit this box's 210 GiB free.
 
-Conclusion: the real dflash2 conversion runs on the 5090 from the fork's own BF16 base
-(the exact source of the existing artifact), folded into that lane's next session. The
-GB10-side enabled-path load-plan test goes in now, env-gated on the converted artifact's
-path, mirroring the existing skip-without-weights pattern.
+Conclusion, CORRECTED the same day: the conclusion above was wrong. The FP8 artifact was
+itself written artifact-to-artifact (`dense_fp8.py`: "no source checkpoint is needed" — the
+BF16-projection artifact's words are the checkpoint's), so the dflash2 conversion needs no
+external base at all. `dflash2_add.py` (committed with this correction) copies the existing
+FP8+MTP artifact byte for byte and appends the dflash2 component from the prepared
+companion. The real converted artifact:
+`out/dflash2/qwen3_8_flash_next_125b_a6b_nvfp4_fp8_mtp_dflash2.ninfer`
+(128,179,449,600 payload bytes, 486 s), and the enabled-path load-plan check passes on it
+end to end: 1288 device objects = the text body plus the draft's 76, zero MTP tensors bound
+(the DFlash2 backend replaces MTP as the speculative lane); the refusal path on the
+component-less artifact is unchanged. The only remaining DFlash2 work is stage 2C (the
+draft execution and its schedule hooks).

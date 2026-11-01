@@ -509,3 +509,47 @@ feature-sink tap layers set to [5,15,25,35,45]; the draft graph capture family b
 `dflash_graph_profiles` (currently returning {}); and the schedule/spec-option plumbing so
 `--speculative dflash2` reaches the backend. The variant's `supports_dflash` stays false
 (v1); a separate `supports_dflash2` gate keeps the v1 paths untouched.
+
+### DFlash2 stage 2C: reference mechanics captured (2026-11-01, twoFour)
+
+The exact reference mechanics for the port, gathered from
+`src/models/qwen3_5/execution/draft.cpp` (`propose_dflash2_batch`, line 203) and
+`workspace.h` (`dflash2_branch`, line 269):
+
+- Flow: `prepare_masked_block(anchors, frontiers, valid_columns, mask_token, ids, positions)`
+  -> embedding over the TARGET's token_embedding into a flat residual
+  [hidden, width=k+1, batch] -> per draft layer, two conv branches:
+  `rmsnorm_dynamic_grouped_conv_prepare(residual, norm, eps, base_kernel,
+  kernel_projection, prepared, finish_delta, scratch)` then the attention/mlp body, then
+  `linear_dynamic_grouped_conv_add(input, projection.weight, base_kernel, finish_delta,
+  residual, scratch)`.
+- Attention body: `linear_split` of separate q/k/v projections (the DFlash2 draft does NOT
+  fuse them), `rmsnorm_rope(positions, query_norm, key_norm, ...)` (fused norm/RoPE requires
+  rms_norm_eps 1e-6 and rope_theta 1e7 — the checkpoint config matches), `sliding_window_attention`
+  over the block with the draft's local KV slots (window 2048, scale 1/sqrt(128)).
+- MLP body: `project_swiglu` (the draft's gate_up is a packed pair) — wait, correction: the
+  reference uses `project_swiglu(branch.prepared..., layer.mlp.gate_up, ...)`: the DFlash2
+  draft's mlp gate/up arrive as ONE packed gate_up projection. The published checkpoint has
+  separate `mlp.gate_proj`/`mlp.up_proj` — the container route should emit them as a packing
+  group the runtime reads as one packed pair (the stage-1 route already groups them; the
+  runtime view needs the packed-pair binding or a two-parameter split).
+- Tail: `rmsnorm_pack_tail(residual, final_norm, hidden[mask_columns])` -> `linear_topk`
+  over the TARGET's output head (or the optimized proposal head) for the top-16 candidate
+  ids/scores per masked column -> `project` the hidden through the selector's
+  hidden_projection [rank 256] -> `candidate_selector_path(candidates, scores, projected,
+  anchors, predecessor_codebook, successor_codebook, frontiers, sampling, drafts,
+  proposal_q)`.
+- Workspace: one `dflash2_branch` per branch = [hidden, width, batch] prepared + 
+  [hidden/conv_group_size, 2, width, batch] finish_delta; per-branch scratch from
+  `rmsnorm_dynamic_grouped_conv_prepare_workspace_capacity_bytes` /
+  `linear_dynamic_grouped_conv_add_workspace_capacity_bytes`.
+- The DFlash2 draft has NO embedding and NO lm head of its own (81 tensors, none) — both
+  come from the target; the context K/V come from the target's tap-layer hidden states via
+  the existing DFlashFeatureSink (`Config::target_feature_layers` -> [5,15,25,35,45]).
+
+The Flash-Next-side structures to mirror: `DFlashPersistentState`/`DFlashBatchContext`/
+`DFlashAppendContext` (schedule.h), the `dflash_graphs` capture family, `dflash_host_ingress`,
+and the round-state proposal arrays (frames.cpp adds `DFlash2 proposal candidates`
+[16, width-1, batch] I32 + probabilities FP32). The variant gate: a `supports_dflash2` flag
+beside `supports_dflash` (v1 stays false everywhere), with the DFlash2 geometry from the
+2B config block.

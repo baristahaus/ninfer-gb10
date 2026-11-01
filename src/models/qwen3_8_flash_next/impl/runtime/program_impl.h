@@ -837,13 +837,15 @@ ProgramImplCore::ProgramImplCore(const LoadedModelData& model_in, const Sequence
     }
     if (model.features != plan.features || model.mtp.has_value() != plan.features.mtp() ||
         model.dflash.has_value() != plan.features.dflash() ||
+        model.dflash2.has_value() != plan.features.dflash2() ||
         model.optimized_proposal.has_value() != plan.features.optimized_proposal() ||
         model.vision.has_value() != plan.features.vision) {
         throw std::invalid_argument(
             "Qwen3.8 loaded weights do not match the frozen startup features");
     }
-    if (model.mtp.has_value() && model.dflash.has_value()) {
-        throw std::invalid_argument("MTP and DFlash model views are mutually exclusive");
+    if (model.mtp.has_value() && (model.dflash.has_value() || model.dflash2.has_value())) {
+        throw std::invalid_argument(
+            "MTP and the masked-draft model views are mutually exclusive");
     }
     if (model.dflash.has_value() && model.vision.has_value()) {
         throw std::invalid_argument("DFlash and Vision model views are mutually exclusive");

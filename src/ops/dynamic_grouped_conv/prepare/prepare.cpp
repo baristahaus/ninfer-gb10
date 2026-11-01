@@ -6,14 +6,14 @@
 
 namespace ninfer::ops::detail::dynamic_grouped_conv::prepare {
 namespace {
-Plan select_plan(int width, int batch) {
+Plan select_plan(int width, int batch, int coefficient_rows) {
     const int columns = width * batch;
     // Split-8 R16 wins through 48 columns; R32 uses half the split scratch above it.
     const int tile_columns      = columns <= 8 ? 8 : columns <= 16 ? 16 : columns <= 32 ? 32 : 48;
     const Projection projection = columns <= 48 ? Projection{16, tile_columns, 8}
                                                 : Projection{32, columns <= 96 ? 32 : 64, 4};
     return {projection, width <= 8 ? 8 : 16,
-            std::size_t(kCoefficientRows) * columns * projection.splits * sizeof(float)};
+            std::size_t(coefficient_rows) * columns * projection.splits * sizeof(float)};
 }
 } // namespace
 } // namespace ninfer::ops::detail::dynamic_grouped_conv::prepare
@@ -29,7 +29,8 @@ std::size_t rmsnorm_dynamic_grouped_conv_prepare_workspace_capacity_bytes(int mi
     std::size_t maximum = 0;
     for (int width = min_width; width <= max_width; ++width)
         for (int batch = min_batch; batch <= max_batch; ++batch)
-            maximum = std::max(maximum, dc::prepare::select_plan(width, batch).workspace_bytes);
+            maximum = std::max(
+                maximum, dc::prepare::select_plan(width, batch, 4 * (5120 / 16)).workspace_bytes);
     return maximum;
 }
 
@@ -41,7 +42,9 @@ void rmsnorm_dynamic_grouped_conv_prepare(const Tensor& residual, const Tensor& 
     const auto stream = execution.stream();
     dc::validate_prepare(residual, norm_weight, epsilon, base_kernel, projection, prepared,
                          finish_delta, workspace, execution);
-    const auto plan = dc::prepare::select_plan(residual.ne[1], residual.ne[2]);
+    const auto shape = dc::Shape::of(residual.ne[0]);
+    const auto plan  = dc::prepare::select_plan(residual.ne[1], residual.ne[2],
+                                                shape.coefficient_rows);
     auto scope      = workspace.scope();
     auto* partials  = static_cast<float*>(workspace.alloc_bytes(plan.workspace_bytes).data);
     rmsnorm(residual, norm_weight, epsilon, false, prepared, execution);

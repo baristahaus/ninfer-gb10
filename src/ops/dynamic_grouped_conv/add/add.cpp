@@ -3,10 +3,10 @@
 
 namespace ninfer::ops::detail::dynamic_grouped_conv::add {
 namespace {
-Plan select_plan(int width, int batch) {
+Plan select_plan(int width, int batch, int hidden) {
     const int columns = width * batch;
     return {columns <= 88 ? Projection::TiledMma : Projection::MmaK128, (columns - 1) / 8,
-            std::size_t(kHidden) * columns * sizeof(std::uint16_t)};
+            std::size_t(hidden) * columns * sizeof(std::uint16_t)};
 }
 } // namespace
 } // namespace ninfer::ops::detail::dynamic_grouped_conv::add
@@ -20,7 +20,7 @@ std::size_t linear_dynamic_grouped_conv_add_workspace_capacity_bytes(int input_r
     dc::validate_interval(min_width, max_width, min_batch, max_batch, dc::kAddOp);
     dc::validate_input_rows(input_rows);
     // Both routes store the same BF16 projection; capacity is monotonic in W and B.
-    return dc::add::select_plan(max_width, max_batch).workspace_bytes;
+    return dc::add::select_plan(max_width, max_batch, 5120).workspace_bytes;
 }
 
 void linear_dynamic_grouped_conv_add(const Tensor& x, const Weight& projection,
@@ -29,10 +29,11 @@ void linear_dynamic_grouped_conv_add(const Tensor& x, const Weight& projection,
                                      CudaExecutionView execution) {
     const auto stream = execution.stream();
     dc::validate_add(x, projection, base_kernel, finish_delta, residual, workspace, execution);
-    const auto plan    = dc::add::select_plan(x.ne[1], x.ne[2]);
+    const auto shape   = dc::Shape::of(residual.ne[0]);
+    const auto plan    = dc::add::select_plan(x.ne[1], x.ne[2], shape.hidden);
     auto scope         = workspace.scope();
     const auto storage = workspace.alloc_bytes(plan.workspace_bytes);
-    Tensor projected(storage, DType::BF16, {dc::kHidden, x.ne[1], x.ne[2]});
+    Tensor projected(storage, DType::BF16, {shape.hidden, x.ne[1], x.ne[2]});
     dc::add::launch(plan, x, projection, base_kernel, finish_delta, residual, projected, stream);
 }
 } // namespace ninfer::ops

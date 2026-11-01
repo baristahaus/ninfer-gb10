@@ -26,9 +26,7 @@ using namespace ninfer::test;
 
 namespace {
 
-constexpr std::int32_t kHidden       = 5120;
 constexpr std::int32_t kMaximumWidth = 16;
-constexpr std::int32_t kGroups       = 320;
 constexpr std::int32_t kTaps         = 2;
 constexpr std::int32_t kSides        = 2;
 constexpr std::int32_t kMaximumBatch = 8;
@@ -71,17 +69,17 @@ std::vector<float> make_activation(std::int32_t input_rows) {
     return result;
 }
 
-std::vector<std::uint16_t> make_base_kernel() {
-    std::vector<std::uint16_t> result(static_cast<std::size_t>(kHidden) * kTaps * kSides);
+std::vector<std::uint16_t> make_base_kernel(std::int32_t h) {
+    std::vector<std::uint16_t> result(static_cast<std::size_t>(h) * kTaps * kSides);
     for (std::int32_t side = 0; side < kSides; ++side) {
         for (std::int32_t tap = 0; tap < kTaps; ++tap) {
-            for (std::int32_t row = 0; row < kHidden; ++row) {
+            for (std::int32_t row = 0; row < h; ++row) {
                 const float center =
                     side == 1 ? (tap == 0 ? 0.375F : -0.15625F) : (tap == 0 ? -0.25F : 0.0625F);
                 const float variation =
-                    signed_pattern(static_cast<std::uint32_t>((side * kTaps + tap) * kHidden + row),
+                    signed_pattern(static_cast<std::uint32_t>((side * kTaps + tap) * h + row),
                                    211U, 1.0F / 32768.0F);
-                result[static_cast<std::size_t>(side * kTaps + tap) * kHidden + row] =
+                result[static_cast<std::size_t>(side * kTaps + tap) * h + row] =
                     f32_to_bf16(center + variation);
             }
         }
@@ -89,16 +87,16 @@ std::vector<std::uint16_t> make_base_kernel() {
     return result;
 }
 
-std::vector<std::uint16_t> make_finish_delta() {
-    std::vector<std::uint16_t> result(static_cast<std::size_t>(kGroups) * kTaps * kMaximumCols);
+std::vector<std::uint16_t> make_finish_delta(std::int32_t h) {
+    std::vector<std::uint16_t> result(static_cast<std::size_t>((h / 16)) * kTaps * kMaximumCols);
     for (std::int32_t col = 0; col < kMaximumCols; ++col) {
         for (std::int32_t tap = 0; tap < kTaps; ++tap) {
-            for (std::int32_t group = 0; group < kGroups; ++group) {
+            for (std::int32_t group = 0; group < (h / 16); ++group) {
                 const float center    = tap == 0 ? 0.046875F : -0.03125F;
                 const float variation = signed_pattern(
-                    static_cast<std::uint32_t>((col * kTaps + tap) * kGroups + group), 307U,
+                    static_cast<std::uint32_t>((col * kTaps + tap) * (h / 16) + group), 307U,
                     1.0F / 65536.0F);
-                result[(static_cast<std::size_t>(col) * kTaps + tap) * kGroups + group] =
+                result[(static_cast<std::size_t>(col) * kTaps + tap) * (h / 16) + group] =
                     f32_to_bf16(center + variation);
             }
         }
@@ -106,57 +104,66 @@ std::vector<std::uint16_t> make_finish_delta() {
     return result;
 }
 
-std::vector<std::uint16_t> make_residual() {
-    std::vector<std::uint16_t> result(static_cast<std::size_t>(kHidden) * kMaximumCols);
+std::vector<std::uint16_t> make_residual(std::int32_t h) {
+    std::vector<std::uint16_t> result(static_cast<std::size_t>(h) * kMaximumCols);
     for (std::int32_t col = 0; col < kMaximumCols; ++col) {
-        for (std::int32_t row = 0; row < kHidden; ++row) {
+        for (std::int32_t row = 0; row < h; ++row) {
             const float value = signed_pattern(
-                static_cast<std::uint32_t>(static_cast<std::uint64_t>(col) * kHidden + row), 401U,
+                static_cast<std::uint32_t>(static_cast<std::uint64_t>(col) * h + row), 401U,
                 1.0F / 4096.0F);
-            result[static_cast<std::size_t>(col) * kHidden + row] = f32_to_bf16(value);
+            result[static_cast<std::size_t>(col) * h + row] = f32_to_bf16(value);
         }
     }
     return result;
+}
+
+std::vector<std::int32_t> sampled_rows(std::int32_t h) {
+    std::vector<std::int32_t> rows(kSampledRows.size());
+    std::transform(kSampledRows.begin(), kSampledRows.end(), rows.begin(),
+                   [h](std::int32_t row) { return std::min(row, h - 1); });
+    return rows;
 }
 
 std::vector<double> projection_oracle(const quantized_weight::PackedWeight& weight,
                                       const std::vector<float>& activation,
-                                      std::int32_t input_rows) {
-    std::vector<double> projection(kSampledRows.size() * kMaximumCols);
-    for (std::size_t sample = 0; sample < kSampledRows.size(); ++sample) {
+                                      std::int32_t input_rows, std::int32_t h) {
+    const auto rows = sampled_rows(h);
+    std::vector<double> projection(rows.size() * kMaximumCols);
+    for (std::size_t sample = 0; sample < rows.size(); ++sample) {
         for (std::int32_t col = 0; col < kMaximumCols; ++col) {
             projection[sample * kMaximumCols + col] = quantized_weight::dot_fp64(
-                weight, kSampledRows[sample],
+                weight, rows[sample],
                 activation.data() + static_cast<std::size_t>(col) * input_rows, input_rows);
         }
     }
     return projection;
 }
 
-std::vector<double> result_oracle(const std::vector<double>& projection,
+std::vector<double> result_oracle(std::int32_t h, const std::vector<double>& projection,
                                   const std::vector<std::uint16_t>& base_kernel,
                                   const std::vector<std::uint16_t>& finish_delta,
                                   const std::vector<std::uint16_t>& residual, std::int32_t width,
                                   std::int32_t batch_size) {
     const std::int32_t cols = width * batch_size;
+    const auto rows         = sampled_rows(h);
     std::vector<double> result;
-    result.reserve(kSampledRows.size() * static_cast<std::size_t>(cols));
-    for (std::size_t sample = 0; sample < kSampledRows.size(); ++sample) {
-        const std::int32_t row   = kSampledRows[sample];
+    result.reserve(rows.size() * static_cast<std::size_t>(cols));
+    for (std::size_t sample = 0; sample < rows.size(); ++sample) {
+        const std::int32_t row   = rows[sample];
         const std::int32_t group = row / 16;
         for (std::int32_t col = 0; col < cols; ++col) {
-            const std::size_t residual_offset = static_cast<std::size_t>(col) * kHidden + row;
+            const std::size_t residual_offset = static_cast<std::size_t>(col) * h + row;
             const std::size_t delta0_offset =
-                (static_cast<std::size_t>(col) * kTaps) * kGroups + group;
+                (static_cast<std::size_t>(col) * kTaps) * (h / 16) + group;
             const double current_coefficient =
-                static_cast<double>(bf16_to_f32(base_kernel[2 * kHidden + row])) +
+                static_cast<double>(bf16_to_f32(base_kernel[2 * h + row])) +
                 static_cast<double>(bf16_to_f32(finish_delta[delta0_offset]));
             double value = static_cast<double>(bf16_to_f32(residual[residual_offset])) +
                            current_coefficient * projection[sample * kMaximumCols + col];
             if ((col % width) != 0) {
                 const double previous_coefficient =
-                    static_cast<double>(bf16_to_f32(base_kernel[3 * kHidden + row])) +
-                    static_cast<double>(bf16_to_f32(finish_delta[delta0_offset + kGroups]));
+                    static_cast<double>(bf16_to_f32(base_kernel[3 * h + row])) +
+                    static_cast<double>(bf16_to_f32(finish_delta[delta0_offset + (h / 16)]));
                 value += previous_coefficient * projection[sample * kMaximumCols + col - 1];
             }
             result.push_back(value);
@@ -165,36 +172,37 @@ std::vector<double> result_oracle(const std::vector<double>& projection,
     return result;
 }
 
-std::vector<double> gather_actual(const void* device, std::int32_t width, std::int32_t batch_size) {
+std::vector<double> gather_actual(std::int32_t h, const void* device, std::int32_t width, std::int32_t batch_size) {
     const std::int32_t cols = width * batch_size;
     const std::vector<double> full =
-        from_device_bf16(device, static_cast<std::size_t>(kHidden) * cols);
+        from_device_bf16(device, static_cast<std::size_t>(h) * cols);
+    const auto rows = sampled_rows(h);
     std::vector<double> result;
-    result.reserve(kSampledRows.size() * static_cast<std::size_t>(cols));
-    for (const std::int32_t row : kSampledRows) {
+    result.reserve(rows.size() * static_cast<std::size_t>(cols));
+    for (const std::int32_t row : rows) {
         for (std::int32_t col = 0; col < cols; ++col) {
-            result.push_back(full[static_cast<std::size_t>(col) * kHidden + row]);
+            result.push_back(full[static_cast<std::size_t>(col) * h + row]);
         }
     }
     return result;
 }
 
-int run_profile(std::int32_t input_rows, std::span<const std::pair<int, int>> cases) {
+int run_profile(std::int32_t input_rows, std::int32_t h, std::span<const std::pair<int, int>> cases) {
     const std::vector<float> activation = make_activation(input_rows);
     std::vector<std::uint16_t> activation_bits(activation.size());
     std::transform(activation.begin(), activation.end(), activation_bits.begin(), f32_to_bf16);
-    const std::vector<std::uint16_t> base_kernel  = make_base_kernel();
-    const std::vector<std::uint16_t> finish_delta = make_finish_delta();
-    const std::vector<std::uint16_t> residual     = make_residual();
+    const std::vector<std::uint16_t> base_kernel  = make_base_kernel(h);
+    const std::vector<std::uint16_t> finish_delta = make_finish_delta(h);
+    const std::vector<std::uint16_t> residual     = make_residual(h);
 
     quantized_weight::PatternedWeightOptions weight_options;
     weight_options.row_split_scale = quantized_weight::RowSplitScalePattern::Tiny;
     weight_options.row_split_codes = quantized_weight::RowSplitCodePattern::Hashed;
     input_projection::DevicePackedWeight projection_weight(quantized_weight::make_patterned_weight(
-        QType::Q8_G32_FP16, kHidden, input_rows, 503U + static_cast<std::uint32_t>(input_rows),
+        QType::Q8_G32_FP16, h, input_rows, 503U + static_cast<std::uint32_t>(input_rows),
         weight_options));
     const std::vector<double> projection =
-        projection_oracle(projection_weight.host, activation, input_rows);
+        projection_oracle(projection_weight.host, activation, input_rows, h);
 
     DeviceBuffer activation_device = to_device(activation_bits);
     DeviceBuffer base_device       = to_device(base_kernel);
@@ -202,12 +210,12 @@ int run_profile(std::int32_t input_rows, std::span<const std::pair<int, int>> ca
     const std::size_t capacity     = ops::linear_dynamic_grouped_conv_add_workspace_capacity_bytes(
         input_rows, 2, 16, 1, kMaximumBatch);
 
-    Tensor base(base_device.span(), DType::BF16, {kHidden, kTaps, kSides});
+    Tensor base(base_device.span(), DType::BF16, {h, kTaps, kSides});
     const Weight weight = projection_weight.view();
     int failures        = 0;
     for (auto [width, batch_size] : cases) {
         const std::size_t bytes =
-            static_cast<std::size_t>(kHidden) * width * batch_size * sizeof(std::uint16_t);
+            static_cast<std::size_t>(h) * width * batch_size * sizeof(std::uint16_t);
         const auto exact = ops::linear_dynamic_grouped_conv_add_workspace_capacity_bytes(
             input_rows, width, width, batch_size, batch_size);
         if (exact > capacity)
@@ -216,15 +224,15 @@ int run_profile(std::int32_t input_rows, std::span<const std::pair<int, int>> ca
         MemoryArena workspace(scratch.span().subspan(0, exact));
         GuardedDeviceBuffer residual_device(bytes);
         Tensor x(activation_device.span(), DType::BF16, {input_rows, width, batch_size});
-        Tensor delta(delta_device.span(), DType::BF16, {kGroups, kTaps, width, batch_size});
-        Tensor residual_view(residual_device.span(), DType::BF16, {kHidden, width, batch_size});
+        Tensor delta(delta_device.span(), DType::BF16, {(h / 16), kTaps, width, batch_size});
+        Tensor residual_view(residual_device.span(), DType::BF16, {h, width, batch_size});
         const auto expected =
-            result_oracle(projection, base_kernel, finish_delta, residual, width, batch_size);
+            result_oracle(h, projection, base_kernel, finish_delta, residual, width, batch_size);
         const bool graph_case = std::find(kGraphCases.begin(), kGraphCases.end(),
                                           std::pair{width, batch_size}) != kGraphCases.end();
         const auto verify     = [&](const std::string& label) {
             failures +=
-                verify_reduction(label, gather_actual(residual_device.data(), width, batch_size),
+                verify_reduction(label, gather_actual(h, residual_device.data(), width, batch_size),
                                      expected, kCriterion);
             failures += residual_device.verify_guards(label);
             failures += scratch.verify_guards(label + " workspace");
@@ -282,7 +290,10 @@ int run_profile(std::int32_t input_rows, std::span<const std::pair<int, int>> ca
 } // namespace
 
 void add_linear_conv_add_cases(ninfer::test::OpSuite& suite) {
-    for (int input_rows : {4096, 17408}) {
+    // The 2560-row pairs join this list once the public wrapper admits the draft geometry
+    // (the kernel templates already cover it; the wrapper validation and capacity queries
+    // are the next unit).
+    for (const auto& [h, input_rows] : {std::pair{5120, 4096}, std::pair{5120, 17408}}) {
         std::vector<std::pair<int, int>> shapes;
         std::vector<OpCase> cases;
         for (int width = 2; width <= 16; ++width)
@@ -290,14 +301,16 @@ void add_linear_conv_add_cases(ninfer::test::OpSuite& suite) {
                 shapes.emplace_back(width, batch);
                 const bool graph = std::find(kGraphCases.begin(), kGraphCases.end(),
                                              std::pair{width, batch}) != kGraphCases.end();
-                cases.push_back({"linear_conv_add/k" + std::to_string(input_rows) + "/w" +
-                                     std::to_string(width) + "/b" + std::to_string(batch),
+                cases.push_back({"linear_conv_add/h" + std::to_string(h) + "/k" +
+                                     std::to_string(input_rows) + "/w" + std::to_string(width) +
+                                     "/b" + std::to_string(batch),
                                  {{"execution", graph ? "graph" : "eager"}, {"format", "q8"}}});
             }
-        suite.add(std::move(cases), [shapes = std::move(shapes), input_rows](auto selected) {
-            std::vector<std::pair<int, int>> cases;
-            for (auto i : selected) cases.push_back(shapes[i]);
-            return run_profile(input_rows, cases);
-        });
+        suite.add(std::move(cases),
+                  [shapes = std::move(shapes), input_rows, h](auto selected) {
+                      std::vector<std::pair<int, int>> cases;
+                      for (auto i : selected) cases.push_back(shapes[i]);
+                      return run_profile(input_rows, h, cases);
+                  });
     }
 }

@@ -483,3 +483,29 @@ q/k/v bindings (the container's packing group already covers the artifact side).
 
 Stage 2B (load/bind) proceeds on that basis; stage 2C (the DFlash2 draft execution and
 its schedule hooks) is the bulk and stays a distinct work item.
+
+### DFlash2 stage 2C map: the draft execution port (2026-10-31, twoFour)
+
+The op layer for DFlash2 is complete and matches the published draft's shape class:
+`candidate_selector_path` (vocab 248320, rank 256, K<=15, B<=8, kSamplePurposeDFlash2Proposal),
+`prepare_masked_block` (block diffusion), and the `dynamic_grouped_conv` family. The port is
+family plumbing, not new kernels.
+
+The reference flow is `propose_dflash2_batch` (`src/models/qwen3_5/execution/draft.cpp:203`):
+prepare_masked_block(anchors, frontiers, valid_columns, mask_token, ids) -> embedding over the
+TARGET's token_embedding -> per draft layer: the two dflash2_branch conv scopes, linear_split
+of the fused? no - separate q/k/v projections, rmsnorm_rope with the layer's q/k norms,
+sliding_window_attention over the block, the mlp with its conv branch -> final_norm ->
+linear_topk over the target's output head (or the optimized proposal head) for the candidate
+ids/unary scores -> candidate_selector_path for the coherent path. The draft has NO embedding
+and NO lm head of its own; both come from the target. Context K/V come from the target's
+hidden states at the tap layers (the DFlashFeatureSink plumbing already parameterizes
+`Config::target_feature_layers`).
+
+The Flash-Next deltas: a `dflash2_impl.h` beside `dflash_impl.h` mirroring this flow with the
+family's DraftExecutionView/workspace recipes; the DFlash2 weights view consuming the plan's
+bindings (the convs via DynamicConvWeights, the selector via the codebook Tensors); the
+feature-sink tap layers set to [5,15,25,35,45]; the draft graph capture family beside
+`dflash_graph_profiles` (currently returning {}); and the schedule/spec-option plumbing so
+`--speculative dflash2` reaches the backend. The variant's `supports_dflash` stays false
+(v1); a separate `supports_dflash2` gate keeps the v1 paths untouched.

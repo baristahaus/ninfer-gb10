@@ -239,6 +239,11 @@ def qwen3_8_flash_next(model, recipe, sources):
     for component in ("vision", "mtp"):
         if component in model.components:
             recipe.place(component + "/*", (1 if component == "vision" else 2, 0))
+    if "dflash2" in model.components:
+        recipe.place("dflash2/*", (3,))
+        for name in model.parameters:
+            if name.startswith("dflash2/"):
+                recipe.assign(name)
     for name in model.parameters:
         if name.startswith("text/layers/") and name.endswith(
             (

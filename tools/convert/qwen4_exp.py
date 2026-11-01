@@ -9,6 +9,7 @@ from pathlib import Path
 import torch
 
 from .model import Model, Parameter
+from .qwen3_5 import draft_config
 from .resources import load_resources
 from .sources.logical import LogicalSource, select_rows, transpose_source
 from .sources.safetensors import SafetensorsSource, tensor_source
@@ -104,6 +105,92 @@ def text_config(source):
         if key in source:
             cfg[key] = source[key]
     return cfg
+
+
+def add_dflash2_draft(model: Model, companion, cfg: dict, draft_cfg: dict) -> None:
+    """Append the DFlash2 draft's parameters from its own safetensors source.
+
+    `cfg` is the Qwen4Exp text config (the verification target); `draft_cfg` is the
+    draft's validated `dflash_config` record. Every tensor of the DFlash2DraftModel
+    checkpoint maps onto the container's dflash2 component vocabulary.
+    """
+    h = cfg["hidden_size"]
+    d = draft_cfg["head_dim"]
+    q = draft_cfg["num_attention_heads"] * d
+    k = draft_cfg["num_key_value_heads"] * d
+    taps = draft_cfg["dflash_config"]["target_layer_ids"]
+    conv_kernel = draft_cfg["dflash_config"]["conv_kernel_size"]
+    conv_groups = h // draft_cfg["dflash_config"]["conv_group_size"]
+    rank = draft_cfg["dflash_config"]["selector_rank"]
+    builder = Builder(model, companion, cfg)
+    builder.add(
+        "dflash2/feature_projection",
+        "fc.weight",
+        (h, len(taps) * h),
+        inputs=("dflash2/target_features",),
+    )
+    builder.add("dflash2/context_norm", "hidden_norm.weight", (h,))
+    builder.add("dflash2/final_norm", "norm.weight", (h,))
+    for i in range(draft_cfg["num_hidden_layers"]):
+        p, sp = f"dflash2/layers/{i}/", f"layers.{i}."
+        builder.add(p + "input_norm", sp + "input_layernorm.weight", (h,))
+        builder.add(p + "post_attention_norm", sp + "post_attention_layernorm.weight", (h,))
+        for role, field, rows in (
+            ("query", "q_proj", q),
+            ("key", "k_proj", k),
+            ("value", "v_proj", k),
+        ):
+            builder.add(
+                p + "attention/" + role,
+                sp + "self_attn." + field + ".weight",
+                (rows, h),
+                inputs=(p + "query_projection_input",),
+            )
+            if role in ("key", "value"):
+                builder.add(
+                    p + "attention/context_" + role,
+                    sp + "self_attn." + field + ".weight",
+                    (rows, h),
+                    inputs=("dflash2/context_input",),
+                )
+        builder.group(*(p + "attention/" + r for r in ("query", "key", "value")))
+        builder.add(p + "attention/query_norm", sp + "self_attn.q_norm.weight", (d,))
+        builder.add(p + "attention/key_norm", sp + "self_attn.k_norm.weight", (d,))
+        builder.add(
+            p + "attention/output",
+            sp + "self_attn.o_proj.weight",
+            (h, q),
+            inputs=(p + "attention_output",),
+        )
+        for branch in ("attention_conv", "mlp_conv"):
+            builder.add(
+                p + branch + "/base_kernel",
+                sp + branch + ".base_kernel",
+                (2, conv_kernel, h),
+            )
+            builder.add(
+                p + branch + "/kernel_projection",
+                sp + branch + ".kernel_projection.weight",
+                (2 * conv_kernel * conv_groups, h),
+                inputs=(p + branch + "_input",),
+            )
+        intermediate = draft_cfg["intermediate_size"]
+        builder.add(p + "mlp/gate", sp + "mlp.gate_proj.weight", (intermediate, h), inputs=(p + "mlp_input",))
+        builder.add(p + "mlp/up", sp + "mlp.up_proj.weight", (intermediate, h), inputs=(p + "mlp_input",))
+        builder.group(p + "mlp/gate", p + "mlp/up")
+        builder.add(p + "mlp/down", sp + "mlp.down_proj.weight", (h, intermediate), inputs=(p + "mlp_product",))
+    builder.add(
+        "dflash2/candidate_selector/hidden_projection",
+        "candidate_selector.hidden_projection.weight",
+        (rank, h),
+        inputs=("dflash2/final_hidden",),
+    )
+    for role in ("predecessor_codebook", "successor_codebook"):
+        builder.add(
+            "dflash2/candidate_selector/" + role,
+            "candidate_selector." + role + ".weight",
+            (cfg["vocab_size"], rank),
+        )
 
 
 def bank_source(store, name, shape, role):
@@ -530,8 +617,8 @@ def build_model(
     base, *, components=("text",), companions=None, resource_overrides=None
 ):
     selected = set(components)
-    if "text" not in selected or selected - {"text", "vision", "mtp"}:
-        raise ValueError("Qwen4Exp supports text, vision and mtp components")
+    if "text" not in selected or selected - {"text", "vision", "mtp", "dflash2"}:
+        raise ValueError("Qwen4Exp supports text, vision, mtp and dflash2 components")
     cfg = text_config(base.config)
     records = {"text": {"config": cfg}}
     if "vision" in selected:
@@ -558,6 +645,13 @@ def build_model(
             layer_types=["indexed_attention"],
         )
         records["mtp"] = {"config": m, "target": "text"}
+    if "dflash2" in selected:
+        if "dflash2" not in companions:
+            raise ValueError("selected dflash2 requires its source")
+        records["dflash2"] = {
+            "config": draft_config(companions["dflash2"].config, cfg, "dflash2"),
+            "target": "text",
+        }
     overrides = {
         "chat_template.jinja": Path(__file__).resolve().parents[1]
         / "chat_templates"
@@ -584,7 +678,9 @@ def build_model(
         "text/output_head",
         "lm_head.weight",
         (cfg["vocab_size"], h),
-        inputs=("text/final_hidden",),
+        inputs=("text/final_hidden", "dflash2/final_hidden")
+        if "dflash2" in selected
+        else ("text/final_hidden",),
     )
     b.hc("text/final_hc/", "model.language_model.hyper_connection_mixer.", False)
     for l, kind in enumerate(cfg["layer_types"]):
@@ -633,6 +729,10 @@ def build_model(
         b.hc(p + "moe_hc/", s + "mlp_hyper_connection.")
         b.qsa(p, s, True)
         b.moe(p, s)
+    if "dflash2" in selected:
+        add_dflash2_draft(
+            model, companions["dflash2"], cfg, records["dflash2"]["config"]
+        )
     if "vision" in selected:
         b.vision(records["vision"]["config"])
     expected = {

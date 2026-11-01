@@ -127,7 +127,7 @@ def add_dflash2_draft(model: Model, companion, cfg: dict, draft_cfg: dict) -> No
         "dflash2/feature_projection",
         "fc.weight",
         (h, len(taps) * h),
-        inputs=("dflash2/target_features",),
+        inputs=("dflash2/feature_projection/input",),
     )
     builder.add("dflash2/context_norm", "hidden_norm.weight", (h,))
     builder.add("dflash2/final_norm", "norm.weight", (h,))
@@ -135,32 +135,39 @@ def add_dflash2_draft(model: Model, companion, cfg: dict, draft_cfg: dict) -> No
         p, sp = f"dflash2/layers/{i}/", f"layers.{i}."
         builder.add(p + "input_norm", sp + "input_layernorm.weight", (h,))
         builder.add(p + "post_attention_norm", sp + "post_attention_layernorm.weight", (h,))
-        for role, field, rows in (
-            ("query", "q_proj", q),
-            ("key", "k_proj", k),
-            ("value", "v_proj", k),
-        ):
-            builder.add(
-                p + "attention/" + role,
-                sp + "self_attn." + field + ".weight",
-                (rows, h),
-                inputs=(p + "query_projection_input",),
-            )
-            if role in ("key", "value"):
-                builder.add(
-                    p + "attention/context_" + role,
-                    sp + "self_attn." + field + ".weight",
-                    (rows, h),
-                    inputs=("dflash2/context_input",),
-                )
-        builder.group(*(p + "attention/" + r for r in ("query", "key", "value")))
+        # The runtime consumes one fused q/k/v projection (row order q, k, v) and one
+        # packed gate/up pair; the companion's separate tensors concatenate here.
+        builder.add(
+            p + "attention/query_key_value",
+            sp + "self_attn.query_key_value.weight",
+            (q + 2 * k, h),
+            inputs=(p + "attention/query_key_value/input",),
+        )
+        # The context projections read the fused q/k/v tensor's own k and v rows
+        # against the target's tap-layer features.
+        builder.add(
+            p + "attention/context_key",
+            sp + "self_attn.query_key_value.weight",
+            (k, h),
+            source_shape=(q + 2 * k, h),
+            rows=((q, q + k),),
+            inputs=(p + "attention/context_key/input",),
+        )
+        builder.add(
+            p + "attention/context_value",
+            sp + "self_attn.query_key_value.weight",
+            (k, h),
+            source_shape=(q + 2 * k, h),
+            rows=((q + k, q + 2 * k),),
+            inputs=(p + "attention/context_key/input",),
+        )
         builder.add(p + "attention/query_norm", sp + "self_attn.q_norm.weight", (d,))
         builder.add(p + "attention/key_norm", sp + "self_attn.k_norm.weight", (d,))
         builder.add(
             p + "attention/output",
             sp + "self_attn.o_proj.weight",
             (h, q),
-            inputs=(p + "attention_output",),
+            inputs=(p + "attention/output/input",),
         )
         for branch in ("attention_conv", "mlp_conv"):
             builder.add(
@@ -175,10 +182,13 @@ def add_dflash2_draft(model: Model, companion, cfg: dict, draft_cfg: dict) -> No
                 inputs=(p + branch + "_input",),
             )
         intermediate = draft_cfg["intermediate_size"]
-        builder.add(p + "mlp/gate", sp + "mlp.gate_proj.weight", (intermediate, h), inputs=(p + "mlp_input",))
-        builder.add(p + "mlp/up", sp + "mlp.up_proj.weight", (intermediate, h), inputs=(p + "mlp_input",))
-        builder.group(p + "mlp/gate", p + "mlp/up")
-        builder.add(p + "mlp/down", sp + "mlp.down_proj.weight", (h, intermediate), inputs=(p + "mlp_product",))
+        builder.add(
+            p + "mlp/gate_up",
+            sp + "mlp.gate_up_proj.weight",
+            (2 * intermediate, h),
+            inputs=(p + "mlp/gate_up/input",),
+        )
+        builder.add(p + "mlp/down", sp + "mlp.down_proj.weight", (h, intermediate), inputs=(p + "mlp/down/input",))
     builder.add(
         "dflash2/candidate_selector/hidden_projection",
         "candidate_selector.hidden_projection.weight",

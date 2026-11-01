@@ -83,6 +83,7 @@ struct MtpWeights {
 };
 
 using EmptyDFlashWeights = qwen3_8_flash_next::DFlashWeights<0>;
+using DFlash2Weights = qwen3_8_flash_next::DFlash2Weights<5>;
 
 struct OptimizedProposalWeights {
     Weight head;
@@ -106,6 +107,7 @@ struct RuntimeModelView {
     std::optional<OptimizedProposalWeights> optimized_proposal;
     std::optional<MtpWeights> mtp;
     std::optional<EmptyDFlashWeights> dflash;
+    std::optional<DFlash2Weights> dflash2;
     std::optional<qwen3_8_flash_next::VisionWeights> vision;
     const artifact::MappedRange* ple_table = nullptr;
 };

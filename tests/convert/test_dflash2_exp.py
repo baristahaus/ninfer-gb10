@@ -91,9 +91,9 @@ def _companion(tmp_path) -> SafetensorsSource:
             {
                 p + "input_layernorm.weight": tensor((HIDDEN,)),
                 p + "post_attention_layernorm.weight": tensor((HIDDEN,)),
-                p + "self_attn.q_proj.weight": tensor((Q_ROWS, HIDDEN)),
-                p + "self_attn.k_proj.weight": tensor((KV_ROWS, HIDDEN)),
-                p + "self_attn.v_proj.weight": tensor((KV_ROWS, HIDDEN)),
+                p + "self_attn.query_key_value.weight": tensor(
+                    (Q_ROWS + 2 * KV_ROWS, HIDDEN)
+                ),
                 p + "self_attn.o_proj.weight": tensor((HIDDEN, Q_ROWS)),
                 p + "self_attn.q_norm.weight": tensor((HEAD_DIM,)),
                 p + "self_attn.k_norm.weight": tensor((HEAD_DIM,)),
@@ -105,8 +105,7 @@ def _companion(tmp_path) -> SafetensorsSource:
                 p + "mlp_conv.kernel_projection.weight": tensor(
                     (4 * (HIDDEN // 16), HIDDEN)
                 ),
-                p + "mlp.gate_proj.weight": tensor((INTERMEDIATE, HIDDEN)),
-                p + "mlp.up_proj.weight": tensor((INTERMEDIATE, HIDDEN)),
+                p + "mlp.gate_up_proj.weight": tensor((2 * INTERMEDIATE, HIDDEN)),
                 p + "mlp.down_proj.weight": tensor((HIDDEN, INTERMEDIATE)),
             }
         )
@@ -150,38 +149,36 @@ def test_draft_parameters_map_the_companion_checkpoint(tmp_path) -> None:
     draft_cfg = draft_config(companion.config, _target_config(), "dflash2")
     add_dflash2_draft(model, companion, _target_config(), draft_cfg)
 
-    assert len(model.parameters) == 3 + DRAFT_LAYERS * 17 + 3
+    assert len(model.parameters) == 3 + DRAFT_LAYERS * 14 + 3
     assert model.parameters["dflash2/feature_projection"].shape == (
         HIDDEN,
         len(TAPS) * HIDDEN,
     )
     assert model.parameters["dflash2/feature_projection"].inputs == (
-        "dflash2/target_features",
+        "dflash2/feature_projection/input",
     )
     assert model.parameters["dflash2/candidate_selector/hidden_projection"].inputs == (
         "dflash2/final_hidden",
     )
     for i in range(DRAFT_LAYERS):
         p = f"dflash2/layers/{i}/"
-        assert model.parameters[p + "attention/query"].shape == (Q_ROWS, HIDDEN)
-        assert model.parameters[p + "attention/query"].inputs == (
-            p + "query_projection_input",
+        assert model.parameters[p + "attention/query_key_value"].shape == (
+            Q_ROWS + 2 * KV_ROWS,
+            HIDDEN,
+        )
+        assert model.parameters[p + "attention/query_key_value"].inputs == (
+            p + "attention/query_key_value/input",
         )
         assert model.parameters[p + "attention/context_key"].shape == (KV_ROWS, HIDDEN)
         assert model.parameters[p + "attention/context_key"].inputs == (
-            "dflash2/context_input",
+            p + "attention/context_key/input",
         )
         assert model.parameters[p + "attention_conv/base_kernel"].shape == (2, 2, HIDDEN)
+        assert model.parameters[p + "mlp/gate_up"].shape == (2 * INTERMEDIATE, HIDDEN)
+        assert model.parameters[p + "mlp/gate_up"].inputs == (p + "mlp/gate_up/input",)
         assert model.parameters[p + "mlp/down"].shape == (HIDDEN, INTERMEDIATE)
-        assert model.parameters[p + "mlp/down"].inputs == (p + "mlp_product",)
-    groups = {tuple(group) for group in model.packing_groups}
-    for i in range(DRAFT_LAYERS):
-        p = f"dflash2/layers/{i}/"
-        assert (
-            p + "attention/query",
-            p + "attention/key",
-            p + "attention/value",
-        ) in groups
+        assert model.parameters[p + "mlp/down"].inputs == (p + "mlp/down/input",)
+    assert not model.packing_groups
     for name, parameter in model.parameters.items():
         assert parameter.residency == "dflash2", name
         assert parameter.direct_format == "bf16", name

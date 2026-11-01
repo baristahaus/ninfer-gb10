@@ -180,12 +180,10 @@ DFlash2Plan bind_dflash2(artifact::Binder& binder, Placement placement) {
         layer.input_norm        = device(binder, p + "input_norm", QType::BF16, {dflash2.hidden}, placement);
         layer.post_attention_norm =
             device(binder, p + "post_attention_norm", QType::BF16, {dflash2.hidden}, placement);
-        layer.query = device(binder, p + "attention/query", QType::BF16,
-                             {dflash2.query_size, dflash2.hidden}, placement);
-        layer.key   = device(binder, p + "attention/key", QType::BF16,
-                             {dflash2.kv_size, dflash2.hidden}, placement);
-        layer.value = device(binder, p + "attention/value", QType::BF16,
-                             {dflash2.kv_size, dflash2.hidden}, placement);
+        layer.query_key_value = device(binder, p + "attention/query_key_value", QType::BF16,
+                                       {dflash2.query_size + 2 * dflash2.kv_size,
+                                        dflash2.hidden},
+                                       placement);
         layer.context_key = device(binder, p + "attention/context_key", QType::BF16,
                                    {dflash2.kv_size, dflash2.hidden}, placement);
         layer.context_value = device(binder, p + "attention/context_value", QType::BF16,
@@ -208,10 +206,8 @@ DFlash2Plan bind_dflash2(artifact::Binder& binder, Placement placement) {
         layer.mlp_conv_kernel_projection =
             device(binder, p + "mlp_conv/kernel_projection", QType::BF16,
                    {dflash2.conv_projection_rows, dflash2.hidden}, placement);
-        layer.mlp_gate = device(binder, p + "mlp/gate", QType::BF16,
-                                {dflash2.intermediate, dflash2.hidden}, placement);
-        layer.mlp_up   = device(binder, p + "mlp/up", QType::BF16,
-                                {dflash2.intermediate, dflash2.hidden}, placement);
+        layer.mlp_gate_up = device(binder, p + "mlp/gate_up", QType::BF16,
+                                   {2 * dflash2.intermediate, dflash2.hidden}, placement);
         layer.mlp_down = device(binder, p + "mlp/down", QType::BF16,
                                 {dflash2.hidden, dflash2.intermediate}, placement);
     }

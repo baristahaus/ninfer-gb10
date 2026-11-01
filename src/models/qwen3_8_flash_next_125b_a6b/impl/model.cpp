@@ -2,6 +2,7 @@
 
 #include "artifact/reader.h"
 #include "artifact/views.h"
+#include "models/qwen3_8_flash_next_125b_a6b/impl/config.h"
 #include "ninfer/ops/weight_input.h"
 
 #include <cstddef>
@@ -327,6 +328,40 @@ LoadedModelData::LoadedModelData(BindingPlan plan, artifact::MaterializedArtifac
             .post_mixer           = moe(source.moe, backing),
             .final_hc             = final_hc(source.final_hc, backing),
         };
+    }
+    if (plan.features.dflash2()) {
+        const DFlash2Plan& source = plan.dflash2;
+        auto& draft               = runtime.dflash2.emplace();
+        draft.feature_projection = bf16(backing, source.feature_projection, 2560, 12800);
+        draft.context_norm       = tensor(backing, source.context_norm, {2560});
+        draft.final_norm         = tensor(backing, source.final_norm, {2560});
+        for (int layer = 0; layer < detail::DFlash2Config::layers; ++layer) {
+            const DFlash2Plan::Layer& from = source.layers[layer];
+            auto& to                       = draft.layers[layer];
+            to.input_norm                  = tensor(backing, from.input_norm, {2560});
+            to.post_attention_norm = tensor(backing, from.post_attention_norm, {2560});
+            to.query_key_value = bf16(backing, from.query_key_value, 6144, 2560);
+            to.context_key         = bf16(backing, from.context_key, 1024, 2560);
+            to.context_value       = bf16(backing, from.context_value, 1024, 2560);
+            to.query_norm          = tensor(backing, from.query_norm, {128});
+            to.key_norm            = tensor(backing, from.key_norm, {128});
+            to.output              = bf16(backing, from.output, 2560, 4096);
+            to.attention_conv_base_kernel =
+                tensor(backing, from.attention_conv_base_kernel, {2, 2, 2560});
+            to.attention_conv_kernel_projection =
+                bf16(backing, from.attention_conv_kernel_projection, 640, 2560);
+            to.mlp_conv_base_kernel = tensor(backing, from.mlp_conv_base_kernel, {2, 2, 2560});
+            to.mlp_conv_kernel_projection =
+                bf16(backing, from.mlp_conv_kernel_projection, 640, 2560);
+            to.mlp_gate_up = bf16(backing, from.mlp_gate_up, 15360, 2560);
+            to.mlp_down = bf16(backing, from.mlp_down, 2560, 7680);
+        }
+        draft.selector_hidden_projection =
+            bf16(backing, source.selector_hidden_projection, 256, 2560);
+        draft.selector_predecessor_codebook =
+            tensor(backing, source.selector_predecessor_codebook, {248320, 256});
+        draft.selector_successor_codebook =
+            tensor(backing, source.selector_successor_codebook, {248320, 256});
     }
     if (plan.features.vision) { runtime.vision = vision(plan.vision, backing); }
     runtime.ple_table = &ple_mapping;

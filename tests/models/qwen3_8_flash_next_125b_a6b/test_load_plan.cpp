@@ -75,20 +75,26 @@ int main() {
             ninfer::artifact::Binder dflash2_binder(dflash2_reader);
             const auto dflash2_plan = ninfer::models::qwen3_8_flash_next_125b_a6b::plan_artifact(
                 dflash2_binder, {.speculative = ninfer::SpeculativeBackend::DFlash2});
-            const std::size_t expected_draft_objects = 85;
-            if (dflash2_plan.device_objects.size() <
-                text_objects + mtp_objects + expected_draft_objects) {
+            // The DFlash2 backend replaces MTP as the speculative lane: the plan binds
+            // the text body plus the draft's 76 device objects, and no MTP tensors.
+            const std::size_t expected_dflash2_objects = text_objects + 76;
+            if (dflash2_plan.device_objects.size() != expected_dflash2_objects) {
                 throw std::runtime_error(
-                    "DFlash2 load plan did not upload exactly the draft tensors");
+                    "DFlash2 load plan uploaded " +
+                    std::to_string(dflash2_plan.device_objects.size()) +
+                    " device objects, expected " +
+                    std::to_string(expected_dflash2_objects));
             }
-            if (dflash2_plan.bindings.dflash2.feature_projection.name.empty() ||
-                dflash2_plan.bindings.dflash2.feature_projection.name !=
-                    "dflash2/feature_projection") {
-                throw std::runtime_error("DFlash2 feature projection is unbound");
+            if (dflash2_plan.bindings.mtp.embedding_norm.name ==
+                "mtp.pre_fc_norm_embedding.weight") {
+                throw std::runtime_error("the DFlash2 plan must not bind MTP tensors");
             }
-            std::cout << "dflash2_objects="
-                      << dflash2_plan.device_objects.size()
-                      << '\n';
+            if (dflash2_plan.bindings.dflash2.feature_projection.name !=
+                "dflash2/feature_projection") {
+                throw std::runtime_error("the DFlash2 feature projection is unbound");
+            }
+            std::cout << "dflash2_objects=" << dflash2_plan.device_objects.size()
+                      << " (no MTP tensors bound)\n";
         }
         return 0;
     } catch (const std::exception& error) {

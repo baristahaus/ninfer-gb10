@@ -11,6 +11,7 @@
 #include "ninfer/ops/linear_topk.h"
 #include "ninfer/ops/prepare_masked_block.h"
 #include "ninfer/ops/rmsnorm.h"
+#include "ninfer/ops/rmsnorm_pack_tail.h"
 #include "ninfer/ops/rmsnorm_rope.h"
 #include "ninfer/ops/sliding_window_attention.h"
 
@@ -90,8 +91,9 @@ void propose_dflash2_batch_impl(DFlashBatchContext& state,
         work.reset();
         ops::prepare_masked_block(anchors, frontiers, valid_columns, Config::mask_token, ids,
                                   positions, state.execution.device.execution_view());
-        Tensor residual = work.alloc(DType::BF16, {Config::hidden, columns});
-        ops::embedding(ids.view({columns}), state.execution.model.token_embedding, residual,
+        Tensor residual = work.alloc(DType::BF16, {Config::hidden, width, batch_size});
+        Tensor flat_residual = residual.view({Config::hidden, columns});
+        ops::embedding(ids.view({columns}), state.execution.model.token_embedding, flat_residual,
                        state.execution.device.execution_view());
 
         for (int layer = 0; layer < Config::layers; ++layer) {
@@ -120,7 +122,8 @@ void propose_dflash2_batch_impl(DFlashBatchContext& state,
                 Tensor key_flat   = key.view({Config::kv_size, columns});
                 Tensor value_flat = value.view({Config::kv_size, columns});
                 std::array outputs{query_flat, key_flat, value_flat};
-                ops::linear_split(branch.prepared, weight.query_key_value, outputs,
+                ops::linear_split(branch.prepared.view({Config::hidden, columns}),
+                                  weight.query_key_value, outputs,
                                   state.execution.device.execution_view());
                 ops::rmsnorm_rope(positions, weight.query_norm, weight.key_norm, query, key,
                                   state.execution.device.execution_view());
@@ -134,9 +137,10 @@ void propose_dflash2_batch_impl(DFlashBatchContext& state,
                     dflash_state(state).local_layer(static_cast<std::uint32_t>(layer)),
                     envelopes.local, work, attention,
                     state.execution.device.execution_view());
-                finish_branch<Config>(attention.view({Config::query_size, columns}),
-                                      weight.output, weight.attention_conv_base_kernel, branch,
-                                      residual, work, state.execution.device.execution_view());
+                finish_branch<Config>(
+                    attention.view({Config::query_size, width, batch_size}), weight.output,
+                    weight.attention_conv_base_kernel, branch, residual, work,
+                    state.execution.device.execution_view());
             }
             {
                 nvtx::ScopedRange mlp_range(nvtx::Name::DFlashMlp, nvtx::Category::PostMixer,
@@ -148,8 +152,10 @@ void propose_dflash2_batch_impl(DFlashBatchContext& state,
                                        weight.mlp_conv_kernel_projection, branch, work,
                                        state.execution.device.execution_view());
                 Tensor intermediate =
-                    work.alloc(DType::BF16, {Config::intermediate, columns});
-                ops::linear_swiglu(branch.prepared, weight.mlp_gate_up, intermediate, work,
+                    work.alloc(DType::BF16, {Config::intermediate, width, batch_size});
+                ops::linear_swiglu(branch.prepared.view({Config::hidden, columns}),
+                                   weight.mlp_gate_up,
+                                   intermediate.view({Config::intermediate, columns}), work,
                                    state.execution.device.execution_view());
                 finish_branch<Config>(intermediate, weight.mlp_down, weight.mlp_conv_base_kernel,
                                       branch, residual, work,
@@ -158,22 +164,9 @@ void propose_dflash2_batch_impl(DFlashBatchContext& state,
         }
 
         const std::int32_t mask_columns = static_cast<std::int32_t>(k) * batch_size;
-        Tensor packed = work.alloc(DType::BF16, {Config::hidden, mask_columns});
-        {
-            const std::size_t element_bytes = dtype_size(DType::BF16);
-            const std::size_t row_bytes =
-                static_cast<std::size_t>(Config::hidden) * element_bytes;
-            const std::size_t source_pitch =
-                static_cast<std::size_t>(Config::hidden) * width * element_bytes;
-            const auto* source = static_cast<const std::byte*>(residual.data) + row_bytes;
-            CUDA_CHECK(cudaMemcpy2DAsync(packed.data, row_bytes, source, source_pitch, row_bytes,
-                                         static_cast<std::size_t>(batch_size),
-                                         cudaMemcpyDeviceToDevice,
-                                         state.execution.device.stream()));
-        }
         Tensor proposal_hidden = work.alloc(DType::BF16, {Config::hidden, mask_columns});
-        ops::rmsnorm(packed, state.execution.model.dflash2->final_norm, Config::rms_epsilon, false,
-                     proposal_hidden, state.execution.device.execution_view());
+        ops::rmsnorm_pack_tail(residual, state.execution.model.dflash2->final_norm,
+                               proposal_hidden, state.execution.device.execution_view());
 
         Tensor candidates = frame.proposal_candidates.slice(1, 0, batch_size);
         Tensor scores     = frame.proposal_scores.slice(1, 0, batch_size);
@@ -187,8 +180,9 @@ void propose_dflash2_batch_impl(DFlashBatchContext& state,
 
         Tensor proposal_q = frame.proposal_q.slice(1, 0, batch_size);
         ops::candidate_selector_path(
-            candidates, scores, projected, anchors,
-            state.execution.model.dflash2->selector_predecessor_codebook,
+            candidates, scores,
+            projected.view({Config::selector_rank, static_cast<std::int32_t>(k), batch_size}),
+            anchors, state.execution.model.dflash2->selector_predecessor_codebook,
             state.execution.model.dflash2->selector_successor_codebook, frontiers,
             frame.sampling, drafts, proposal_q, work,
             state.execution.device.execution_view());

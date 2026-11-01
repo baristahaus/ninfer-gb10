@@ -205,7 +205,7 @@ void propose_batch_impl(DFlashBatchContext& state, qwen3_8_flash_next::DFlashDec
 
         state.execution.work.reset();
         ops::prepare_masked_block(anchors, frontiers, valid_columns, Config::mask_token, ids,
-                                  positions, state.execution.device.execution_view());
+                                  positions, state.execution.device.stream());
         Tensor residual = state.execution.work.alloc(DType::BF16, {Config::hidden, columns});
         ops::embedding(ids.view({columns}), state.execution.model.token_embedding, residual,
                        state.execution.device.execution_view());
@@ -232,7 +232,7 @@ void propose_batch_impl(DFlashBatchContext& state, qwen3_8_flash_next::DFlashDec
                 Tensor key_flat   = key_raw.view({Config::kv_size, columns});
                 Tensor value_flat = value.view({Config::kv_size, columns});
                 ops::attn_input_proj(roots.hidden, weight.query_key_value, query_flat, key_flat,
-                                     value_flat, state.execution.device.execution_view());
+                                     value_flat, state.execution.device.stream());
                 Tensor query = roots.query.view({Config::head_dim, Config::query_heads, columns});
                 Tensor key   = roots.key.view({Config::head_dim, Config::kv_heads, columns});
                 ops::rmsnorm(query_raw, weight.query_norm, Config::rms_epsilon, false, query,
@@ -319,7 +319,7 @@ void propose_batch_impl(DFlashBatchContext& state, qwen3_8_flash_next::DFlashDec
             ops::argmax(logits, flat_drafts, V::draft_head_rows, state.execution.device.execution_view());
             ops::proposal_remap_token_ids(flat_drafts,
                                           static_cast<const std::int32_t*>(proposal.token_ids.data),
-                                          V::draft_head_rows, state.execution.device.execution_view());
+                                          V::draft_head_rows, state.execution.device.stream());
         }
         state.execution.work.reset();
     }

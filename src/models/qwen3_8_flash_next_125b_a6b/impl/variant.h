@@ -34,9 +34,9 @@ struct Variant {
     static constexpr float gdn_scale                           = kGdnScale;
     static constexpr std::uint32_t prefill_chunk_alignment     = kPrefillChunkAlignment;
     static constexpr std::uint32_t maximum_mtp_draft_tokens    = kMaximumMtpDraftTokens;
-    static constexpr std::uint32_t maximum_dflash_draft_tokens = kMaximumDFlashDraftTokens;
+    static constexpr std::uint32_t maximum_dflash_draft_tokens = kMaximumDFlash2DraftTokens;
     static constexpr std::uint32_t maximum_context             = kNativeContext;
-    static constexpr bool supports_dflash                      = false;
+    static constexpr bool supports_dflash                      = true;
     static constexpr std::int32_t draft_head_rows              = 147456;
     static constexpr std::int32_t draft_head_valid_rows        = 147456;
 

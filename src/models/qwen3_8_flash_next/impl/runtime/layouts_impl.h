@@ -766,12 +766,13 @@ void validate_target_options(DeviceContext& device, const EngineOptions& options
         }
         break;
     case SpeculativeBackend::DFlash:
-        if (kMaximumDFlashDraftTokens == 0) {
+    case SpeculativeBackend::DFlash2:
+        if (Variant::maximum_dflash_draft_tokens == 0) {
             throw std::invalid_argument("DFlash is not supported by this target");
         }
         if (options.speculative.draft_tokens == 0 ||
-            options.speculative.draft_tokens > kMaximumDFlashDraftTokens) {
-            throw std::invalid_argument("DFlash draft window must be in [1,15]");
+            options.speculative.draft_tokens > Variant::maximum_dflash_draft_tokens) {
+            throw std::invalid_argument("DFlash draft window is outside the target's range");
         }
         if (options.enable_vision) {
             throw std::invalid_argument("DFlash and Vision cannot be enabled together");

@@ -54,18 +54,30 @@ struct VisionConfig : qwen3_8_flash_next::VisionBackboneConfig {
     static constexpr int output_hidden = TextConfig::hidden;
 };
 
+// The masked-draft companion's geometry. The 125B artifact's companion is the published
+// DFlash2 draft: five sliding-attention layers at the text hidden, two-tap dynamic
+// convolutions, a candidate selector over the target's tap layers 5/15/25/35/45.
 struct DFlashConfig {
-    static constexpr bool supported     = false;
-    static constexpr int local_layers   = 0;
-    static constexpr int local_capacity = 0;
-    static constexpr int query_heads    = 0;
-    static constexpr int kv_heads       = 0;
-    static constexpr int head_dim       = 0;
-    static constexpr int feature_rows   = 0;
-    static constexpr int hidden         = 0;
-    static constexpr int intermediate   = 0;
-    static constexpr int query_size     = 0;
-    static constexpr int kv_size        = 0;
+    static constexpr bool supported     = true;
+    static constexpr int layers         = 5;
+    static constexpr int local_layers   = 5;
+    static constexpr int local_capacity = 2048;
+    static constexpr int query_heads    = 32;
+    static constexpr int kv_heads       = 8;
+    static constexpr int head_dim       = 128;
+    static constexpr int hidden         = 2560;
+    static constexpr int intermediate   = 7680;
+    static constexpr int query_size     = query_heads * head_dim;
+    static constexpr int kv_size        = kv_heads * head_dim;
+    static constexpr int groups         = hidden / 16;
+    static constexpr int feature_rows   = 5 * hidden;
+    static constexpr int mask_token     = 248077;
+    static constexpr float rms_epsilon  = 1.0e-6F;
+    static constexpr float rope_theta   = 1.0e7F;
+    static constexpr float attention_scale = 1.0F / 11.3137085F;  // 1/sqrt(128)
+    static constexpr std::array<int, 5> target_feature_layers = {5, 15, 25, 35, 45};
+    static constexpr int selector_rank   = 256;
+    static constexpr int selector_top_k  = 16;
 };
 
 // The published DFlash2 draft for Flash-Next (incoai/Qwen3.8-Flash-Next-DFlash2):
@@ -74,7 +86,7 @@ struct DFlashConfig {
 // layers 5/15/25/35/45. Load/bind support only; the draft execution and its
 // schedule hooks are a separate work item.
 struct DFlash2Config {
-    static constexpr bool supported              = true;
+    static constexpr bool supported              = DFlashConfig::supported;
     static constexpr int layers                  = 5;
     static constexpr int hidden                  = 2560;
     static constexpr int intermediate            = 7680;

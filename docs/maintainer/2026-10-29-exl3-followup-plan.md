@@ -463,3 +463,23 @@ build tree is `build-134`. Next step: diff the standalone's capture usage
 against `DecodeGraphCapture` (stream, capture mode, instantiation timing) and
 walk the repo test toward the standalone until the poison appears — the first
 delta that flips it is the mechanism.
+
+### DFlash2 stage 2A: scope correction from the family mapping (2026-10-31, twoFour)
+
+The Flash-Next family runtime already carries a complete, variant-gated **DFlash v1**
+machinery (`dflash_impl.h`, contexts, graphs, ingress, round state — 10+ files), and the
+125B variant stubs it out entirely: `DFlashConfig::supported = false` (all-zero geometry),
+`supports_dflash = false`, `kMaximumDFlashDraftTokens = 0`, `EmptyDFlashWeights`,
+`dflash_graph_profiles -> {}`. The public contract also already anticipates DFlash2:
+`SpeculativeBackend::DFlash2` exists and `speculative_component()` returns "dflash2".
+
+But the family's DFlash is **v1**: `DFlashLayerWeights` binds a fused `query_key_value`
+plus context K/V — no two-tap dynamic convs, no candidate selector, no codebooks. The
+published DFlash2 draft requires all three. The DFlash2-specific pieces therefore are:
+the conv weights per layer (`attention_conv`/`mlp_conv` base kernel + projection, consumed
+by the existing `dynamic_grouped_conv` ops), the selector (`hidden_projection` +
+predecessor/successor codebooks, the `candidate_selector` op family), and separate
+q/k/v bindings (the container's packing group already covers the artifact side).
+
+Stage 2B (load/bind) proceeds on that basis; stage 2C (the DFlash2 draft execution and
+its schedule hooks) is the bulk and stays a distinct work item.

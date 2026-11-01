@@ -22,6 +22,7 @@
 #include "models/qwen3_8_flash_next/impl/runtime/graph_impl.h"
 #include "models/qwen3_8_flash_next/impl/runtime/speculative_target_impl.h"
 #include "models/qwen3_8_flash_next/impl/runtime/dflash_impl.h"
+#include "models/qwen3_8_flash_next/impl/runtime/dflash2_impl.h"
 #include "models/qwen3_8_flash_next/impl/runtime/decode_impl.h"
 #include "models/qwen3_8_flash_next/impl/runtime/mtp_impl.h"
 #include "models/qwen3_8_flash_next/impl/runtime/request_plan_impl.h"

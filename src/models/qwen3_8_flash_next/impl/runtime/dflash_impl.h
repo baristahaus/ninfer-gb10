@@ -325,6 +325,14 @@ void propose_batch_impl(DFlashBatchContext& state, qwen3_8_flash_next::DFlashDec
     }
 }
 
+// Defined beside the v1 proposal in dflash2_impl.h; declared here because the decode body
+// dispatches on the variant's speculative backend and this header is included first.
+template <class V>
+void propose_dflash2_batch_impl(DFlashBatchContext& state,
+                                qwen3_8_flash_next::DFlashDecodeState& frame,
+                                std::int32_t batch_size, std::uint32_t k,
+                                DFlashEnvelopes envelopes);
+
 auto dflash_decode_batch_body(DFlashBatchContext& state, std::int32_t batch_size, std::uint32_t k,
                               DFlashEnvelopes envelopes,
                               ops::CausalAttentionExecutionEnvelope target_envelope) {
@@ -371,7 +379,11 @@ auto dflash_decode_batch_body(DFlashBatchContext& state, std::int32_t batch_size
         append_context_impl<Variant>(state, compact_features, append_positions, append_counts,
                                      state_destinations, dflash_rows, envelopes.append);
 
-        propose_batch_impl<Variant>(state, frame, batch_size, k, envelopes);
+        if (state.execution.model.features.speculative == SpeculativeBackend::DFlash2) {
+            propose_dflash2_batch_impl<Variant>(state, frame, batch_size, k, envelopes);
+        } else {
+            propose_batch_impl<Variant>(state, frame, batch_size, k, envelopes);
+        }
         ops::speculative_prepare_verify_ids(anchors, drafts, extents, verify_ids,
                                             state.execution.device.stream());
 

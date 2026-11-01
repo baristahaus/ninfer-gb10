@@ -192,7 +192,7 @@ DFlash2Plan bind_dflash2(artifact::Binder& binder, Placement placement) {
             device(binder, p + "attention/query_norm", QType::BF16, {dflash2.head_dim}, placement);
         layer.key_norm =
             device(binder, p + "attention/key_norm", QType::BF16, {dflash2.head_dim}, placement);
-        layer.output = device(binder, p + "attention/output", QType::BF16,
+        layer.output = device(binder, p + "attention/output", QType::Q8_G32_FP16,
                               {dflash2.hidden, dflash2.query_size}, placement);
         layer.attention_conv_base_kernel =
             dflash2_table(binder, p + "attention_conv/base_kernel",
@@ -208,7 +208,7 @@ DFlash2Plan bind_dflash2(artifact::Binder& binder, Placement placement) {
                    {dflash2.conv_projection_rows, dflash2.hidden}, placement);
         layer.mlp_gate_up = device(binder, p + "mlp/gate_up", QType::BF16,
                                    {2 * dflash2.intermediate, dflash2.hidden}, placement);
-        layer.mlp_down = device(binder, p + "mlp/down", QType::BF16,
+        layer.mlp_down = device(binder, p + "mlp/down", QType::Q8_G32_FP16,
                                 {dflash2.hidden, dflash2.intermediate}, placement);
     }
     out.selector_hidden_projection =

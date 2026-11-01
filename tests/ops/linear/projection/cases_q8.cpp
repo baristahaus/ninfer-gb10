@@ -25,7 +25,7 @@ struct Geometry {
 const std::array kGeometries{
 #if NINFER_TARGET_SPARK
     Geometry{4096, 4096, 947U},  Geometry{12288, 4096, 911U}, Geometry{2560, 3072, 383U},
-    Geometry{8192, 2560, 373U},
+    Geometry{8192, 2560, 373U},  Geometry{2560, 4096, 367U}, Geometry{2560, 7680, 379U},
 #endif
     Geometry{1024, 2048, 257U},  Geometry{1024, 5120, 223U},  Geometry{2048, 4096, 251U},
     Geometry{2048, 4608, 271U},  Geometry{2048, 16384, 283U}, Geometry{2560, 6144, 307U},

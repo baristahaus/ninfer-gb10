@@ -242,7 +242,12 @@ def qwen3_8_flash_next(model, recipe, sources):
     if "dflash2" in model.components:
         recipe.place("dflash2/*", (3,))
         for name in model.parameters:
-            if name.startswith("dflash2/"):
+            if not name.startswith("dflash2/"):
+                continue
+            if name.endswith(("/attention/output", "/mlp/down")):
+                # The dynamic-conv add op consumes these projections as Q8_G32_FP16.
+                _assign(recipe, name, Q8)
+            else:
                 recipe.assign(name)
     for name in model.parameters:
         if name.startswith("text/layers/") and name.endswith(

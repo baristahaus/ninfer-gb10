@@ -23,11 +23,14 @@ from safetensors.torch import load_file
 from tools.artifact.reader import Artifact
 from tools.artifact.schema import ResourceObject, ResourceSpec, TensorSpec
 from tools.artifact.writer import ArtifactWriter
+from tools.artifact.layouts import row_split_geometry
+from tools.convert.quantization.groupwise import quantize_matrix
 
 OUTPUT_BASENAME = "qwen3_8_flash_next_125b_a6b_nvfp4_fp8_mtp_dflash2.ninfer"
 RECIPE_ID = "qwen3_8_flash_next_125b_a6b_nvfp4_fp8_mtp_dflash2-v1"
 DRAFT_LAYERS = 5
 CONTIGUOUS = "contiguous_le_v1"
+Q8 = "q8_g32_fp16"
 
 # (parameter name, companion tensor, shape, inputs); the conv base kernels and the
 # codebooks carry no mathematical use and get no Use record.
@@ -81,12 +84,28 @@ def add(source_path: str | Path, companion_path: Path, out_path: str | Path) -> 
     companion = load_file(companion_path / "model.safetensors")
     config = json.loads((companion_path / "config.json").read_text())
     draft_payloads: dict[str, bytes] = {}
+    quantized: dict[str, str] = {}
     for name, tensor_name, shape, _inputs in DRAFT_PARAMETERS:
         value = companion[tensor_name]
         if name.endswith("attention/context_key"):
             value = value[4096:5120]
         elif name.endswith("attention/context_value"):
             value = value[5120:6144]
+        if name.endswith(("/attention/output", "/mlp/down")):
+            # The dynamic-conv add op consumes these projections as Q8_G32_FP16; the
+            # physical payload is the row-split plane layout.
+            encoded = quantize_matrix(value.contiguous(), Q8, device="cpu")
+            geometry = row_split_geometry(Q8, shape)
+            codes = encoded.codes.cpu().view(torch.uint8).numpy().tobytes()
+            scales = encoded.scales.cpu().view(torch.float16).numpy().tobytes()
+            if len(codes) != geometry.base_bytes or len(scales) != geometry.scale_bytes:
+                raise SystemExit(f"{name}: Q8 planes disagree with the row-split geometry")
+            payload = codes + bytes(geometry.scale_offset - len(codes)) + scales
+            if len(payload) != geometry.payload_bytes:
+                raise SystemExit(f"{name}: Q8 payload disagrees with the row-split geometry")
+            draft_payloads[name] = payload
+            quantized[name] = Q8
+            continue
         payload = value.contiguous().view(torch.uint8).numpy().tobytes()
         if len(payload) != prod(shape) * 2:
             raise SystemExit(
@@ -109,7 +128,10 @@ def add(source_path: str | Path, companion_path: Path, out_path: str | Path) -> 
                 specs.append(TensorSpec(obj.id, tuple(obj.shape), obj.format, obj.layout))
             steps.append((obj.id, False))
         for name, tensor_name, shape, _inputs in DRAFT_PARAMETERS:
-            specs.append(TensorSpec(name, shape, "bf16", CONTIGUOUS))
+            if name in quantized:
+                specs.append(TensorSpec(name, shape, quantized[name], "row_split_k128_v1"))
+            else:
+                specs.append(TensorSpec(name, shape, "bf16", CONTIGUOUS))
             steps.append((name, True))
         bindings = {**bindings, **{
             name: {"object": name} for name, _, _, _ in DRAFT_PARAMETERS

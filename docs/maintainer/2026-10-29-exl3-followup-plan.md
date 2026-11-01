@@ -578,3 +578,19 @@ The draft's local KV state sizing (`execution.local_layer(i)` in the reference,
 `DFlashConfig::local_layers/local_capacity/kv_heads/head_dim` in the Flash-Next variant
 config) must also be pinned from qwen3_5's frames/startup for the DFlash2 geometry: five
 local layers, kv_heads 8, head_dim 128, capacity = the draft's sliding window (2048).
+
+### DFlash2 stage 2D: the conversion base is 5090-only (2026-11-01, twoFour)
+
+Verified against Hugging Face (2026-11-01): NVIDIA's `nvidia/Qwen3.8-Flash-Next-FP4-Local`
+(95 GiB, 22 safetensors) IS a `Qwen4ExpForConditionalGeneration` checkpoint with the right
+geometry — but its `ple_layer_ids` is **[2]** while this fork's route requires **[1]** (the
+recipe's expected dict and the C++ binder's hardcoded layer-1 PLE binding). The NVIDIA export
+is a different PLE placement than this fork's base, so it is NOT a drop-in conversion source:
+using it would silently move the PLE component to the wrong layer. The Qwen FP8 checkpoint
+(172.8 GiB) is the wrong format for the codes-preserving route, and the BF16 base
+(335.3 GiB) does not fit this box's 210 GiB free.
+
+Conclusion: the real dflash2 conversion runs on the 5090 from the fork's own BF16 base
+(the exact source of the existing artifact), folded into that lane's next session. The
+GB10-side enabled-path load-plan test goes in now, env-gated on the converted artifact's
+path, mirroring the existing skip-without-weights pattern.

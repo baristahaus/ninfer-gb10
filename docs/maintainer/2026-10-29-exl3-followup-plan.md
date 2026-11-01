@@ -553,3 +553,28 @@ and the round-state proposal arrays (frames.cpp adds `DFlash2 proposal candidate
 [16, width-1, batch] I32 + probabilities FP32). The variant gate: a `supports_dflash2` flag
 beside `supports_dflash` (v1 stays false everywhere), with the DFlash2 geometry from the
 2B config block.
+
+### DFlash2 stage 2C addendum: the two weight-type systems (2026-11-01, twoFour)
+
+The qwen3_5 family has TWO draft weight representations, and the port must not conflate
+them:
+
+- **Binding side** (`weights.h`): `DraftBlockWeights` — SEPARATE `attention.query/key/value`
+  plus `attention.context_key/context_value` mirrors, `mlp` (DenseParameters), optional
+  `attention_conv`/`mlp_conv` (`DynamicConvWeights{base_kernel, kernel_projection}`). This is
+  what `bind_draft` fills from the artifact (separate container parameters — the stage-1
+  route's shape is correct) and what `bind_dflash2` extends with the convs and selector.
+- **Execution side** (`execution/parameters.h`): `DraftBlockParameters` — a FUSED
+  `query_key_value` LinearParameters plus `context_key/context_value`, optional convs, and a
+  `DenseParameters mlp` (the packed gate/up pair). `propose_dflash2_batch` consumes this.
+
+The separate-to-fused conversion happens at the family's weight materialization step (the
+packing group's parent object read as one fused Weight covering the q/k/v row ranges); trace
+it in `weights.cpp`/the instantiation before writing the Flash-Next view. The same decision
+recurs for the Flash-Next port: bind separate (as the container emits), pack at
+materialization (as qwen3_5 does).
+
+The draft's local KV state sizing (`execution.local_layer(i)` in the reference,
+`DFlashConfig::local_layers/local_capacity/kv_heads/head_dim` in the Flash-Next variant
+config) must also be pinned from qwen3_5's frames/startup for the DFlash2 geometry: five
+local layers, kv_heads 8, head_dim 128, capacity = the draft's sliding window (2048).

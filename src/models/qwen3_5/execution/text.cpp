@@ -225,10 +225,7 @@ void TextRun::gdn(const BlockParameters& block, std::uint32_t compact_layer) {
         Tensor value_output     = vc.view({dimension(gdn.value_width()), width, batch});
         Tensor gate_output      = z.view({dimension(gdn.value_width()), width, batch});
         Tensor conv             = view_.states.layer_view(compact_layer).conv;
-        const auto* exl3_single = std::get_if<LinearParameters>(&p.projection);
-        const bool exl3_route =
-            p.role_rows.has_value() ||
-            (exl3_single != nullptr && exl3_single->weight.qtype == QType::EXL3);
+        const bool exl3_route = is_exl3_gdn(p);
         if (replay) {
             if (exl3_route) {
                 throw std::invalid_argument(

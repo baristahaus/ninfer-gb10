@@ -5,6 +5,20 @@
 
 namespace ninfer::models::qwen3_5::execution {
 
+// The decomposed EXL3 GDN route: the fused single-parent form or the separate
+// (qkv, z) role form (campaign plan 4a). One predicate for the workspace, decode
+// and planning selectors so their copies cannot drift.
+[[nodiscard]] inline bool is_exl3_gdn(const GdnParameters& parameters) {
+    if (parameters.role_rows) { return true; }
+    const auto* single = std::get_if<LinearParameters>(&parameters.projection);
+    return single != nullptr && single->weight.qtype == QType::EXL3;
+}
+
+[[nodiscard]] inline bool is_exl3_gdn(const GdnProfile& profile) {
+    return profile.role_profiles.has_value() ||
+           (!profile.projection.second && profile.projection.first.qtype == QType::EXL3);
+}
+
 [[nodiscard]] std::size_t gdn_projection_workspace_bytes(const GdnProfile& parameters,
                                                          std::int32_t first, std::int32_t last);
 [[nodiscard]] std::size_t gdn_snapshot_workspace_bytes(const GdnProfile& parameters,

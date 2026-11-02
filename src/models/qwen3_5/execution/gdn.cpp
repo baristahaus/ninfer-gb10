@@ -19,8 +19,8 @@ std::size_t gdn_projection_workspace_bytes(const GdnProfile& parameters, std::in
         }
         return peak;
     }
-    if (const auto& packed = parameters.projection.first;
-        !parameters.projection.second && packed.qtype == QType::EXL3) {
+    if (is_exl3_gdn(parameters)) {
+        const auto& packed = parameters.projection.first;
         return ops::gdn_input_proj_exl3_workspace_capacity_bytes(packed.n, packed.k, packed.policy,
                                                                  first, last);
     }

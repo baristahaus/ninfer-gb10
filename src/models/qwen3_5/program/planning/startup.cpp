@@ -209,9 +209,7 @@ WorkspaceSpec build_workspace_plan(const SequencePlanImpl& plan) {
                     scratch(layout, ops::gdn_norm_control_proj_workspace_capacity_bytes(
                                         gdn.control, first, last));
                     (void)workspace::gdn_projection(layout, config, last);
-                    const bool exl3_gdn =
-                        (!gdn.projection.second && gdn.projection.first.qtype == QType::EXL3) ||
-                        gdn.role_profiles.has_value();
+                    const bool exl3_gdn = is_exl3_gdn(gdn);
                     if (path == GdnWorkspacePath::Snapshot && exl3_gdn) {
                         // The decomposed EXL3 decode route: the dense EXL3 projection into
                         // one qkv plane, then the standalone batched causal conv into a

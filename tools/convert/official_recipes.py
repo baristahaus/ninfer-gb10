@@ -579,6 +579,24 @@ def qwen3_8_27b_exl3_sc385(model, recipe, sources):
     recipe.assign("text/output_head", format="exl3", layout="exl3_dense_v1",
                   method="import_exl3_dense",
                   parameters={"checkpoint": checkpoint, "tensor": "lm_head"})
+    # W0.4: the DFlash2 companion is independent of the main model's quantization —
+    # it re-encodes at the official companion route (Q8) from its own source, so the
+    # DFlash2 draft's candidate selection never touches the EXL3 output head.
+    for name, parameter in model.parameters.items():
+        if not name.startswith("dflash2/"):
+            continue
+        if name.endswith((
+            "/attention_conv/kernel_projection",
+            "/mlp_conv/kernel_projection",
+            "/candidate_selector/hidden_projection",
+        )):
+            continue
+        _assign(recipe, name, Q8)
+    layers = model.components["dflash2"]["config"]["num_hidden_layers"]
+    for layer in range(layers):
+        prefix = f"dflash2/layers/{layer}/attention/"
+        for role in ("key", "value"):
+            recipe.share(prefix + "context_" + role, prefix + role)
 
 
 def qwen3_6_35b_a3b_exl3(model, recipe, sources):

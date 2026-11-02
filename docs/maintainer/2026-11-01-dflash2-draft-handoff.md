@@ -13,11 +13,13 @@ component appended. Read this before touching the draft path.
 - Acceptance is nonzero, so the draft carries real signal: 12/138 (8.7%) on a 59-token reply,
   19/501 (3.8%) on a 187-token reply.
 
-## 2. What is broken
+## 2. What was broken (superseded by §3.1)
 
-Acceptance is far below the reference DFlash2 lane. `docs/performance/qwen3.8-27b.md:190-198`
+Acceptance was far below the reference DFlash2 lane. `docs/performance/qwen3.8-27b.md:190-198`
 records 33.9-65.9% acceptance and 3.4-5.6 tokens/round for the 27B DFlash2 route; this lane
-produces 2-9%.
+produced 2-9%. **The root cause is now found and fixed (§3.1: the draft's pack-tail ran the
+5120 geometry on the 2560 draft), acceptance is 25.9%, and the old "right token, wrong
+rank" reading of the top-16 candidates is superseded by the column-shift explanation.**
 
 **Measured against the MTP lane on the same artifact** (2026-11-02, greedy,
 `--no-cuda-graph`, `--max-context 4096`, one request; short = "17*23" 64-token reply, long =
@@ -35,9 +37,19 @@ decode baseline — its verify batches cost more than the near-zero acceptance r
 dt3 is *slower* than dt1. The MTP lane also works unchanged on the DFlash2-appended
 artifact, so the appended component does not disturb it.
 
-The draft's *structure* is sound: its top-16 candidates usually contain the token the target
-picks, but that token sits at ranks 3-6 instead of rank 0. That "right token, wrong rank"
-signature is a systematic distortion, not a broken assembly.
+The draft's *structure* was sound: its top-16 candidates usually contained the token the
+target picks, but at the wrong rank. That "right token, wrong rank" signature was the
+pack-tail column shift: the head scored the wrong columns' hidden states. After the §3.1
+fix, position 0 of the block accepts ~70%; positions 1-2 remain near zero, which is the
+open selector/head question tracked as `ninfer-gb10-lpc`.
+
+**Current measurement** (CLI, greedy, `--no-cuda-graph`, dt3):
+
+```bash
+build/apps/ninfer out/dflash2/<artifact>.ninfer --prompt "The capital of France is" \
+  --max-tokens 200 --temperature 0 --spec dflash2 --draft-tokens 3 --no-cuda-graph
+# summary: drafted 81, accepted 21 (25.9%), accepted by pos 19,2,0
+```
 
 ## 3. Prime suspect: the draft's RoPE base — CONFIRMED AND FIXED 2026-11-02, with a twist
 
@@ -104,16 +116,25 @@ Acceptance after the fix (CLI, 200 tokens, greedy, dt3, no graph): **21/81 = 25.
 ~70% (19/27); positions 1-2 remain near zero, so the remaining gap is in the later
 block columns' head distribution — the next campaign target.
 
-### 3.2 The extent collapse at small budgets
+### 3.2 The extent collapse at small budgets (repro; cause unconfirmed)
 
 With `--max-tokens 2` the round ingress reports `extent=0`, so `target_valid_columns = 1`
 and only the anchor column of the propose block is live (the three mask columns are inert
-zeros). The cause is the CLI's warmup round consuming one generated token from the budget
-before the real round (`max_by_budget = generated_tokens_remaining - 1`); the extent is
-`min(draft_window, max_by_budget, capacity - frontier - 1)`. The warmup's token is not a
-defect for normal budgets (the extent is 3 again from ~5 tokens up), but the warmup round
-should not decrement the user's budget. Not fixed; measurement runs must use
-`--max-tokens >= 5` or the extent-0 round is silently degenerate.
+zeros). Verified facts:
+
+- the extent formula (`program_impl.h`, the round ingress):
+  `max_by_budget = generated_tokens_remaining > 1 ? generated_tokens_remaining - 1 : 0`,
+  `extent = min({draft_window, max_by_budget, capacity - frontier - 1})`;
+- the repro: `--max-tokens 2` shows `extent=0` on the first real round (dump line
+  `[dflash2] round ingress: ... extent=0`);
+- the practical mitigation: measure with `--max-tokens >= 5`, where the extent is 3 and
+  all four block columns are live (`valid=4`).
+
+The attribution to the CLI's warmup round is **not confirmed**: no CLI warmup that
+decrements the user's budget has been located, and an extent-0 round implies
+`generated_tokens_remaining` was already 1 (the `-1` itself is structural sizing — the
+anchor token shares the round's commit). Trace `generated_tokens_remaining` per round
+before treating this as a defect; it is tracked under `ninfer-gb10-lpc`.
 
 ## 4. Ruled out, with evidence
 

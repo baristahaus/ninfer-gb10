@@ -103,21 +103,25 @@ static void execute_swiglu(const Tensor& x, const Weight& gate_up_weight, Tensor
         !common::operand::aligned(out.data, 16))
         throw std::invalid_argument("linear_swiglu: x/out must be contiguous and 16-byte aligned");
 
-#if NINFER_TARGET_SPARK
     if (w.qtype == QType::BF16) {
         if (w.ndim != 2 || w.shape[0] != w.n || w.shape[1] != w.k ||
             w.layout != QuantLayout::Contiguous || w.group != 0 || w.group_size != 0 || w.scales ||
             w.qhigh || w.high_plane_bytes || w.payload_bytes < std::uint64_t(w.n) * w.k * 2 ||
             !common::operand::aligned(w.qdata, 16))
             throw std::invalid_argument("linear_swiglu: invalid BF16 weight");
+#if NINFER_TARGET_SPARK
         if (w.n == 1280 && w.k == 2560) {
             detail::launch_bf16_swiglu_n1280_k2560(x, w, out, limit, clamped, execution.stream());
-        } else {
-            detail::launch_bf16_swiglu_n2048_k4096(x, w, out, limit, clamped, execution.stream());
+            return;
         }
+        if (w.n == 2048 && w.k == 4096) {
+            detail::launch_bf16_swiglu_n2048_k4096(x, w, out, limit, clamped, execution.stream());
+            return;
+        }
+#endif
+        detail::launch_bf16_swiglu_n7680_k2560(x, w, out, limit, clamped, execution.stream());
         return;
     }
-#endif
     const bool q8_weight    = w.qtype == QType::Q8_G32_FP16;
     const bool fp8_weight   = w.qtype == QType::FP8_E4M3FN_ROW_BF16;
     const bool nvfp4_weight = w.qtype == QType::NVFP4;

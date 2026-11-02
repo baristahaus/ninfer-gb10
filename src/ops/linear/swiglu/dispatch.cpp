@@ -12,6 +12,7 @@ void validate_swiglu_geometry(QType type, int rows, int k) {
     // The Flash-Next FP8 shared expert builds its kernel on every target.
     if (type == QType::FP8_E4M3FN_ROW_BF16 && rows == 1280 && k == 2560) return;
     if (type == QType::Q8_G32_FP16 && rows == 12288 && k == 2048) return;
+    if (type == QType::BF16 && rows == 15360 && k == 2560) return; // DFlash2 draft gate/up.
     if (rows == 34816 && k == 5120 &&
         (type == QType::Q4_G64_FP16 || type == QType::Q8_G32_FP16 ||
          type == QType::FP8_E4M3FN_ROW_BF16 || type == QType::NVFP4 ||

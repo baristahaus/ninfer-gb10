@@ -393,6 +393,8 @@ DFlashDecodeState::DFlashDecodeState(MemorySpan backing, const DFlashDecodeState
         return Tensor(static_cast<unsigned char*>(egress.data) + offset, egress.device, dtype, shape);
     };
     anchors = ingress_tensor(offsetof(DFlashDecodeIngress, anchors), DType::I32, {batch});
+    ple_history =
+        ingress_tensor(offsetof(DFlashDecodeIngress, ple_history), DType::I32, {2, batch});
     execution_frontiers =
         ingress_tensor(offsetof(DFlashDecodeIngress, execution_frontiers), DType::I32, {batch});
     context_frontiers =

@@ -4,6 +4,7 @@
 #include "core/device.h"
 
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <stdexcept>
@@ -14,10 +15,10 @@ namespace {
 
 template <bool Pair>
 void launch_fixed(const Tensor& positions, const Tensor* q_norm_weight, const Tensor& k_norm_weight,
-                  Tensor* q, Tensor& k, std::int32_t tokens, cudaStream_t stream) {
+                  Tensor* q, Tensor& k, float theta, std::int32_t tokens, cudaStream_t stream) {
     const dim3 grid(tokens, Pair ? 5 : 1);
     detail::rmsnorm_rope_d128_kernel<Pair><<<grid, 256, 0, stream>>>(
-        static_cast<const std::int32_t*>(positions.data),
+        static_cast<const std::int32_t*>(positions.data), theta,
         q_norm_weight == nullptr ? nullptr : static_cast<const __nv_bfloat16*>(q_norm_weight->data),
         static_cast<const __nv_bfloat16*>(k_norm_weight.data),
         q == nullptr ? nullptr : static_cast<__nv_bfloat16*>(q->data),
@@ -66,13 +67,20 @@ void require_single_nonoverlap(const Tensor& positions, const Tensor& norm_weigh
     }
 }
 
+void require_theta(float theta) {
+    if (!(theta > 0.0F) || !std::isfinite(theta)) {
+        throw std::invalid_argument("rmsnorm_rope: theta must be positive and finite");
+    }
+}
+
 } // namespace
 
 void rmsnorm_rope(const Tensor& positions, const Tensor& q_norm_weight, const Tensor& k_norm_weight,
-                  Tensor& q, Tensor& k, CudaExecutionView execution) {
+                  Tensor& q, Tensor& k, float theta, CudaExecutionView execution) {
     const auto stream        = execution.stream();
     const std::int32_t batch = q.ne[3];
     const std::int32_t width = q.ne[2];
+    require_theta(theta);
     if (width < 2 || width > 16) throw std::invalid_argument("rmsnorm_rope: pair W must be 2..16");
     if (batch < 1 || batch > kMaximumBatch) {
         throw std::invalid_argument("rmsnorm_rope: pair B must be 1..8");
@@ -85,14 +93,16 @@ void rmsnorm_rope(const Tensor& positions, const Tensor& q_norm_weight, const Te
                    execution.device());
     require_tensor(positions, DType::I32, {width, batch, 1, 1}, "positions", execution.device());
     require_pair_nonoverlap(positions, q_norm_weight, k_norm_weight, q, k);
-    launch_fixed<true>(positions, &q_norm_weight, k_norm_weight, &q, k, width * batch, stream);
+    launch_fixed<true>(positions, &q_norm_weight, k_norm_weight, &q, k, theta, width * batch,
+                       stream);
     CUDA_CHECK(cudaGetLastError());
 }
 
-void rmsnorm_rope(const Tensor& positions, const Tensor& norm_weight, Tensor& x,
+void rmsnorm_rope(const Tensor& positions, const Tensor& norm_weight, Tensor& x, float theta,
                   CudaExecutionView execution) {
     const auto stream         = execution.stream();
     const std::int32_t tokens = x.ne[2];
+    require_theta(theta);
     if (tokens < 1 || tokens > kMaximumSingle) {
         throw std::invalid_argument("rmsnorm_rope: single T must be 1..2048");
     }
@@ -101,7 +111,7 @@ void rmsnorm_rope(const Tensor& positions, const Tensor& norm_weight, Tensor& x,
                    execution.device());
     require_tensor(positions, DType::I32, {tokens, 1, 1, 1}, "positions", execution.device());
     require_single_nonoverlap(positions, norm_weight, x);
-    launch_fixed<false>(positions, nullptr, norm_weight, nullptr, x, tokens, stream);
+    launch_fixed<false>(positions, nullptr, norm_weight, nullptr, x, theta, tokens, stream);
     CUDA_CHECK(cudaGetLastError());
 }
 

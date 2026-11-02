@@ -410,13 +410,17 @@ ArtifactLoadPlan plan_artifact(artifact::Binder& binder,
             throw artifact::ArtifactError("Flash-Next requires its matching DFlash2 component");
         }
         const auto& dflash2 = directory.component("dflash2");
+        const auto& companion_rope =
+            dflash2.config.value("rope_parameters", artifact::Json::object());
         const bool valid =
             dflash2.target == "text" &&
             dflash2.config.value("architectures", artifact::Json{}) ==
                 artifact::Json::array({"DFlash2DraftModel"}) &&
             dflash2.config.value("hidden_size", 0) == detail::DFlash2Config::hidden &&
             dflash2.config.value("vocab_size", 0) == 248320 &&
-            dflash2.config.value("num_hidden_layers", 0) == detail::DFlash2Config::layers;
+            dflash2.config.value("num_hidden_layers", 0) == detail::DFlash2Config::layers &&
+            companion_rope.value("rope_theta", 0.0) ==
+                static_cast<double>(detail::DFlash2Config::rope_theta);
         if (!valid) {
             throw artifact::ArtifactError("Flash-Next requires its matching DFlash2 component");
         }

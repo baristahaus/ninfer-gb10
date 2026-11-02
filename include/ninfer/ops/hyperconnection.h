@@ -23,6 +23,12 @@ struct HyperConnectionWeights {
 // Initializes the four-stream state by repeating each BF16 [2560,T] input column.
 void hyperconnection_repeat(const Tensor& input, Tensor& hyper, cudaStream_t stream);
 
+// DFlash2 target-feature tap: out[d,t] = 0.25 * sum_s hyper[s*2560 + d, t] over the four
+// hyper-connection streams. hyper is BF16 [10240,T] and out is BF16 [2560,T]; both contiguous.
+// This is the reference capture ("completed, zero-based layer outputs, averaged over the four
+// hyper-connection streams"). Inputs are preserved.
+void hyperconnection_mean(const Tensor& hyper, Tensor& out, cudaStream_t stream);
+
 // Adds one [2560,T] embedding branch to each of the four [2560,T]
 // predictor branches in-place.
 void hyperconnection_add_repeated(const Tensor& embedding, Tensor& hyper,

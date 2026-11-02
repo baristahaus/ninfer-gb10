@@ -32,7 +32,8 @@ namespace ninfer::models::qwen3_8_flash_next::detail::NINFER_QWEN38_FLASH_NEXT_R
 namespace {
 
 void require_dflash_state(const PrefillContext& state) {
-    if (state.dflash == nullptr || !state.execution.model.dflash.has_value()) {
+    if (state.dflash == nullptr ||
+        (!state.execution.model.dflash.has_value() && !state.execution.model.dflash2.has_value())) {
         throw std::logic_error("DFlash schedule requires DFlash weights and state");
     }
 }
@@ -130,17 +131,41 @@ void append_context_impl(Context& state, const Tensor& features, const Tensor& p
         const auto context_roots =
             workspace_recipe::dflash_context<Config>(state.execution.work, columns);
         Tensor projected = context_roots.projected;
-        ops::linear(features.view({Config::feature_rows, columns}),
-                    state.execution.model.dflash->feature_projection, projected,
-                    state.execution.device.execution_view());
-        Tensor context = context_roots.normalized;
-        ops::rmsnorm(projected, state.execution.model.dflash->context_norm, Config::rms_epsilon,
-                     false, context, state.execution.device.execution_view());
-
+        // The v1 DFlash draft and the DFlash2 draft share the context projection, the layer
+        // context projections, and the norm names; only the model-view source differs.
+        const auto project_and_norm = [&](const auto& draft) {
+            ops::linear(features.view({Config::feature_rows, columns}), draft.feature_projection,
+                        projected, state.execution.device.execution_view());
+            Tensor normalized = context_roots.normalized;
+            ops::rmsnorm(projected, draft.context_norm, Config::rms_epsilon, false, normalized,
+                         state.execution.device.execution_view());
+            return normalized;
+        };
+        const auto dump_append = std::getenv("NINFER_DFLASH2_DUMP") != nullptr;
+        const auto append_layers = [&](const auto& draft) {
+        Tensor context = project_and_norm(draft);
+        if (dump_append) {
+            CUDA_CHECK(cudaStreamSynchronize(state.execution.device.stream()));
+            std::vector<std::uint16_t> all(static_cast<std::size_t>(context.bytes()) / 2);
+            CUDA_CHECK(cudaMemcpy(all.data(), context.data, context.bytes(),
+                                  cudaMemcpyDeviceToHost));
+            std::size_t nan = 0, zero = 0;
+            double magnitude = 0.0;
+            for (auto b16 : all) {
+                if ((b16 & 0x7f80u) == 0x7f80u && (b16 & 0x007fu) != 0) { ++nan; }
+                else if (b16 == 0) { ++zero; }
+                magnitude += std::fabs(static_cast<float>(static_cast<std::int16_t>(b16)));
+            }
+            std::fprintf(stderr, "[dflash2] context scan: n=%zu nan=%zu zero=%zu mean|x|=%.5f first:",
+                         all.size(), nan, zero, magnitude / static_cast<double>(all.size()));
+            for (std::size_t i = 0; i < 6 && i < all.size(); ++i) {
+                std::fprintf(stderr, " %04x", all[i]);
+            }
+            std::fprintf(stderr, "\n");
+        }
         for (int layer = 0; layer < Config::layers; ++layer) {
             auto layer_scope = state.execution.work.scope();
-            const auto& weight =
-                state.execution.model.dflash->layers.at(static_cast<std::size_t>(layer));
+            const auto& weight = draft.layers.at(static_cast<std::size_t>(layer));
             const bool local_layer  = layer < Config::local_layers;
             const int layer_width   = local_layer ? local_width : width;
             const int layer_columns = layer_width * batch;
@@ -158,8 +183,17 @@ void append_context_impl(Context& state, const Tensor& features, const Tensor& p
                 layer_roots.value.view({Config::head_dim, Config::kv_heads, layer_columns});
             Tensor key_flat   = key_raw.view({Config::kv_size, layer_columns});
             Tensor value_flat = value.view({Config::kv_size, layer_columns});
-            ops::linear_pair(layer_context, weight.context_key, weight.context_value, key_flat,
-                             value_flat, state.execution.device.execution_view());
+            // The v1 draft's context projections are quantized and run as one pair; the
+            // DFlash2 draft's are BF16 and run as two registered dense projections.
+            if (weight.context_key.qtype == QType::BF16) {
+                ops::linear(layer_context, weight.context_key, key_flat,
+                            state.execution.device.execution_view());
+                ops::linear(layer_context, weight.context_value, value_flat,
+                            state.execution.device.execution_view());
+            } else {
+                ops::linear_pair(layer_context, weight.context_key, weight.context_value,
+                                 key_flat, value_flat, state.execution.device.execution_view());
+            }
             Tensor key = layer_roots.key.view({Config::head_dim, Config::kv_heads, layer_columns});
             ops::rmsnorm(key_raw, weight.key_norm, Config::rms_epsilon, false, key,
                          state.execution.device.execution_view());
@@ -179,6 +213,33 @@ void append_context_impl(Context& state, const Tensor& features, const Tensor& p
                     key_batch, value_batch, position_batch, commit_counts, table_rows, envelope,
                     dflash_state(state).full_batch_layer(0), state.execution.device.execution_view());
             }
+        }
+        };
+        if (state.execution.model.dflash2.has_value()) {
+            append_layers(*state.execution.model.dflash2);
+        } else {
+            append_layers(*state.execution.model.dflash);
+        }
+        if (std::getenv("NINFER_DFLASH2_DUMP") != nullptr) {
+            // The draft's context must land in the lane-local cyclic caches; scan the first
+            // layer's K plane for a live window.
+            CUDA_CHECK(cudaStreamSynchronize(state.execution.device.stream()));
+            const auto cache = dflash_state(state).local_layer(0);
+            const std::size_t count = std::min<std::size_t>(
+                static_cast<std::size_t>(cache.k.bytes()) / 2, 2560u * 4u);
+            std::vector<std::uint16_t> all(count);
+            CUDA_CHECK(cudaMemcpy(all.data(), cache.k.data, count * 2, cudaMemcpyDeviceToHost));
+            std::size_t nan = 0, zero = 0;
+            for (auto b16 : all) {
+                if ((b16 & 0x7f80u) == 0x7f80u && (b16 & 0x007fu) != 0) { ++nan; }
+                else if (b16 == 0) { ++zero; }
+            }
+            std::fprintf(stderr, "[dflash2] context cache K scan: n=%zu nan=%zu zero=%zu first:",
+                         count, nan, zero);
+            for (std::size_t i = 0; i < 8 && i < count; ++i) {
+                std::fprintf(stderr, " %04x", all[i]);
+            }
+            std::fprintf(stderr, "\n");
         }
     }
 }
@@ -378,6 +439,55 @@ auto dflash_decode_batch_body(DFlashBatchContext& state, std::int32_t batch_size
                                    append_counts, state.execution.device.stream());
         append_context_impl<Variant>(state, compact_features, append_positions, append_counts,
                                      state_destinations, dflash_rows, envelopes.append);
+        if (std::getenv("NINFER_DFLASH2_DUMP") != nullptr) {
+            CUDA_CHECK(cudaStreamSynchronize(state.execution.device.stream()));
+            std::vector<std::int32_t> append_pos(static_cast<std::size_t>(width) * batch_size);
+            CUDA_CHECK(cudaMemcpy(append_pos.data(), append_positions.data,
+                                  append_positions.bytes(), cudaMemcpyDeviceToHost));
+            std::vector<std::int32_t> append_count(static_cast<std::size_t>(batch_size));
+            CUDA_CHECK(cudaMemcpy(append_count.data(), append_counts.data, append_counts.bytes(),
+                                  cudaMemcpyDeviceToHost));
+            std::fprintf(stderr,
+                         "[dflash2] round ingress: anchor=%d E=%d CF=%d extent=%d lane=%d dest=%d | append pos:",
+                         state.host_ingress.anchors[0],
+                         state.host_ingress.execution_frontiers[0],
+                         state.host_ingress.context_frontiers[0],
+                         state.host_ingress.proposal_extents[0],
+                         state.host_ingress.active_lanes[0],
+                         state.host_ingress.state_destination_slots[0]);
+            for (int i = 0; i < width * batch_size; ++i) {
+                std::fprintf(stderr, " %d", append_pos[static_cast<std::size_t>(i)]);
+            }
+            std::fprintf(stderr, " count:");
+            for (int i = 0; i < batch_size; ++i) {
+                std::fprintf(stderr, " %d", append_count[static_cast<std::size_t>(i)]);
+            }
+            {
+                std::vector<std::uint16_t> feats(compact_features.numel());
+                CUDA_CHECK(cudaMemcpy(feats.data(), compact_features.data, compact_features.bytes(),
+                                      cudaMemcpyDeviceToHost));
+                static int feats_index = 0;
+                const std::string ft_path = "/tmp/oracle_feats_" + std::to_string(feats_index++) + ".bin";
+                FILE* f = std::fopen(ft_path.c_str(), "wb");
+                if (f != nullptr) {
+                    std::fwrite(feats.data(), 2, feats.size(), f);
+                    std::fclose(f);
+                }
+                std::fprintf(stderr, "[dflash2] feats dumped n=%zu\n", feats.size());
+                const auto cache = dflash_state(state).local_layer(0);
+                std::vector<std::uint16_t> ks(static_cast<std::size_t>(cache.k.ne[0]) * 32);
+                CUDA_CHECK(cudaMemcpy(ks.data(), cache.k.data, ks.size() * 2,
+                                      cudaMemcpyDeviceToHost));
+                f = std::fopen("/tmp/oracle_cachek.bin", "wb");
+                if (f != nullptr) {
+                    std::fwrite(ks.data(), 2, ks.size(), f);
+                    std::fclose(f);
+                }
+                std::fprintf(stderr, "[dflash2] cache k dumped ne0=%d ne1=%d ne2=%d\n", cache.k.ne[0],
+                             cache.k.ne[1], cache.k.ne[2]);
+            }
+            std::fprintf(stderr, "\n");
+        }
 
         if (state.execution.model.features.speculative == SpeculativeBackend::DFlash2) {
             propose_dflash2_batch_impl<Variant>(state, frame, batch_size, k, envelopes);
@@ -386,11 +496,38 @@ auto dflash_decode_batch_body(DFlashBatchContext& state, std::int32_t batch_size
         }
         ops::speculative_prepare_verify_ids(anchors, drafts, extents, verify_ids,
                                             state.execution.device.stream());
+        if (std::getenv("NINFER_DFLASH2_DUMP") != nullptr) {
+            CUDA_CHECK(cudaStreamSynchronize(state.execution.device.stream()));
+            std::vector<std::int32_t> dh(drafts.numel()), vh(verify_ids.numel()),
+                xh(extents.numel());
+            CUDA_CHECK(cudaMemcpy(dh.data(), drafts.data, drafts.bytes(), cudaMemcpyDeviceToHost));
+            CUDA_CHECK(cudaMemcpy(vh.data(), verify_ids.data, verify_ids.bytes(),
+                                  cudaMemcpyDeviceToHost));
+            CUDA_CHECK(cudaMemcpy(xh.data(), extents.data, extents.bytes(),
+                                  cudaMemcpyDeviceToHost));
+            std::fprintf(stderr, "[dflash2] accept inputs: extent=%d drafts:", xh[0]);
+            for (auto v : dh) { std::fprintf(stderr, " %d", v); }
+            std::fprintf(stderr, " verify:");
+            for (auto v : vh) { std::fprintf(stderr, " %d", v); }
+            std::fprintf(stderr, "\n");
+        }
 
         TextContext card(state.execution.device, state.execution.model, state.execution.work, {},
                          state.execution.linear_attention, state.execution.io,
                          state.execution.prefill_hidden, state.execution.prefill_chunk, 0, {},
                          &state.text_cache, nullptr, state.execution.ple_state);
+        // The target's Flash-Next layers consume PLE rows for their verify columns.
+        Tensor ple_embeddings;
+        if (state.ple_embeddings != nullptr) {
+            ple_embeddings = state.ple_embeddings->slice(2, 0, batch_size);
+            card.set_ple_embeddings(&ple_embeddings);
+        }
+        if (state.ple_stage_mailbox != nullptr) {
+            Tensor ple_history = frame.ple_history.slice(1, 0, batch_size);
+            ops::flash_next_ple_publish_ids(verify_ids, ple_history, state.ple_stage_mailbox,
+                                            state.execution.device.stream());
+            card.set_ple_stage(state.ple_stage_mailbox, state.ple_stage_staging);
+        }
         DFlashFeatureSink sink =
             batch_feature_sink_impl<Variant>(state, active_lanes, valid_columns, width, batch_size);
         {
@@ -425,6 +562,55 @@ auto dflash_decode_batch_body(DFlashBatchContext& state, std::int32_t batch_size
         CUDA_CHECK(cudaMemcpyAsync(&state.host_egress, frame.egress.data,
                                    sizeof(qwen3_8_flash_next::DFlashDecodeEgress),
                                    cudaMemcpyDeviceToHost, state.execution.device.stream()));
+        if (std::getenv("NINFER_DFLASH2_DUMP") != nullptr) {
+            CUDA_CHECK(cudaStreamSynchronize(state.execution.device.stream()));
+            std::array<std::int32_t, 8> accepted_host{};
+            CUDA_CHECK(cudaMemcpy(accepted_host.data(), accepted.data,
+                                  std::min<std::size_t>(sizeof(std::int32_t) * batch_size,
+                                                        static_cast<std::size_t>(accepted.bytes())),
+                                  cudaMemcpyDeviceToHost));
+            std::array<std::int32_t, 8> licensed{};
+            CUDA_CHECK(cudaMemcpy(licensed.data(), licensed_counts.data,
+                                  std::min<std::size_t>(sizeof(std::int32_t) * batch_size,
+                                                        static_cast<std::size_t>(licensed_counts.bytes())),
+                                  cudaMemcpyDeviceToHost));
+            {
+                std::array<std::int32_t, 8> argmax{};
+                CUDA_CHECK(cudaMemcpy(argmax.data(), frame.target_argmax.data,
+                                      std::min<std::size_t>(sizeof(std::int32_t) * width * batch_size,
+                                                            frame.target_argmax.bytes()),
+                                      cudaMemcpyDeviceToHost));
+                std::fprintf(stderr, "[dflash2] target argmax:");
+                for (int i = 0; i < width * batch_size; ++i) { std::fprintf(stderr, " %d", argmax[i]); }
+                std::fprintf(stderr, "\n");
+            }
+            static int round_index = 0;
+            {
+                const std::string tl_path = "/tmp/oracle_target_logits_" + std::to_string(round_index) + ".bin";
+                FILE* f = std::fopen(tl_path.c_str(), "wb");
+                if (f != nullptr) {
+                    std::vector<std::uint16_t> all(frame.target_logits.numel());
+                    CUDA_CHECK(cudaMemcpy(all.data(), frame.target_logits.data,
+                                          frame.target_logits.bytes(), cudaMemcpyDeviceToHost));
+                    std::fwrite(all.data(), 2, all.size(), f);
+                    std::fclose(f);
+                }
+                const std::string th_path = "/tmp/oracle_target_hidden_" + std::to_string(round_index) + ".bin";
+                f = std::fopen(th_path.c_str(), "wb");
+                if (f != nullptr) {
+                    std::vector<std::uint16_t> all(target_hidden.numel());
+                    CUDA_CHECK(cudaMemcpy(all.data(), target_hidden.data, target_hidden.bytes(),
+                                          cudaMemcpyDeviceToHost));
+                    std::fwrite(all.data(), 2, all.size(), f);
+                    std::fclose(f);
+                }
+            }
+            std::fprintf(stderr, "[dflash2] round %d k=%u accepted:", round_index++, k);
+            for (int i = 0; i < batch_size; ++i) {
+                std::fprintf(stderr, " %d(licensed %d)", accepted_host[i], licensed[i]);
+            }
+            std::fprintf(stderr, "\n");
+        }
     };
 }
 

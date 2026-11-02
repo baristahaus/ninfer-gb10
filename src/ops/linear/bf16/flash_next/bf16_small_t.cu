@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <stdexcept>
+#include <string>
 #include <utility>
 
 namespace ninfer::ops::detail::flash_next {
@@ -49,6 +50,10 @@ NINFER_FLASH_NEXT_SMALL_T_LAUNCHERS(HcUp, 10240, 320)
 NINFER_FLASH_NEXT_SMALL_T_LAUNCHERS(QsaQueryGate, 12288, 2560)
 NINFER_FLASH_NEXT_SMALL_T_LAUNCHERS(NarrowProjection, 512, 2560)
 NINFER_FLASH_NEXT_SMALL_T_LAUNCHERS(IndexKey, 128, 2560)
+// DFlash2 draft: the selector's rank projection and the layer context key/value projections.
+NINFER_FLASH_NEXT_SMALL_T_LAUNCHERS(SelectorRank, 256, 2560)
+NINFER_FLASH_NEXT_SMALL_T_LAUNCHERS(ContextKV, 1024, 2560)
+NINFER_FLASH_NEXT_SMALL_T_LAUNCHERS(DraftFeature, 2560, 12800)
 NINFER_FLASH_NEXT_SMALL_T_LAUNCHERS(AttentionOutput, 2560, 6144)
 NINFER_FLASH_NEXT_SMALL_T_LAUNCHERS(SharedGateUp, 640, 2560)
 NINFER_FLASH_NEXT_SMALL_T_LAUNCHERS(GdnQkv, 10240, 2560)
@@ -160,6 +165,9 @@ void launch_bf16_small_t(const Tensor& x, const Weight& weight, Tensor& out, cud
     NINFER_FLASH_NEXT_SMALL_T_DISPATCH(QsaQueryGate)
     NINFER_FLASH_NEXT_SMALL_T_DISPATCH(NarrowProjection)
     NINFER_FLASH_NEXT_SMALL_T_DISPATCH(IndexKey)
+    NINFER_FLASH_NEXT_SMALL_T_DISPATCH(SelectorRank)
+    NINFER_FLASH_NEXT_SMALL_T_DISPATCH(ContextKV)
+    NINFER_FLASH_NEXT_SMALL_T_DISPATCH(DraftFeature)
     NINFER_FLASH_NEXT_SMALL_T_DISPATCH(AttentionOutput)
     NINFER_FLASH_NEXT_SMALL_T_DISPATCH(SharedGateUp)
     NINFER_FLASH_NEXT_SMALL_T_DISPATCH(GdnQkv)
@@ -169,7 +177,9 @@ void launch_bf16_small_t(const Tensor& x, const Weight& weight, Tensor& out, cud
     NINFER_FLASH_NEXT_SMALL_T_DISPATCH(LmHead)
     NINFER_FLASH_NEXT_SMALL_T_DISPATCH(ProposalTail)
 #undef NINFER_FLASH_NEXT_SMALL_T_DISPATCH
-    throw std::invalid_argument("bf16 linear small-T: unsupported exact problem");
+    throw std::invalid_argument("bf16 linear small-T: unsupported exact problem (n=" +
+                                std::to_string(weight.n) + ", k=" + std::to_string(weight.k) +
+                                ", t=" + std::to_string(x.ne[1]) + ")");
 }
 
 void launch_bf16_hc_down_silu_small_t(const Tensor& x, const Weight& weight, Tensor& out,

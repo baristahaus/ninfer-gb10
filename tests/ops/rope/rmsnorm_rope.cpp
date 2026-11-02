@@ -63,7 +63,7 @@ std::vector<std::int32_t> make_positions(int tokens, int first_position) {
 // Independent FP64 oracle for the complete public formula. It does not call either standalone Op
 // or reproduce the production warp reduction, coefficient table, or range reduction.
 OracleResult fused_oracle(const std::vector<float>& input, const std::vector<float>& weight,
-                          const std::vector<std::int32_t>& positions, int heads) {
+                          const std::vector<std::int32_t>& positions, int heads, double theta) {
     const int tokens = static_cast<int>(positions.size());
     OracleResult result{
         .output     = std::vector<double>(input.size()),
@@ -88,7 +88,7 @@ OracleResult fused_oracle(const std::vector<float>& input, const std::vector<flo
                 const double exponent = -2.0 * static_cast<double>(pair) / kHeadDim;
                 const double phase =
                     static_cast<double>(positions[static_cast<std::size_t>(token)]) *
-                    std::pow(kTheta, exponent);
+                    std::pow(theta, exponent);
                 const double cosine = std::cos(phase);
                 const double sine   = std::sin(phase);
                 const double first  = normalized[static_cast<std::size_t>(pair)];
@@ -180,7 +180,7 @@ void execute(Launch launch, Reset reset, bool graph) {
     cuda_check(cudaStreamDestroy(stream), "destroy stream");
 }
 
-int run_pair_case(int width, int batch, int first_position, std::uint32_t seed,
+int run_pair_case(int width, int batch, int first_position, std::uint32_t seed, float theta,
                   bool graph = false) {
     const int tokens              = width * batch;
     const std::size_t q_count     = static_cast<std::size_t>(kHeadDim) * kQueryHeads * tokens;
@@ -190,8 +190,8 @@ int run_pair_case(int width, int batch, int first_position, std::uint32_t seed,
     const auto q_weight           = make_bf16_values(kHeadDim, seed + 2U, 0.25F, 1.75F);
     const auto k_weight           = make_bf16_values(kHeadDim, seed + 3U, 0.25F, 1.75F);
     const auto positions          = make_positions(tokens, first_position);
-    const OracleResult q_expected = fused_oracle(q, q_weight, positions, kQueryHeads);
-    const OracleResult k_expected = fused_oracle(k, k_weight, positions, kKeyHeads);
+    const OracleResult q_expected = fused_oracle(q, q_weight, positions, kQueryHeads, theta);
+    const OracleResult k_expected = fused_oracle(k, k_weight, positions, kKeyHeads, theta);
     const auto q_bits             = bf16_bits(q);
     const auto k_bits             = bf16_bits(k);
     const auto q_weight_bits      = bf16_bits(q_weight);
@@ -212,7 +212,7 @@ int run_pair_case(int width, int batch, int first_position, std::uint32_t seed,
     execute(
         [&](CudaExecutionView cuda) {
             ops::rmsnorm_rope(position_tensor, q_weight_tensor, k_weight_tensor, q_tensor, k_tensor,
-                              cuda);
+                              theta, cuda);
         },
         [&](CudaExecutionView cuda) {
             const auto stream = cuda.stream();
@@ -227,7 +227,8 @@ int run_pair_case(int width, int batch, int first_position, std::uint32_t seed,
 
     const std::string label = "rmsnorm_rope pair W=" + std::to_string(width) +
                               " graph=" + std::to_string(graph) + " B=" + std::to_string(batch) +
-                              " P=" + std::to_string(first_position);
+                              " P=" + std::to_string(first_position) +
+                              " theta=" + std::to_string(theta);
     int failures =
         verify_profile(label + " q", from_device_bf16(q_device.data(), q_count), q_expected);
     failures +=
@@ -246,12 +247,13 @@ int run_pair_case(int width, int batch, int first_position, std::uint32_t seed,
     return failures;
 }
 
-int run_single_case(int tokens, int first_position, std::uint32_t seed, bool graph = false) {
+int run_single_case(int tokens, int first_position, std::uint32_t seed, float theta,
+                    bool graph = false) {
     const std::size_t count     = static_cast<std::size_t>(kHeadDim) * kKeyHeads * tokens;
     const auto input            = make_bf16_values(count, seed, -4.0F, 4.0F);
     const auto weight           = make_bf16_values(kHeadDim, seed + 1U, 0.25F, 1.75F);
     const auto positions        = make_positions(tokens, first_position);
-    const OracleResult expected = fused_oracle(input, weight, positions, kKeyHeads);
+    const OracleResult expected = fused_oracle(input, weight, positions, kKeyHeads, theta);
     const auto input_bits       = bf16_bits(input);
     const auto weight_bits      = bf16_bits(weight);
 
@@ -264,7 +266,7 @@ int run_single_case(int tokens, int first_position, std::uint32_t seed, bool gra
     Tensor position_tensor(position_device.span(), DType::I32, {tokens});
     execute(
         [&](CudaExecutionView cuda) {
-            ops::rmsnorm_rope(position_tensor, weight_tensor, input_tensor, cuda);
+            ops::rmsnorm_rope(position_tensor, weight_tensor, input_tensor, theta, cuda);
         },
         [&](CudaExecutionView cuda) {
             const auto stream = cuda.stream();
@@ -275,8 +277,8 @@ int run_single_case(int tokens, int first_position, std::uint32_t seed, bool gra
         graph);
 
     const std::string label = "rmsnorm_rope single graph=" + std::to_string(graph) +
-                              " T=" + std::to_string(tokens) +
-                              " P=" + std::to_string(first_position);
+                              " T=" + std::to_string(tokens) + " P=" + std::to_string(first_position) +
+                              " theta=" + std::to_string(theta);
     int failures = verify_profile(label, from_device_bf16(input_device.data(), count), expected);
     failures += input_device.verify_guards(label + " guards");
     failures +=
@@ -291,27 +293,36 @@ int run_single_case(int tokens, int first_position, std::uint32_t seed, bool gra
 } // namespace
 
 void add_rmsnorm_rope_cases(ninfer::test::OpSuite& suite) {
-    const auto pair = [&](int width, int batch, int position, unsigned seed, bool graph = false) {
+    const auto pair = [&](int width, int batch, int position, unsigned seed, float theta,
+                          bool graph = false) {
         suite.add("rmsnorm_rope/pair/w" + std::to_string(width) + "/b" + std::to_string(batch) +
+                      "/theta" + std::to_string(static_cast<int>(theta)) +
                       (graph ? "/graph" : "/eager"),
-                  [=] { return run_pair_case(width, batch, position, seed, graph); },
+                  [=] { return run_pair_case(width, batch, position, seed, theta, graph); },
                   {{"execution", graph ? "graph" : "eager"}});
     };
-    const auto single = [&](int tokens, int position, unsigned seed, bool graph = false) {
-        suite.add("rmsnorm_rope/single/t" + std::to_string(tokens) + (graph ? "/graph" : "/eager"),
-                  [=] { return run_single_case(tokens, position, seed, graph); },
+    const auto single = [&](int tokens, int position, unsigned seed, float theta,
+                            bool graph = false) {
+        suite.add("rmsnorm_rope/single/t" + std::to_string(tokens) + "/theta" +
+                      std::to_string(static_cast<int>(theta)) + (graph ? "/graph" : "/eager"),
+                  [=] { return run_single_case(tokens, position, seed, theta, graph); },
                   {{"execution", graph ? "graph" : "eager"}});
     };
     for (int width = 2; width <= 16; ++width)
         for (int batch = 1; batch <= 8; ++batch)
-            pair(width, batch, width == 2 && batch == 1 ? 0 : 262000, 0x1000U + width * 8 + batch);
-    pair(3, 3, 0, 0x1001U, true);
-    pair(16, 8, 262000, 0x1002U, true);
-    single(1, 0, 0x2001U, true);
-    single(2048, 260000, 0x2002U, true);
-    single(1, 0, 0x2001U);
-    single(8, 131'069, 0x2002U);
-    single(64, 262'080, 0x2003U);
-    single(1024, 130'048, 0x2004U);
-    single(2048, 260'032, 0x2005U);
+            pair(width, batch, width == 2 && batch == 1 ? 0 : 262000,
+                 0x1000U + width * 8 + batch, kTheta);
+    // The DFlash2 draft companion checkpoint declares theta=1e4; this exercises the derived
+    // frequency path, not the precomputed 1e7 table.
+    pair(4, 2, 0, 0x1100U, 1.0e4F);
+    pair(16, 8, 2048, 0x1101U, 1.0e4F, true);
+    pair(3, 3, 0, 0x1001U, kTheta, true);
+    pair(16, 8, 262000, 0x1002U, kTheta, true);
+    single(1, 0, 0x2001U, kTheta, true);
+    single(2048, 260000, 0x2002U, kTheta, true);
+    single(1, 0, 0x2001U, 1.0e4F);
+    single(8, 131'069, 0x2002U, 1.0e4F);
+    single(64, 262'080, 0x2003U, kTheta);
+    single(1024, 130'048, 0x2004U, 1.0e4F);
+    single(2048, 260'032, 0x2005U, kTheta);
 }

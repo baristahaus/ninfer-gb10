@@ -37,6 +37,7 @@ const SplitShape& select(ProjectionProfile weights, const auto& rows) {
             &kBf16SplitN1152K2560,
             &kBf16SplitN7296K2560,
             &kBf16SplitN640K2560,
+            &kBf16SplitN6144K2560ThreeOutput,
 #endif
             &kBf16SplitN1152K2560ThreeOutput,
             &kBf16SplitN1664K2560,

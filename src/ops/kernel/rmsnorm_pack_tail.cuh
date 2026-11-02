@@ -12,7 +12,11 @@ inline constexpr int kRmsnormPackTailRows        = 5120;
 inline constexpr int kRmsnormPackTailPairsPerRow = kRmsnormPackTailRows / 2;
 inline constexpr float kRmsnormPackTailEps       = 1.0e-6F;
 
-template <int kBlock>
+// Row extent of one packed hidden state; the Flash-Next masked draft uses the 2560 geometry.
+template <int Rows>
+inline constexpr int kRmsnormPackTailPairs = Rows / 2;
+
+template <int kBlock, int Rows>
 __device__ __forceinline__ float rmsnorm_pack_tail_inverse(float local_sum, float* warp_sums,
                                                            float* inverse) {
     constexpr int kWarps = kBlock / kWarpSize;
@@ -26,7 +30,8 @@ __device__ __forceinline__ float rmsnorm_pack_tail_inverse(float local_sum, floa
         float block_sum = lane < kWarps ? warp_sums[lane] : 0.0F;
         block_sum       = warp_reduce_sum(block_sum);
         if (lane == 0) {
-            *inverse = rsqrtf(block_sum * (1.0F / kRmsnormPackTailRows) + kRmsnormPackTailEps);
+            *inverse = rsqrtf(block_sum * (1.0F / static_cast<float>(Rows)) +
+                              kRmsnormPackTailEps);
         }
     }
     __syncthreads();
@@ -34,19 +39,19 @@ __device__ __forceinline__ float rmsnorm_pack_tail_inverse(float local_sum, floa
 }
 
 // Grid x selects a mask column, grid y its request. Anchor columns are never read.
-template <int kBlock>
+template <int kBlock, int Rows>
 __global__ __launch_bounds__(kBlock) void rmsnorm_pack_tail_kernel(
     const __nv_bfloat162* __restrict__ input, const __nv_bfloat162* __restrict__ weight,
     __nv_bfloat162* __restrict__ output, int width) {
-    constexpr int kPairsPerThread = kRmsnormPackTailPairsPerRow / kBlock;
-    static_assert(kRmsnormPackTailPairsPerRow % kBlock == 0);
+    constexpr int kPairsPerThread = kRmsnormPackTailPairs<Rows> / kBlock;
+    static_assert(kRmsnormPackTailPairs<Rows> % kBlock == 0);
 
     const int tail  = static_cast<int>(blockIdx.x);
     const int batch = static_cast<int>(blockIdx.y);
     const std::int64_t input_base =
-        static_cast<std::int64_t>(batch * width + tail + 1) * kRmsnormPackTailPairsPerRow;
+        static_cast<std::int64_t>(batch * width + tail + 1) * kRmsnormPackTailPairs<Rows>;
     const std::int64_t output_base =
-        static_cast<std::int64_t>(batch * (width - 1) + tail) * kRmsnormPackTailPairsPerRow;
+        static_cast<std::int64_t>(batch * (width - 1) + tail) * kRmsnormPackTailPairs<Rows>;
 
     __nv_bfloat162 values[kPairsPerThread];
     __nv_bfloat162 weights[kPairsPerThread];
@@ -62,7 +67,7 @@ __global__ __launch_bounds__(kBlock) void rmsnorm_pack_tail_kernel(
 
     __shared__ float warp_sums[kBlock / kWarpSize];
     __shared__ float inverse;
-    const float inv = rmsnorm_pack_tail_inverse<kBlock>(local_sum, warp_sums, &inverse);
+    const float inv = rmsnorm_pack_tail_inverse<kBlock, Rows>(local_sum, warp_sums, &inverse);
 
 #pragma unroll
     for (int item = 0; item < kPairsPerThread; ++item) {

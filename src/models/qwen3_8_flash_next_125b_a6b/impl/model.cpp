@@ -346,11 +346,13 @@ LoadedModelData::LoadedModelData(BindingPlan plan, artifact::MaterializedArtifac
             to.query_norm          = tensor(backing, from.query_norm, {128});
             to.key_norm            = tensor(backing, from.key_norm, {128});
             to.output              = bf16(backing, from.output, 2560, 4096);
+            // The artifact stores the conv base kernel with the hidden axis fastest; the
+            // convolution ops declare that axis first.
             to.attention_conv_base_kernel =
-                tensor(backing, from.attention_conv_base_kernel, {2, 2, 2560});
+                tensor(backing, from.attention_conv_base_kernel, {2560, 2, 2});
             to.attention_conv_kernel_projection =
                 bf16(backing, from.attention_conv_kernel_projection, 640, 2560);
-            to.mlp_conv_base_kernel = tensor(backing, from.mlp_conv_base_kernel, {2, 2, 2560});
+            to.mlp_conv_base_kernel = tensor(backing, from.mlp_conv_base_kernel, {2560, 2, 2});
             to.mlp_conv_kernel_projection =
                 bf16(backing, from.mlp_conv_kernel_projection, 640, 2560);
             to.mlp_gate_up = bf16(backing, from.mlp_gate_up, 15360, 2560);
@@ -358,10 +360,12 @@ LoadedModelData::LoadedModelData(BindingPlan plan, artifact::MaterializedArtifac
         }
         draft.selector_hidden_projection =
             bf16(backing, source.selector_hidden_projection, 256, 2560);
+        // The artifact stores each codebook vocabulary-major with the selector rank fastest; the
+        // selector op declares that rank axis first.
         draft.selector_predecessor_codebook =
-            tensor(backing, source.selector_predecessor_codebook, {248320, 256});
+            tensor(backing, source.selector_predecessor_codebook, {256, 248320});
         draft.selector_successor_codebook =
-            tensor(backing, source.selector_successor_codebook, {248320, 256});
+            tensor(backing, source.selector_successor_codebook, {256, 248320});
     }
     if (plan.features.vision) { runtime.vision = vision(plan.vision, backing); }
     runtime.ple_table = &ple_mapping;

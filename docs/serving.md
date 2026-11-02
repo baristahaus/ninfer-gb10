@@ -76,8 +76,14 @@ unavailable. The endpoint remains unauthenticated.
 
 `GET /metrics` renders Prometheus text (`text/plain; version=0.0.4`) with `ninfer:`-prefixed
 metrics: monotonic counters for completed, rejected, and failed requests; prompt, computed
-prefill, completion, reasoning, and cached tokens; speculative drafted/accepted tokens and
-rounds; and sum/count pairs for request latency, time to first token, prefill, and decode. The
+prefill, completion, reasoning, and cached tokens; and sum/count pairs for request latency,
+time to first token, prefill, and decode. The speculative series carry the configured backend
+as a `speculative_backend` label (`mtp`, `dflash2`, or `none`): drafted/accepted token
+counters, verification rounds, fallback steps, the `spec_decode_acceptance_ratio` gauge
+(accepted over drafted since startup), and per block position
+`spec_decode_attempted_per_position_total` and `spec_decode_accepted_per_position_total`
+counters — attempted is that position's acceptance denominator, so per-position draft quality
+is trackable across polls. The
 same document carries Engine gauges: running/prefilling/waiting requests, Main KV pool
 occupancy, catalogued prompts (`kept_prompts`), context length, Device and Host State slot
 occupancy, and Host KV spill occupancy. Consumers delta-sample the counters between polls

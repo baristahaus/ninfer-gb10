@@ -207,12 +207,15 @@ summary as `accepted by pos`.
 7. **Batch > 1**: verified working (batch 2, both requests correct, batch 1.70). Acceptance is
    lower in batch (1.0-1.1%) than single (~9%) — a batch-path draft-quality item for the next
    campaign, not a correctness bug.
-8. **CUDA Graph mode**: still unsupported — `Variant::dflash_graph_profiles` returns `{}`
-   (`impl/variant.cpp:84`), so the family is empty and instantiation throws, with a secondary
-   heap-corruption segfault on that failure path (`ServeOptions::~ServeOptions`). The MTP-style
-   PLE stage wrapper around the DFlash instantiation is in place (necessary but insufficient).
-   Implementing the profile set (the `mtp_graph_profiles` analog + `capture_dflash_decode_batch`)
-   is a standalone feature task; eager mode is the supported operating point.
+8. ~~CUDA Graph mode.~~ **Done 2026-11-02**: `Variant::dflash_graph_profiles` now returns the
+   profile set (the `mtp_graph_profiles` analog: `profiles(capacity)` plus the verify-envelope
+   topology adjustment — dense QSA where the envelope fits, classes 3/4 across the 65K/131K
+   boundaries; the draft schedule is startup-fixed so no extra classes). Graph mode starts
+   (ready in 1.2 s), serves correctly, and is quality-equivalent to eager: TEB
+   `--short --trials 3` = **97.0 / Pass@3 93.3%**, the same as eager dt3 and MTP. Decode
+   22.4-24.2 tok/s (eager ~20.4); acceptance 5.1-11.7% (eager 2.7-6.9%). The earlier
+   empty-family throw and its unwind segfault are gone; the failure path's heap corruption
+   (`ServeOptions::~ServeOptions`) is no longer reachable from this configuration.
 9. **Draft quality remains the headline gap**: acceptance ~5-9% (dt1) / ~2.7-6.9% (dt3) vs the
    reference's 3.26 acceptance length (~81% per position). Further verification (2026-11-02):
    the tap-index A/B with the corrected mean value is null (0.204 vs 0.200 overlap — adjacent

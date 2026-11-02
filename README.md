@@ -64,15 +64,21 @@ Two draft lanes run on the same artifact. Acceptance is greedy, measured with th
 
 | lane | acceptance | per block position | notes |
 |---|---:|---|---|
-| MTP | 89.6% short / 50.2% long | 1 / 1 / 1 at K=3 | 43/48 and 307/611 drafted tokens; 45-48 tok/s decode |
-| DFlash2 | 45% (27/60) | 14 / 8 / 5 | ~20-22 tok/s decode; draft quality is the limiter, not the round machinery |
+| MTP | 89.6% short / 50.2% long | 18/18, 18/12, 18/9 attempted/accepted (live scrape) | 43/48 and 307/611 drafted tokens; 45-48 tok/s decode |
+| DFlash2 | 45% (27/60) | 14 / 8 / 5 | draft quality is the limiter, not the round machinery |
 
 The DFlash2 lane is a second, block-diffusion draft head (five sliding-attention layers over
 the target's tap layers 5/15/25/35/45, a candidate path selector, and two-tap dynamic
-convolutions). Its round machinery is verified token-identical to MTP's; the current
-acceptance comes from a fixed candidate-layout defect in `column_topk` (see the handoff
-record). `/metrics` exposes `ninfer_spec_decode_{rounds,draft_tokens,accepted_tokens}_total`
-with a `speculative_backend` label, the `spec_decode_acceptance_ratio` gauge, and per-position
+convolutions). Its draft forward and selector picks are verified against a reference replay
+of the companion model on the same context. The acceptance trail follows two fixed defects:
+the draft's final RMSNorm ran the 5120-row geometry on the 2560-row draft (8.7% to 25.9%),
+and `column_topk` wrote its candidates column-major against its rank-fastest contract (25.9%
+to 45%). The remaining gap to MTP is draft quality; the decode rate has not been re-measured
+after these fixes. Details are in the
+[DFlash2 handoff](docs/maintainer/2026-11-01-dflash2-draft-handoff.md).
+
+`/metrics` exposes `ninfer_spec_decode_{rounds,draft_tokens,accepted_tokens}_total` with a
+`speculative_backend` label, the `spec_decode_acceptance_ratio` gauge, and per-position
 attempted/accepted counters, so draft quality is trackable per position over time.
 
 Long prompts (October 2026 cycle, draft-tokens 3):

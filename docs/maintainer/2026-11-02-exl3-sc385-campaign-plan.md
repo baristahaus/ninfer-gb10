@@ -132,6 +132,19 @@ the pool.
    his 3.03 tok/step, 0.86/0.66/0.52 — measured on a different card and engine, so
    treat as reference, not gate).
 
+**P1 measured (2026-11-02, RTX 5090, `qwen3_8_27b_exl3_sc385_df2.ninfer`, TEB --short
+15/15 quality 100 both modes, `--kv-dtype k8v4 --prefill-chunk 1024
+--max-concurrency 2`):**
+
+| Mode | Rounds | Drafted | Accepted | Acceptance | Tokens/step | Per-position acceptance |
+|---|---|---|---|---|---|---|
+| MTP3 | 1319 | 3956 | 3368 | 85% | 3.55 | not recorded (single run) |
+| DFlash2 K=7 | 880 | 6155 | 3861 | 63% | 5.39 | 91% / 79% / 69% / … of rounds |
+
+Tokens/step = generation_tokens / (rounds + fallback steps); DFlash2's
+`spec_decode_accepted_tokens_per_pos_total` series render on /metrics (the MTP run
+predates that counter's landing). Both modes beat his anchors.
+
 **Window:** development iterations are short (single-request speculative rounds); one
 medium window for the acceptance battery.
 

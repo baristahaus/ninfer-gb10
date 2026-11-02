@@ -204,6 +204,15 @@ std::string Metrics::render(const EngineSnapshot& snapshot, bool ready) const {
             "Draft tokens accepted by native verification.");
     COUNTER(speculative_fallback_steps, "spec_decode_fallback_steps_total",
             "Speculative fallback steps without drafts.");
+    for (std::size_t position = 0; position < stats.speculative_accepted_per_position.size();
+         ++position) {
+        const auto accepted = stats.speculative_accepted_per_position[position] -
+                              (position < baseline.speculative_accepted_per_position.size()
+                                   ? baseline.speculative_accepted_per_position[position]
+                                   : 0);
+        out << "ninfer_spec_decode_accepted_tokens_per_pos_total{position=\"" << position + 1
+            << "\"} " << accepted << '\n';
+    }
     GAUGE(device_state_occupied_slots, "device_state_used_slots",
           "Occupied device StateImage slots.");
     gauge("device_state_capacity_slots", description_.device_state_capacity,

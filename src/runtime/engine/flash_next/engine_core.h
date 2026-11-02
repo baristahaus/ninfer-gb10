@@ -621,6 +621,7 @@ private:
             break;
         }
         cumulative_stats_.reused_prompt_tokens += summary.reusable_prompt_tokens;
+        cumulative_stats_.prompt_tokens += summary.prompt_tokens;
         cumulative_stats_.last_selected_frontier_tokens = summary.reusable_prompt_tokens;
     }
 

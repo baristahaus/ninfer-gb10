@@ -161,6 +161,19 @@ void EngineCore<Instance>::commit_pending(PendingBatch&& pending, ComputeFlight 
             counters.accepted_tokens - observed.accepted_tokens;
         cumulative_stats_.speculative_fallback_steps +=
             counters.fallback_steps - observed.fallback_steps;
+        const std::size_t positions = counters.attempted_per_position.size();
+        if (cumulative_stats_.speculative_attempted_per_position.size() < positions) {
+            cumulative_stats_.speculative_attempted_per_position.resize(positions, 0);
+            cumulative_stats_.speculative_accepted_per_position.resize(positions, 0);
+        }
+        for (std::size_t i = 0; i < positions; ++i) {
+            cumulative_stats_.speculative_attempted_per_position[i] +=
+                counters.attempted_per_position[i] - observed.attempted_per_position[i];
+            cumulative_stats_.speculative_accepted_per_position[i] +=
+                counters.accepted_per_position[i] - observed.accepted_per_position[i];
+            observed.attempted_per_position[i] = counters.attempted_per_position[i];
+            observed.accepted_per_position[i]  = counters.accepted_per_position[i];
+        }
         observed.rounds                 = counters.rounds;
         observed.drafted_tokens         = counters.drafted_tokens;
         observed.accepted_tokens        = counters.accepted_tokens;

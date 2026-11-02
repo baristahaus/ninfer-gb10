@@ -84,6 +84,15 @@ void Metrics::done(const GenerationOutcome& outcome) {
     requests_.duration.observe(outcome.stats.timings.total_seconds +
                                outcome.service_prepare_seconds);
     requests_.queue.observe(outcome.stats.engine_timing.queue_wait_seconds);
+    const auto& speculative = outcome.stats.speculative;
+    for (std::size_t i = 0;
+         i < speculative.attempted_per_position.size() && i < kSpeculativePositions; ++i) {
+        requests_.spec_attempted_per_position[i] += speculative.attempted_per_position[i];
+    }
+    for (std::size_t i = 0;
+         i < speculative.accepted_per_position.size() && i < kSpeculativePositions; ++i) {
+        requests_.spec_accepted_per_position[i] += speculative.accepted_per_position[i];
+    }
 }
 
 void Metrics::rejected() {
@@ -196,14 +205,45 @@ std::string Metrics::render(const EngineSnapshot& snapshot, bool ready) const {
     COUNTER(root_selections, "root_selections_total", "Initial bindings without checkpoint reuse.");
     COUNTER(checkpoint_selections, "checkpoint_selections_total",
             "Initial bindings with checkpoint reuse.");
-    COUNTER(speculative_rounds, "spec_decode_rounds_total",
-            "Native speculative verification rounds.");
-    COUNTER(speculative_draft_tokens, "spec_decode_draft_tokens_total",
-            "Draft tokens evaluated by native verification.");
-    COUNTER(speculative_accepted_tokens, "spec_decode_accepted_tokens_total",
-            "Draft tokens accepted by native verification.");
-    COUNTER(speculative_fallback_steps, "spec_decode_fallback_steps_total",
-            "Speculative fallback steps without drafts.");
+    {
+        const std::string backend =
+            product::speculative_backend_name(options_.speculative.backend);
+        const auto labeled_counter = [&](std::string_view name, auto current, auto base,
+                                         std::string_view help) {
+            header(name, "counter", help);
+            out << "ninfer_" << name << "{speculative_backend=\"" << escape_label(backend)
+                << "\"} " << current - base << '\n';
+        };
+        labeled_counter("spec_decode_rounds_total", stats.speculative_rounds,
+                        baseline.speculative_rounds, "Native speculative verification rounds.");
+        labeled_counter("spec_decode_draft_tokens_total", stats.speculative_draft_tokens,
+                        baseline.speculative_draft_tokens,
+                        "Draft tokens evaluated by native verification.");
+        labeled_counter("spec_decode_accepted_tokens_total", stats.speculative_accepted_tokens,
+                        baseline.speculative_accepted_tokens,
+                        "Draft tokens accepted by native verification.");
+        labeled_counter("spec_decode_fallback_steps_total", stats.speculative_fallback_steps,
+                        baseline.speculative_fallback_steps,
+                        "Speculative fallback steps without drafts.");
+        const auto drafted = stats.speculative_draft_tokens - baseline.speculative_draft_tokens;
+        const auto accepted =
+            stats.speculative_accepted_tokens - baseline.speculative_accepted_tokens;
+        gauge("spec_decode_acceptance_ratio",
+              drafted == 0 ? 0.0 : static_cast<double>(accepted) / static_cast<double>(drafted),
+              "Accepted draft tokens per drafted token since startup.");
+        header("spec_decode_attempted_per_position_total", "counter",
+               "Draft tokens attempted by block position.");
+        header("spec_decode_accepted_per_position_total", "counter",
+               "Draft tokens accepted by block position.");
+        const std::size_t window = std::min<std::size_t>(
+            options_.speculative.draft_tokens, kSpeculativePositions);
+        for (std::size_t i = 0; i < window; ++i) {
+            out << "ninfer_spec_decode_attempted_per_position_total{position=\"" << i << "\"} "
+                << requests.spec_attempted_per_position[i] << '\n';
+            out << "ninfer_spec_decode_accepted_per_position_total{position=\"" << i << "\"} "
+                << requests.spec_accepted_per_position[i] << '\n';
+        }
+    }
     GAUGE(device_state_occupied_slots, "device_state_used_slots",
           "Occupied device StateImage slots.");
     gauge("device_state_capacity_slots", description_.device_state_capacity,

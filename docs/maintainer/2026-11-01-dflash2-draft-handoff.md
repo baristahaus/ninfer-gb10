@@ -220,6 +220,24 @@ Probes synchronize the compute stream before every read. The compute stream is
 `cudaStreamNonBlocking`, so an unsynchronized `cudaMemcpy` D2H races the kernels and produces
 misleading dumps — this cost a full false-positive root cause earlier in the session.
 
+### 6.1 Drafting telemetry (`GET /metrics`)
+
+The Prometheus surface exposes the speculative lane for both backends (2026-11-02):
+
+- `ninfer_spec_decode_rounds_total{speculative_backend="mtp|dflash2"}`
+- `ninfer_spec_decode_draft_tokens_total{...}` / `..._accepted_tokens_total{...}`
+- `ninfer_spec_decode_acceptance_ratio` — accepted/drafted since startup
+- `ninfer_spec_decode_attempted_per_position_total{position="i"}` and
+  `ninfer_spec_decode_accepted_per_position_total{position="i"}` — per block position, from
+  the settled requests; attempted is the position's acceptance denominator
+- `ninfer_generation_tokens_total` — the committed output tokens
+
+The Engine's cumulative counters are published in `EngineSnapshot::runtime` (the Flash-Next
+engine core aggregates every committed row's `SpeculativeStats`; the per-position vectors are
+sized lazily and the Engine-side baseline is zero-filled). Verified live: dflash2 (87 drafted
+/ 30 accepted, ratio 0.345, by position 29/24, 29/6, 29/0) and mtp (54/39, ratio 0.722, by
+position 18/18, 18/12, 18/9) on the same artifact.
+
 ## 7. Reproduction
 
 ```bash

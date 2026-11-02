@@ -204,9 +204,14 @@ summary as `accepted by pos`.
    comparable; the per-*token* difference is the tokens-per-round ratio (dt3 = 97 = MTP). No
    numeric defect; dt3 is the correct operating point. Residual per-token flips are benign
    near-tie argmax flips inherent to batched verify.
-7. **Batch > 1**: verified working (batch 2, both requests correct, batch 1.70). Acceptance is
-   lower in batch (1.0-1.1%) than single (~9%) — a batch-path draft-quality item for the next
-   campaign, not a correctness bug.
+7. **Batch > 1**: works (batch 2, both requests correct, batch 1.70). The accept's batch
+   indexing is correct (the ne[0]-fastest layout: the kernel's `row*cols` stride addresses each
+   row's columns exactly; round-27's egress reconciles with row 1's targets). The acceptance is
+   lower in batch (1.0-1.1%) than sequential (2.4-3.1% on the same prompts), but the
+   alignment test across offsets is noise-level (batch: next 0.235 / same 0.219 / prev 0.203;
+   single-lane: prev 0.249 > same 0.196 — opposite lean). The draft's dist is weakly related
+   to the target at every offset; the lag hypothesis is dead and the batch gap has the same
+   root as the acceptance gap (the draft's weak distribution), not a batch-path bug.
 8. ~~CUDA Graph mode.~~ **Done 2026-11-02**: `Variant::dflash_graph_profiles` now returns the
    profile set (the `mtp_graph_profiles` analog: `profiles(capacity)` plus the verify-envelope
    topology adjustment — dense QSA where the envelope fits, classes 3/4 across the 65K/131K

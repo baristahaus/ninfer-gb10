@@ -41,12 +41,18 @@ public:
     }
 
     DenseParameters dense(const DenseWeights& w) const {
-        return {with_context(model_.weight(w.gate).name,
-                             [&] {
-                                 return ops::prepare_linear_swiglu_weight(model_.input(w.gate),
-                                                                          model_.input(w.up));
-                             }),
-                linear(w.down)};
+        const std::array inputs{model_.input(w.gate), model_.input(w.up)};
+        DenseParameters out;
+        out.down = linear(w.down);
+        if (ops::projection_region_count(inputs) > 1) {
+            out.gate_up_roles = std::array<ops::SingleProjectionWeight, 2>{
+                ops::prepare_linear_weight(inputs[0]), ops::prepare_linear_weight(inputs[1])};
+            return out;
+        }
+        out.gate_up = with_context(model_.weight(w.gate).name, [&] {
+            return ops::prepare_linear_swiglu_weight(inputs[0], inputs[1]);
+        });
+        return out;
     }
 
     FfnParameters ffn(const BlockWeights& w) const {
@@ -96,18 +102,31 @@ public:
             const std::array rows{
                 dimension(inputs[0].weight.shape[0]), dimension(inputs[1].weight.shape[0]),
                 dimension(inputs[2].weight.shape[0]), dimension(inputs[3].weight.shape[0])};
-            auto projection = ops::prepare_projection_weights(inputs);
-            const auto* exl3_single_weight = std::get_if<ops::SingleProjectionWeight>(&projection);
-            const bool exl3_single =
-                exl3_single_weight != nullptr &&
-                exl3_single_weight->weight.qtype == QType::EXL3;
-            if (!exl3_single) {
-                (void)ops::linear_split_workspace_capacity_bytes(projection, rows, 1, 1);
+            AttentionParameters mixer;
+            if (ops::projection_region_count(inputs) > 2) {
+                // Per-tensor input transforms (plan 4a): the checkpoint's attention
+                // parents exceed the packed/paired forms; bind each role as its own
+                // linear in binding order.
+                mixer.role_rows = std::array<LinearParameters, 4>{
+                    ops::prepare_linear_weight(inputs[0]), ops::prepare_linear_weight(inputs[1]),
+                    ops::prepare_linear_weight(inputs[2]), ops::prepare_linear_weight(inputs[3])};
+            } else {
+                auto projection = ops::prepare_projection_weights(inputs);
+                const auto* exl3_single_weight = std::get_if<ops::SingleProjectionWeight>(&projection);
+                const bool exl3_single =
+                    exl3_single_weight != nullptr &&
+                    exl3_single_weight->weight.qtype == QType::EXL3;
+                if (!exl3_single) {
+                    (void)ops::linear_split_workspace_capacity_bytes(projection, rows, 1, 1);
+                }
+                mixer.projection = std::move(projection);
+                mixer.projection_rows = rows;
             }
-            out.mixer = AttentionParameters{std::move(projection), rows, tensor(a->query_norm),
-                                            tensor(a->key_norm), linear(a->output)};
-            out.projection_prefetch =
-                prefetch(std::get<AttentionParameters>(out.mixer).projection, a->query);
+            mixer.query_norm = tensor(a->query_norm);
+            mixer.key_norm   = tensor(a->key_norm);
+            mixer.output     = linear(a->output);
+            out.mixer        = std::move(mixer);
+            out.projection_prefetch = prefetch(std::get<AttentionParameters>(out.mixer), a->query);
         } else {
             const auto& g = std::get<GdnWeights>(w.mixer);
             const std::array inputs{model_.input(g.query), model_.input(g.key),
@@ -143,6 +162,17 @@ public:
         const auto* single = std::get_if<LinearParameters>(&projection);
         const auto& weight =
             single ? single->weight : std::get<ops::PairedProjectionWeights>(projection).first;
+        return prefetch_weight(weight, query);
+    }
+
+    ops::MoeExecutionHints prefetch(const AttentionParameters& mixer, WeightId query) const {
+        if (mixer.role_rows) {
+            return prefetch_weight((*mixer.role_rows)[0].weight, query);
+        }
+        return prefetch(mixer.projection, query);
+    }
+
+    ops::MoeExecutionHints prefetch_weight(const Weight& weight, WeightId query) const {
         const auto& geometry = model_.weight(query).view.parts.front().parent->geometry;
         const auto row_bytes = geometry.layout == QuantLayout::Contiguous
                                    ? std::uint64_t(weight.k) * dtype_size(DType::BF16)

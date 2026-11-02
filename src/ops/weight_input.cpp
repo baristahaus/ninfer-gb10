@@ -163,7 +163,8 @@ LinearProfile describe_single(const WeightView& view, std::span<const WeightInpu
 }
 
 template <class Make>
-auto projection_regions(std::span<const WeightInput> rows, Make make) {
+auto projection_regions(std::span<const WeightInput> rows, Make make,
+                        std::size_t region_limit = 2) {
     const auto view = concatenate_rows(rows);
     if (contiguous(view)) return std::vector{make(view, rows)};
 
@@ -184,7 +185,8 @@ auto projection_regions(std::span<const WeightInput> rows, Make make) {
             if (!bank.parts.empty() &&
                 (part.parent != bank.parts.back().parent || part.begin != bank.parts.back().end)) {
                 finish_bank();
-                require(banks.size() < 2, "projection bank requires more than two native regions");
+                require(banks.size() < region_limit,
+                        "projection bank requires more than two native regions");
                 bank.parts.clear();
                 bank_rows.clear();
                 elements = 0;
@@ -256,6 +258,12 @@ ProjectionProfile describe_projection_weights(std::span<const WeightInput> rows)
     if (banks.size() == 1) return {banks[0], {}};
     banks[0].policy = banks[1].policy = LinearPolicy::A16Only;
     return {banks[0], banks[1]};
+}
+
+std::size_t projection_region_count(std::span<const WeightInput> rows) {
+    return projection_regions(rows, [](const WeightView&, std::span<const WeightInput>) {
+        return std::size_t{1};
+    }).size();
 }
 
 ProjectionWeights prepare_projection_weights(std::span<const WeightInput> rows) {

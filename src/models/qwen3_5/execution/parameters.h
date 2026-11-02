@@ -33,6 +33,11 @@ struct AttentionParameters {
     std::array<std::int32_t, 4> projection_rows;
     Tensor query_norm, key_norm;
     LinearParameters output;
+    // Per-role input projection for checkpoints that carry one input transform per
+    // tensor (campaign plan 4a): more than two native parents cannot bind through
+    // the packed or paired forms. Role order is query, key, gate, value; empty when
+    // the packed form above is active.
+    std::optional<std::array<LinearParameters, 4>> role_rows;
 };
 
 struct GdnParameters {

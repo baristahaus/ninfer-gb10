@@ -30,6 +30,7 @@ constexpr int kProblems[][2] = {
     {16384, 5120},  // GDN fused query/key/value/z parent
     {17408, 5120},  // MLP gate and up projections
     {5120, 17408},  // MLP down projection
+    {248320, 5120}, // the 27B output head (the SC import's 5-bit EXL3 lm_head)
 };
 
 constexpr std::int32_t kMaxTokens = 8;  // the decode shapes the route registers

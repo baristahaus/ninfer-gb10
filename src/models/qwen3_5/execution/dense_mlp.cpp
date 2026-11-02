@@ -19,6 +19,25 @@ std::size_t dense_mlp_workspace_bytes(const DenseProfile& parameters, std::int32
     const auto& gu   = parameters.gate_up;
     const auto& down = parameters.down;
     WorkspaceLayoutBuilder layout;
+    if (parameters.gate_up_role_profiles) {
+        const auto& gate = (*parameters.gate_up_role_profiles)[0];
+        const auto& up   = (*parameters.gate_up_role_profiles)[1];
+        const auto rows  = gate.n + up.n;
+        (void)layout.alloc(DType::BF16, {rows, last});
+        {
+            auto scope = layout.scope();
+            (void)layout.alloc_bytes(ops::linear_workspace_capacity_bytes(
+                gate.qtype, gate.n, gate.k, gate.policy, first, last));
+        }
+        {
+            auto scope = layout.scope();
+            (void)layout.alloc_bytes(ops::linear_workspace_capacity_bytes(
+                up.qtype, up.n, up.k, up.policy, first, last));
+        }
+        (void)layout.alloc_bytes(ops::linear_add_workspace_capacity_bytes(
+            down.qtype, down.n, down.k, parameters.down.policy, first, last));
+        return layout.peak_bytes(1);
+    }
     if (use == DenseMlpUse::Mtp) {
         (void)layout.alloc(DType::BF16, {gu.n, last});
         {
@@ -52,6 +71,26 @@ void dense_mlp(const Tensor& hidden, const DenseParameters& parameters, Tensor& 
     const auto columns = hidden.ne[1];
     const auto& gu     = parameters.gate_up.weight;
     const auto& down   = parameters.down.weight;
+    if (parameters.gate_up_roles) {
+        const auto& gate = (*parameters.gate_up_roles)[0];
+        const auto& up   = (*parameters.gate_up_roles)[1];
+        Tensor gate_out = workspace.alloc(DType::BF16, {gate.weight.shape[0], columns});
+        Tensor up_out   = workspace.alloc(DType::BF16, {up.weight.shape[0], columns});
+        {
+            auto call = workspace.scope();
+            ops::linear(hidden, gate.weight, gate_out, gate.policy, workspace, execution);
+        }
+        {
+            auto call = workspace.scope();
+            ops::linear(hidden, up.weight, up_out, up.policy, workspace, execution);
+        }
+        Tensor activation =
+            workspace.alloc(DType::BF16, {gate.weight.shape[0], columns});
+        ops::silu_mul(gate_out, up_out, activation, execution);
+        ops::linear_add(activation, down, residual, parameters.down.policy, workspace,
+                        execution);
+        return;
+    }
     if (use == DenseMlpUse::Mtp) {
         Tensor gate_up = workspace.alloc(DType::BF16, {gu.n, columns});
         {

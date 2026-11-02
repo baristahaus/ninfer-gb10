@@ -18,6 +18,11 @@ struct WeightInput {
 [[nodiscard]] LinearProfile describe_linear_weight(std::span<const WeightInput> rows);
 [[nodiscard]] ProjectionProfile describe_projection_weights(std::span<const WeightInput> rows);
 
+// The number of native parent regions the rows would bind through — the same scan
+// projection_regions and prepare_projection_weights perform. More than two regions
+// admits the calling model's per-role form (campaign plan 4a).
+[[nodiscard]] std::size_t projection_region_count(std::span<const WeightInput> rows);
+
 // Prepare the existing native forms; no device allocation, upload, execution or graph rewrite.
 // Runtime shape/phase choices and scratch remain with the actual calling Op.
 [[nodiscard]] SingleProjectionWeight prepare_linear_weight(const WeightInput& input);

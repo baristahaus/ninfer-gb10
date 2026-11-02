@@ -4,6 +4,7 @@
 #include "ninfer/ops/linear_split.h"
 #include "ninfer/ops/rope.h"
 
+#include <algorithm>
 #include <stdexcept>
 
 namespace ninfer::models::qwen3_5::execution {
@@ -22,6 +23,16 @@ void require_rope_axes(const Tensor& positions, const RopeConfig& config) {
 
 std::size_t attention_projection_workspace_bytes(const AttentionProfile& parameters,
                                                  std::int32_t first, std::int32_t last) {
+    if (parameters.role_profiles) {
+        // Per-role dispatches run under their own scopes, so the peak is the largest
+        // role's capacity, not the sum.
+        std::size_t peak = 0;
+        for (const auto& role : *parameters.role_profiles) {
+            peak = std::max(peak, ops::linear_workspace_capacity_bytes(
+                                      role.qtype, role.n, role.k, role.policy, first, last));
+        }
+        return peak;
+    }
     if (const auto& first_profile = parameters.projection.first;
         !parameters.projection.second && first_profile.qtype == QType::EXL3) {
         return ops::attn_input_proj_workspace_capacity_bytes(first_profile.qtype, first_profile.n,
@@ -35,6 +46,15 @@ std::size_t attention_projection_workspace_bytes(const AttentionProfile& paramet
 void attention_projection(const Tensor& hidden, const AttentionParameters& parameters,
                           Tensor& query, Tensor& gate, Tensor& key, Tensor& value,
                           MemoryArena& workspace, CudaExecutionView execution) {
+    if (parameters.role_rows) {
+        const std::array<Tensor*, 4> outputs{&query, &key, &gate, &value};
+        for (std::size_t i = 0; i < parameters.role_rows->size(); ++i) {
+            const auto& role = (*parameters.role_rows)[i];
+            auto call = workspace.scope();
+            ops::linear(hidden, role.weight, *outputs[i], role.policy, workspace, execution);
+        }
+        return;
+    }
     if (const auto* single = std::get_if<LinearParameters>(&parameters.projection);
         single != nullptr && single->weight.qtype == QType::EXL3) {
         ops::attn_input_proj(hidden, single->weight, query, gate, key, value, single->policy,

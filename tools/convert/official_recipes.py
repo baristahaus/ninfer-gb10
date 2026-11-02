@@ -498,6 +498,89 @@ def qwen3_8_27b_exl3_dense(model, recipe, sources):
                 recipe.group(names)
 
 
+def qwen3_8_27b_exl3_sc385(model, recipe, sources):
+    """Import the JRamirez-UAB Qwen3.8-27B EXL3 3.85bpw SC checkpoint verbatim (plan P0).
+
+    His artifact carries one input transform (suh) per tensor, so the attention binds
+    as per-role objects (the engine's role-rows form), the GDN as the paired
+    (in_proj_qkv, in_proj_z) form and the MLP as separate gate/up — the forms the
+    engine's planner already produces for native checkpoints and the speculative
+    record path already serves. His q_proj interleaves each head's gate rows after
+    its query rows, so query and gate import as two band selections of that one
+    tensor. The token embedding re-encodes from the BF16 source at the qualified
+    q8_g32 (his per-row int8 scale granularity has no qualified engine layout and no
+    quality advantage over finer groups); the output head imports as his 5-bit EXL3
+    object. Vision and the MTP fc head stay out of this first text-only artifact
+    (plan 4a).
+    """
+
+    if "num_experts" in model.config:
+        raise ValueError("this official route requires Qwen3.5 Dense mathematics")
+    exl3 = sources["exl3"]
+    check_quantization_config(exl3.config)
+    _check_architecture(exl3.config, model.config)
+    checkpoint = str(exl3.path)
+    layers = model.config["num_hidden_layers"]
+    heads = model.config["num_attention_heads"]
+    d = model.config["head_dim"]
+    _optional(model, recipe)
+    _assign(recipe, "text/token_embedding", Q8)
+
+    def role_bands(role):
+        # His q_proj rows: each head holds its query rows then its gate rows; the
+        # binding order wants the query block then the gate block, in 16-row bands.
+        stride, offset = (2 * d // 16, d // 16 if role == "gate" else 0)
+        return [head * stride + offset + band
+                for head in range(heads) for band in range(d // 16)]
+
+    def dense_import(tensor, bands=None):
+        parameters = {"checkpoint": checkpoint, "tensor": tensor}
+        if bands is not None:
+            parameters["row_bands"] = bands
+        return parameters
+
+    for name, parameter in model.parameters.items():
+        if not name.startswith("text/layers/") or not parameter.projection:
+            continue
+        if name.endswith(("/gdn/a_projection", "/gdn/b_projection")):
+            continue
+        parts = name.split("/")
+        layer = int(parts[2])
+        role = parts[-1]
+        stem = "self_attn" if "/attention/" in name else (
+            "linear_attn" if "/gdn/" in name else "mlp")
+        if "/attention/" in name:
+            if role in ("query", "gate"):
+                source_tensor, bands = (f"model.language_model.layers.{layer}.{stem}.q_proj",
+                                        role_bands(role))
+            else:
+                source_tensor = (f"model.language_model.layers.{layer}.{stem}."
+                                 + {"key": "k_proj", "value": "v_proj", "output": "o_proj"}[role])
+                bands = None
+        elif "/gdn/" in name:
+            source_tensor = (f"model.language_model.layers.{layer}.{stem}."
+                             + {"query": "in_proj_qkv", "key": "in_proj_qkv",
+                                "value": "in_proj_qkv", "z": "in_proj_z",
+                                "output": "out_proj"}[role])
+            bands = None
+        else:
+            source_tensor = (f"model.language_model.layers.{layer}.{stem}."
+                             + {"gate": "gate_proj", "up": "up_proj", "down": "down_proj"}[role])
+            bands = None
+        recipe.assign(name, format="exl3", layout="exl3_dense_v1",
+                      method="import_exl3_dense",
+                      parameters=dense_import(source_tensor, bands))
+    # The GDN query/key/value rows are contiguous in his in_proj_qkv, so one verbatim
+    # parent binds the three roles and z stays separate: the paired form.
+    for layer in range(layers):
+        names = [f"text/layers/{layer}/gdn/{role}" for role in ("query", "key", "value")]
+        if all(name in model.parameters for name in names):
+            recipe.group(names)
+    recipe.assign("text/output_head", format="exl3", layout="exl3_dense_v1",
+                  method="import_exl3_dense",
+                  parameters={"checkpoint": checkpoint, "tensor": "lm_head"})
+
+
 def qwen3_6_35b_a3b_exl3(model, recipe, sources):
     """Import the routed experts as EXL3 banks; everything else per the groupwise recipe.
 
@@ -562,5 +645,6 @@ RECIPES = {
     "qwen3_6_35b_a3b": qwen3_6_35b_a3b,
     "qwen3_6_35b_a3b_exl3": qwen3_6_35b_a3b_exl3,
     "qwen3_8_27b_exl3_dense": qwen3_8_27b_exl3_dense,
+    "qwen3_8_27b_exl3_sc385": qwen3_8_27b_exl3_sc385,
     "qwen3_8_flash_next": qwen3_8_flash_next,
 }

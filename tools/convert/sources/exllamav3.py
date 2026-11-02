@@ -19,6 +19,12 @@ from tools.artifact.layouts import EXL3_CODEBOOK_IDS, validate_exl3_rate
 from .safetensors import SafetensorsSource, TensorInfo
 
 PINNED_EXL3_VERSION = "1.6.1"
+# Producer versions whose on-disk layout (trellis int16 [k/16, n/16, 16K], FP16
+# suh/svh, mcg/mul1 int32 markers) is identical to the pinned one. Verified against
+# the JRamirez-UAB Qwen3.8-27B EXL3 3.85bpw artifact (campaign plan §4a): its MUL1
+# constant equals the pinned marker and every text-model object matches the layout
+# read below. A producer version is added only after that same verification.
+ACCEPTED_EXL3_VERSIONS = frozenset(("1.5.1", PINNED_EXL3_VERSION))
 MCG_MARKER = 0xCBAC1FED
 MUL1_MARKER = 0x83DCD12D
 
@@ -92,10 +98,10 @@ def check_quantization_config(config: dict) -> None:
             f"quant_method {quantization.get('quant_method')!r} is not exl3"
         )
     version = quantization.get("version")
-    if version != PINNED_EXL3_VERSION:
+    if version not in ACCEPTED_EXL3_VERSIONS:
         raise ValueError(
-            f"EXL3 checkpoint version {version!r} is not the pinned "
-            f"{PINNED_EXL3_VERSION!r}"
+            f"EXL3 checkpoint version {version!r} is not an accepted producer "
+            f"(accepted: {sorted(ACCEPTED_EXL3_VERSIONS)})"
         )
 
 

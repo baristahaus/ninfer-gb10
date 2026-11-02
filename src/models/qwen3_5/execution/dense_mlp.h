@@ -5,11 +5,16 @@
 #include "core/device.h"
 #include "ninfer/ops/projection_weights.h"
 
+#include <optional>
+
 namespace ninfer::models::qwen3_5::execution {
 
 struct DenseParameters {
     ops::SingleProjectionWeight gate_up;
     ops::SingleProjectionWeight down;
+    // Separate gate/up parents, each with its own input transform (plan 4a); set when
+    // the checkpoint stores them per tensor. Empty when the fused gate_up is active.
+    std::optional<std::array<ops::SingleProjectionWeight, 2>> gate_up_roles;
 };
 
 enum class DenseMlpUse { Text, Mtp };

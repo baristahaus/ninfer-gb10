@@ -38,8 +38,9 @@ from .quantization.exl3 import decode_tiles
 from .quantization.fp8_row import quantize_bf16_rows
 from .quantization.groupwise import quantize_matrix
 from .quantization.stored_scale import quantize_stored_scale
-from .sources.exllamav3 import Exl3ExpertSource
+from .sources.exllamav3 import Exl3ExpertSource, _marker_codebook, read_exl3_linear
 from .sources.logical import EncodedRows, LogicalSource
+from .sources.safetensors import SafetensorsSource
 
 UseKey = tuple[str, str]
 AuxiliaryKey = tuple[str, str, str]
@@ -695,6 +696,117 @@ def _exl3_import_spec_bytes(items, parameters) -> int:
 import_exl3_bank.spec_bytes = _exl3_import_spec_bytes
 
 
+def import_exl3_dense(request: PrepareRequest) -> PreparedMethod:
+    """Repack one dense EXL3 linear verbatim from an external checkpoint (plan 4a).
+
+    Method parameters identify the source — `checkpoint` (the external EXL3
+    safetensors directory or shard) and `tensor` (the projection's tensor-name
+    prefix) — so the request's logical inputs stay the BF16 binding sources and
+    grouping slices them without touching the import. The emitted `exl3_dense_v1`
+    payload copies trellis/suh/svh and the codebook marker unchanged. The optional
+    `row_bands` parameter selects 16-row output bands of the source tensor in target
+    order (his q_proj interleaves each head's gate rows after its query rows, while
+    the dense rows form binds contiguous role bands), permuting the trellis's n-dim
+    tiles and the svh rows that belong to them. Sampled tiles decode bit-identically
+    against the codec oracle at their mapped positions before any bytes are written.
+    """
+
+    if request.target.format != "exl3" or request.target.layout != "exl3_dense_v1":
+        raise ValueError("import_exl3_dense requires the exl3_dense_v1 target")
+    checkpoint = request.parameters.get("checkpoint")
+    tensor = request.parameters.get("tensor")
+    if not isinstance(checkpoint, str) or not isinstance(tensor, str):
+        raise ValueError("import_exl3_dense requires checkpoint and tensor parameters")
+    if not request.inputs:
+        raise ValueError("import_exl3_dense requires at least one logical source")
+    bands = request.parameters.get("row_bands")
+
+    store = SafetensorsSource(checkpoint)
+    linear = read_exl3_linear(store, tensor)
+    if request.target.shape[1] != linear.k:
+        raise ValueError(
+            f"{tensor}: source linear's K {linear.k} differs from the logical {request.target.shape[1]}"
+        )
+    if bands is None:
+        if request.target.shape[0] != linear.n:
+            raise ValueError(
+                f"{tensor}: source linear is {linear.n}x{linear.k}, the logical "
+                f"parameter is {request.target.shape[0]}x{request.target.shape[1]}"
+            )
+        trellis, svh = linear.trellis, linear.svh
+    else:
+        if len(bands) * 16 != request.target.shape[0] or linear.n % 16:
+            raise ValueError(
+                f"{tensor}: row_bands must select the logical {request.target.shape[0]} rows"
+            )
+        index = torch.tensor(bands, dtype=torch.long)
+        if int(index.min()) < 0 or int(index.max()) >= linear.n // 16:
+            raise ValueError(f"{tensor}: row_bands outside the source's {linear.n} rows")
+        trellis = linear.trellis[:, index, :].contiguous()
+        svh = linear.svh.reshape(-1, 16)[index].reshape(-1).contiguous()
+    n, k = request.target.shape
+    geometry = exl3_dense_geometry(n, k, linear.k2, linear.codebook)
+
+    def mapped_tile(tile_n, tile_k):
+        source_tile_k = int(bands[tile_k]) if bands is not None else tile_k
+        return tile_n, source_tile_k
+
+    tiles_n, tiles_k = k // 16, n // 16
+    words = linear.k2 * 8
+    positions = [(0, 0), (tiles_n - 1, tiles_k - 1)]
+    generator = torch.Generator().manual_seed(20261102 + 7919 * tiles_n * tiles_k)
+    picks = torch.randint(0, tiles_n * tiles_k, (8,), generator=generator)
+    positions += [(int(p) // tiles_k, int(p) % tiles_k) for p in picks.tolist()]
+    for tile_n, tile_k in positions:
+        source_n, source_k = mapped_tile(tile_n, tile_k)
+        if not np.array_equal(
+            decode_tiles(trellis[tile_n, tile_k].reshape(1, 1, words), linear.k2,
+                         linear.codebook),
+            decode_tiles(linear.trellis[source_n, source_k].reshape(1, 1, words), linear.k2,
+                         linear.codebook),
+        ):
+            raise ValueError(
+                f"{tensor}: band-mapped tile ({tile_n},{tile_k}) differs from its "
+                f"source tile ({source_n},{source_k})"
+            )
+
+    def produce(output):
+        data = trellis.numpy().tobytes()
+        if len(data) != n * k * linear.k2 // 16:
+            raise ValueError(f"{tensor}: trellis bytes disagree with its rate")
+        output.write_bytes(0, data)
+        if geometry.trellis_bytes > len(data):
+            output.write_bytes(len(data), bytes(geometry.trellis_bytes - len(data)))
+        if tuple(linear.suh.shape) != (k,) or tuple(svh.shape) != (n,):
+            raise ValueError(f"{tensor}: suh/svh planes disagree with the emitted shape")
+        output.write_bytes(geometry.suh_offset, linear.suh.numpy().tobytes())
+        output.write_bytes(geometry.svh_offset, svh.numpy().tobytes())
+        output.write_bytes(
+            geometry.codebook_offset,
+            EXL3_CODEBOOK_IDS[linear.codebook].to_bytes(4, "little"),
+        )
+
+    return request.job(produce=produce)
+
+
+def _exl3_dense_import_spec_bytes(items, parameters) -> int:
+    """Size the verbatim payload from the checkpoint's own trellis shape (describe only)."""
+
+    store = SafetensorsSource(parameters["checkpoint"])
+    info = store.describe(f"{parameters['tensor']}.trellis")
+    k2 = info.shape[-1] // 8
+    codebook = _marker_codebook(store, parameters["tensor"])
+    rows = 0
+    for item in items:
+        value = item[1] if isinstance(item, tuple) else item
+        rows += value.source.shape[0]
+    k = items[0][1].source.shape[-1] if isinstance(items[0], tuple) else items[0].source.shape[-1]
+    return exl3_dense_geometry(rows, k, k2, codebook).payload_bytes
+
+
+import_exl3_dense.spec_bytes = _exl3_dense_import_spec_bytes
+
+
 def pack_exl3_dense(request: PrepareRequest) -> PreparedMethod:
     """Emit one dense linear as an `exl3_dense_v1` object from a convert_model result.
 
@@ -863,6 +975,7 @@ METHODS: dict[str, Method] = {
     "fp8_row_maxabs": fp8_row_maxabs,
     "import_encoded": import_encoded,
     "import_exl3_bank": import_exl3_bank,
+    "import_exl3_dense": import_exl3_dense,
     "pack_exl3_dense": pack_exl3_dense,
     "pack_exl3_dense_group": pack_exl3_dense_group,
     "pack_exl3_bank_quantized": pack_exl3_bank_quantized,

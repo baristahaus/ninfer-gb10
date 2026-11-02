@@ -19,6 +19,9 @@ namespace execution {
 
 struct DenseProfile {
     ops::LinearProfile gate_up, down;
+    // Per-tensor profiles when the checkpoint stores gate and up as separate parents
+    // with their own input transforms (plan 4a); empty when the fused form is active.
+    std::optional<std::array<ops::LinearProfile, 2>> gate_up_role_profiles;
 };
 
 struct MoeLayerProfile {
@@ -32,6 +35,9 @@ struct AttentionProfile {
     ops::ProjectionProfile projection;
     std::array<std::int32_t, 4> projection_rows;
     ops::LinearProfile output;
+    // Per-role profiles when the checkpoint's attention binds as role rows (plan 4a);
+    // empty when the packed form above is active.
+    std::optional<std::array<ops::LinearProfile, 4>> role_profiles;
 };
 
 struct GdnProfile {

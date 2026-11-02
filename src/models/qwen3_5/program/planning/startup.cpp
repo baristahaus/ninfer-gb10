@@ -215,11 +215,12 @@ WorkspaceSpec build_workspace_plan(const SequencePlanImpl& plan) {
                         exl3_gdn) {
                         // The decomposed EXL3 decode route: the dense EXL3 projection into
                         // one qkv plane, then the standalone batched causal conv into a
-                        // second plane whose row ranges become the split outputs. The
-                        // record round adds scratch conv states for its reservations and
-                        // the per-row slot vectors.
-                        (void)workspace::gdn_prefill_conv(layout, config, max_width);
-                        (void)workspace::gdn_prefill_conv(layout, config, max_width);
+                        // second plane whose row ranges become the split outputs. The token
+                        // axis is width*batch, so the planes follow `last`. The record round
+                        // adds scratch conv states for its reservations and the per-row slot
+                        // vectors.
+                        (void)workspace::gdn_prefill_conv(layout, config, last);
+                        (void)workspace::gdn_prefill_conv(layout, config, last);
                         if (path == GdnWorkspacePath::ReplayRecord) {
                             matrix(layout, DType::BF16,
                                    dimension(config.gdn->conv_channels()),
@@ -228,7 +229,7 @@ WorkspaceSpec build_workspace_plan(const SequencePlanImpl& plan) {
                             (void)layout.alloc(DType::I32, {batch_size});
                         }
                         scratch(layout, execution::gdn_projection_workspace_bytes(
-                                            gdn, min_width, max_width));
+                                            gdn, last, last));
                     } else if (path == GdnWorkspacePath::Snapshot) {
                         scratch(layout, execution::gdn_snapshot_workspace_bytes(
                                             gdn, batch_size, min_width, max_width));

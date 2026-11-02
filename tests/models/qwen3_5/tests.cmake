@@ -54,6 +54,10 @@ ninfer_add_test(ninfer_qwen3_5_dflash2_real_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/test_engine_dflash2_real.cpp"
   LIBRARIES ninfer_engine ninfer::json)
 
+ninfer_add_test(ninfer_qwen3_5_speculative_invariant_real_test
+  SOURCES "${CMAKE_CURRENT_LIST_DIR}/test_speculative_invariant_real.cpp"
+  LIBRARIES ninfer_engine ninfer::json)
+
 ninfer_add_test(ninfer_qwen3_5_dflash_prefill_real_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/test_dflash_prefill_real.cpp"
   LIBRARIES ninfer_model_execution ninfer_model_loading ninfer_core)

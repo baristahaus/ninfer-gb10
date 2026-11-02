@@ -88,6 +88,7 @@ public:
     [[nodiscard]] MemorySpan alloc_bytes(std::size_t bytes, std::size_t alignment = 256);
     [[nodiscard]] Scope scope() noexcept;
     [[nodiscard]] std::size_t peak_bytes(std::size_t alignment = 256) const;
+    [[nodiscard]] std::size_t cursor_bytes() const { return cursor_; }
 
 private:
     std::size_t cursor_ = 0;

@@ -24,6 +24,7 @@
 #include "ninfer/ops/softmax_attention.h"
 #include "ninfer/ops/speculative_accept.h"
 #include <algorithm>
+#include <cstdio>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -190,6 +191,9 @@ WorkspaceSpec build_workspace_plan(const SequencePlanImpl& plan) {
         for (const auto& block : profile.text.layers) {
             {
                 auto stage = layout.scope();
+                // The previous layer's mixer stage allocated post_mixer_hidden_, which the
+                // TextRun holds as a member across this stage; model that residency here.
+                matrix(layout, DType::BF16, dimension(config.hidden_size), last);
                 if (const auto* attention =
                         std::get_if<execution::AttentionProfile>(&block.mixer)) {
                     (void)workspace::text_attention_projection(layout, config, last);
@@ -253,6 +257,9 @@ WorkspaceSpec build_workspace_plan(const SequencePlanImpl& plan) {
                 }
             }
             auto stage = layout.scope();
+            // The previous mixer's post_mixer_hidden_ member is still live while this
+            // stage's scratch allocates; model that residency.
+            matrix(layout, DType::BF16, dimension(config.hidden_size), last);
             (void)workspace::post_mixer_hidden(layout, config, last);
             if (const auto* dense = std::get_if<execution::DenseProfile>(&block.ffn)) {
                 scratch(layout, execution::dense_mlp_workspace_bytes(*dense, first, last,

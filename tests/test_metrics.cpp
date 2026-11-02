@@ -56,7 +56,8 @@ int main() {
           "metrics must distinguish batch/row deltas and measured/unmeasured GPU intervals");
     check(live.find("ninfer_generation_tokens_total 5\n") != std::string::npos,
           "live generated count must exclude startup warmup");
-    check(live.find("ninfer_spec_decode_draft_tokens_total 6\n") != std::string::npos,
+    check(live.find("ninfer_spec_decode_draft_tokens_total{speculative_backend=\"none\"} 6\n") !=
+              std::string::npos,
           "speculative work must be observable before request completion");
     check(live.find("ninfer_time_to_first_token_seconds_count 1\n") != std::string::npos &&
               live.find("ninfer_requests_total{outcome=\"completed\"} 0\n") != std::string::npos,

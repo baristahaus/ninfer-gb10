@@ -22,8 +22,10 @@ std::size_t dense_mlp_workspace_bytes(const DenseProfile& parameters, std::int32
     if (parameters.gate_up_role_profiles) {
         const auto& gate = (*parameters.gate_up_role_profiles)[0];
         const auto& up   = (*parameters.gate_up_role_profiles)[1];
-        const auto rows  = gate.n + up.n;
-        (void)layout.alloc(DType::BF16, {rows, last});
+        // The runtime holds gate_out, up_out and the SiLU activation simultaneously.
+        (void)layout.alloc(DType::BF16, {gate.n, last});
+        (void)layout.alloc(DType::BF16, {up.n, last});
+        (void)layout.alloc(DType::BF16, {gate.n, last});
         {
             auto scope = layout.scope();
             (void)layout.alloc_bytes(ops::linear_workspace_capacity_bytes(

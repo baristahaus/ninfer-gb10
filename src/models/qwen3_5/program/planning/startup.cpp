@@ -257,8 +257,9 @@ WorkspaceSpec build_workspace_plan(const SequencePlanImpl& plan) {
                 }
             }
             auto stage = layout.scope();
-            // The previous mixer's post_mixer_hidden_ member is still live while this
-            // stage's scratch allocates; model that residency.
+            // The TextRun's frame members live through this stage: the previous mixer's
+            // post_mixer_hidden_ and the normalized hidden plane. Model that residency.
+            matrix(layout, DType::BF16, dimension(config.hidden_size), last);
             matrix(layout, DType::BF16, dimension(config.hidden_size), last);
             (void)workspace::post_mixer_hidden(layout, config, last);
             if (const auto* dense = std::get_if<execution::DenseProfile>(&block.ffn)) {

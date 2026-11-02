@@ -84,9 +84,17 @@ public:
                                             inputs[2].weight.shape[0]),
                                   dimension(inputs[3].weight.shape[0])};
             const std::array control{plan_.input(g.a_projection), plan_.input(g.b_projection)};
-            out.mixer =
-                GdnProfile{ops::describe_projection_weights(inputs),
-                           ops::describe_projection_weights(control), rows, linear(g.output)};
+            if (ops::projection_region_count(inputs) > 1) {
+                std::array<ops::LinearProfile, 2> role_profiles{
+                    ops::describe_linear_weight(std::span<const ops::WeightInput>(inputs.data(), 3)),
+                    ops::describe_linear_weight(std::span<const ops::WeightInput>(inputs.data() + 3, 1))};
+                out.mixer = GdnProfile{{}, ops::describe_projection_weights(control), rows,
+                                       linear(g.output), std::move(role_profiles)};
+            } else {
+                out.mixer =
+                    GdnProfile{ops::describe_projection_weights(inputs),
+                               ops::describe_projection_weights(control), rows, linear(g.output)};
+            }
         }
         return out;
     }

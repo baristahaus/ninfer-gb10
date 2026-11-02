@@ -44,6 +44,9 @@ struct GdnProfile {
     ops::ProjectionProfile projection, control;
     std::array<std::int32_t, 2> projection_rows;
     ops::LinearProfile output;
+    // Per-parent profiles for the separate (qkv, z) form (plan 4a); empty when the
+    // packed form above is active.
+    std::optional<std::array<ops::LinearProfile, 2>> role_profiles;
 };
 
 struct BlockProfile {

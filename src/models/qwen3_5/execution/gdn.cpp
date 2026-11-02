@@ -1,12 +1,24 @@
 #include "models/qwen3_5/execution/gdn.h"
 #include "ninfer/ops/gdn_control.h"
 #include "ninfer/ops/gdn_input_proj.h"
+#include "ninfer/ops/linear.h"
 #include "ninfer/ops/linear_split.h"
+
+#include <algorithm>
 
 namespace ninfer::models::qwen3_5::execution {
 
 std::size_t gdn_projection_workspace_bytes(const GdnProfile& parameters, std::int32_t first,
                                            std::int32_t last) {
+    if (parameters.role_profiles) {
+        // The two role dispatches run under their own scopes; the peak is the larger.
+        std::size_t peak = 0;
+        for (const auto& role : *parameters.role_profiles) {
+            peak = std::max(peak, ops::linear_workspace_capacity_bytes(
+                                      role.qtype, role.n, role.k, role.policy, first, last));
+        }
+        return peak;
+    }
     if (const auto& packed = parameters.projection.first;
         !parameters.projection.second && packed.qtype == QType::EXL3) {
         return ops::gdn_input_proj_exl3_workspace_capacity_bytes(packed.n, packed.k, packed.policy,
@@ -30,6 +42,21 @@ std::size_t gdn_record_workspace_bytes(const GdnProfile& parameters, std::int32_
 
 void gdn_projection(const Tensor& hidden, const GdnParameters& parameters, Tensor& qkv, Tensor& z,
                     MemoryArena& workspace, CudaExecutionView execution) {
+    if (parameters.role_rows) {
+        // Separate (qkv, z) parents (plan 4a): one linear per role into the same
+        // planes the fused route produces.
+        const auto& qkv_role = (*parameters.role_rows)[0];
+        const auto& z_role   = (*parameters.role_rows)[1];
+        {
+            auto call = workspace.scope();
+            ops::linear(hidden, qkv_role.weight, qkv, qkv_role.policy, workspace, execution);
+        }
+        {
+            auto call = workspace.scope();
+            ops::linear(hidden, z_role.weight, z, z_role.policy, workspace, execution);
+        }
+        return;
+    }
     if (const auto* single = std::get_if<LinearParameters>(&parameters.projection);
         single != nullptr && single->weight.qtype == QType::EXL3) {
         ops::gdn_input_proj_exl3(hidden, single->weight, qkv, z, single->policy, workspace,

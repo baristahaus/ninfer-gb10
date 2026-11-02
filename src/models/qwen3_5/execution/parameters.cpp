@@ -134,25 +134,33 @@ public:
             const std::array rows{dimension(inputs[0].weight.shape[0] + inputs[1].weight.shape[0] +
                                             inputs[2].weight.shape[0]),
                                   dimension(inputs[3].weight.shape[0])};
-            auto projection = ops::prepare_projection_weights(inputs);
-            const auto* gdn_exl3_weight = std::get_if<ops::SingleProjectionWeight>(&projection);
-            const bool gdn_exl3_single =
-                gdn_exl3_weight != nullptr && gdn_exl3_weight->weight.qtype == QType::EXL3;
-            if (!gdn_exl3_single) {
-                (void)ops::linear_split_workspace_capacity_bytes(projection, rows, 1, 1);
+            GdnParameters mixer;
+            if (ops::projection_region_count(inputs) > 1) {
+                // Separate (qkv, z) parents with their own input transforms (plan 4a);
+                // the paired native form is the Q4/Q5 attention pairing, not this.
+                mixer.role_rows = std::array<LinearParameters, 2>{
+                    ops::prepare_linear_weight(std::span<const ops::WeightInput>(inputs.data(), 3)),
+                    ops::prepare_linear_weight(std::span<const ops::WeightInput>(inputs.data() + 3, 1))};
+            } else {
+                auto projection = ops::prepare_projection_weights(inputs);
+                const auto* gdn_exl3_weight = std::get_if<ops::SingleProjectionWeight>(&projection);
+                const bool gdn_exl3_single =
+                    gdn_exl3_weight != nullptr && gdn_exl3_weight->weight.qtype == QType::EXL3;
+                if (!gdn_exl3_single) {
+                    (void)ops::linear_split_workspace_capacity_bytes(projection, rows, 1, 1);
+                }
+                mixer.projection = std::move(projection);
+                mixer.projection_rows = rows;
             }
-            out.mixer =
-                GdnParameters{std::move(projection),
-                              rows,
-                              ops::prepare_gdn_control_proj_weights(model_.input(g.a_projection),
-                                                                    model_.input(g.b_projection)),
-                              tensor(g.a_log),
-                              tensor(g.dt_bias),
-                              tensor(g.convolution),
-                              tensor(g.norm),
-                              linear(g.output)};
-            out.projection_prefetch =
-                prefetch(std::get<GdnParameters>(out.mixer).projection, g.query);
+            mixer.control = ops::prepare_gdn_control_proj_weights(model_.input(g.a_projection),
+                                                                  model_.input(g.b_projection));
+            mixer.a_log        = tensor(g.a_log);
+            mixer.dt_bias      = tensor(g.dt_bias);
+            mixer.convolution  = tensor(g.convolution);
+            mixer.norm         = tensor(g.norm);
+            mixer.output       = linear(g.output);
+            out.mixer          = std::move(mixer);
+            out.projection_prefetch = prefetch(std::get<GdnParameters>(out.mixer), g.query);
         }
         return out;
     }
@@ -166,6 +174,13 @@ public:
     }
 
     ops::MoeExecutionHints prefetch(const AttentionParameters& mixer, WeightId query) const {
+        if (mixer.role_rows) {
+            return prefetch_weight((*mixer.role_rows)[0].weight, query);
+        }
+        return prefetch(mixer.projection, query);
+    }
+
+    ops::MoeExecutionHints prefetch(const GdnParameters& mixer, WeightId query) const {
         if (mixer.role_rows) {
             return prefetch_weight((*mixer.role_rows)[0].weight, query);
         }

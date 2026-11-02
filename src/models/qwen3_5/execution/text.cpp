@@ -227,7 +227,8 @@ void TextRun::gdn(const BlockParameters& block, std::uint32_t compact_layer) {
         Tensor conv             = view_.states.layer_view(compact_layer).conv;
         const auto* exl3_single = std::get_if<LinearParameters>(&p.projection);
         const bool exl3_route =
-            exl3_single != nullptr && exl3_single->weight.qtype == QType::EXL3;
+            p.role_rows.has_value() ||
+            (exl3_single != nullptr && exl3_single->weight.qtype == QType::EXL3);
         if (replay) {
             if (exl3_route) {
                 throw std::invalid_argument(

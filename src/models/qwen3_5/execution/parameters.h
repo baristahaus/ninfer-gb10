@@ -46,6 +46,9 @@ struct GdnParameters {
     ops::ProjectionWeights control;
     Tensor a_log, dt_bias, convolution, norm;
     LinearParameters output;
+    // Separate (qkv, z) parents for checkpoints that carry one input transform per
+    // tensor (campaign plan 4a); empty when the packed form above is active.
+    std::optional<std::array<LinearParameters, 2>> role_rows;
 };
 
 struct BlockParameters {

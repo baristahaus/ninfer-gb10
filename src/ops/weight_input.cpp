@@ -261,9 +261,12 @@ ProjectionProfile describe_projection_weights(std::span<const WeightInput> rows)
 }
 
 std::size_t projection_region_count(std::span<const WeightInput> rows) {
-    return projection_regions(rows, [](const WeightView&, std::span<const WeightInput>) {
-        return std::size_t{1};
-    }).size();
+    return projection_regions(rows,
+                              [](const WeightView&, std::span<const WeightInput>) {
+                                  return std::size_t{1};
+                              },
+                              std::numeric_limits<std::size_t>::max())
+        .size();
 }
 
 ProjectionWeights prepare_projection_weights(std::span<const WeightInput> rows) {

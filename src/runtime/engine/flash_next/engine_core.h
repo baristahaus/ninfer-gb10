@@ -620,6 +620,11 @@ private:
             ++cumulative_stats_.shared_stable_prefix_selections;
             break;
         }
+        // The generic core's vocabulary: a non-root selection is a checkpoint selection. The
+        // private_* counters above stay the lane's detailed breakdown.
+        if (summary.prefix_reuse_path != PrefixReusePath::Root) {
+            ++cumulative_stats_.checkpoint_selections;
+        }
         cumulative_stats_.reused_prompt_tokens += summary.reusable_prompt_tokens;
         cumulative_stats_.prompt_tokens += summary.prompt_tokens;
         cumulative_stats_.last_selected_frontier_tokens = summary.reusable_prompt_tokens;

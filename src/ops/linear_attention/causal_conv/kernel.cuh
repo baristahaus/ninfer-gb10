@@ -466,3 +466,26 @@ __global__ void causal_conv1d_batched_snapshot_smallt_kernel(
 }
 
 } // namespace ninfer::ops::detail
+
+// Record-round history gather: copies each row's source conv window (3 taps) from the layer's
+// committed states into the head of its scratch reservation, so the snapshot form can read real
+// history from inside the scratch tensor. One thread per channel, one block row per sequence;
+// `source_slots` is read device-side so the gather stays valid under stream capture.
+__global__ void causal_conv1d_history_gather_kernel(
+    const __nv_bfloat16* conv_states, std::int64_t src_slot_stride,
+    const std::int32_t* source_slots, std::int32_t C, std::int32_t width,
+    std::int64_t dst_slot_stride, __nv_bfloat16* scratch, std::int32_t* record_slots) {
+    const std::int32_t batch = static_cast<std::int32_t>(blockIdx.y);
+    const std::int64_t c64   = blockIdx.x * static_cast<std::int64_t>(blockDim.x) + threadIdx.x;
+    const std::int64_t C64   = static_cast<std::int64_t>(C);
+    if (c64 >= C64) { return; }
+    if (record_slots != nullptr && c64 == 0) { record_slots[batch] = batch * width; }
+
+    const std::int64_t src      = source_slots[batch];
+    const std::int64_t dst_slot = static_cast<std::int64_t>(batch) * width;
+    #pragma unroll
+    for (int j = 0; j < 3; ++j) {
+        scratch[dst_slot * dst_slot_stride + static_cast<std::int64_t>(j) * C64 + c64] =
+            conv_states[src * src_slot_stride + static_cast<std::int64_t>(j) * C64 + c64];
+    }
+}

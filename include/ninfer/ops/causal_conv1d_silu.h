@@ -68,4 +68,16 @@ void causal_conv1d_silu_snapshot(const Tensor& x, const Tensor& weight, Tensor& 
                                  const Tensor& snapshot_base_slots, Tensor& out,
                                  cudaStream_t stream);
 
+/**
+ * Record-round history gather: copies each row's source conv window (3 taps) from `conv_states`
+ * at `source_slots[b]` into slot `b*width` of `scratch`, so the snapshot form can read real
+ * history from inside a scratch state tensor without touching the layer's committed state.
+ * `conv_states` is BF16 [C,3,Slots], `scratch` is BF16 [C,3,B*width] with the same layout, and
+ * `source_slots` is contiguous I32 [B]. All reads index device memory; the op is
+ * capture-compatible.
+ */
+void gdn_conv_history_gather(const Tensor& conv_states, const Tensor& source_slots,
+                             Tensor& scratch, Tensor& record_slots, std::int32_t width,
+                             cudaStream_t stream);
+
 } // namespace ninfer::ops

@@ -21,4 +21,8 @@ void launch_causal_conv_snapshot(const Tensor& x, const Tensor& weight, Tensor& 
                                  const Tensor& valid, const Tensor& initial_slots,
                                  const Tensor& snapshot_slots, Tensor& out,
                                  CausalConvSnapshotPlan plan, cudaStream_t stream);
+
+void launch_causal_conv_history_gather(const Tensor& conv_states, const Tensor& source_slots,
+                                       Tensor& scratch, Tensor& record_slots, std::int32_t width,
+                                       cudaStream_t stream);
 } // namespace ninfer::ops::detail

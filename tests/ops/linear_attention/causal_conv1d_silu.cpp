@@ -819,6 +819,7 @@ int main(int argc, char** argv) {
     batched_snapshot(kQwen35Channels, 1, {8, 9, 10, 11, 12, 13, 14, 15}, {0, 1, 2, 3, 4, 5, 6, 7},
                      {}, 16, 5001U);
     batched_snapshot(kQwen27Channels, 6, {18, 19, 20}, {0, 6, 12}, {6, 3, 1}, 21, 5006U);
+    batched_snapshot(kQwen27Channels, 4, {1, 4}, {0, 4}, {4, 4}, 8, 5004U);
     // Row 0 reads slot 15 and overwrites it only after the final valid column. This is the
     // production same-row alias pattern; row 1 remains fully disjoint.
     batched_snapshot(kQwen35Channels, 16, {15, 33}, {0, 16}, {16, 7}, 34, 5016U);

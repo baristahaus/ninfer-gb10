@@ -349,4 +349,23 @@ void causal_conv1d_silu_snapshot(const Tensor& x, const Tensor& weight, Tensor& 
                                      snapshot_base_slots, out, x.device, stream);
 }
 
+void gdn_conv_history_gather(const Tensor& conv_states, const Tensor& source_slots,
+                             Tensor& scratch, Tensor& record_slots, std::int32_t width,
+                             cudaStream_t stream) {
+    if (conv_states.dtype != DType::BF16 || scratch.dtype != DType::BF16 ||
+        source_slots.dtype != DType::I32) {
+        throw std::invalid_argument("causal_conv1d: history gather tensors must be BF16/I32");
+    }
+    if (conv_states.ne[0] != scratch.ne[0] || conv_states.ne[1] != 3 || scratch.ne[1] != 3) {
+        throw std::invalid_argument("causal_conv1d: history gather state shape mismatch");
+    }
+    const std::int32_t batch = source_slots.ne[0];
+    if (static_cast<std::int64_t>(scratch.ne[2]) !=
+        static_cast<std::int64_t>(batch) * width) {
+        throw std::invalid_argument("causal_conv1d: history gather scratch slot count mismatch");
+    }
+    detail::launch_causal_conv_history_gather(conv_states, source_slots, scratch, record_slots,
+                                              width, stream);
+}
+
 } // namespace ninfer::ops

@@ -240,16 +240,24 @@ void TextRun::gdn(const BlockParameters& block, std::uint32_t compact_layer) {
             Tensor conv_input  = qkv.view({dimension(gdn.conv_channels()), width, batch});
             Tensor conv_result = conv_out.view({dimension(gdn.conv_channels()), width, batch});
             if (replay) {
-                // Record round (plan W1.1/W1.2): the conv reads the source history
-                // and rewrites the same slots — a row's own initial slot may lie in
-                // its destination reservation — and the replay fold rewinds or
-                // commits the state from the records afterwards. The conv history
-                // record is the qkv plane itself: the fused record op's [C,W,B]
-                // column order is the plane's own layout.
-                ops::causal_conv1d_silu_snapshot(conv_input, p.convolution, conv,
-                                                 inputs_.valid_columns,
-                                                 inputs_.state_source_slots,
-                                                 inputs_.state_source_slots, conv_result, cuda);
+                // Record round (plan W1.1/W1.2): the conv runs over a scratch state
+                // tensor — the layer's committed state is untouched, and the replay
+                // fold rewinds or commits from the records afterwards. Each row's
+                // source window is gathered into its reservation head (device-side,
+                // capture-compatible) so the snapshot's initial slots point at real
+                // history inside the scratch. The conv history record is the qkv
+                // plane itself: the fused record op's [C,W,B] column order is the
+                // plane's own layout.
+                const std::int32_t channels = dimension(gdn.conv_channels());
+                Tensor scratch_states = work.alloc(DType::BF16, {channels, 3, kColumns});
+                Tensor heads = work.alloc(DType::I32, {batch});
+                // One device-side op fills the reservation heads and gathers the source
+                // windows; both stay valid under stream capture.
+                ops::gdn_conv_history_gather(conv, inputs_.state_source_slots, scratch_states,
+                                             heads, width, cuda.stream());
+                ops::causal_conv1d_silu_snapshot(conv_input, p.convolution, scratch_states,
+                                                 inputs_.valid_columns, heads, heads,
+                                                 conv_result, cuda);
                 const auto records = replay->records.layer(compact_layer, batch);
                 if (!(records.conv.dtype == DType::BF16 &&
                       records.conv.ne[0] == dimension(gdn.conv_channels()) &&
@@ -267,19 +275,28 @@ void TextRun::gdn(const BlockParameters& block, std::uint32_t compact_layer) {
                                                  inputs_.state_destination_slots, conv_result,
                                                  cuda);
             }
-            const auto q_rows  = static_cast<std::size_t>(dimension(gdn.key_width())) *
-                                static_cast<std::size_t>(kColumns) * 2;
-            const auto k_rows  = static_cast<std::size_t>(dimension(gdn.key_width())) *
-                                static_cast<std::size_t>(kColumns) * 2;
-            const auto v_rows  = static_cast<std::size_t>(dimension(gdn.value_width())) *
-                                static_cast<std::size_t>(kColumns) * 2;
+            // The qkv plane is row-fastest [rows, kColumns]: each row group's rows for column j
+            // live at j*conv_channels. The split outputs keep the same row-fastest layout, so
+            // each group is a strided 2D copy, not a flat range.
+            const auto group_channels = dimension(gdn.conv_channels());
             const auto* source = static_cast<const std::byte*>(conv_out.data);
-            CUDA_CHECK(cudaMemcpyAsync(query_output.data, source, q_rows, cudaMemcpyDeviceToDevice,
-                                       cuda.stream()));
-            CUDA_CHECK(cudaMemcpyAsync(key_output.data, source + q_rows, k_rows,
-                                       cudaMemcpyDeviceToDevice, cuda.stream()));
-            CUDA_CHECK(cudaMemcpyAsync(value_output.data, source + q_rows + k_rows, v_rows,
-                                       cudaMemcpyDeviceToDevice, cuda.stream()));
+            CUDA_CHECK(cudaMemcpy2DAsync(
+                query_output.data, static_cast<std::size_t>(dimension(gdn.key_width())) * 2,
+                source, static_cast<std::size_t>(group_channels) * 2,
+                static_cast<std::size_t>(dimension(gdn.key_width())) * 2, kColumns,
+                cudaMemcpyDeviceToDevice, cuda.stream()));
+            CUDA_CHECK(cudaMemcpy2DAsync(
+                key_output.data, static_cast<std::size_t>(dimension(gdn.key_width())) * 2,
+                source + static_cast<std::size_t>(dimension(gdn.key_width())) * 2,
+                static_cast<std::size_t>(group_channels) * 2,
+                static_cast<std::size_t>(dimension(gdn.key_width())) * 2, kColumns,
+                cudaMemcpyDeviceToDevice, cuda.stream()));
+            CUDA_CHECK(cudaMemcpy2DAsync(
+                value_output.data, static_cast<std::size_t>(dimension(gdn.value_width())) * 2,
+                source + static_cast<std::size_t>(2 * dimension(gdn.key_width())) * 2,
+                static_cast<std::size_t>(group_channels) * 2,
+                static_cast<std::size_t>(dimension(gdn.value_width())) * 2, kColumns,
+                cudaMemcpyDeviceToDevice, cuda.stream()));
         } else if (replay) {
             const auto records = replay->records.layer(compact_layer, batch);
             Tensor conv_record = records.conv;
@@ -298,7 +315,7 @@ void TextRun::gdn(const BlockParameters& block, std::uint32_t compact_layer) {
     Tensor k = kc.view({dk, qh, tokens});
     Tensor v = vc.view({dv, vh, tokens});
     Tensor o = workspace::gdn_recurrent_output(work, cfg, tokens).view({dv, vh, tokens});
-    if (sequence) {
+    if (sequence && !replay) {
         Tensor source      = view_.states.recurrent_slot(compact_layer, sequence->source_slot);
         Tensor destination = view_.states.recurrent_slot(compact_layer, sequence->destination_slot);
         ops::gated_delta_net(q, k, v, g, beta, scale, true, work, source, destination, o, cuda);

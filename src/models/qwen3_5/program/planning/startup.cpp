@@ -215,9 +215,18 @@ WorkspaceSpec build_workspace_plan(const SequencePlanImpl& plan) {
                         exl3_gdn) {
                         // The decomposed EXL3 decode route: the dense EXL3 projection into
                         // one qkv plane, then the standalone batched causal conv into a
-                        // second plane whose row ranges become the split outputs.
+                        // second plane whose row ranges become the split outputs. The
+                        // record round adds scratch conv states for its reservations and
+                        // the per-row slot vectors.
                         (void)workspace::gdn_prefill_conv(layout, config, max_width);
                         (void)workspace::gdn_prefill_conv(layout, config, max_width);
+                        if (path == GdnWorkspacePath::ReplayRecord) {
+                            matrix(layout, DType::BF16,
+                                   dimension(config.gdn->conv_channels()),
+                                   3 * batch_size * max_width);
+                            (void)layout.alloc(DType::I32, {batch_size});
+                            (void)layout.alloc(DType::I32, {batch_size});
+                        }
                         scratch(layout, execution::gdn_projection_workspace_bytes(
                                             gdn, min_width, max_width));
                     } else if (path == GdnWorkspacePath::Snapshot) {

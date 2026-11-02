@@ -341,4 +341,20 @@ void launch_causal_conv_state(const Tensor& x, const Tensor& state_in, Tensor& s
         static_cast<__nv_bfloat16*>(state_out.data), x.ne[0], x.ne[1]);
     CUDA_CHECK(cudaGetLastError());
 }
+void launch_causal_conv_history_gather(const Tensor& conv_states, const Tensor& source_slots,
+                                       Tensor& scratch, Tensor& record_slots, std::int32_t width,
+                                       cudaStream_t stream) {
+    const std::int32_t C     = conv_states.ne[0];
+    const std::int32_t batch = source_slots.ne[0];
+    const int block          = 128;
+    const dim3 grid(grid_for(C, block, "history gather"), static_cast<unsigned int>(batch));
+    causal_conv1d_history_gather_kernel<<<grid, block, 0, stream>>>(
+        static_cast<const __nv_bfloat16*>(conv_states.data),
+        static_cast<std::int64_t>(conv_states.nb[2] / 2),
+        static_cast<const std::int32_t*>(source_slots.data), C, width,
+        static_cast<std::int64_t>(scratch.nb[2] / 2),
+        static_cast<__nv_bfloat16*>(scratch.data), static_cast<std::int32_t*>(record_slots.data));
+    CUDA_CHECK(cudaGetLastError());
+}
 } // namespace ninfer::ops::detail
+

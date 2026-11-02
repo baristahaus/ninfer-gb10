@@ -509,9 +509,10 @@ def qwen3_8_27b_exl3_sc385(model, recipe, sources):
     its query rows, so query and gate import as two band selections of that one
     tensor. The token embedding re-encodes from the BF16 source at the qualified
     q8_g32 (his per-row int8 scale granularity has no qualified engine layout and no
-    quality advantage over finer groups); the output head imports as his 5-bit EXL3
-    object. Vision and the MTP fc head stay out of this first text-only artifact
-    (plan 4a).
+    quality advantage over finer groups); the output head likewise re-encodes at
+    q8_g32 (W0.2) because the DFlash2 draft self-selects candidates against it
+    through linear_topk. Vision stays out of this artifact (plan 4a); the MTP and
+    DFlash2 companions ride along through _optional's Q8 route.
     """
 
     if "num_experts" in model.config:
@@ -576,27 +577,11 @@ def qwen3_8_27b_exl3_sc385(model, recipe, sources):
         names = [f"text/layers/{layer}/gdn/{role}" for role in ("query", "key", "value")]
         if all(name in model.parameters for name in names):
             recipe.group(names)
-    recipe.assign("text/output_head", format="exl3", layout="exl3_dense_v1",
-                  method="import_exl3_dense",
-                  parameters={"checkpoint": checkpoint, "tensor": "lm_head"})
-    # W0.4: the DFlash2 companion is independent of the main model's quantization —
-    # it re-encodes at the official companion route (Q8) from its own source, so the
-    # DFlash2 draft's candidate selection never touches the EXL3 output head.
-    for name, parameter in model.parameters.items():
-        if not name.startswith("dflash2/"):
-            continue
-        if name.endswith((
-            "/attention_conv/kernel_projection",
-            "/mlp_conv/kernel_projection",
-            "/candidate_selector/hidden_projection",
-        )):
-            continue
-        _assign(recipe, name, Q8)
-    layers = model.components["dflash2"]["config"]["num_hidden_layers"]
-    for layer in range(layers):
-        prefix = f"dflash2/layers/{layer}/attention/"
-        for role in ("key", "value"):
-            recipe.share(prefix + "context_" + role, prefix + role)
+    # W0.2: the output head re-encodes at the qualified q8_g32 — the DFlash2 draft
+    # self-selects candidates against the target head through linear_topk, whose
+    # Q8Full profile this format feeds directly, and MTP's full-logits route reads
+    # the same head. +0.37 GiB over his 5-bit object, zero engine work.
+    _assign(recipe, "text/output_head", Q8)
 
 
 def qwen3_6_35b_a3b_exl3(model, recipe, sources):

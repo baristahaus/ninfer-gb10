@@ -221,6 +221,28 @@ median turn, 256K needle 8/8.
 SC rows, same method as the October EXL3 section); the fork-strategy SP-7 note gains
 the campaign closure record (gates recorded on both sides per the ratified cadence).
 
+### 4a. W0.1 binding design (resolved 2026-11-02, payload verified)
+
+Download verified against SHA256SUMS at
+`/nfs/hub/models--JRamirez-UAB--Qwen3.8-27B-EXL3-3.85bpw-24GB/snapshots/dd840e08…/`
+(14.62 GB, 2 shards, 3081 tensors, 573 EXL3 objects: trellis last dim = 16·bpw —
+289×4-bit, 77×3-bit, 41×5-bit incl. the head, 2×2-bit, 164×6-bit vision).
+
+The controlling constraint: his artifact carries a per-tensor input transform (`suh`)
+on every linear, while this engine's fused groups (gate_up, qkvz) assume one shared
+suh. Verbatim import therefore keeps his objects separate and binds them through the
+engine's existing pair/rows parameter forms:
+
+| Group | Import | Engine work |
+|---|---|---|
+| Attention | 4 objects/layer (query/gate split from his `q_proj` by 256-row-per-head bands — tile-aligned, 16-row granularity holds); per-role rows form is already what Qwen3.5 uses | none |
+| GDN | `(in_proj_qkv, in_proj_z)` pair — the op signature's pair form exists | the decomposed EXL3 route must recognize the pair (currently single-only) — folds into W1.2 |
+| Dense MLP | `(gate, up)` pair + `down` | one new `DenseParameters` variant arm + a two-dispatch branch in `dense_mlp`; workspace sizing follows the MoE separate-bank pattern |
+| Head/embed/norms | verbatim (5-bit EXL3 head, int8 row embed) | W0.2 head-route check only |
+| Vision / MTP | text-only first artifact; his vision tower carries 247 biases (our linear op takes none) and his MTP companion is a 7-tensor fc head (~20 MB) | deferred; both are explicit P0 verification items, not assumptions |
+
+Text model has zero biases (config-confirmed), so the bias question is vision-only.
+
 ## 5. Hardware and window map
 
 | Job | Machine | Duration | Pool impact |

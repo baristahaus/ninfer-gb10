@@ -210,7 +210,9 @@ WorkspaceSpec build_workspace_plan(const SequencePlanImpl& plan) {
                                         gdn.control, first, last));
                     (void)workspace::gdn_projection(layout, config, last);
                     const bool exl3_gdn = is_exl3_gdn(gdn);
-                    if (path == GdnWorkspacePath::Snapshot && exl3_gdn) {
+                    if ((path == GdnWorkspacePath::Snapshot ||
+                         path == GdnWorkspacePath::ReplayRecord) &&
+                        exl3_gdn) {
                         // The decomposed EXL3 decode route: the dense EXL3 projection into
                         // one qkv plane, then the standalone batched causal conv into a
                         // second plane whose row ranges become the split outputs.

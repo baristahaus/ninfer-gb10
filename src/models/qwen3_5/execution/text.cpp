@@ -226,20 +226,10 @@ void TextRun::gdn(const BlockParameters& block, std::uint32_t compact_layer) {
         Tensor gate_output      = z.view({dimension(gdn.value_width()), width, batch});
         Tensor conv             = view_.states.layer_view(compact_layer).conv;
         const bool exl3_route = is_exl3_gdn(p);
-        if (replay) {
-            if (exl3_route) {
-                throw std::invalid_argument(
-                    "the EXL3 GDN route does not support the speculative replay record path");
-            }
-            const auto records = replay->records.layer(compact_layer, batch);
-            Tensor conv_record = records.conv;
-            gdn_projection_record(projection_input, p, conv, inputs_.valid_columns,
-                                  inputs_.state_source_slots, conv_record, query_output, key_output,
-                                  value_output, gate_output, work, cuda);
-        } else if (exl3_route) {
-            // Decomposed decode: the dense EXL3 wrapper projects the fused qkv rows and the
-            // output gate, then the standalone batched causal conv runs over the qkv rows
-            // with the state selectors. The conv preserves the projection's row order, so
+        if (exl3_route) {
+            // Decomposed EXL3 route: the per-role or fused projection into one qkv
+            // plane plus the output gate, then the standalone batched causal conv
+            // over the qkv rows. The conv preserves the projection's row order, so
             // each split output is a contiguous row range of its result.
             const std::int32_t kColumns = width * batch;
             Tensor qkv       = workspace::gdn_prefill_conv(work, cfg, kColumns);
@@ -249,9 +239,34 @@ void TextRun::gdn(const BlockParameters& block, std::uint32_t compact_layer) {
             Tensor conv_out    = workspace::gdn_prefill_conv(work, cfg, kColumns);
             Tensor conv_input  = qkv.view({dimension(gdn.conv_channels()), width, batch});
             Tensor conv_result = conv_out.view({dimension(gdn.conv_channels()), width, batch});
-            ops::causal_conv1d_silu_snapshot(conv_input, p.convolution, conv, inputs_.valid_columns,
-                                             inputs_.state_source_slots,
-                                             inputs_.state_destination_slots, conv_result, cuda);
+            if (replay) {
+                // Record round (plan W1.1/W1.2): the conv reads the source history
+                // and rewrites the same slots — a row's own initial slot may lie in
+                // its destination reservation — and the replay fold rewinds or
+                // commits the state from the records afterwards. The conv history
+                // record is the qkv plane itself: the fused record op's [C,W,B]
+                // column order is the plane's own layout.
+                ops::causal_conv1d_silu_snapshot(conv_input, p.convolution, conv,
+                                                 inputs_.valid_columns,
+                                                 inputs_.state_source_slots,
+                                                 inputs_.state_source_slots, conv_result, cuda);
+                const auto records = replay->records.layer(compact_layer, batch);
+                if (!(records.conv.dtype == DType::BF16 &&
+                      records.conv.ne[0] == dimension(gdn.conv_channels()) &&
+                      records.conv.ne[1] == width && records.conv.ne[2] == batch)) {
+                    throw std::invalid_argument(
+                        "gdn record: conv record geometry differs from the round");
+                }
+                CUDA_CHECK(cudaMemcpyAsync(records.conv.data, conv_input.data,
+                                           records.conv.bytes(), cudaMemcpyDeviceToDevice,
+                                           cuda.stream()));
+            } else {
+                ops::causal_conv1d_silu_snapshot(conv_input, p.convolution, conv,
+                                                 inputs_.valid_columns,
+                                                 inputs_.state_source_slots,
+                                                 inputs_.state_destination_slots, conv_result,
+                                                 cuda);
+            }
             const auto q_rows  = static_cast<std::size_t>(dimension(gdn.key_width())) *
                                 static_cast<std::size_t>(kColumns) * 2;
             const auto k_rows  = static_cast<std::size_t>(dimension(gdn.key_width())) *
@@ -265,6 +280,12 @@ void TextRun::gdn(const BlockParameters& block, std::uint32_t compact_layer) {
                                        cudaMemcpyDeviceToDevice, cuda.stream()));
             CUDA_CHECK(cudaMemcpyAsync(value_output.data, source + q_rows + k_rows, v_rows,
                                        cudaMemcpyDeviceToDevice, cuda.stream()));
+        } else if (replay) {
+            const auto records = replay->records.layer(compact_layer, batch);
+            Tensor conv_record = records.conv;
+            gdn_projection_record(projection_input, p, conv, inputs_.valid_columns,
+                                  inputs_.state_source_slots, conv_record, query_output, key_output,
+                                  value_output, gate_output, work, cuda);
         } else {
             gdn_projection_snapshot(projection_input, p, conv, inputs_.valid_columns,
                                     inputs_.state_source_slots, inputs_.state_destination_slots,

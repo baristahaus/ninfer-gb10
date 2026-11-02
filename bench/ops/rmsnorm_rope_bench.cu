@@ -169,7 +169,7 @@ void run_pair(const Options& options, int width, int batch, CudaExecutionView cu
     Tensor t_q_weight(q_weight.span(), DType::BF16, {kHeadDim});
     Tensor t_k_weight(k_weight.span(), DType::BF16, {kHeadDim});
     const auto launch = [&](CudaExecutionView cuda) {
-        ops::rmsnorm_rope(t_positions, t_q_weight, t_k_weight, t_q, t_k, cuda);
+        ops::rmsnorm_rope(t_positions, t_q_weight, t_k_weight, t_q, t_k, 1.0e7F, cuda);
     };
     if (options.profile) {
         for (int index = 0; index < options.warmup; ++index) {
@@ -209,7 +209,7 @@ void run_single(const Options& options, int tokens, CudaExecutionView cuda) {
     Tensor t_x(x.span(), DType::BF16, {kHeadDim, kKeyHeads, tokens});
     Tensor t_weight(weight.span(), DType::BF16, {kHeadDim});
     const auto launch = [&](CudaExecutionView cuda) {
-        ops::rmsnorm_rope(t_positions, t_weight, t_x, cuda);
+        ops::rmsnorm_rope(t_positions, t_weight, t_x, 1.0e7F, cuda);
     };
     if (options.profile) {
         for (int index = 0; index < options.warmup; ++index) {

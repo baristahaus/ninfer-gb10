@@ -74,17 +74,23 @@ Engine-wide failure it returns HTTP 503 with `{"status":"unavailable"}`, and dur
 drain HTTP 503 with `{"status":"draining"}`. Temporary queue saturation does not make the Engine
 unavailable. The endpoint remains unauthenticated.
 
-`GET /metrics` renders Prometheus text (`text/plain; version=0.0.4`) with `ninfer:`-prefixed
-metrics: monotonic counters for completed, rejected, and failed requests; prompt, computed
-prefill, completion, reasoning, and cached tokens; speculative drafted/accepted tokens and
-rounds; and sum/count pairs for request latency, time to first token, prefill, and decode. The
-same document carries Engine gauges: running/prefilling/waiting requests, Main KV pool
-occupancy, catalogued prompts (`kept_prompts`), context length, Device and Host State slot
-occupancy, and Host KV spill occupancy. Consumers delta-sample the counters between polls
-(EngineMetrics does this for its live throughput panel); a request counter only moves when the
-corresponding request reaches its terminal state, so a poll taken mid-request sees no partial
-values. The endpoint remains unauthenticated alongside `/health` so monitoring tools poll
-without credentials.
+`GET /metrics` renders Prometheus text (`text/plain; version=0.0.4`) with `ninfer_`-prefixed
+metrics. Counters (delta-sample between polls; a request counter moves only when the request
+reaches its terminal state): completed, rejected, and failed requests with reason labels;
+prompt, cached, computed-prefill, generated, committed-decode, and replayed tokens; decode
+rounds and batch-size sums; speculative rounds, drafted/accepted/fallback tokens,
+per-position accepted drafts (`spec_decode_accepted_tokens_per_pos_total{position}`,
+1-based), and finish-reason labels; constrained-decoding request, branch, cache, mask, and
+preparation counters; context-transfer and tier-traffic totals; admission and context-cache
+pressure counters; and `http_requests_total`. Histograms: `request_duration_seconds`,
+`request_prefill_time_seconds`, `request_decode_time_seconds`,
+`inter_token_latency_seconds` (per-request mean), and `decode_batch_tokens`.
+Gauges: running/prefilling/waiting/paused requests, `spec_decode_draft_window`, per-pool Main
+KV occupancy and capacity (page groups and tokens), Device/Host State slot occupancy, Host
+context and KV spill bytes, `kv_cache_usage_ratio` per pool, `ninfer_engine_info` (model card
+with quoted label values), `process_resident_memory_bytes`, and `process_cpu_seconds_total`.
+The endpoint remains unauthenticated alongside `/health` so monitoring tools poll without
+credentials.
 
 [Output and tool constraints](#output-constraints) add counters that settle with each constrained
 request, including length-interrupted and cancelled ones; preparation failures and execution
@@ -93,13 +99,13 @@ or schema content.
 
 | Metric | Meaning |
 |---|---|
-| `ninfer:constraint_requests_total{outcome}` | Settled constrained requests: `terminated`, `complete_interrupted`, or `incomplete_interrupted` |
-| `ninfer:constraint_branch_total{branch}` | Committed output branch: `undecided`, `content`, or `tools` |
-| `ninfer:constraint_cache_total{result}` | Grammar compilation cache access: `hit`, `built`, or `waited` |
-| `ninfer:constraint_mask_positions_total` | Evaluated constrained prediction positions, including rolled-back speculative lookahead |
-| `ninfer:constraint_mask_upload_bytes_total` | Submitted token-mask payload bytes |
-| `ninfer:constraint_{prepare,mask,matcher}_seconds_sum` | CPU preparation (including compilation), mask, and matcher work; parts of existing request time that can overlap GPU execution |
-| `ninfer:constraint_draft_wait_seconds_sum` | Constrained DFlash wait for Host-visible drafts, counted once per batch; a subset of device wait |
+| `ninfer_constraint_requests_total{outcome}` | Settled constrained requests: `terminated`, `complete_interrupted`, or `incomplete_interrupted` |
+| `ninfer_constraint_branch_total{branch}` | Committed output branch: `undecided`, `content`, or `tools` |
+| `ninfer_constraint_cache_total{result}` | Grammar compilation cache access: `hit`, `built`, or `waited` |
+| `ninfer_constraint_mask_positions_total` | Evaluated constrained prediction positions, including rolled-back speculative lookahead |
+| `ninfer_constraint_mask_upload_bytes_total` | Submitted token-mask payload bytes |
+| `ninfer_constraint_{prepare,mask,matcher}_seconds_sum` | CPU preparation (including compilation), mask, and matcher work; parts of existing request time that can overlap GPU execution |
+| `ninfer_constraint_draft_wait_seconds_sum` | Constrained DFlash wait for Host-visible drafts, counted once per batch; a subset of device wait |
 
 Every OpenAI-compatible response carries a unique `x-request-id` header, including streaming and
 error responses. Anthropic endpoints use their separate `request-id` contract.

@@ -112,9 +112,27 @@ reference ([-0.777, -0.461, -0.027, ...] vs [-0.779, -0.461, -0.027, ...]) and t
 per-round first proposal matches the target's argmax every round.
 
 Acceptance after the fix (CLI, 200 tokens, greedy, dt3, no graph): **21/81 = 25.9%**
-(accepted by position 19,2,0), up from the 8.7% baseline. Position 0 now accepts at
-~70% (19/27); positions 1-2 remain near zero, so the remaining gap is in the later
-block columns' head distribution — the next campaign target.
+(accepted by position 19,2,0), up from the 8.7% baseline.
+
+### 3.1b The second defect: `column_topk` wrote a column-major candidate layout — FIXED 2026-11-02
+
+The remaining positions 1-2 gap was the candidate extractor. `ops::column_topk` declares its
+outputs `[K,T,B]` with the rank axis fastest, but the kernel indexed
+`rank * columns + column`, so each column's 16 candidates landed interleaved across all
+columns: column 0's candidate list came out as `[col0 rank0, col1 rank0, col2 rank0,
+col0 rank1, ...]`. The selector's edge then scored each column's candidates against the
+wrong unary values and the wrong hidden row, so the first draft usually matched (the anchor
+column happened to line up) while positions 1-2 picked near-arbitrary tokens.
+
+Diagnosis: the engine's round-0 proposal logits matched the reference to corr 0.9999, the
+final hidden matched, and the selector projection matched (0.03 BF16 diff); the reference
+selector replayed on the engine's own logits+hidden picked `[1156, 579, 1876]` while the
+engine's op picked `[1156, 4439, 2574]` — with the dumped candidates showing the interleaved
+sets.
+
+Fix: `src/ops/column_topk/column_topk.cu` indexes `rank + Rank * column`. After the fix the
+engine's drafts match the reference's picks exactly and acceptance is **27/60 = 45%**
+(accepted by position **14, 8, 5**) — positions 1-2 now carry real signal.
 
 ### 3.2 The extent collapse at small budgets (repro; cause unconfirmed)
 

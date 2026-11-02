@@ -80,7 +80,9 @@ __global__ void column_topk_kernel(const __nv_bfloat16* logits, std::int32_t row
                 if (key != 0) { insert_sorted(final_values, key, final_count); }
             }
             for (int rank = 0; rank < Rank; ++rank) {
-                const std::int64_t index = static_cast<std::int64_t>(rank) * columns + column;
+                // Contract layout: [K,T,B] with the rank axis fastest, so a column's ranks are
+                // contiguous (rank + K*column). Column-major indexing mixed the columns' ranks.
+                const std::int64_t index = static_cast<std::int64_t>(rank) + Rank * column;
                 if (rank < final_count) {
                     const std::uint64_t key = final_values[rank];
                     ids[index] = static_cast<std::int32_t>(

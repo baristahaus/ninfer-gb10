@@ -76,3 +76,4 @@ tools/gb10/config.local.sh
 # Local startup configuration; keep the complete reference in version control.
 *.toml
 !/ninfer.example.toml
+runs/

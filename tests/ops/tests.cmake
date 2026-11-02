@@ -4,6 +4,7 @@ ninfer_op_oracle_options(ninfer_op_test_support)
 target_link_libraries(ninfer_op_test_support PUBLIC ninfer_cpu CUDA::cudart)
 
 include("${CMAKE_CURRENT_LIST_DIR}/elementwise/tests.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/column_topk/tests.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/embedding/tests.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/indexing/tests.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/reduction/tests.cmake")

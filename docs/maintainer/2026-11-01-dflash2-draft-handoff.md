@@ -71,6 +71,50 @@ Re-measured acceptance after the fix: essentially unchanged (dt1: 8/53 15.1% sho
 the `qwen3_5` reference's assertion that the draft's theta must be 1e7: that checkpoint is
 a different model. The companion config is the authority for this one.
 
+### 3.1 The dominant loss: `rmsnorm_pack_tail` ran the 5120 geometry on the 2560 draft — FOUND AND FIXED 2026-11-02
+
+The draft's final hidden is produced by `ops::rmsnorm_pack_tail(residual, final_norm,
+proposal_hidden, execution)`, the `CudaExecutionView` overload. That overload bound to a
+*duplicate* hard-coded kernel in `src/ops/normalization/rmsnorm/pack_tail.cu` whose
+`kRmsnormPackTailPairsPerRow` was fixed at `5120/2 = 2560` pairs for both row geometries.
+For the draft's D=2560 (1280 pairs/row) every column read started one full 5120-element
+row late: `tail0` read element `5120` = column 2's start, `tail1` read element `10240`
+(past the 10240-element buffer) and `tail2` element `15360` (further out of bounds). The
+draft therefore scored the head on the *wrong columns'* hidden states — column 0's logits
+came from residual column 2, column 1's from column 3, column 2's from garbage — which is
+exactly the "right token, wrong rank" signature: the first proposal often still matched
+(target verify column 0 aligns with the *anchor* column, which the bug shifted onto the
+correct data), while positions 1-2 never did.
+
+Verified by the reference replay: the engine's proposal_hidden column 0 matched the
+reference's mask-2 hidden (not mask-0), and the layer-0..4 residuals matched the reference
+to BF16/accumulation noise while the final hidden did not.
+
+Fix: the `CudaExecutionView` overload now validates and delegates to the shared templated
+launcher (`src/ops/launcher/rmsnorm_pack_tail.cu` + `kernel/rmsnorm_pack_tail.cuh`,
+`Rows`-templated with `1.0F/Rows` in the inverse); the duplicate hard-coded kernel is
+deleted; the launcher dispatches `threads=256` for D=2560 (1280 pairs / 5 per thread) and
+`threads=512` for D=5120 (2560 pairs / 5); the launcher and kernel are registered in
+`normalization/rmsnorm/sources.cmake`. After the fix the final hidden matches the
+reference ([-0.777, -0.461, -0.027, ...] vs [-0.779, -0.461, -0.027, ...]) and the
+per-round first proposal matches the target's argmax every round.
+
+Acceptance after the fix (CLI, 200 tokens, greedy, dt3, no graph): **21/81 = 25.9%**
+(accepted by position 19,2,0), up from the 8.7% baseline. Position 0 now accepts at
+~70% (19/27); positions 1-2 remain near zero, so the remaining gap is in the later
+block columns' head distribution — the next campaign target.
+
+### 3.2 The extent collapse at small budgets
+
+With `--max-tokens 2` the round ingress reports `extent=0`, so `target_valid_columns = 1`
+and only the anchor column of the propose block is live (the three mask columns are inert
+zeros). The cause is the CLI's warmup round consuming one generated token from the budget
+before the real round (`max_by_budget = generated_tokens_remaining - 1`); the extent is
+`min(draft_window, max_by_budget, capacity - frontier - 1)`. The warmup's token is not a
+defect for normal budgets (the extent is 3 again from ~5 tokens up), but the warmup round
+should not decrement the user's budget. Not fixed; measurement runs must use
+`--max-tokens >= 5` or the extent-0 round is silently degenerate.
+
 ## 4. Ruled out, with evidence
 
 | Item | Evidence |
@@ -224,8 +268,10 @@ summary as `accepted by pos`.
    22.4-24.2 tok/s (eager ~20.4); acceptance 5.1-11.7% (eager 2.7-6.9%). The earlier
    empty-family throw and its unwind segfault are gone; the failure path's heap corruption
    (`ServeOptions::~ServeOptions`) is no longer reachable from this configuration.
-9. **Draft quality remains the headline gap**: acceptance ~5-9% (dt1) / ~2.7-6.9% (dt3) vs the
-   reference's 3.26 acceptance length (~81% per position). Further verification (2026-11-02):
+9. **Draft quality remains the headline gap**: acceptance **25.9%** (dt3) after the §3.1
+   pack-tail fix — position 0 ~70%, positions 1-2 still ~0 — vs the reference's 3.26
+   acceptance length (~81% per position). The earlier ~5-9% (dt1) / ~2.7-6.9% (dt3)
+   numbers predate the fix and the reference-replay validation. Further verification (2026-11-02):
    the tap-index A/B with the corrected mean value is null (0.204 vs 0.200 overlap — adjacent
    block means correlate, so the slot assignment barely matters; `layer-1` kept per the doc);
    BYPASS (pure head argmax) is still 0/28, so the draft's top-1 never matches the target's
@@ -267,4 +313,8 @@ boundary*, which no oracle on this machine can settle without the source model's
 `hidden_states`. Per-round synchronized dumps live in `/tmp/oracle_*.bin`
 (`oracle_prop_logits_N.bin`, `oracle_target_logits_N.bin`, `oracle_feats_N.bin`,
 `oracle_cachek.bin`, `l0_*.bin`); the conv-prepare, context-K, and layer-0 replays are the
-reproducible checks.
+reproducible checks. The tap *is* validated as of 2026-11-02: feeding our dumped
+prefill-feature windows to the reference `DFlash2DraftModel` reproduces the target's token
+at mask position 0 (reference selector pick 1156 = target argmax 1156), and the reference's
+per-stage values (prepared, q/k/v post-rope, attention, residual per layer, final hidden)
+match the engine's dumps to BF16 rounding once the pack-tail bug is fixed.

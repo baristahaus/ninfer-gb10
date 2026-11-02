@@ -81,9 +81,25 @@ std::vector<GraphExecutionProfile> Variant::mtp_graph_profiles(std::uint32_t cap
     return out;
 }
 
-std::vector<GraphExecutionProfile> Variant::dflash_graph_profiles(std::uint32_t, std::uint32_t,
-                                                                  std::uint32_t) {
-    return {};
+std::vector<GraphExecutionProfile> Variant::dflash_graph_profiles(std::uint32_t capacity,
+                                                                  std::uint32_t draft_window,
+                                                                  std::uint32_t batch_size) {
+    if (draft_window == 0 || batch_size == 0) { return {}; }
+    auto out = profiles(capacity);
+    // The DFlash round shares the target verify's node-topology transitions with the MTP round
+    // (the four-token verify/draft schedule between the 65K and 131K envelopes, and QSA going
+    // dense where the verify envelope fits its budget), and its own draft schedule is fixed at
+    // startup, so the topology classes carry over unchanged.
+    for (GraphExecutionProfile& profile : out) {
+        const std::uint64_t verify_visible = std::min<std::uint64_t>(
+            capacity, static_cast<std::uint64_t>(profile.max) + draft_window + 1ULL);
+        if (dense_qsa(verify_visible)) {
+            profile.topology_class = kDenseQsa;
+        } else if (profile.max > 65535U) {
+            profile.topology_class = profile.max <= 131071U ? 3U : 4U;
+        }
+    }
+    return out;
 }
 
 void Variant::attention_projection(const Tensor& hidden,

@@ -247,9 +247,10 @@ BindingReservation SessionImpl::start_binding(const RequestBasePlan& base, runti
         prepared.publish_continuation = base.summary().publish_continuation;
         prepared.sampling_host        = base.impl_->sampling;
         prepared.speculative_stats    = {
-               .backend               = speculative_backend,
-               .enabled               = speculative_backend != SpeculativeBackend::None,
-               .draft_window          = draft_window,
+               .backend              = speculative_backend,
+               .enabled              = speculative_backend != SpeculativeBackend::None,
+               .draft_window         = draft_window,
+               .drafted_per_position = std::vector<std::uint64_t>(draft_window, 0),
                .accepted_per_position = std::vector<std::uint64_t>(draft_window, 0),
         };
     }

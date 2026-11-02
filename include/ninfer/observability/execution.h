@@ -201,6 +201,9 @@ struct ContextKvPoolUsage {
     std::string label;
     std::uint32_t occupied_page_groups                                           = 0;
     std::uint32_t capacity_page_groups                                           = 0;
+    // Tokens per page group (KVPageGeometry::page_tokens); zero when the pool has no paged
+    // geometry (Flash-Next pools are reported through the dedicated page counters).
+    std::uint32_t page_tokens                                                    = 0;
     friend bool operator==(const ContextKvPoolUsage&, const ContextKvPoolUsage&) = default;
 };
 
@@ -230,6 +233,9 @@ struct SpeculativeStats {
     std::uint64_t accepted_tokens        = 0;
     std::uint64_t committed_draft_tokens = 0;
     std::uint64_t fallback_steps         = 0;
+    // One entry per draft position (0-based, sized by the draft window at binding): the draft
+    // positions the verification rounds actually drafted and the positions they accepted.
+    std::vector<std::uint64_t> drafted_per_position;
     std::vector<std::uint64_t> accepted_per_position;
 };
 

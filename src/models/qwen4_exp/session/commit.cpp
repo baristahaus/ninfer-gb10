@@ -238,6 +238,7 @@ CommitResult Session::commit(PendingBatch&& batch,
                 ++stats.fallback_steps;
             stats.drafted_tokens += drafted;
             stats.accepted_tokens += accepted;
+            for (std::uint32_t i = 0; i < drafted; ++i) ++stats.drafted_per_position[i];
             for (std::uint32_t i = 0; i < accepted; ++i) ++stats.accepted_per_position[i];
         }
         const auto& stats = s.speculative;

@@ -74,32 +74,119 @@ Engine-wide failure it returns HTTP 503 with `{"status":"unavailable"}`, and dur
 drain HTTP 503 with `{"status":"draining"}`. Temporary queue saturation does not make the Engine
 unavailable. The endpoint remains unauthenticated.
 
-`GET /metrics` renders Prometheus text (`text/plain; version=0.0.4`) with `ninfer:`-prefixed
-metrics: monotonic counters for completed, rejected, and failed requests; prompt, computed
-prefill, completion, reasoning, and cached tokens; speculative drafted/accepted tokens and
-rounds; and sum/count pairs for request latency, time to first token, prefill, and decode. The
-same document carries Engine gauges: running/prefilling/waiting requests, Main KV pool
-occupancy, catalogued prompts (`kept_prompts`), context length, Device and Host State slot
-occupancy, and Host KV spill occupancy. Consumers delta-sample the counters between polls
-(EngineMetrics does this for its live throughput panel); a request counter only moves when the
-corresponding request reaches its terminal state, so a poll taken mid-request sees no partial
-values. The endpoint remains unauthenticated alongside `/health` so monitoring tools poll
-without credentials.
+`GET /metrics` renders Prometheus text (`text/plain; version=0.0.4`) with `ninfer_`-prefixed
+metrics. Counters are delta-sampled between polls (EngineMetrics does this for its live panels);
+a request counter only moves when the corresponding request reaches its terminal state, so a
+poll taken mid-request sees no partial values. Gauges are point-in-time Engine snapshots. The
+endpoint remains unauthenticated alongside `/health` so monitoring tools poll without
+credentials.
+
+### Request and latency
+
+| Metric | Kind | Meaning |
+|---|---|---|
+| `ninfer_requests_total{outcome}` | counter | Generation attempts entering preparation: `completed`, `cancelled`, `failed`, or `rejected` |
+| `ninfer_request_finish_reasons_total{reason}` | counter | Settled requests by semantic finish reason: `stop_token`, `stop_string`, `output_limit`, `context_capacity`, or `cancelled` (including response failures after generation) |
+| `ninfer_response_failures_total` | counter | Response rendering, storage, or transport failures after generation settlement |
+| `ninfer_time_to_first_token_seconds` | histogram | Preparation through first committed token; one observation per request |
+| `ninfer_inter_token_latency_seconds` | histogram | Per-request mean inter-token latency (generation wall span over its token intervals); one observation per request with at least two generated tokens |
+| `ninfer_request_duration_seconds` | histogram | Request duration through settlement, including cancellation |
+| `ninfer_request_queue_seconds` | histogram | Initial Engine queue wait of settled requests |
+| `ninfer_request_prefill_time_seconds` | histogram | Accepted-to-retired prefill execution exposure of settled requests |
+| `ninfer_request_decode_time_seconds` | histogram | Accepted-to-retired decode execution exposure of settled requests |
+| `ninfer_decode_batch_tokens` | histogram | Compact decode steps by batch size (1..8); each step of size $B$ is observed by its $B$ members, so the histogram recovers exact step counts |
+
+### Tokens, scheduling, and KV
+
+| Metric | Kind | Meaning |
+|---|---|---|
+| `ninfer_prompt_tokens_total` | counter | Full input tokens counted once on initial binding |
+| `ninfer_prompt_tokens_cached_total` | counter | Input tokens supplied by exact checkpoints (prefix reuse) |
+| `ninfer_prefill_tokens_total` | counter | Initial input tokens actually computed, excluding replay |
+| `ninfer_generation_tokens_total` | counter | Committed output tokens, including first and control tokens |
+| `ninfer_decode_tokens_total` | counter | Committed decode/control tokens, excluding the first token |
+| `ninfer_replayed_tokens_total` | counter | History tokens recomputed during recovery |
+| `ninfer_requests_{running,waiting,paused,prefilling,decode_ready,replaying,materializing}` | gauge | Request lifecycle stages (the suffix names are split across the rendered lines) |
+| `ninfer_kv_cache_usage_ratio{pool}` | gauge | Occupied over capacity page groups, 0..1, by KV pool label |
+| `ninfer_kv_pool_occupied_tokens{pool}` / `ninfer_kv_pool_capacity_tokens{pool}` | gauge | Pool tokens (page groups times page tokens); zero where a pool has no paged geometry |
+| `ninfer_device_kv_used_page_groups{pool_id}` / `ninfer_device_kv_capacity_page_groups{pool_id}` | gauge | Physical KV page-group occupancy and capacity |
+| `ninfer_preemptions_total`, `ninfer_snapshot_restores_total`, `ninfer_replay_restores_total` | counter | Resource-pressure pauses and recovery operations |
+| `ninfer_root_selections_total` / `ninfer_checkpoint_selections_total` | counter | Initial bindings without / with checkpoint reuse |
+| `ninfer_host_context_used_bytes`, `ninfer_host_context_reserved_bytes`, `ninfer_host_context_capacity_bytes`, `ninfer_host_context_peak_bytes`, `ninfer_host_state_images`, `ninfer_host_kv_used_bytes` | gauge | Shared Host backing occupancy, state images, and Host-resident KV |
+| `ninfer_device_state_used_slots` / `ninfer_device_state_capacity_slots` | gauge | Device StateImage slot occupancy and capacity |
+
+### Speculative decode
+
+| Metric | Kind | Meaning |
+|---|---|---|
+| `ninfer_spec_decode_rounds_total` | counter | Native speculative verification rounds |
+| `ninfer_spec_decode_draft_tokens_total` / `ninfer_spec_decode_accepted_tokens_total` | counter | Draft tokens evaluated / accepted by verification |
+| `ninfer_spec_decode_draft_tokens_per_pos_total{position}` / `ninfer_spec_decode_accepted_tokens_per_pos_total{position}` | counter | The same totals by 1-based draft position; acceptance over drafts at position $k$ is the conditional acceptance rate |
+| `ninfer_spec_decode_fallback_steps_total` | counter | Speculative fallback steps without drafts |
+| `ninfer_spec_decode_draft_window` | gauge | Configured draft window |
+
+### Context transfers and tier traffic
+
+| Metric | Kind | Meaning |
+|---|---|---|
+| `ninfer_context_transfer_bytes_total{resource,direction}` / `ninfer_context_transfer_seconds_total{resource,direction}` | counter | Completed context payload transfers by resource (`state`, KV pool id) and direction (`d2h`, `h2d`, `d2d`) |
+| `ninfer_host_work_seconds_total` | counter | Host-side context work (reclaim, clone, materialize preparation) |
+| `ninfer_state_transfer_{pages,bytes,seconds}_total{direction}` | counter | Flash-Next StateImage tier transfers |
+| `ninfer_main_kv_transfer_{pages,bytes,seconds}_total{direction}` | counter | Flash-Next main KV tier transfers |
+| `ninfer_backend_kv_transfer_{pages,bytes,seconds}_total{direction}` | counter | Flash-Next backend (draft) KV tier transfers |
+
+### Admission and context-cache pressure
+
+| Metric | Kind | Meaning |
+|---|---|---|
+| `ninfer_admission_blocked_total{reason}` | counter | Flash-Next admissions blocked: `context_transaction`, `unsettled_state_fork`, `no_free_lane`, `no_feasible_plan` |
+| `ninfer_admission_deferred_long_prefill_total`, `ninfer_admission_short_backfills_total`, `ninfer_admission_prefill_yields_total` | counter | Flash-Next prefill deferral and backfill |
+| `ninfer_admission_{private_endpoint,private_turn_closure,private_response_replay,private_long_anchor,shared_stable_prefix}_selections_total` | counter | Flash-Next binding source selections |
+| `ninfer_pressure_spill_pages_total` | counter | KV page groups spilled to Host under pressure |
+| `ninfer_pressure_{private,shared}_owners_{degraded,evicted}_total` | counter | Continuation and shared-prefix owner degradation/eviction |
+| `ninfer_pressure_checkpoints_dropped_total`, `ninfer_partial_tail_cow_pages_total`, `ninfer_historical_fork_hits_total` | counter | Checkpoint drops, partial-tail clones, historical fork bindings |
+| `ninfer_shared_active_references` | gauge | Active references into shared prefix sources |
+
+Pressure and admission counters stay at zero on engines and workloads that never trigger them;
+they are rendered unconditionally so a scrape always sees the full surface.
+
+### Execution, memory, and process
+
+| Metric | Kind | Meaning |
+|---|---|---|
+| `ninfer_execution_units_total{kind}`, `ninfer_execution_rows_total{kind}`, `ninfer_execution_positions_total{kind}`, `ninfer_execution_elapsed_seconds_total{kind}` | counter | Executed work by `kind` (`prefill`, `decode`, `replay`, `control`, `score`, `context`) |
+| `ninfer_executor_flush_seconds_total`, `ninfer_scheduler_yield_seconds_total` | counter | Engine-owned non-GPU work |
+| `ninfer_memory_allocation_bytes{rank,location,resource}` | gauge | Owned backing bytes |
+| `ninfer_workspace_required_peak_bytes{rank,resource}`, `ninfer_workspace_measurement_peak_bytes{rank,resource}` | gauge | Workspace peaks |
+| `ninfer_memory_budget_bytes{rank}`, `ninfer_memory_headroom_bytes`, `ninfer_cuda_memory_free_bytes`, `ninfer_system_memory_available_bytes` | gauge | Startup budgets and sampled device/system memory |
+| `ninfer_rank_compute_units_total{rank,kind}`, `ninfer_rank_gpu_interval_seconds_total{rank}`, `ninfer_rank_gpu_interval_samples_total{rank}`, `ninfer_rank_host_call_seconds_total{rank}` | counter/gauge | Per-rank work and GPU intervals |
+| `ninfer_engine_ready` | gauge | 1 while the Engine accepts work |
+| `ninfer_engine_info{architecture,kv_cache,kv_capacity_tokens,max_context,max_concurrency,prefill_chunk,ranks,hardware}` | gauge | Engine configuration model card (value 1) |
+| `ninfer_model_info{model_name,speculative_backend}` | gauge | Resident model alias and speculative backend |
+| `ninfer_server_start_time_seconds`, `ninfer_max_concurrency`, `ninfer_max_context_tokens` | gauge | Service attachment time and configured limits |
+| `ninfer_http_requests_total` | counter | HTTP requests observed at the server, including `/health` and `/metrics` |
+| `ninfer_process_resident_memory_bytes` | gauge | Resident process memory, sampled at scrape time |
+| `ninfer_process_cpu_seconds_total` | counter | Process CPU seconds (utime+stime), sampled at scrape time |
 
 [Output and tool constraints](#output-constraints) add counters that settle with each constrained
 request, including length-interrupted and cancelled ones; preparation failures and execution
 errors stay in the rejected/failed counters. Labels are fixed enumerations and never carry grammar
 or schema content.
 
-| Metric | Meaning |
-|---|---|
-| `ninfer:constraint_requests_total{outcome}` | Settled constrained requests: `terminated`, `complete_interrupted`, or `incomplete_interrupted` |
-| `ninfer:constraint_branch_total{branch}` | Committed output branch: `undecided`, `content`, or `tools` |
-| `ninfer:constraint_cache_total{result}` | Grammar compilation cache access: `hit`, `built`, or `waited` |
-| `ninfer:constraint_mask_positions_total` | Evaluated constrained prediction positions, including rolled-back speculative lookahead |
-| `ninfer:constraint_mask_upload_bytes_total` | Submitted token-mask payload bytes |
-| `ninfer:constraint_{prepare,mask,matcher}_seconds_sum` | CPU preparation (including compilation), mask, and matcher work; parts of existing request time that can overlap GPU execution |
-| `ninfer:constraint_draft_wait_seconds_sum` | Constrained DFlash wait for Host-visible drafts, counted once per batch; a subset of device wait |
+| Metric | Kind | Meaning |
+|---|---|---|
+| `ninfer_constraint_requests_total{outcome}` | counter | Settled constrained requests: `terminated`, `complete_interrupted`, or `incomplete_interrupted` |
+| `ninfer_constraint_branch_total{branch}` | counter | Committed output branch: `undecided`, `content`, or `tools` |
+| `ninfer_constraint_cache_total{result}` | counter | Grammar compilation cache access: `hit`, `built`, or `waited` |
+| `ninfer_constraint_mask_positions_total` | counter | Evaluated constrained prediction positions, including rolled-back speculative lookahead |
+| `ninfer_constraint_mask_upload_bytes_total` | counter | Submitted token-mask payload bytes |
+| `ninfer_constraint_{prepare,mask,matcher}_seconds_sum` | counter | CPU preparation (including compilation), mask, and matcher work; parts of existing request time that can overlap GPU execution |
+| `ninfer_constraint_draft_wait_seconds_sum` | counter | Constrained DFlash wait for Host-visible drafts, counted once per batch; a subset of device wait |
+
+Family-specific counters that apply where the family runs the corresponding work (Flash-Next PLE
+and scoring, expert upload) are rendered alongside these: `ninfer_ple_read_bytes_total`,
+`ninfer_ple_upload_bytes_total`, `ninfer_expert_upload_bytes_total`, `ninfer_communication_calls_total`,
+`ninfer_communication_payload_bytes_total`, and the `ninfer_score_*` counters.
 
 Every OpenAI-compatible response carries a unique `x-request-id` header, including streaming and
 error responses. Anthropic endpoints use their separate `request-id` contract.

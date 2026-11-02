@@ -251,7 +251,8 @@ private:
                     startup.ranks           = instance->rank_budgets;
                     for (const auto& pool : instance->session->kv_pools())
                         description.kv_pools.push_back(
-                            {pool.id.index, std::string(pool.label), 0, pool.device_page_groups});
+                            {pool.id.index, std::string(pool.label), 0, pool.device_page_groups,
+                             pool.geometry ? pool.geometry->page_tokens : 0});
                     for (const auto& rank : instance->executor->observations()) {
                         int device = options.device;
                         if (options.deployment)

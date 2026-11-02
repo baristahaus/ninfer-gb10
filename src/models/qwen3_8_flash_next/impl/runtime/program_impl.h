@@ -11759,10 +11759,11 @@ void ProgramImplCore::install_sampling(SequenceState& sequence, RequestControl& 
                                     .view({TextConfig::token_domain});
     request.sampling_host     = config;
     request.speculative_stats = SpeculativeStats{
-        .backend               = speculative_backend,
-        .enabled               = speculative_backend != SpeculativeBackend::None,
-        .draft_window          = draft_window,
-        .accepted_per_position = std::vector<std::uint64_t>(draft_window, 0),
+        .backend                = speculative_backend,
+        .enabled                = speculative_backend != SpeculativeBackend::None,
+        .draft_window           = draft_window,
+        .drafted_per_position   = std::vector<std::uint64_t>(draft_window, 0),
+        .accepted_per_position  = std::vector<std::uint64_t>(draft_window, 0),
     };
     const bool penalties = request.sampling_host.presence_penalty != 0.0F ||
                            request.sampling_host.frequency_penalty != 0.0F;
@@ -12615,6 +12616,10 @@ ProgramImplCore::decode_mtp_batch(std::span<const std::uint32_t> lanes,
                 request.speculative_stats.rounds += 1;
                 request.speculative_stats.drafted_tokens += pcur;
                 request.speculative_stats.accepted_tokens += static_cast<std::uint32_t>(accepted_i);
+                for (std::int32_t i = 0; i < static_cast<std::int32_t>(pcur); ++i) {
+                    request.speculative_stats.drafted_per_position[static_cast<std::size_t>(i)] +=
+                        1;
+                }
                 for (std::int32_t i = 0; i < accepted_i; ++i) {
                     request.speculative_stats.accepted_per_position[static_cast<std::size_t>(i)] +=
                         1;
@@ -12819,6 +12824,10 @@ ProgramImplCore::decode_dflash_batch(std::span<const std::uint32_t> lanes,
                 request.speculative_stats.rounds += 1;
                 request.speculative_stats.drafted_tokens += extent;
                 request.speculative_stats.accepted_tokens += static_cast<std::uint32_t>(accepted_i);
+                for (std::int32_t i = 0; i < static_cast<std::int32_t>(extent); ++i) {
+                    request.speculative_stats.drafted_per_position[static_cast<std::size_t>(i)] +=
+                        1;
+                }
                 for (std::int32_t i = 0; i < accepted_i; ++i) {
                     request.speculative_stats.accepted_per_position[static_cast<std::size_t>(i)] +=
                         1;

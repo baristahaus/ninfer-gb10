@@ -473,6 +473,7 @@ int main() {
     outcome.stats.speculative.drafted_tokens        = 900;
     outcome.stats.speculative.accepted_tokens       = 720;
     outcome.stats.speculative.fallback_steps        = 2;
+    outcome.stats.speculative.drafted_per_position  = {350, 300, 250};
     outcome.stats.speculative.accepted_per_position = {290, 240, 190};
     outcome.stats.engine_request_id                 = 991;
     outcome.stats.scheduling                        = {
@@ -549,8 +550,11 @@ int main() {
     failures += check(done.at("speculative").at("fallback_steps") == 2,
                       "speculative fallback count missing");
     failures +=
+        check(done.at("speculative").at("drafted_per_position") == Json::array({350, 300, 250}),
+              "speculative drafted position counts missing");
+    failures +=
         check(done.at("speculative").at("accepted_per_position") == Json::array({290, 240, 190}),
-              "speculative position counts missing");
+              "speculative accepted position counts missing");
     failures += check(
         done.at("engine_timing").at("queue_wait_seconds") == 0.001 &&
             std::abs(done.at("engine_timing").at("host_exposed_seconds").at("total").get<double>() -

@@ -113,19 +113,7 @@ const char* protocol_name(std::string_view protocol) noexcept {
 }
 
 const char* kv_cache_name(ninfer::KvCacheStorage storage) noexcept {
-    switch (storage) {
-    case ninfer::KvCacheStorage::BFloat16:
-        return "bf16";
-    case ninfer::KvCacheStorage::Int8Group64:
-        return "int8";
-    case ninfer::KvCacheStorage::Fp8E4M3Row256:
-        return "fp8";
-    case ninfer::KvCacheStorage::Nvfp4Group16:
-        return "nvfp4";
-    case ninfer::KvCacheStorage::Fp8KeyNvfp4Value:
-        return "k8v4";
-    }
-    return "unknown";
+    return ninfer::kv_cache_storage_name(storage);
 }
 
 const char* kv_capacity_mode_name(ninfer::KvCapacityMode mode) noexcept {

@@ -307,6 +307,7 @@ CommitResult SessionImpl::commit(PendingBatch&& pending,
                 ++stats.fallback_steps;
             stats.drafted_tokens += drafted;
             stats.accepted_tokens += accepted;
+            for (std::uint32_t j = 0; j < drafted; ++j) ++stats.drafted_per_position[j];
             for (std::uint32_t j = 0; j < accepted; ++j) ++stats.accepted_per_position[j];
         }
         auto& row               = result.rows[b];

@@ -74,7 +74,8 @@ public:
         cumulative_stats_.context_transfers.kv.resize(instance_.session->kv_pools().size());
         for (const auto& pool : instance_.session->kv_pools()) {
             cumulative_stats_.kv_pools.push_back(
-                {pool.id.index, std::string(pool.label), 0, pool.device_page_groups});
+                {pool.id.index, std::string(pool.label), 0, pool.device_page_groups,
+                 pool.geometry ? pool.geometry->page_tokens : 0});
         }
         stats_snapshot_             = cumulative_stats_;
         published_snapshot_.runtime = cumulative_stats_;

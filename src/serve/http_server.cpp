@@ -354,8 +354,11 @@ void HttpServer::register_routes() {
                         [](const httplib::Request&, httplib::Response& res) { res.status = 204; });
     }
 
+    // The single pre-routing hook: request-id, HTTP traffic accounting and API-key
+    // authentication for every method and path, before dispatch.
     server_.set_pre_routing_handler([this](const httplib::Request& req, httplib::Response& res) {
         ensure_http_request_id(req, res);
+        metrics_.http_request();
         if (options_.api_key.empty() || req.path == "/health" || req.method == "OPTIONS") {
             return httplib::Server::HandlerResponse::Unhandled;
         }

@@ -26,6 +26,7 @@ ResidencyBinding SessionImpl::context_binding(BindOperation& operation) {
             sequence.speculative.backend      = SpeculativeBackend::Mtp;
             sequence.speculative.enabled      = true;
             sequence.speculative.draft_window = shape.draft_tokens;
+            sequence.speculative.drafted_per_position.resize(shape.draft_tokens);
             sequence.speculative.accepted_per_position.resize(shape.draft_tokens);
         }
     }

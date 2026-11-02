@@ -22,6 +22,24 @@ enum class KvCacheStorage : std::uint8_t {
     Fp8KeyNvfp4Value,
 };
 
+[[nodiscard]] inline constexpr const char* kv_cache_storage_name(KvCacheStorage storage) noexcept {
+    switch (storage) {
+    case KvCacheStorage::BFloat16:
+        return "bf16";
+    case KvCacheStorage::BFloat16KeyValue:
+        return "bf16-kv";
+    case KvCacheStorage::Int8Group64:
+        return "int8";
+    case KvCacheStorage::Fp8E4M3Row256:
+        return "fp8";
+    case KvCacheStorage::Nvfp4Group16:
+        return "nvfp4";
+    case KvCacheStorage::Fp8KeyNvfp4Value:
+        return "k8v4";
+    }
+    return "unknown";
+}
+
 // Logical Vision regions within existing backing; these are subsets of owned allocations.
 // Handoff offsets refer to persistent or workspace backing as indicated.
 struct VisionWorkspaceMemorySummary {

@@ -307,6 +307,7 @@ Json speculative_json(const RequestStats& metrics) {
                 {"accepted_tokens", metrics.speculative.accepted_tokens},
                 {"committed_draft_tokens", metrics.speculative.committed_draft_tokens},
                 {"fallback_steps", metrics.speculative.fallback_steps},
+                {"drafted_per_position", metrics.speculative.drafted_per_position},
                 {"accepted_per_position", metrics.speculative.accepted_per_position}};
 }
 

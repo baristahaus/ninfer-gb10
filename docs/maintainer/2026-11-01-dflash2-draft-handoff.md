@@ -206,12 +206,15 @@ summary as `accepted by pos`.
    near-tie argmax flips inherent to batched verify.
 7. **Batch > 1**: works (batch 2, both requests correct, batch 1.70). The accept's batch
    indexing is correct (the ne[0]-fastest layout: the kernel's `row*cols` stride addresses each
-   row's columns exactly; round-27's egress reconciles with row 1's targets). The acceptance is
-   lower in batch (1.0-1.1%) than sequential (2.4-3.1% on the same prompts), but the
-   alignment test across offsets is noise-level (batch: next 0.235 / same 0.219 / prev 0.203;
-   single-lane: prev 0.249 > same 0.196 — opposite lean). The draft's dist is weakly related
-   to the target at every offset; the lag hypothesis is dead and the batch gap has the same
-   root as the acceptance gap (the draft's weak distribution), not a batch-path bug.
+   row's columns exactly; round-27's egress reconciles with row 1's targets). No alignment
+   offset exists: the draft-vs-target top-2k overlap is ~0.2 at every offset (batch: next
+   0.235 / same 0.219 / prev 0.203; single-lane: prev 0.249 > same 0.196 — opposite lean,
+   ±0.03 spread), so the round-28/29 argmax coincidences were small-sample artifacts. The
+   batch-vs-single acceptance difference (1.0-1.1% vs 2.4-3.1%) is **within small-sample
+   noise** (2/84 and 3/96 vs 1/87 and 1/102 accepted events); the earlier "9% single vs 1%
+   batch" gap was mostly prompt mix. A real batch verdict needs aggregate samples (a batch
+   TEB), and since the top-1 agreement is ~0 anyway, the root cause dwarfs any batch effect.
+   The draft is simply weak; there is no batch-path bug.
 8. ~~CUDA Graph mode.~~ **Done 2026-11-02**: `Variant::dflash_graph_profiles` now returns the
    profile set (the `mtp_graph_profiles` analog: `profiles(capacity)` plus the verify-envelope
    topology adjustment — dense QSA where the envelope fits, classes 3/4 across the 65K/131K
@@ -241,6 +244,17 @@ summary as `accepted by pos`.
    the same position's (0.196) — a weak lean, not a clean off-by-one. The residual gap
    requires the source model's `hidden_states` (absent; a download-scale prerequisite) or a
    reference-runtime comparison (SGLang DFlash2), not any further local code change.
+
+**Standing rule (operator directive 2026-11-02)**: anything used as a *test input* must live
+on local NVMe, never on NFS. Current state: everything under test is already local
+(`/dev/nvme0n1p2`: the artifact, the companion, the tokenizers); the only NFS path is
+`/nfs` (the HF cache the sources came from). The two source candidates do not fit local disk
+(BF16 266G, NVFP4 113G vs 72G free), so a wholesale copy is impossible without freeing space;
+a one-shot mmap-streamed tap oracle reading from NFS is the only NFS-touching option if that
+route is ever taken — and it must stream per layer (the 2026-10-01 whole-model OOM precedent
+ended in driver corruption and a reboot). The source snapshot ships no modeling `.py` (131
+shards + config only), so the static capture-point check is closed; its `text_config`
+confirms `hc_count = 4` (the four-stream mean), 48 layers, 512 experts.
 
 ## 9. Coverage limits of everything above
 

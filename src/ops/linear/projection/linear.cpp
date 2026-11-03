@@ -109,7 +109,7 @@ void dispatch_linear(const Tensor& x, const Weight& w, Tensor& out, LinearPolicy
         if (w.layout != QuantLayout::Exl3Dense) {
             throw std::invalid_argument("linear: EXL3 weights route through their consumers");
         }
-        if (out.ne[1] <= 8) {
+        if (out.ne[1] <= 16) {
             detail::exl3_dense_dispatch(x, w, out, workspace, stream);
             return;
         }
@@ -196,8 +196,8 @@ std::size_t linear_workspace_capacity_bytes(QType qtype, std::int32_t output_row
                                         std::to_string(input_rows));
         }
         std::size_t bytes = detail::exl3_dense_workspace_bytes(
-            output_rows, input_rows, std::min(max_tokens, 8));
-        if (max_tokens > 8) {
+            output_rows, input_rows, std::min(max_tokens, 16));
+        if (max_tokens > 16) {
             // The prefill composition: the decoded W'[n, k] and u[k, T] planes plus the
             // transformed-input GEMM; the registered BF16 route takes no transient bytes.
             bytes = std::max(bytes, detail::exl3_prefill_workspace_bytes(output_rows, input_rows,

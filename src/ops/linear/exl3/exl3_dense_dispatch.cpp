@@ -33,7 +33,7 @@ constexpr int kProblems[][2] = {
     {248320, 5120}, // the 27B output head (the SC import's 5-bit EXL3 lm_head)
 };
 
-constexpr std::int32_t kMaxTokens = 8;  // the decode shapes the route registers
+constexpr std::int32_t kMaxTokens = 16;  // decode shapes and record rounds to four concurrent rows (T = width x batch <= 16)
 
 } // namespace
 

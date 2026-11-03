@@ -55,8 +55,8 @@ int admission_refusals() {
     // the capacity covers the decoded [n, k] plane plus the transformed activation.
     {
         const auto capacity = ops::linear_workspace_capacity_bytes(
-            QType::EXL3, 1024, 5120, ops::LinearPolicy::A16Only, 9, 9);
-        const auto expected = sizeof(std::uint16_t) * (1024ULL * 5120ULL + 5120ULL * 9ULL);
+            QType::EXL3, 1024, 5120, ops::LinearPolicy::A16Only, 65, 65);
+        const auto expected = sizeof(std::uint16_t) * (1024ULL * 5120ULL + 5120ULL * 65ULL);
         if (capacity < expected) {
             std::cerr << "exl3 dense: composed prefill capacity below its planes\n";
             ++failures;
@@ -131,7 +131,7 @@ int exl3_dense_a16_conformance() {
 
     // Every remaining registered problem, sampled rows and columns at the decode shapes.
     constexpr std::array kSampled{
-        Invocation{1}, Invocation{4}, Invocation{8},
+        Invocation{1}, Invocation{4}, Invocation{8}, Invocation{12}, Invocation{16},
     };
     const test::linear::WeightGenerator mcg =
         [](std::int32_t n, std::int32_t k, std::uint32_t seed) {
@@ -152,7 +152,7 @@ int exl3_dense_a16_conformance() {
     // decoded W' carries one extra BF16 rounding of the weight plane, so the criterion is
     // the composed profile's output error against the same FP64 oracle.
     constexpr std::array kComposed{
-        Invocation{9}, Invocation{16}, Invocation{33},
+        Invocation{33}, Invocation{65}, Invocation{128},
     };
     failures += run_shape("EXL3_DENSE_A16", ActivationCompute::A16, mcg,
                           {1024, 5120, 211U, Comparison::Full, true, kComposed});

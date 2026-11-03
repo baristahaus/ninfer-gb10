@@ -207,7 +207,10 @@ the artifact's trellis + suh/svh decoded via the converter's validated numpy dec
 the reference rows joined per-leaf through the conversion report's provenance (banded
 q/gate leaves select his interleaved 16-row bands). The amplitude-halving law holds:
 median rfn 0.150 (K=3, n=79) / 0.076 (K=4, n=291) / 0.040 (K=5, n=44) — the anchors
-for W2.4's per-K extrapolation. Dequant our accepted 2.00bpw artifact
+for W2.4's per-K extrapolation. The 2.00bpw anchor itself
+(`out/qwen3_8_27b_exl3.ninfer`, uniform K=2, fused q/k/v/z + q/k/gate/v parents)
+measured with the generalized join: 256/256 leaves, median rfn 0.297
+(0.277-0.348) — the K=2 row of the law, consistent with the K=3/4/5 halving. Dequant our accepted 2.00bpw artifact
 per-tensor, record `rfn_t = ‖W_q − W‖/‖W‖` (`sc_rfn_probe.py` against the checkpoint).
 K=2 anchors extrapolate across K per the amplitude-halving law — our artifact is the
 anchor.

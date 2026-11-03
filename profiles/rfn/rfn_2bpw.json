@@ -1,0 +1,3599 @@
+{
+ "artifact": "out/qwen3_8_27b_exl3.ninfer",
+ "base": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B",
+ "results": [
+  {
+   "object": "weight/000000",
+   "parameters": [
+    "text/layers/0/gdn/query",
+    "text/layers/0/gdn/key",
+    "text/layers/0/gdn/value",
+    "text/layers/0/gdn/z"
+   ],
+   "source": "rows(/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.0.linear_attn.in_proj_qkv.weight, 1 spans, 2048 rows)",
+   "n": 16384,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.31555601026906327,
+   "ref_norm": 145.2203605731648
+  },
+  {
+   "object": "weight/000001",
+   "parameters": [
+    "text/layers/0/mlp/gate",
+    "text/layers/0/mlp/up"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.0.mlp.gate_proj.weight",
+   "n": 34816,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.3302601620817406,
+   "ref_norm": 133.43422858987495
+  },
+  {
+   "object": "weight/000002",
+   "parameters": [
+    "text/layers/1/gdn/query",
+    "text/layers/1/gdn/key",
+    "text/layers/1/gdn/value",
+    "text/layers/1/gdn/z"
+   ],
+   "source": "rows(/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.1.linear_attn.in_proj_qkv.weight, 1 spans, 2048 rows)",
+   "n": 16384,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.30570052937269737,
+   "ref_norm": 141.78248635674294
+  },
+  {
+   "object": "weight/000003",
+   "parameters": [
+    "text/layers/1/mlp/gate",
+    "text/layers/1/mlp/up"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.1.mlp.gate_proj.weight",
+   "n": 34816,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.3231934794700059,
+   "ref_norm": 140.68629219828063
+  },
+  {
+   "object": "weight/000004",
+   "parameters": [
+    "text/layers/2/gdn/query",
+    "text/layers/2/gdn/key",
+    "text/layers/2/gdn/value",
+    "text/layers/2/gdn/z"
+   ],
+   "source": "rows(/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.2.linear_attn.in_proj_qkv.weight, 1 spans, 2048 rows)",
+   "n": 16384,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.30277404935710645,
+   "ref_norm": 144.16060921763614
+  },
+  {
+   "object": "weight/000005",
+   "parameters": [
+    "text/layers/2/mlp/gate",
+    "text/layers/2/mlp/up"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.2.mlp.gate_proj.weight",
+   "n": 34816,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.30885155813061477,
+   "ref_norm": 144.1879266898758
+  },
+  {
+   "object": "weight/000006",
+   "parameters": [
+    "text/layers/3/attention/query",
+    "text/layers/3/attention/key",
+    "text/layers/3/attention/gate",
+    "text/layers/3/attention/value"
+   ],
+   "source": "rows(/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.3.self_attn.q_proj.weight, 24 spans, 6144 rows)",
+   "n": 14336,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2846608257474608,
+   "ref_norm": 146.65368298946672
+  },
+  {
+   "object": "weight/000007",
+   "parameters": [
+    "text/layers/3/mlp/gate",
+    "text/layers/3/mlp/up"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.3.mlp.gate_proj.weight",
+   "n": 34816,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.3031151294128347,
+   "ref_norm": 145.61043382086325
+  },
+  {
+   "object": "weight/000008",
+   "parameters": [
+    "text/layers/4/gdn/query",
+    "text/layers/4/gdn/key",
+    "text/layers/4/gdn/value",
+    "text/layers/4/gdn/z"
+   ],
+   "source": "rows(/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.4.linear_attn.in_proj_qkv.weight, 1 spans, 2048 rows)",
+   "n": 16384,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2991607063533346,
+   "ref_norm": 147.7642759600574
+  },
+  {
+   "object": "weight/000009",
+   "parameters": [
+    "text/layers/4/mlp/gate",
+    "text/layers/4/mlp/up"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.4.mlp.gate_proj.weight",
+   "n": 34816,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.30031724513824687,
+   "ref_norm": 146.84872105333434
+  },
+  {
+   "object": "weight/000010",
+   "parameters": [
+    "text/layers/5/gdn/query",
+    "text/layers/5/gdn/key",
+    "text/layers/5/gdn/value",
+    "text/layers/5/gdn/z"
+   ],
+   "source": "rows(/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.5.linear_attn.in_proj_qkv.weight, 1 spans, 2048 rows)",
+   "n": 16384,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.29641862886941656,
+   "ref_norm": 145.64475456139846
+  },
+  {
+   "object": "weight/000011",
+   "parameters": [
+    "text/layers/5/mlp/gate",
+    "text/layers/5/mlp/up"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.5.mlp.gate_proj.weight",
+   "n": 34816,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2981433899797972,
+   "ref_norm": 146.9433883337389
+  },
+  {
+   "object": "weight/000012",
+   "parameters": [
+    "text/layers/6/gdn/query",
+    "text/layers/6/gdn/key",
+    "text/layers/6/gdn/value",
+    "text/layers/6/gdn/z"
+   ],
+   "source": "rows(/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.6.linear_attn.in_proj_qkv.weight, 1 spans, 2048 rows)",
+   "n": 16384,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2926550104626373,
+   "ref_norm": 145.71805637300068
+  },
+  {
+   "object": "weight/000013",
+   "parameters": [
+    "text/layers/6/mlp/gate",
+    "text/layers/6/mlp/up"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.6.mlp.gate_proj.weight",
+   "n": 34816,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2975883293314761,
+   "ref_norm": 146.51750375381775
+  },
+  {
+   "object": "weight/000014",
+   "parameters": [
+    "text/layers/7/attention/query",
+    "text/layers/7/attention/key",
+    "text/layers/7/attention/gate",
+    "text/layers/7/attention/value"
+   ],
+   "source": "rows(/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.7.self_attn.q_proj.weight, 24 spans, 6144 rows)",
+   "n": 14336,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2880045516851269,
+   "ref_norm": 139.22488412412127
+  },
+  {
+   "object": "weight/000015",
+   "parameters": [
+    "text/layers/7/mlp/gate",
+    "text/layers/7/mlp/up"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.7.mlp.gate_proj.weight",
+   "n": 34816,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.29716304590711756,
+   "ref_norm": 147.94216036174407
+  },
+  {
+   "object": "weight/000016",
+   "parameters": [
+    "text/layers/8/gdn/query",
+    "text/layers/8/gdn/key",
+    "text/layers/8/gdn/value",
+    "text/layers/8/gdn/z"
+   ],
+   "source": "rows(/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.8.linear_attn.in_proj_qkv.weight, 1 spans, 2048 rows)",
+   "n": 16384,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.29522694436862834,
+   "ref_norm": 145.4766277405068
+  },
+  {
+   "object": "weight/000017",
+   "parameters": [
+    "text/layers/8/mlp/gate",
+    "text/layers/8/mlp/up"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.8.mlp.gate_proj.weight",
+   "n": 34816,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2963408573199758,
+   "ref_norm": 148.17467521476132
+  },
+  {
+   "object": "weight/000018",
+   "parameters": [
+    "text/layers/9/gdn/query",
+    "text/layers/9/gdn/key",
+    "text/layers/9/gdn/value",
+    "text/layers/9/gdn/z"
+   ],
+   "source": "rows(/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.9.linear_attn.in_proj_qkv.weight, 1 spans, 2048 rows)",
+   "n": 16384,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2951690099899428,
+   "ref_norm": 144.40965493172538
+  },
+  {
+   "object": "weight/000019",
+   "parameters": [
+    "text/layers/9/mlp/gate",
+    "text/layers/9/mlp/up"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.9.mlp.gate_proj.weight",
+   "n": 34816,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2962867260861145,
+   "ref_norm": 147.52428957844535
+  },
+  {
+   "object": "weight/000020",
+   "parameters": [
+    "text/layers/10/gdn/query",
+    "text/layers/10/gdn/key",
+    "text/layers/10/gdn/value",
+    "text/layers/10/gdn/z"
+   ],
+   "source": "rows(/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.10.linear_attn.in_proj_qkv.weight, 1 spans, 2048 rows)",
+   "n": 16384,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.29561222283815997,
+   "ref_norm": 144.33108098223335
+  },
+  {
+   "object": "weight/000021",
+   "parameters": [
+    "text/layers/10/mlp/gate",
+    "text/layers/10/mlp/up"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.10.mlp.gate_proj.weight",
+   "n": 34816,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.29657108876228594,
+   "ref_norm": 145.85889880077596
+  },
+  {
+   "object": "weight/000022",
+   "parameters": [
+    "text/layers/11/attention/query",
+    "text/layers/11/attention/key",
+    "text/layers/11/attention/gate",
+    "text/layers/11/attention/value"
+   ],
+   "source": "rows(/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.11.self_attn.q_proj.weight, 24 spans, 6144 rows)",
+   "n": 14336,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.29211810629718366,
+   "ref_norm": 138.77475145221842
+  },
+  {
+   "object": "weight/000023",
+   "parameters": [
+    "text/layers/11/mlp/gate",
+    "text/layers/11/mlp/up"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.11.mlp.gate_proj.weight",
+   "n": 34816,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.29605053933410636,
+   "ref_norm": 146.9521340011774
+  },
+  {
+   "object": "weight/000024",
+   "parameters": [
+    "text/layers/12/gdn/query",
+    "text/layers/12/gdn/key",
+    "text/layers/12/gdn/value",
+    "text/layers/12/gdn/z"
+   ],
+   "source": "rows(/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.12.linear_attn.in_proj_qkv.weight, 1 spans, 2048 rows)",
+   "n": 16384,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2943279027015836,
+   "ref_norm": 145.35829923416824
+  },
+  {
+   "object": "weight/000025",
+   "parameters": [
+    "text/layers/12/mlp/gate",
+    "text/layers/12/mlp/up"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.12.mlp.gate_proj.weight",
+   "n": 34816,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.29679810264705153,
+   "ref_norm": 146.63752743798227
+  },
+  {
+   "object": "weight/000026",
+   "parameters": [
+    "text/layers/13/gdn/query",
+    "text/layers/13/gdn/key",
+    "text/layers/13/gdn/value",
+    "text/layers/13/gdn/z"
+   ],
+   "source": "rows(/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.13.linear_attn.in_proj_qkv.weight, 1 spans, 2048 rows)",
+   "n": 16384,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2944382387957488,
+   "ref_norm": 145.21834315092568
+  },
+  {
+   "object": "weight/000027",
+   "parameters": [
+    "text/layers/13/mlp/gate",
+    "text/layers/13/mlp/up"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.13.mlp.gate_proj.weight",
+   "n": 34816,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.29693351148222547,
+   "ref_norm": 146.0101599097645
+  },
+  {
+   "object": "weight/000028",
+   "parameters": [
+    "text/layers/14/gdn/query",
+    "text/layers/14/gdn/key",
+    "text/layers/14/gdn/value",
+    "text/layers/14/gdn/z"
+   ],
+   "source": "rows(/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.14.linear_attn.in_proj_qkv.weight, 1 spans, 2048 rows)",
+   "n": 16384,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2939214875210616,
+   "ref_norm": 145.09094669378928
+  },
+  {
+   "object": "weight/000029",
+   "parameters": [
+    "text/layers/14/mlp/gate",
+    "text/layers/14/mlp/up"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.14.mlp.gate_proj.weight",
+   "n": 34816,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.29683306811942506,
+   "ref_norm": 145.3527363648514
+  },
+  {
+   "object": "weight/000030",
+   "parameters": [
+    "text/layers/15/attention/query",
+    "text/layers/15/attention/key",
+    "text/layers/15/attention/gate",
+    "text/layers/15/attention/value"
+   ],
+   "source": "rows(/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.15.self_attn.q_proj.weight, 24 spans, 6144 rows)",
+   "n": 14336,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.295767764432619,
+   "ref_norm": 136.59378932165987
+  },
+  {
+   "object": "weight/000031",
+   "parameters": [
+    "text/layers/15/mlp/gate",
+    "text/layers/15/mlp/up"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.15.mlp.gate_proj.weight",
+   "n": 34816,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.29529112120519163,
+   "ref_norm": 146.4786807226567
+  },
+  {
+   "object": "weight/000032",
+   "parameters": [
+    "text/layers/16/gdn/query",
+    "text/layers/16/gdn/key",
+    "text/layers/16/gdn/value",
+    "text/layers/16/gdn/z"
+   ],
+   "source": "rows(/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.16.linear_attn.in_proj_qkv.weight, 1 spans, 2048 rows)",
+   "n": 16384,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.29302970002533657,
+   "ref_norm": 144.87689413127615
+  },
+  {
+   "object": "weight/000033",
+   "parameters": [
+    "text/layers/16/mlp/gate",
+    "text/layers/16/mlp/up"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.16.mlp.gate_proj.weight",
+   "n": 34816,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.29455528103424783,
+   "ref_norm": 147.20384728752845
+  },
+  {
+   "object": "weight/000034",
+   "parameters": [
+    "text/layers/17/gdn/query",
+    "text/layers/17/gdn/key",
+    "text/layers/17/gdn/value",
+    "text/layers/17/gdn/z"
+   ],
+   "source": "rows(/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.17.linear_attn.in_proj_qkv.weight, 1 spans, 2048 rows)",
+   "n": 16384,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.29301263472782424,
+   "ref_norm": 145.16368724219566
+  },
+  {
+   "object": "weight/000035",
+   "parameters": [
+    "text/layers/17/mlp/gate",
+    "text/layers/17/mlp/up"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.17.mlp.gate_proj.weight",
+   "n": 34816,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.29418041611638934,
+   "ref_norm": 147.84735979000436
+  },
+  {
+   "object": "weight/000036",
+   "parameters": [
+    "text/layers/18/gdn/query",
+    "text/layers/18/gdn/key",
+    "text/layers/18/gdn/value",
+    "text/layers/18/gdn/z"
+   ],
+   "source": "rows(/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.18.linear_attn.in_proj_qkv.weight, 1 spans, 2048 rows)",
+   "n": 16384,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2930160450002088,
+   "ref_norm": 145.68632024404351
+  },
+  {
+   "object": "weight/000037",
+   "parameters": [
+    "text/layers/18/mlp/gate",
+    "text/layers/18/mlp/up"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.18.mlp.gate_proj.weight",
+   "n": 34816,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2953742317665378,
+   "ref_norm": 148.47341012997916
+  },
+  {
+   "object": "weight/000038",
+   "parameters": [
+    "text/layers/19/attention/query",
+    "text/layers/19/attention/key",
+    "text/layers/19/attention/gate",
+    "text/layers/19/attention/value"
+   ],
+   "source": "rows(/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.19.self_attn.q_proj.weight, 24 spans, 6144 rows)",
+   "n": 14336,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2982534182832464,
+   "ref_norm": 136.70745310470457
+  },
+  {
+   "object": "weight/000039",
+   "parameters": [
+    "text/layers/19/mlp/gate",
+    "text/layers/19/mlp/up"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.19.mlp.gate_proj.weight",
+   "n": 34816,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2948076192001076,
+   "ref_norm": 149.35280954421313
+  },
+  {
+   "object": "weight/000040",
+   "parameters": [
+    "text/layers/20/gdn/query",
+    "text/layers/20/gdn/key",
+    "text/layers/20/gdn/value",
+    "text/layers/20/gdn/z"
+   ],
+   "source": "rows(/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.20.linear_attn.in_proj_qkv.weight, 1 spans, 2048 rows)",
+   "n": 16384,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2931109447879125,
+   "ref_norm": 147.58875772310708
+  },
+  {
+   "object": "weight/000041",
+   "parameters": [
+    "text/layers/20/mlp/gate",
+    "text/layers/20/mlp/up"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.20.mlp.gate_proj.weight",
+   "n": 34816,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2944015786373907,
+   "ref_norm": 149.67824867027272
+  },
+  {
+   "object": "weight/000042",
+   "parameters": [
+    "text/layers/21/gdn/query",
+    "text/layers/21/gdn/key",
+    "text/layers/21/gdn/value",
+    "text/layers/21/gdn/z"
+   ],
+   "source": "rows(/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.21.linear_attn.in_proj_qkv.weight, 1 spans, 2048 rows)",
+   "n": 16384,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2931177824554969,
+   "ref_norm": 147.84395806897217
+  },
+  {
+   "object": "weight/000043",
+   "parameters": [
+    "text/layers/21/mlp/gate",
+    "text/layers/21/mlp/up"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.21.mlp.gate_proj.weight",
+   "n": 34816,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2937812453421749,
+   "ref_norm": 149.9372329614129
+  },
+  {
+   "object": "weight/000044",
+   "parameters": [
+    "text/layers/22/gdn/query",
+    "text/layers/22/gdn/key",
+    "text/layers/22/gdn/value",
+    "text/layers/22/gdn/z"
+   ],
+   "source": "rows(/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.22.linear_attn.in_proj_qkv.weight, 1 spans, 2048 rows)",
+   "n": 16384,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2918736426844684,
+   "ref_norm": 145.67182723505599
+  },
+  {
+   "object": "weight/000045",
+   "parameters": [
+    "text/layers/22/mlp/gate",
+    "text/layers/22/mlp/up"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.22.mlp.gate_proj.weight",
+   "n": 34816,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2922161062907706,
+   "ref_norm": 151.71641669163557
+  },
+  {
+   "object": "weight/000046",
+   "parameters": [
+    "text/layers/23/attention/query",
+    "text/layers/23/attention/key",
+    "text/layers/23/attention/gate",
+    "text/layers/23/attention/value"
+   ],
+   "source": "rows(/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.23.self_attn.q_proj.weight, 24 spans, 6144 rows)",
+   "n": 14336,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2955249753097341,
+   "ref_norm": 133.22436139366553
+  },
+  {
+   "object": "weight/000047",
+   "parameters": [
+    "text/layers/23/mlp/gate",
+    "text/layers/23/mlp/up"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.23.mlp.gate_proj.weight",
+   "n": 34816,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.29085114038212073,
+   "ref_norm": 151.78878725880907
+  },
+  {
+   "object": "weight/000048",
+   "parameters": [
+    "text/layers/24/gdn/query",
+    "text/layers/24/gdn/key",
+    "text/layers/24/gdn/value",
+    "text/layers/24/gdn/z"
+   ],
+   "source": "rows(/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.24.linear_attn.in_proj_qkv.weight, 1 spans, 2048 rows)",
+   "n": 16384,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2928595000575488,
+   "ref_norm": 143.46756220919767
+  },
+  {
+   "object": "weight/000049",
+   "parameters": [
+    "text/layers/24/mlp/gate",
+    "text/layers/24/mlp/up"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.24.mlp.gate_proj.weight",
+   "n": 34816,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.29085776247837725,
+   "ref_norm": 152.99977660318658
+  },
+  {
+   "object": "weight/000050",
+   "parameters": [
+    "text/layers/25/gdn/query",
+    "text/layers/25/gdn/key",
+    "text/layers/25/gdn/value",
+    "text/layers/25/gdn/z"
+   ],
+   "source": "rows(/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.25.linear_attn.in_proj_qkv.weight, 1 spans, 2048 rows)",
+   "n": 16384,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.293942289736734,
+   "ref_norm": 143.97866324129419
+  },
+  {
+   "object": "weight/000051",
+   "parameters": [
+    "text/layers/25/mlp/gate",
+    "text/layers/25/mlp/up"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.25.mlp.gate_proj.weight",
+   "n": 34816,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.29189382899129157,
+   "ref_norm": 153.16859710993307
+  },
+  {
+   "object": "weight/000052",
+   "parameters": [
+    "text/layers/26/gdn/query",
+    "text/layers/26/gdn/key",
+    "text/layers/26/gdn/value",
+    "text/layers/26/gdn/z"
+   ],
+   "source": "rows(/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.26.linear_attn.in_proj_qkv.weight, 1 spans, 2048 rows)",
+   "n": 16384,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2950464766369388,
+   "ref_norm": 143.39840834411308
+  },
+  {
+   "object": "weight/000053",
+   "parameters": [
+    "text/layers/26/mlp/gate",
+    "text/layers/26/mlp/up"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.26.mlp.gate_proj.weight",
+   "n": 34816,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.292878764188374,
+   "ref_norm": 152.56134780392443
+  },
+  {
+   "object": "weight/000054",
+   "parameters": [
+    "text/layers/27/attention/query",
+    "text/layers/27/attention/key",
+    "text/layers/27/attention/gate",
+    "text/layers/27/attention/value"
+   ],
+   "source": "rows(/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.27.self_attn.q_proj.weight, 24 spans, 6144 rows)",
+   "n": 14336,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2983233236997404,
+   "ref_norm": 134.64206020036977
+  },
+  {
+   "object": "weight/000055",
+   "parameters": [
+    "text/layers/27/mlp/gate",
+    "text/layers/27/mlp/up"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.27.mlp.gate_proj.weight",
+   "n": 34816,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.29172646011031905,
+   "ref_norm": 152.64517296044772
+  },
+  {
+   "object": "weight/000056",
+   "parameters": [
+    "text/layers/28/gdn/query",
+    "text/layers/28/gdn/key",
+    "text/layers/28/gdn/value",
+    "text/layers/28/gdn/z"
+   ],
+   "source": "rows(/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.28.linear_attn.in_proj_qkv.weight, 1 spans, 2048 rows)",
+   "n": 16384,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2933440499781175,
+   "ref_norm": 142.8755946509935
+  },
+  {
+   "object": "weight/000057",
+   "parameters": [
+    "text/layers/28/mlp/gate",
+    "text/layers/28/mlp/up"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.28.mlp.gate_proj.weight",
+   "n": 34816,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.29294873129958937,
+   "ref_norm": 151.56670097270705
+  },
+  {
+   "object": "weight/000058",
+   "parameters": [
+    "text/layers/29/gdn/query",
+    "text/layers/29/gdn/key",
+    "text/layers/29/gdn/value",
+    "text/layers/29/gdn/z"
+   ],
+   "source": "rows(/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.29.linear_attn.in_proj_qkv.weight, 1 spans, 2048 rows)",
+   "n": 16384,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2934620667727864,
+   "ref_norm": 142.53056826738958
+  },
+  {
+   "object": "weight/000059",
+   "parameters": [
+    "text/layers/29/mlp/gate",
+    "text/layers/29/mlp/up"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.29.mlp.gate_proj.weight",
+   "n": 34816,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.29272287432128963,
+   "ref_norm": 150.93266684808495
+  },
+  {
+   "object": "weight/000060",
+   "parameters": [
+    "text/layers/30/gdn/query",
+    "text/layers/30/gdn/key",
+    "text/layers/30/gdn/value",
+    "text/layers/30/gdn/z"
+   ],
+   "source": "rows(/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.30.linear_attn.in_proj_qkv.weight, 1 spans, 2048 rows)",
+   "n": 16384,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2926111738420133,
+   "ref_norm": 142.64026813543924
+  },
+  {
+   "object": "weight/000061",
+   "parameters": [
+    "text/layers/30/mlp/gate",
+    "text/layers/30/mlp/up"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.30.mlp.gate_proj.weight",
+   "n": 34816,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.29258999097409094,
+   "ref_norm": 150.23180656280812
+  },
+  {
+   "object": "weight/000062",
+   "parameters": [
+    "text/layers/31/attention/query",
+    "text/layers/31/attention/key",
+    "text/layers/31/attention/gate",
+    "text/layers/31/attention/value"
+   ],
+   "source": "rows(/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.31.self_attn.q_proj.weight, 24 spans, 6144 rows)",
+   "n": 14336,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.29491538066901435,
+   "ref_norm": 130.71144717229245
+  },
+  {
+   "object": "weight/000063",
+   "parameters": [
+    "text/layers/31/mlp/gate",
+    "text/layers/31/mlp/up"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.31.mlp.gate_proj.weight",
+   "n": 34816,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.29028492663006256,
+   "ref_norm": 149.89130176147648
+  },
+  {
+   "object": "weight/000064",
+   "parameters": [
+    "text/layers/32/gdn/query",
+    "text/layers/32/gdn/key",
+    "text/layers/32/gdn/value",
+    "text/layers/32/gdn/z"
+   ],
+   "source": "rows(/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.32.linear_attn.in_proj_qkv.weight, 1 spans, 2048 rows)",
+   "n": 16384,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.29041083719416,
+   "ref_norm": 141.29390219282288
+  },
+  {
+   "object": "weight/000065",
+   "parameters": [
+    "text/layers/32/mlp/gate",
+    "text/layers/32/mlp/up"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.32.mlp.gate_proj.weight",
+   "n": 34816,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2899976098113381,
+   "ref_norm": 149.42351461115481
+  },
+  {
+   "object": "weight/000066",
+   "parameters": [
+    "text/layers/33/gdn/query",
+    "text/layers/33/gdn/key",
+    "text/layers/33/gdn/value",
+    "text/layers/33/gdn/z"
+   ],
+   "source": "rows(/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.33.linear_attn.in_proj_qkv.weight, 1 spans, 2048 rows)",
+   "n": 16384,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2903067552399655,
+   "ref_norm": 141.65970724327366
+  },
+  {
+   "object": "weight/000067",
+   "parameters": [
+    "text/layers/33/mlp/gate",
+    "text/layers/33/mlp/up"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.33.mlp.gate_proj.weight",
+   "n": 34816,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.28964630654404866,
+   "ref_norm": 149.31750331717646
+  },
+  {
+   "object": "weight/000068",
+   "parameters": [
+    "text/layers/34/gdn/query",
+    "text/layers/34/gdn/key",
+    "text/layers/34/gdn/value",
+    "text/layers/34/gdn/z"
+   ],
+   "source": "rows(/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.34.linear_attn.in_proj_qkv.weight, 1 spans, 2048 rows)",
+   "n": 16384,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2904890976188042,
+   "ref_norm": 141.8818968587959
+  },
+  {
+   "object": "weight/000069",
+   "parameters": [
+    "text/layers/34/mlp/gate",
+    "text/layers/34/mlp/up"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.34.mlp.gate_proj.weight",
+   "n": 34816,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.29295717261405846,
+   "ref_norm": 149.18616463583345
+  },
+  {
+   "object": "weight/000070",
+   "parameters": [
+    "text/layers/35/attention/query",
+    "text/layers/35/attention/key",
+    "text/layers/35/attention/gate",
+    "text/layers/35/attention/value"
+   ],
+   "source": "rows(/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.35.self_attn.q_proj.weight, 24 spans, 6144 rows)",
+   "n": 14336,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2971198906190745,
+   "ref_norm": 128.33482818393455
+  },
+  {
+   "object": "weight/000071",
+   "parameters": [
+    "text/layers/35/mlp/gate",
+    "text/layers/35/mlp/up"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.35.mlp.gate_proj.weight",
+   "n": 34816,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2933662238713502,
+   "ref_norm": 149.84585830112223
+  },
+  {
+   "object": "weight/000072",
+   "parameters": [
+    "text/layers/36/gdn/query",
+    "text/layers/36/gdn/key",
+    "text/layers/36/gdn/value",
+    "text/layers/36/gdn/z"
+   ],
+   "source": "rows(/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.36.linear_attn.in_proj_qkv.weight, 1 spans, 2048 rows)",
+   "n": 16384,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2951959636267978,
+   "ref_norm": 145.21713268412924
+  },
+  {
+   "object": "weight/000073",
+   "parameters": [
+    "text/layers/36/mlp/gate",
+    "text/layers/36/mlp/up"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.36.mlp.gate_proj.weight",
+   "n": 34816,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.29465401644948397,
+   "ref_norm": 150.31629413090917
+  },
+  {
+   "object": "weight/000074",
+   "parameters": [
+    "text/layers/37/gdn/query",
+    "text/layers/37/gdn/key",
+    "text/layers/37/gdn/value",
+    "text/layers/37/gdn/z"
+   ],
+   "source": "rows(/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.37.linear_attn.in_proj_qkv.weight, 1 spans, 2048 rows)",
+   "n": 16384,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.29635570211029993,
+   "ref_norm": 145.3735019806739
+  },
+  {
+   "object": "weight/000075",
+   "parameters": [
+    "text/layers/37/mlp/gate",
+    "text/layers/37/mlp/up"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.37.mlp.gate_proj.weight",
+   "n": 34816,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2942646673907089,
+   "ref_norm": 150.66258607813023
+  },
+  {
+   "object": "weight/000076",
+   "parameters": [
+    "text/layers/38/gdn/query",
+    "text/layers/38/gdn/key",
+    "text/layers/38/gdn/value",
+    "text/layers/38/gdn/z"
+   ],
+   "source": "rows(/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.38.linear_attn.in_proj_qkv.weight, 1 spans, 2048 rows)",
+   "n": 16384,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2937516279309681,
+   "ref_norm": 145.30419331096402
+  },
+  {
+   "object": "weight/000077",
+   "parameters": [
+    "text/layers/38/mlp/gate",
+    "text/layers/38/mlp/up"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.38.mlp.gate_proj.weight",
+   "n": 34816,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2923644325137025,
+   "ref_norm": 153.39814286481763
+  },
+  {
+   "object": "weight/000078",
+   "parameters": [
+    "text/layers/39/attention/query",
+    "text/layers/39/attention/key",
+    "text/layers/39/attention/gate",
+    "text/layers/39/attention/value"
+   ],
+   "source": "rows(/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.39.self_attn.q_proj.weight, 24 spans, 6144 rows)",
+   "n": 14336,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.29600020571273455,
+   "ref_norm": 127.83316611652471
+  },
+  {
+   "object": "weight/000079",
+   "parameters": [
+    "text/layers/39/mlp/gate",
+    "text/layers/39/mlp/up"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.39.mlp.gate_proj.weight",
+   "n": 34816,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.29129449434248506,
+   "ref_norm": 152.83448844869733
+  },
+  {
+   "object": "weight/000080",
+   "parameters": [
+    "text/layers/40/gdn/query",
+    "text/layers/40/gdn/key",
+    "text/layers/40/gdn/value",
+    "text/layers/40/gdn/z"
+   ],
+   "source": "rows(/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.40.linear_attn.in_proj_qkv.weight, 1 spans, 2048 rows)",
+   "n": 16384,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.29500503250702764,
+   "ref_norm": 142.06964896222556
+  },
+  {
+   "object": "weight/000081",
+   "parameters": [
+    "text/layers/40/mlp/gate",
+    "text/layers/40/mlp/up"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.40.mlp.gate_proj.weight",
+   "n": 34816,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.29083892210149154,
+   "ref_norm": 153.7022918867835
+  },
+  {
+   "object": "weight/000082",
+   "parameters": [
+    "text/layers/41/gdn/query",
+    "text/layers/41/gdn/key",
+    "text/layers/41/gdn/value",
+    "text/layers/41/gdn/z"
+   ],
+   "source": "rows(/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.41.linear_attn.in_proj_qkv.weight, 1 spans, 2048 rows)",
+   "n": 16384,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.294324917713782,
+   "ref_norm": 141.80425686708068
+  },
+  {
+   "object": "weight/000083",
+   "parameters": [
+    "text/layers/41/mlp/gate",
+    "text/layers/41/mlp/up"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.41.mlp.gate_proj.weight",
+   "n": 34816,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2911057583651673,
+   "ref_norm": 152.79425376752556
+  },
+  {
+   "object": "weight/000084",
+   "parameters": [
+    "text/layers/42/gdn/query",
+    "text/layers/42/gdn/key",
+    "text/layers/42/gdn/value",
+    "text/layers/42/gdn/z"
+   ],
+   "source": "rows(/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.42.linear_attn.in_proj_qkv.weight, 1 spans, 2048 rows)",
+   "n": 16384,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2948624820850201,
+   "ref_norm": 141.05336839074423
+  },
+  {
+   "object": "weight/000085",
+   "parameters": [
+    "text/layers/42/mlp/gate",
+    "text/layers/42/mlp/up"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.42.mlp.gate_proj.weight",
+   "n": 34816,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2923108502396629,
+   "ref_norm": 151.9847854227521
+  },
+  {
+   "object": "weight/000086",
+   "parameters": [
+    "text/layers/43/attention/query",
+    "text/layers/43/attention/key",
+    "text/layers/43/attention/gate",
+    "text/layers/43/attention/value"
+   ],
+   "source": "rows(/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.43.self_attn.q_proj.weight, 24 spans, 6144 rows)",
+   "n": 14336,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2978731582393046,
+   "ref_norm": 127.05632055805016
+  },
+  {
+   "object": "weight/000087",
+   "parameters": [
+    "text/layers/43/mlp/gate",
+    "text/layers/43/mlp/up"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.43.mlp.gate_proj.weight",
+   "n": 34816,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2915135452568152,
+   "ref_norm": 152.60227103487026
+  },
+  {
+   "object": "weight/000088",
+   "parameters": [
+    "text/layers/44/gdn/query",
+    "text/layers/44/gdn/key",
+    "text/layers/44/gdn/value",
+    "text/layers/44/gdn/z"
+   ],
+   "source": "rows(/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.44.linear_attn.in_proj_qkv.weight, 1 spans, 2048 rows)",
+   "n": 16384,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2946553237830532,
+   "ref_norm": 141.27870283591932
+  },
+  {
+   "object": "weight/000089",
+   "parameters": [
+    "text/layers/44/mlp/gate",
+    "text/layers/44/mlp/up"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.44.mlp.gate_proj.weight",
+   "n": 34816,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2935967698650091,
+   "ref_norm": 152.2436305625789
+  },
+  {
+   "object": "weight/000090",
+   "parameters": [
+    "text/layers/45/gdn/query",
+    "text/layers/45/gdn/key",
+    "text/layers/45/gdn/value",
+    "text/layers/45/gdn/z"
+   ],
+   "source": "rows(/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.45.linear_attn.in_proj_qkv.weight, 1 spans, 2048 rows)",
+   "n": 16384,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.29457362393764736,
+   "ref_norm": 141.14628382461933
+  },
+  {
+   "object": "weight/000091",
+   "parameters": [
+    "text/layers/45/mlp/gate",
+    "text/layers/45/mlp/up"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.45.mlp.gate_proj.weight",
+   "n": 34816,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2937286196209025,
+   "ref_norm": 152.1554252647601
+  },
+  {
+   "object": "weight/000092",
+   "parameters": [
+    "text/layers/46/gdn/query",
+    "text/layers/46/gdn/key",
+    "text/layers/46/gdn/value",
+    "text/layers/46/gdn/z"
+   ],
+   "source": "rows(/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.46.linear_attn.in_proj_qkv.weight, 1 spans, 2048 rows)",
+   "n": 16384,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.29477934931713606,
+   "ref_norm": 141.71833999389423
+  },
+  {
+   "object": "weight/000093",
+   "parameters": [
+    "text/layers/46/mlp/gate",
+    "text/layers/46/mlp/up"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.46.mlp.gate_proj.weight",
+   "n": 34816,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.294189272240581,
+   "ref_norm": 151.46066166252544
+  },
+  {
+   "object": "weight/000094",
+   "parameters": [
+    "text/layers/47/attention/query",
+    "text/layers/47/attention/key",
+    "text/layers/47/attention/gate",
+    "text/layers/47/attention/value"
+   ],
+   "source": "rows(/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.47.self_attn.q_proj.weight, 24 spans, 6144 rows)",
+   "n": 14336,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.29752880303197204,
+   "ref_norm": 127.50154717198532
+  },
+  {
+   "object": "weight/000095",
+   "parameters": [
+    "text/layers/47/mlp/gate",
+    "text/layers/47/mlp/up"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.47.mlp.gate_proj.weight",
+   "n": 34816,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.29298947050877183,
+   "ref_norm": 152.31500690386682
+  },
+  {
+   "object": "weight/000096",
+   "parameters": [
+    "text/layers/48/gdn/query",
+    "text/layers/48/gdn/key",
+    "text/layers/48/gdn/value",
+    "text/layers/48/gdn/z"
+   ],
+   "source": "rows(/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.48.linear_attn.in_proj_qkv.weight, 1 spans, 2048 rows)",
+   "n": 16384,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2950644714933134,
+   "ref_norm": 141.83091275353198
+  },
+  {
+   "object": "weight/000097",
+   "parameters": [
+    "text/layers/48/mlp/gate",
+    "text/layers/48/mlp/up"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.48.mlp.gate_proj.weight",
+   "n": 34816,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2943751642139728,
+   "ref_norm": 152.33219507461317
+  },
+  {
+   "object": "weight/000098",
+   "parameters": [
+    "text/layers/49/gdn/query",
+    "text/layers/49/gdn/key",
+    "text/layers/49/gdn/value",
+    "text/layers/49/gdn/z"
+   ],
+   "source": "rows(/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.49.linear_attn.in_proj_qkv.weight, 1 spans, 2048 rows)",
+   "n": 16384,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.29593131721990285,
+   "ref_norm": 143.63545028343455
+  },
+  {
+   "object": "weight/000099",
+   "parameters": [
+    "text/layers/49/mlp/gate",
+    "text/layers/49/mlp/up"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.49.mlp.gate_proj.weight",
+   "n": 34816,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2960036498631972,
+   "ref_norm": 152.36168804648693
+  },
+  {
+   "object": "weight/000100",
+   "parameters": [
+    "text/layers/50/gdn/query",
+    "text/layers/50/gdn/key",
+    "text/layers/50/gdn/value",
+    "text/layers/50/gdn/z"
+   ],
+   "source": "rows(/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.50.linear_attn.in_proj_qkv.weight, 1 spans, 2048 rows)",
+   "n": 16384,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2985027776435958,
+   "ref_norm": 143.57311127523147
+  },
+  {
+   "object": "weight/000101",
+   "parameters": [
+    "text/layers/50/mlp/gate",
+    "text/layers/50/mlp/up"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.50.mlp.gate_proj.weight",
+   "n": 34816,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.30009727713804457,
+   "ref_norm": 153.45394514723301
+  },
+  {
+   "object": "weight/000102",
+   "parameters": [
+    "text/layers/51/attention/query",
+    "text/layers/51/attention/key",
+    "text/layers/51/attention/gate",
+    "text/layers/51/attention/value"
+   ],
+   "source": "rows(/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.51.self_attn.q_proj.weight, 24 spans, 6144 rows)",
+   "n": 14336,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.30768234604088296,
+   "ref_norm": 126.49113728834918
+  },
+  {
+   "object": "weight/000103",
+   "parameters": [
+    "text/layers/51/mlp/gate",
+    "text/layers/51/mlp/up"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.51.mlp.gate_proj.weight",
+   "n": 34816,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.30095667420449873,
+   "ref_norm": 155.1286260655976
+  },
+  {
+   "object": "weight/000104",
+   "parameters": [
+    "text/layers/52/gdn/query",
+    "text/layers/52/gdn/key",
+    "text/layers/52/gdn/value",
+    "text/layers/52/gdn/z"
+   ],
+   "source": "rows(/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.52.linear_attn.in_proj_qkv.weight, 1 spans, 2048 rows)",
+   "n": 16384,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.3034805057040942,
+   "ref_norm": 149.27152535312956
+  },
+  {
+   "object": "weight/000105",
+   "parameters": [
+    "text/layers/52/mlp/gate",
+    "text/layers/52/mlp/up"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.52.mlp.gate_proj.weight",
+   "n": 34816,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.30263692359719085,
+   "ref_norm": 157.40698518291683
+  },
+  {
+   "object": "weight/000106",
+   "parameters": [
+    "text/layers/53/gdn/query",
+    "text/layers/53/gdn/key",
+    "text/layers/53/gdn/value",
+    "text/layers/53/gdn/z"
+   ],
+   "source": "rows(/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.53.linear_attn.in_proj_qkv.weight, 1 spans, 2048 rows)",
+   "n": 16384,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.3022407197116842,
+   "ref_norm": 149.70114107990292
+  },
+  {
+   "object": "weight/000107",
+   "parameters": [
+    "text/layers/53/mlp/gate",
+    "text/layers/53/mlp/up"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.53.mlp.gate_proj.weight",
+   "n": 34816,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.30099572706072475,
+   "ref_norm": 158.83922812273107
+  },
+  {
+   "object": "weight/000108",
+   "parameters": [
+    "text/layers/54/gdn/query",
+    "text/layers/54/gdn/key",
+    "text/layers/54/gdn/value",
+    "text/layers/54/gdn/z"
+   ],
+   "source": "rows(/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.54.linear_attn.in_proj_qkv.weight, 1 spans, 2048 rows)",
+   "n": 16384,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.3010147727507088,
+   "ref_norm": 148.87131345141682
+  },
+  {
+   "object": "weight/000109",
+   "parameters": [
+    "text/layers/54/mlp/gate",
+    "text/layers/54/mlp/up"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.54.mlp.gate_proj.weight",
+   "n": 34816,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.29974525814624087,
+   "ref_norm": 162.3894876619943
+  },
+  {
+   "object": "weight/000110",
+   "parameters": [
+    "text/layers/55/attention/query",
+    "text/layers/55/attention/key",
+    "text/layers/55/attention/gate",
+    "text/layers/55/attention/value"
+   ],
+   "source": "rows(/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.55.self_attn.q_proj.weight, 24 spans, 6144 rows)",
+   "n": 14336,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.30680480487396256,
+   "ref_norm": 130.7239906013812
+  },
+  {
+   "object": "weight/000111",
+   "parameters": [
+    "text/layers/55/mlp/gate",
+    "text/layers/55/mlp/up"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.55.mlp.gate_proj.weight",
+   "n": 34816,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2987241856728442,
+   "ref_norm": 161.52434873533772
+  },
+  {
+   "object": "weight/000112",
+   "parameters": [
+    "text/layers/56/gdn/query",
+    "text/layers/56/gdn/key",
+    "text/layers/56/gdn/value",
+    "text/layers/56/gdn/z"
+   ],
+   "source": "rows(/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.56.linear_attn.in_proj_qkv.weight, 1 spans, 2048 rows)",
+   "n": 16384,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.29899604330226365,
+   "ref_norm": 151.48172460935675
+  },
+  {
+   "object": "weight/000113",
+   "parameters": [
+    "text/layers/56/mlp/gate",
+    "text/layers/56/mlp/up"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.56.mlp.gate_proj.weight",
+   "n": 34816,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2980080938410245,
+   "ref_norm": 163.6688372331459
+  },
+  {
+   "object": "weight/000114",
+   "parameters": [
+    "text/layers/57/gdn/query",
+    "text/layers/57/gdn/key",
+    "text/layers/57/gdn/value",
+    "text/layers/57/gdn/z"
+   ],
+   "source": "rows(/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.57.linear_attn.in_proj_qkv.weight, 1 spans, 2048 rows)",
+   "n": 16384,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.29803727242300676,
+   "ref_norm": 152.47185319141693
+  },
+  {
+   "object": "weight/000115",
+   "parameters": [
+    "text/layers/57/mlp/gate",
+    "text/layers/57/mlp/up"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.57.mlp.gate_proj.weight",
+   "n": 34816,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.29661059330003325,
+   "ref_norm": 166.7801521183651
+  },
+  {
+   "object": "weight/000116",
+   "parameters": [
+    "text/layers/58/gdn/query",
+    "text/layers/58/gdn/key",
+    "text/layers/58/gdn/value",
+    "text/layers/58/gdn/z"
+   ],
+   "source": "rows(/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.58.linear_attn.in_proj_qkv.weight, 1 spans, 2048 rows)",
+   "n": 16384,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.29650953048559453,
+   "ref_norm": 152.23618959325998
+  },
+  {
+   "object": "weight/000117",
+   "parameters": [
+    "text/layers/58/mlp/gate",
+    "text/layers/58/mlp/up"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.58.mlp.gate_proj.weight",
+   "n": 34816,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.29523220612002327,
+   "ref_norm": 169.73935671714443
+  },
+  {
+   "object": "weight/000118",
+   "parameters": [
+    "text/layers/59/attention/query",
+    "text/layers/59/attention/key",
+    "text/layers/59/attention/gate",
+    "text/layers/59/attention/value"
+   ],
+   "source": "rows(/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.59.self_attn.q_proj.weight, 24 spans, 6144 rows)",
+   "n": 14336,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.3034219070109159,
+   "ref_norm": 133.19425282036383
+  },
+  {
+   "object": "weight/000119",
+   "parameters": [
+    "text/layers/59/mlp/gate",
+    "text/layers/59/mlp/up"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.59.mlp.gate_proj.weight",
+   "n": 34816,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.29382056212280894,
+   "ref_norm": 169.50194735238296
+  },
+  {
+   "object": "weight/000120",
+   "parameters": [
+    "text/layers/60/gdn/query",
+    "text/layers/60/gdn/key",
+    "text/layers/60/gdn/value",
+    "text/layers/60/gdn/z"
+   ],
+   "source": "rows(/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.60.linear_attn.in_proj_qkv.weight, 1 spans, 2048 rows)",
+   "n": 16384,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2951880947275614,
+   "ref_norm": 154.18361745213076
+  },
+  {
+   "object": "weight/000121",
+   "parameters": [
+    "text/layers/60/mlp/gate",
+    "text/layers/60/mlp/up"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.60.mlp.gate_proj.weight",
+   "n": 34816,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.29416220027403533,
+   "ref_norm": 169.6973121012086
+  },
+  {
+   "object": "weight/000122",
+   "parameters": [
+    "text/layers/61/gdn/query",
+    "text/layers/61/gdn/key",
+    "text/layers/61/gdn/value",
+    "text/layers/61/gdn/z"
+   ],
+   "source": "rows(/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.61.linear_attn.in_proj_qkv.weight, 1 spans, 2048 rows)",
+   "n": 16384,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2945754137701331,
+   "ref_norm": 149.9602681754404
+  },
+  {
+   "object": "weight/000123",
+   "parameters": [
+    "text/layers/61/mlp/gate",
+    "text/layers/61/mlp/up"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.61.mlp.gate_proj.weight",
+   "n": 34816,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.29461292982190584,
+   "ref_norm": 171.69461556969398
+  },
+  {
+   "object": "weight/000124",
+   "parameters": [
+    "text/layers/62/gdn/query",
+    "text/layers/62/gdn/key",
+    "text/layers/62/gdn/value",
+    "text/layers/62/gdn/z"
+   ],
+   "source": "rows(/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.62.linear_attn.in_proj_qkv.weight, 1 spans, 2048 rows)",
+   "n": 16384,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2961665432398258,
+   "ref_norm": 150.35864676249918
+  },
+  {
+   "object": "weight/000125",
+   "parameters": [
+    "text/layers/62/mlp/gate",
+    "text/layers/62/mlp/up"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.62.mlp.gate_proj.weight",
+   "n": 34816,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2959243354327566,
+   "ref_norm": 172.54700446544993
+  },
+  {
+   "object": "weight/000126",
+   "parameters": [
+    "text/layers/63/attention/query",
+    "text/layers/63/attention/key",
+    "text/layers/63/attention/gate",
+    "text/layers/63/attention/value"
+   ],
+   "source": "rows(/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.63.self_attn.q_proj.weight, 24 spans, 6144 rows)",
+   "n": 14336,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2993066603997709,
+   "ref_norm": 132.0788486686078
+  },
+  {
+   "object": "weight/000127",
+   "parameters": [
+    "text/layers/63/mlp/gate",
+    "text/layers/63/mlp/up"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.63.mlp.gate_proj.weight",
+   "n": 34816,
+   "k": 5120,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2977125315078447,
+   "ref_norm": 178.84302649250822
+  },
+  {
+   "object": "weight/000184",
+   "parameters": [
+    "text/layers/0/gdn/output"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.0.linear_attn.out_proj.weight",
+   "n": 5120,
+   "k": 6144,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2770402164404308,
+   "ref_norm": 88.21649450269348
+  },
+  {
+   "object": "weight/000186",
+   "parameters": [
+    "text/layers/0/mlp/down"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.0.mlp.down_proj.weight",
+   "n": 5120,
+   "k": 17408,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.3475910347862447,
+   "ref_norm": 100.38931054586938
+  },
+  {
+   "object": "weight/000192",
+   "parameters": [
+    "text/layers/1/gdn/output"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.1.linear_attn.out_proj.weight",
+   "n": 5120,
+   "k": 6144,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.32233052930589545,
+   "ref_norm": 90.11324797685133
+  },
+  {
+   "object": "weight/000194",
+   "parameters": [
+    "text/layers/1/mlp/down"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.1.mlp.down_proj.weight",
+   "n": 5120,
+   "k": 17408,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.321569661884724,
+   "ref_norm": 101.97871446103349
+  },
+  {
+   "object": "weight/000200",
+   "parameters": [
+    "text/layers/2/gdn/output"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.2.linear_attn.out_proj.weight",
+   "n": 5120,
+   "k": 6144,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.31872310802520887,
+   "ref_norm": 90.83599360592143
+  },
+  {
+   "object": "weight/000202",
+   "parameters": [
+    "text/layers/2/mlp/down"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.2.mlp.down_proj.weight",
+   "n": 5120,
+   "k": 17408,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.3235301205746912,
+   "ref_norm": 103.57257042166135
+  },
+  {
+   "object": "weight/000206",
+   "parameters": [
+    "text/layers/3/attention/output"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.3.self_attn.o_proj.weight",
+   "n": 5120,
+   "k": 6144,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.3181960343465096,
+   "ref_norm": 89.44257170281108
+  },
+  {
+   "object": "weight/000208",
+   "parameters": [
+    "text/layers/3/mlp/down"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.3.mlp.down_proj.weight",
+   "n": 5120,
+   "k": 17408,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.32168239044897484,
+   "ref_norm": 103.43273686163148
+  },
+  {
+   "object": "weight/000214",
+   "parameters": [
+    "text/layers/4/gdn/output"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.4.linear_attn.out_proj.weight",
+   "n": 5120,
+   "k": 6144,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.31027331285075693,
+   "ref_norm": 91.0293672565343
+  },
+  {
+   "object": "weight/000216",
+   "parameters": [
+    "text/layers/4/mlp/down"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.4.mlp.down_proj.weight",
+   "n": 5120,
+   "k": 17408,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.3090106924079409,
+   "ref_norm": 103.53830529838945
+  },
+  {
+   "object": "weight/000222",
+   "parameters": [
+    "text/layers/5/gdn/output"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.5.linear_attn.out_proj.weight",
+   "n": 5120,
+   "k": 6144,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.31009619539268174,
+   "ref_norm": 89.98344031681607
+  },
+  {
+   "object": "weight/000224",
+   "parameters": [
+    "text/layers/5/mlp/down"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.5.mlp.down_proj.weight",
+   "n": 5120,
+   "k": 17408,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.3036908007289975,
+   "ref_norm": 103.14124871989867
+  },
+  {
+   "object": "weight/000230",
+   "parameters": [
+    "text/layers/6/gdn/output"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.6.linear_attn.out_proj.weight",
+   "n": 5120,
+   "k": 6144,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.30714469207686906,
+   "ref_norm": 89.80850667444454
+  },
+  {
+   "object": "weight/000232",
+   "parameters": [
+    "text/layers/6/mlp/down"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.6.mlp.down_proj.weight",
+   "n": 5120,
+   "k": 17408,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.3012273871282736,
+   "ref_norm": 102.09706434014153
+  },
+  {
+   "object": "weight/000236",
+   "parameters": [
+    "text/layers/7/attention/output"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.7.self_attn.o_proj.weight",
+   "n": 5120,
+   "k": 6144,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.3253965668792419,
+   "ref_norm": 86.9295326821889
+  },
+  {
+   "object": "weight/000238",
+   "parameters": [
+    "text/layers/7/mlp/down"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.7.mlp.down_proj.weight",
+   "n": 5120,
+   "k": 17408,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2973460123378561,
+   "ref_norm": 103.21884934145992
+  },
+  {
+   "object": "weight/000244",
+   "parameters": [
+    "text/layers/8/gdn/output"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.8.linear_attn.out_proj.weight",
+   "n": 5120,
+   "k": 6144,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.3078950435367543,
+   "ref_norm": 89.35409502017801
+  },
+  {
+   "object": "weight/000246",
+   "parameters": [
+    "text/layers/8/mlp/down"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.8.mlp.down_proj.weight",
+   "n": 5120,
+   "k": 17408,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.29695829704826343,
+   "ref_norm": 103.71597239426288
+  },
+  {
+   "object": "weight/000252",
+   "parameters": [
+    "text/layers/9/gdn/output"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.9.linear_attn.out_proj.weight",
+   "n": 5120,
+   "k": 6144,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.309238479164974,
+   "ref_norm": 89.40856559392114
+  },
+  {
+   "object": "weight/000254",
+   "parameters": [
+    "text/layers/9/mlp/down"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.9.mlp.down_proj.weight",
+   "n": 5120,
+   "k": 17408,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2946870917540159,
+   "ref_norm": 103.26158095614505
+  },
+  {
+   "object": "weight/000260",
+   "parameters": [
+    "text/layers/10/gdn/output"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.10.linear_attn.out_proj.weight",
+   "n": 5120,
+   "k": 6144,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.3097642573568622,
+   "ref_norm": 88.9209099293088
+  },
+  {
+   "object": "weight/000262",
+   "parameters": [
+    "text/layers/10/mlp/down"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.10.mlp.down_proj.weight",
+   "n": 5120,
+   "k": 17408,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.29451709516885705,
+   "ref_norm": 102.06649467840806
+  },
+  {
+   "object": "weight/000266",
+   "parameters": [
+    "text/layers/11/attention/output"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.11.self_attn.o_proj.weight",
+   "n": 5120,
+   "k": 6144,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.3227900399879583,
+   "ref_norm": 86.50747912933598
+  },
+  {
+   "object": "weight/000268",
+   "parameters": [
+    "text/layers/11/mlp/down"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.11.mlp.down_proj.weight",
+   "n": 5120,
+   "k": 17408,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2930861409698173,
+   "ref_norm": 102.79514481178087
+  },
+  {
+   "object": "weight/000274",
+   "parameters": [
+    "text/layers/12/gdn/output"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.12.linear_attn.out_proj.weight",
+   "n": 5120,
+   "k": 6144,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.3127593733967872,
+   "ref_norm": 89.07365061776126
+  },
+  {
+   "object": "weight/000276",
+   "parameters": [
+    "text/layers/12/mlp/down"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.12.mlp.down_proj.weight",
+   "n": 5120,
+   "k": 17408,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2933287545885912,
+   "ref_norm": 102.74512895236202
+  },
+  {
+   "object": "weight/000282",
+   "parameters": [
+    "text/layers/13/gdn/output"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.13.linear_attn.out_proj.weight",
+   "n": 5120,
+   "k": 6144,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.3033763137312819,
+   "ref_norm": 89.47414190878
+  },
+  {
+   "object": "weight/000284",
+   "parameters": [
+    "text/layers/13/mlp/down"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.13.mlp.down_proj.weight",
+   "n": 5120,
+   "k": 17408,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.29174601827808366,
+   "ref_norm": 102.22702312897749
+  },
+  {
+   "object": "weight/000290",
+   "parameters": [
+    "text/layers/14/gdn/output"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.14.linear_attn.out_proj.weight",
+   "n": 5120,
+   "k": 6144,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.3085092151345801,
+   "ref_norm": 88.79693411268488
+  },
+  {
+   "object": "weight/000292",
+   "parameters": [
+    "text/layers/14/mlp/down"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.14.mlp.down_proj.weight",
+   "n": 5120,
+   "k": 17408,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.29156488879016756,
+   "ref_norm": 101.76552783850728
+  },
+  {
+   "object": "weight/000296",
+   "parameters": [
+    "text/layers/15/attention/output"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.15.self_attn.o_proj.weight",
+   "n": 5120,
+   "k": 6144,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.32291344734105404,
+   "ref_norm": 86.3178231975442
+  },
+  {
+   "object": "weight/000298",
+   "parameters": [
+    "text/layers/15/mlp/down"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.15.mlp.down_proj.weight",
+   "n": 5120,
+   "k": 17408,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.28995637797417123,
+   "ref_norm": 102.49026725895733
+  },
+  {
+   "object": "weight/000304",
+   "parameters": [
+    "text/layers/16/gdn/output"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.16.linear_attn.out_proj.weight",
+   "n": 5120,
+   "k": 6144,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.3080021178680117,
+   "ref_norm": 88.68496461756497
+  },
+  {
+   "object": "weight/000306",
+   "parameters": [
+    "text/layers/16/mlp/down"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.16.mlp.down_proj.weight",
+   "n": 5120,
+   "k": 17408,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.29109785799493504,
+   "ref_norm": 102.52132019121682
+  },
+  {
+   "object": "weight/000312",
+   "parameters": [
+    "text/layers/17/gdn/output"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.17.linear_attn.out_proj.weight",
+   "n": 5120,
+   "k": 6144,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.3085756413008857,
+   "ref_norm": 88.97067909306554
+  },
+  {
+   "object": "weight/000314",
+   "parameters": [
+    "text/layers/17/mlp/down"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.17.mlp.down_proj.weight",
+   "n": 5120,
+   "k": 17408,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2928716065687128,
+   "ref_norm": 103.06794349632916
+  },
+  {
+   "object": "weight/000320",
+   "parameters": [
+    "text/layers/18/gdn/output"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.18.linear_attn.out_proj.weight",
+   "n": 5120,
+   "k": 6144,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.3144537099692974,
+   "ref_norm": 88.17880671184545
+  },
+  {
+   "object": "weight/000322",
+   "parameters": [
+    "text/layers/18/mlp/down"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.18.mlp.down_proj.weight",
+   "n": 5120,
+   "k": 17408,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2990890194229799,
+   "ref_norm": 102.87401275346461
+  },
+  {
+   "object": "weight/000326",
+   "parameters": [
+    "text/layers/19/attention/output"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.19.self_attn.o_proj.weight",
+   "n": 5120,
+   "k": 6144,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.31205738756544904,
+   "ref_norm": 89.44228509648694
+  },
+  {
+   "object": "weight/000328",
+   "parameters": [
+    "text/layers/19/mlp/down"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.19.mlp.down_proj.weight",
+   "n": 5120,
+   "k": 17408,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.29754547590861047,
+   "ref_norm": 104.28913477832914
+  },
+  {
+   "object": "weight/000334",
+   "parameters": [
+    "text/layers/20/gdn/output"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.20.linear_attn.out_proj.weight",
+   "n": 5120,
+   "k": 6144,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.3131191538266329,
+   "ref_norm": 88.44211836439271
+  },
+  {
+   "object": "weight/000336",
+   "parameters": [
+    "text/layers/20/mlp/down"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.20.mlp.down_proj.weight",
+   "n": 5120,
+   "k": 17408,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.296377589638876,
+   "ref_norm": 104.26289357466779
+  },
+  {
+   "object": "weight/000342",
+   "parameters": [
+    "text/layers/21/gdn/output"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.21.linear_attn.out_proj.weight",
+   "n": 5120,
+   "k": 6144,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.3151637622964354,
+   "ref_norm": 87.97511078246791
+  },
+  {
+   "object": "weight/000344",
+   "parameters": [
+    "text/layers/21/mlp/down"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.21.mlp.down_proj.weight",
+   "n": 5120,
+   "k": 17408,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.292825091290255,
+   "ref_norm": 104.35635125317002
+  },
+  {
+   "object": "weight/000350",
+   "parameters": [
+    "text/layers/22/gdn/output"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.22.linear_attn.out_proj.weight",
+   "n": 5120,
+   "k": 6144,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.30844584118719287,
+   "ref_norm": 87.91545343752144
+  },
+  {
+   "object": "weight/000352",
+   "parameters": [
+    "text/layers/22/mlp/down"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.22.mlp.down_proj.weight",
+   "n": 5120,
+   "k": 17408,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.29802793726101323,
+   "ref_norm": 103.72341056115297
+  },
+  {
+   "object": "weight/000356",
+   "parameters": [
+    "text/layers/23/attention/output"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.23.self_attn.o_proj.weight",
+   "n": 5120,
+   "k": 6144,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.31230830627388595,
+   "ref_norm": 88.74082809120331
+  },
+  {
+   "object": "weight/000358",
+   "parameters": [
+    "text/layers/23/mlp/down"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.23.mlp.down_proj.weight",
+   "n": 5120,
+   "k": 17408,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.295340566662209,
+   "ref_norm": 104.82318632165786
+  },
+  {
+   "object": "weight/000364",
+   "parameters": [
+    "text/layers/24/gdn/output"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.24.linear_attn.out_proj.weight",
+   "n": 5120,
+   "k": 6144,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.3027428942247557,
+   "ref_norm": 87.62482168312812
+  },
+  {
+   "object": "weight/000366",
+   "parameters": [
+    "text/layers/24/mlp/down"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.24.mlp.down_proj.weight",
+   "n": 5120,
+   "k": 17408,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2981172005848256,
+   "ref_norm": 105.39582200863087
+  },
+  {
+   "object": "weight/000372",
+   "parameters": [
+    "text/layers/25/gdn/output"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.25.linear_attn.out_proj.weight",
+   "n": 5120,
+   "k": 6144,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.30443233956790317,
+   "ref_norm": 88.74060799776223
+  },
+  {
+   "object": "weight/000374",
+   "parameters": [
+    "text/layers/25/mlp/down"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.25.mlp.down_proj.weight",
+   "n": 5120,
+   "k": 17408,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2953244787083173,
+   "ref_norm": 106.29545443156306
+  },
+  {
+   "object": "weight/000380",
+   "parameters": [
+    "text/layers/26/gdn/output"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.26.linear_attn.out_proj.weight",
+   "n": 5120,
+   "k": 6144,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.3030201001812182,
+   "ref_norm": 88.17241632165924
+  },
+  {
+   "object": "weight/000382",
+   "parameters": [
+    "text/layers/26/mlp/down"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.26.mlp.down_proj.weight",
+   "n": 5120,
+   "k": 17408,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2951257366307489,
+   "ref_norm": 106.73156493336448
+  },
+  {
+   "object": "weight/000386",
+   "parameters": [
+    "text/layers/27/attention/output"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.27.self_attn.o_proj.weight",
+   "n": 5120,
+   "k": 6144,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.31112027834945666,
+   "ref_norm": 87.37872454955068
+  },
+  {
+   "object": "weight/000388",
+   "parameters": [
+    "text/layers/27/mlp/down"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.27.mlp.down_proj.weight",
+   "n": 5120,
+   "k": 17408,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.29490813805554694,
+   "ref_norm": 107.52371649722214
+  },
+  {
+   "object": "weight/000394",
+   "parameters": [
+    "text/layers/28/gdn/output"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.28.linear_attn.out_proj.weight",
+   "n": 5120,
+   "k": 6144,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.30120847751050034,
+   "ref_norm": 87.97834650142613
+  },
+  {
+   "object": "weight/000396",
+   "parameters": [
+    "text/layers/28/mlp/down"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.28.mlp.down_proj.weight",
+   "n": 5120,
+   "k": 17408,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2945549552629774,
+   "ref_norm": 107.4059272252933
+  },
+  {
+   "object": "weight/000402",
+   "parameters": [
+    "text/layers/29/gdn/output"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.29.linear_attn.out_proj.weight",
+   "n": 5120,
+   "k": 6144,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.29272183746064623,
+   "ref_norm": 88.24419576344667
+  },
+  {
+   "object": "weight/000404",
+   "parameters": [
+    "text/layers/29/mlp/down"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.29.mlp.down_proj.weight",
+   "n": 5120,
+   "k": 17408,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2914102032820235,
+   "ref_norm": 106.98476636594108
+  },
+  {
+   "object": "weight/000410",
+   "parameters": [
+    "text/layers/30/gdn/output"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.30.linear_attn.out_proj.weight",
+   "n": 5120,
+   "k": 6144,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2955575489028558,
+   "ref_norm": 87.31664662218625
+  },
+  {
+   "object": "weight/000412",
+   "parameters": [
+    "text/layers/30/mlp/down"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.30.mlp.down_proj.weight",
+   "n": 5120,
+   "k": 17408,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.28993962791702815,
+   "ref_norm": 107.2079381024908
+  },
+  {
+   "object": "weight/000416",
+   "parameters": [
+    "text/layers/31/attention/output"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.31.self_attn.o_proj.weight",
+   "n": 5120,
+   "k": 6144,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.3020296057569688,
+   "ref_norm": 88.22232546774937
+  },
+  {
+   "object": "weight/000418",
+   "parameters": [
+    "text/layers/31/mlp/down"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.31.mlp.down_proj.weight",
+   "n": 5120,
+   "k": 17408,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2895323632320334,
+   "ref_norm": 107.73724275552303
+  },
+  {
+   "object": "weight/000424",
+   "parameters": [
+    "text/layers/32/gdn/output"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.32.linear_attn.out_proj.weight",
+   "n": 5120,
+   "k": 6144,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2947123581344769,
+   "ref_norm": 87.15642087200891
+  },
+  {
+   "object": "weight/000426",
+   "parameters": [
+    "text/layers/32/mlp/down"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.32.mlp.down_proj.weight",
+   "n": 5120,
+   "k": 17408,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2902087873365687,
+   "ref_norm": 107.74394559556467
+  },
+  {
+   "object": "weight/000432",
+   "parameters": [
+    "text/layers/33/gdn/output"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.33.linear_attn.out_proj.weight",
+   "n": 5120,
+   "k": 6144,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2924238981790251,
+   "ref_norm": 87.61783360495168
+  },
+  {
+   "object": "weight/000434",
+   "parameters": [
+    "text/layers/33/mlp/down"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.33.mlp.down_proj.weight",
+   "n": 5120,
+   "k": 17408,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.291232889902628,
+   "ref_norm": 107.97981582221745
+  },
+  {
+   "object": "weight/000440",
+   "parameters": [
+    "text/layers/34/gdn/output"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.34.linear_attn.out_proj.weight",
+   "n": 5120,
+   "k": 6144,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.30125063165888527,
+   "ref_norm": 86.63136362809084
+  },
+  {
+   "object": "weight/000442",
+   "parameters": [
+    "text/layers/34/mlp/down"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.34.mlp.down_proj.weight",
+   "n": 5120,
+   "k": 17408,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.29696735003637714,
+   "ref_norm": 108.19407114648196
+  },
+  {
+   "object": "weight/000446",
+   "parameters": [
+    "text/layers/35/attention/output"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.35.self_attn.o_proj.weight",
+   "n": 5120,
+   "k": 6144,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.30864721644217724,
+   "ref_norm": 92.12050001730071
+  },
+  {
+   "object": "weight/000448",
+   "parameters": [
+    "text/layers/35/mlp/down"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.35.mlp.down_proj.weight",
+   "n": 5120,
+   "k": 17408,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.3045309858470323,
+   "ref_norm": 108.81471224775858
+  },
+  {
+   "object": "weight/000454",
+   "parameters": [
+    "text/layers/36/gdn/output"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.36.linear_attn.out_proj.weight",
+   "n": 5120,
+   "k": 6144,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.31391484724684293,
+   "ref_norm": 87.66561335908739
+  },
+  {
+   "object": "weight/000456",
+   "parameters": [
+    "text/layers/36/mlp/down"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.36.mlp.down_proj.weight",
+   "n": 5120,
+   "k": 17408,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.3025613829424602,
+   "ref_norm": 106.72184292736188
+  },
+  {
+   "object": "weight/000462",
+   "parameters": [
+    "text/layers/37/gdn/output"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.37.linear_attn.out_proj.weight",
+   "n": 5120,
+   "k": 6144,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.31780717307069406,
+   "ref_norm": 86.68599043386422
+  },
+  {
+   "object": "weight/000464",
+   "parameters": [
+    "text/layers/37/mlp/down"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.37.mlp.down_proj.weight",
+   "n": 5120,
+   "k": 17408,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2971836408746999,
+   "ref_norm": 106.04462688238853
+  },
+  {
+   "object": "weight/000470",
+   "parameters": [
+    "text/layers/38/gdn/output"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.38.linear_attn.out_proj.weight",
+   "n": 5120,
+   "k": 6144,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.3120064960859876,
+   "ref_norm": 86.83670468903112
+  },
+  {
+   "object": "weight/000472",
+   "parameters": [
+    "text/layers/38/mlp/down"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.38.mlp.down_proj.weight",
+   "n": 5120,
+   "k": 17408,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.30227096151771166,
+   "ref_norm": 103.58384662315838
+  },
+  {
+   "object": "weight/000476",
+   "parameters": [
+    "text/layers/39/attention/output"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.39.self_attn.o_proj.weight",
+   "n": 5120,
+   "k": 6144,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.3117470475136058,
+   "ref_norm": 89.63519816456034
+  },
+  {
+   "object": "weight/000478",
+   "parameters": [
+    "text/layers/39/mlp/down"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.39.mlp.down_proj.weight",
+   "n": 5120,
+   "k": 17408,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.30274744327775116,
+   "ref_norm": 104.73349269544819
+  },
+  {
+   "object": "weight/000484",
+   "parameters": [
+    "text/layers/40/gdn/output"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.40.linear_attn.out_proj.weight",
+   "n": 5120,
+   "k": 6144,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.30295055241751523,
+   "ref_norm": 86.20495596886381
+  },
+  {
+   "object": "weight/000486",
+   "parameters": [
+    "text/layers/40/mlp/down"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.40.mlp.down_proj.weight",
+   "n": 5120,
+   "k": 17408,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.3052148227387353,
+   "ref_norm": 104.56013240744534
+  },
+  {
+   "object": "weight/000492",
+   "parameters": [
+    "text/layers/41/gdn/output"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.41.linear_attn.out_proj.weight",
+   "n": 5120,
+   "k": 6144,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.3032057243096374,
+   "ref_norm": 86.9583963474057
+  },
+  {
+   "object": "weight/000494",
+   "parameters": [
+    "text/layers/41/mlp/down"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.41.mlp.down_proj.weight",
+   "n": 5120,
+   "k": 17408,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.29630852695365506,
+   "ref_norm": 106.00422861553685
+  },
+  {
+   "object": "weight/000500",
+   "parameters": [
+    "text/layers/42/gdn/output"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.42.linear_attn.out_proj.weight",
+   "n": 5120,
+   "k": 6144,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.30317984976435053,
+   "ref_norm": 86.54692436584618
+  },
+  {
+   "object": "weight/000502",
+   "parameters": [
+    "text/layers/42/mlp/down"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.42.mlp.down_proj.weight",
+   "n": 5120,
+   "k": 17408,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2936878481351401,
+   "ref_norm": 106.77492573457965
+  },
+  {
+   "object": "weight/000506",
+   "parameters": [
+    "text/layers/43/attention/output"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.43.self_attn.o_proj.weight",
+   "n": 5120,
+   "k": 6144,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.31349581550457745,
+   "ref_norm": 88.32136533262351
+  },
+  {
+   "object": "weight/000508",
+   "parameters": [
+    "text/layers/43/mlp/down"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.43.mlp.down_proj.weight",
+   "n": 5120,
+   "k": 17408,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.29619908919464655,
+   "ref_norm": 108.40940288006617
+  },
+  {
+   "object": "weight/000514",
+   "parameters": [
+    "text/layers/44/gdn/output"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.44.linear_attn.out_proj.weight",
+   "n": 5120,
+   "k": 6144,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.3049053252746658,
+   "ref_norm": 86.35416603839968
+  },
+  {
+   "object": "weight/000516",
+   "parameters": [
+    "text/layers/44/mlp/down"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.44.mlp.down_proj.weight",
+   "n": 5120,
+   "k": 17408,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.29844346205733674,
+   "ref_norm": 108.5823375298096
+  },
+  {
+   "object": "weight/000522",
+   "parameters": [
+    "text/layers/45/gdn/output"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.45.linear_attn.out_proj.weight",
+   "n": 5120,
+   "k": 6144,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.294923318513537,
+   "ref_norm": 87.541000438723
+  },
+  {
+   "object": "weight/000524",
+   "parameters": [
+    "text/layers/45/mlp/down"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.45.mlp.down_proj.weight",
+   "n": 5120,
+   "k": 17408,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.29559383804834105,
+   "ref_norm": 108.5030376518902
+  },
+  {
+   "object": "weight/000530",
+   "parameters": [
+    "text/layers/46/gdn/output"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.46.linear_attn.out_proj.weight",
+   "n": 5120,
+   "k": 6144,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.29891771763437697,
+   "ref_norm": 86.00562072838612
+  },
+  {
+   "object": "weight/000532",
+   "parameters": [
+    "text/layers/46/mlp/down"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.46.mlp.down_proj.weight",
+   "n": 5120,
+   "k": 17408,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2952020303791683,
+   "ref_norm": 108.58187435064842
+  },
+  {
+   "object": "weight/000536",
+   "parameters": [
+    "text/layers/47/attention/output"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.47.self_attn.o_proj.weight",
+   "n": 5120,
+   "k": 6144,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.3119414729341638,
+   "ref_norm": 92.18369695545411
+  },
+  {
+   "object": "weight/000538",
+   "parameters": [
+    "text/layers/47/mlp/down"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.47.mlp.down_proj.weight",
+   "n": 5120,
+   "k": 17408,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.2986513252043346,
+   "ref_norm": 109.063073064397
+  },
+  {
+   "object": "weight/000544",
+   "parameters": [
+    "text/layers/48/gdn/output"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.48.linear_attn.out_proj.weight",
+   "n": 5120,
+   "k": 6144,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.3072197010378858,
+   "ref_norm": 85.7759874296487
+  },
+  {
+   "object": "weight/000546",
+   "parameters": [
+    "text/layers/48/mlp/down"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.48.mlp.down_proj.weight",
+   "n": 5120,
+   "k": 17408,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.3004545720757825,
+   "ref_norm": 109.2117129349572
+  },
+  {
+   "object": "weight/000552",
+   "parameters": [
+    "text/layers/49/gdn/output"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.49.linear_attn.out_proj.weight",
+   "n": 5120,
+   "k": 6144,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.30363230892387894,
+   "ref_norm": 87.37458366764187
+  },
+  {
+   "object": "weight/000554",
+   "parameters": [
+    "text/layers/49/mlp/down"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.49.mlp.down_proj.weight",
+   "n": 5120,
+   "k": 17408,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.30415984956602915,
+   "ref_norm": 109.4669970242173
+  },
+  {
+   "object": "weight/000560",
+   "parameters": [
+    "text/layers/50/gdn/output"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.50.linear_attn.out_proj.weight",
+   "n": 5120,
+   "k": 6144,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.3099342997983231,
+   "ref_norm": 85.17915402990334
+  },
+  {
+   "object": "weight/000562",
+   "parameters": [
+    "text/layers/50/mlp/down"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.50.mlp.down_proj.weight",
+   "n": 5120,
+   "k": 17408,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.3099945959744651,
+   "ref_norm": 109.11163828563386
+  },
+  {
+   "object": "weight/000566",
+   "parameters": [
+    "text/layers/51/attention/output"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.51.self_attn.o_proj.weight",
+   "n": 5120,
+   "k": 6144,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.31354117752212757,
+   "ref_norm": 98.45999742915902
+  },
+  {
+   "object": "weight/000568",
+   "parameters": [
+    "text/layers/51/mlp/down"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.51.mlp.down_proj.weight",
+   "n": 5120,
+   "k": 17408,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.31536567002247856,
+   "ref_norm": 111.22781994486586
+  },
+  {
+   "object": "weight/000574",
+   "parameters": [
+    "text/layers/52/gdn/output"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.52.linear_attn.out_proj.weight",
+   "n": 5120,
+   "k": 6144,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.32393333717957157,
+   "ref_norm": 85.87151443981584
+  },
+  {
+   "object": "weight/000576",
+   "parameters": [
+    "text/layers/52/mlp/down"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.52.mlp.down_proj.weight",
+   "n": 5120,
+   "k": 17408,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.3146456091867045,
+   "ref_norm": 110.20876850890768
+  },
+  {
+   "object": "weight/000582",
+   "parameters": [
+    "text/layers/53/gdn/output"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.53.linear_attn.out_proj.weight",
+   "n": 5120,
+   "k": 6144,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.3254395461144069,
+   "ref_norm": 86.98377295687109
+  },
+  {
+   "object": "weight/000584",
+   "parameters": [
+    "text/layers/53/mlp/down"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.53.mlp.down_proj.weight",
+   "n": 5120,
+   "k": 17408,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.31405481321503387,
+   "ref_norm": 109.7797955710658
+  },
+  {
+   "object": "weight/000590",
+   "parameters": [
+    "text/layers/54/gdn/output"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.54.linear_attn.out_proj.weight",
+   "n": 5120,
+   "k": 6144,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.3297322537733869,
+   "ref_norm": 87.40798733525443
+  },
+  {
+   "object": "weight/000592",
+   "parameters": [
+    "text/layers/54/mlp/down"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.54.mlp.down_proj.weight",
+   "n": 5120,
+   "k": 17408,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.31637653763701606,
+   "ref_norm": 110.24476496924922
+  },
+  {
+   "object": "weight/000596",
+   "parameters": [
+    "text/layers/55/attention/output"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.55.self_attn.o_proj.weight",
+   "n": 5120,
+   "k": 6144,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.3138071094777337,
+   "ref_norm": 100.39058487353283
+  },
+  {
+   "object": "weight/000598",
+   "parameters": [
+    "text/layers/55/mlp/down"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.55.mlp.down_proj.weight",
+   "n": 5120,
+   "k": 17408,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.3202257427576363,
+   "ref_norm": 111.22941347447176
+  },
+  {
+   "object": "weight/000604",
+   "parameters": [
+    "text/layers/56/gdn/output"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.56.linear_attn.out_proj.weight",
+   "n": 5120,
+   "k": 6144,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.3310906087218748,
+   "ref_norm": 87.43899938403487
+  },
+  {
+   "object": "weight/000606",
+   "parameters": [
+    "text/layers/56/mlp/down"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.56.mlp.down_proj.weight",
+   "n": 5120,
+   "k": 17408,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.32157380020413995,
+   "ref_norm": 111.79596981639142
+  },
+  {
+   "object": "weight/000612",
+   "parameters": [
+    "text/layers/57/gdn/output"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.57.linear_attn.out_proj.weight",
+   "n": 5120,
+   "k": 6144,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.32711110122852116,
+   "ref_norm": 88.71843353677268
+  },
+  {
+   "object": "weight/000614",
+   "parameters": [
+    "text/layers/57/mlp/down"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.57.mlp.down_proj.weight",
+   "n": 5120,
+   "k": 17408,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.3196168314970847,
+   "ref_norm": 113.32258297665122
+  },
+  {
+   "object": "weight/000620",
+   "parameters": [
+    "text/layers/58/gdn/output"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.58.linear_attn.out_proj.weight",
+   "n": 5120,
+   "k": 6144,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.32552046990727285,
+   "ref_norm": 88.6549749864256
+  },
+  {
+   "object": "weight/000622",
+   "parameters": [
+    "text/layers/58/mlp/down"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.58.mlp.down_proj.weight",
+   "n": 5120,
+   "k": 17408,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.31465102727268907,
+   "ref_norm": 115.57280071723191
+  },
+  {
+   "object": "weight/000626",
+   "parameters": [
+    "text/layers/59/attention/output"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.59.self_attn.o_proj.weight",
+   "n": 5120,
+   "k": 6144,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.3165137075185079,
+   "ref_norm": 109.58683949555713
+  },
+  {
+   "object": "weight/000628",
+   "parameters": [
+    "text/layers/59/mlp/down"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.59.mlp.down_proj.weight",
+   "n": 5120,
+   "k": 17408,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.3148525986949542,
+   "ref_norm": 116.04760186422423
+  },
+  {
+   "object": "weight/000634",
+   "parameters": [
+    "text/layers/60/gdn/output"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.60.linear_attn.out_proj.weight",
+   "n": 5120,
+   "k": 6144,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.32931532714067846,
+   "ref_norm": 88.84023251918299
+  },
+  {
+   "object": "weight/000636",
+   "parameters": [
+    "text/layers/60/mlp/down"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.60.mlp.down_proj.weight",
+   "n": 5120,
+   "k": 17408,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.32344185487060545,
+   "ref_norm": 116.51927398905943
+  },
+  {
+   "object": "weight/000642",
+   "parameters": [
+    "text/layers/61/gdn/output"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.61.linear_attn.out_proj.weight",
+   "n": 5120,
+   "k": 6144,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.3349627206766792,
+   "ref_norm": 90.36132979253348
+  },
+  {
+   "object": "weight/000644",
+   "parameters": [
+    "text/layers/61/mlp/down"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.61.mlp.down_proj.weight",
+   "n": 5120,
+   "k": 17408,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.3293939122642172,
+   "ref_norm": 117.93093764864035
+  },
+  {
+   "object": "weight/000650",
+   "parameters": [
+    "text/layers/62/gdn/output"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.62.linear_attn.out_proj.weight",
+   "n": 5120,
+   "k": 6144,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.32557275235113947,
+   "ref_norm": 91.74875999672966
+  },
+  {
+   "object": "weight/000652",
+   "parameters": [
+    "text/layers/62/mlp/down"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.62.mlp.down_proj.weight",
+   "n": 5120,
+   "k": 17408,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.3276437200630864,
+   "ref_norm": 116.77028229872958
+  },
+  {
+   "object": "weight/000656",
+   "parameters": [
+    "text/layers/63/attention/output"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.63.self_attn.o_proj.weight",
+   "n": 5120,
+   "k": 6144,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.3091356178146272,
+   "ref_norm": 100.38831344615019
+  },
+  {
+   "object": "weight/000658",
+   "parameters": [
+    "text/layers/63/mlp/down"
+   ],
+   "source": "/home/barista/.cache/huggingface/models/Qwen/Qwen3.8-27B:model.language_model.layers.63.mlp.down_proj.weight",
+   "n": 5120,
+   "k": 17408,
+   "k2": 2,
+   "codebook": "mcg",
+   "rfn": 0.30394381875688753,
+   "ref_norm": 109.81921400932079
+  }
+ ],
+ "failures": [],
+ "summary": {
+  "2": {
+   "n": 256,
+   "median": 0.29716304590711756,
+   "min": 0.2770402164404308,
+   "max": 0.3475910347862447
+  }
+ }
+}

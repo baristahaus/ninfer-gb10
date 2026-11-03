@@ -104,17 +104,61 @@ class BF16Source:
         return tensor[row_begin:row_begin + rows, :].float()
 
 
-def span_rows(sources: list[str]) -> list[int]:
-    """Row counts from a method record's sources: `rows(..., M rows)` refs give their
-    count; a plain `path:name.weight` ref means the full tensor (the caller passes n)."""
+def source_tensor(source_ref: str) -> str:
+    """HF weight name from a source ref (the last `:...weight` before any span tail)."""
 
-    counts = []
-    for ref in sources:
+    return re.search(r":([^:,]+\.weight)(?:,|$)", source_ref).group(1)
+
+
+def leaf_reference_rows(source: "BF16Source", record: dict, leaf_n: int,
+                        heads: int, head_dim: int) -> torch.Tensor:
+    """Reference rows [leaf_n, k] for one leaf, per its parameter/source pairs.
+
+    Banded parameters (the attention query/gate rows of his interleaved q_proj)
+    select their 16-row bands: band index b covers rows b*16..b*16+16. Spanned
+    sources take contiguous [begin, begin+count) ranges accumulated per tensor
+    (the GDN fused qkv); plain sources take the parameter's own full rows, sized
+    from the leaf total minus the counted spans.
+    """
+
+    mp = record.get("method_parameters", {})
+    if "row_bands" in mp:  # the SC import form: one tensor, explicit band list
+        return torch.cat([source.rows(mp["tensor"] + ".weight", b * 16, 16)
+                          for b in mp["row_bands"]])
+    stride = 2 * head_dim // 16
+    bands_per_role = head_dim // 16
+    blocks, begin_by_tensor = [], {}
+    for param, ref in zip(record["parameters"], record["sources"]):
+        tensor = source_tensor(ref)
+        role = param.rsplit("/", 1)[-1]
+        if role in ("query", "gate") and "q_proj" in tensor:
+            offset = head_dim // 16 if role == "gate" else 0
+            bands = [head * stride + offset + band
+                     for head in range(heads) for band in range(bands_per_role)]
+            blocks.append((tensor, "bands", bands))
+            continue
         m = re.search(r", (\d+) rows\)$", ref)
         if m is None:
-            return []  # plain full-tensor ref; the caller defaults to n
-        counts.append(int(m.group(1)))
-    return counts
+            blocks.append((tensor, "plain", None))
+        else:
+            count = int(m.group(1))
+            begin = begin_by_tensor.get(tensor, 0)
+            blocks.append((tensor, "span", (begin, count)))
+            begin_by_tensor[tensor] = begin + count
+    counted = sum(spec[1] for _, kind, spec in blocks if kind == "span")
+    plain_blocks = [b for b in blocks if b[1] == "plain"]
+    plain_count = (leaf_n - counted) // len(plain_blocks) if plain_blocks else 0
+    parts = []
+    for tensor, kind, spec in blocks:
+        if kind == "bands":
+            parts.append(torch.cat([source.rows(tensor, b * 16, 16) for b in spec]))
+        elif kind == "span":
+            parts.append(source.rows(tensor, spec[0], spec[1]))
+        else:
+            parts.append(source.rows(tensor, 0, plain_count))
+    ref = torch.cat(parts)
+    assert ref.shape[0] == leaf_n, f"reference rows {ref.shape[0]} != leaf {leaf_n}"
+    return ref
 
 
 def main() -> int:
@@ -127,7 +171,9 @@ def main() -> int:
     report = json.load(open(str(artifact_path) + ".conversion.json"))
     base = Path(report["provenance"]["sources"]["base"]["path"])
     source = BF16Source(base)
-    methods = {m["object"]: m for m in report["methods"] if m["method"] == "import_exl3_dense"}
+    config = json.load(open(base / "config.json"))["text_config"]
+    heads, head_dim = config["num_attention_heads"], config["head_dim"]
+    methods = {m["object"]: m for m in report["methods"] if "exl3" in m["method"]}
 
     artifact = Artifact.open(artifact_path)
     results, failures = [], []
@@ -143,18 +189,9 @@ def main() -> int:
             payload = artifact.read_range(obj.offset, obj.bytes)
             w_q, k2, codebook = parse_leaf(payload, n, k)
 
-            # The reference rows: banded leaves (his interleaved q_proj: query rows
-            # then gate rows per head) select 16-row bands of the source; grouped
-            # leaves (the GDN fused qkv) take contiguous role spans; plain leaves
-            # take the full tensor. The sources' row counts give the leaf's total.
-            tensor_name = mp["tensor"] + ".weight"
-            if "row_bands" in mp:
-                bands = mp["row_bands"]
-                ref = torch.cat([source.rows(tensor_name, b * 16, 16) for b in bands])
-            else:
-                counts = span_rows(record["sources"]) if any(
-                    "rows(" in s for s in record["sources"]) else [n]
-                ref = source.rows(tensor_name, 0, sum(counts))
+            # The reference rows: banded leaves select his interleaved q_proj bands;
+            # grouped leaves take contiguous role spans; plain leaves the full tensor.
+            ref = leaf_reference_rows(source, record, n, heads, head_dim)
             ref = ref[:n].contiguous()  # [n, k], matching w_q
             if ref.shape != w_q.shape:
                 raise ValueError(f"reference shape {tuple(ref.shape)} != {tuple(w_q.shape)}")
@@ -162,7 +199,7 @@ def main() -> int:
             ref_sq = ref.square().sum().item()
             rfn = (diff.square().sum().item() / ref_sq) ** 0.5
             results.append(dict(object=obj.id, parameters=record["parameters"],
-                                source=tensor_name, n=n, k=k, k2=k2, codebook=codebook,
+                                source=record["sources"][0], n=n, k=k, k2=k2, codebook=codebook,
                                 rfn=rfn, ref_norm=ref_sq ** 0.5))
         except Exception as exc:  # noqa: BLE001 - per-leaf failures recorded, not fatal
             failures.append(dict(object=obj.id, error=repr(exc)[:200]))

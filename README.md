@@ -74,8 +74,8 @@ of the companion model on the same context. The acceptance trail follows two fix
 the draft's final RMSNorm ran the 5120-row geometry on the 2560-row draft (8.7% to 25.9%),
 and `column_topk` wrote its candidates column-major against its rank-fastest contract (25.9%
 to 45%). The remaining gap to MTP is draft quality; the decode rate has not been re-measured
-after these fixes. Details are in the
-[DFlash2 handoff](docs/maintainer/2026-11-01-dflash2-draft-handoff.md).
+after these fixes. The lane record lives in the beads issue history (`ninfer-gb10-cd3`,
+`ninfer-gb10-j91`).
 
 `/metrics` exposes `ninfer_spec_decode_{rounds,draft_tokens,accepted_tokens}_total` with a
 `speculative_backend` label, the `spec_decode_acceptance_ratio` gauge, and per-position

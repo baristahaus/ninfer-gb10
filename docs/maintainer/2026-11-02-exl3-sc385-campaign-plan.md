@@ -155,8 +155,8 @@ Steady-decode tok/s (the published definition; the NVFP4 MTP3 reference rows are
 | Mode | C=1 | C=2 | C=4 | C=8 |
 |---|---|---|---|---|
 | MTP0 steady | 59.5 | 116.3 | 220.5 | 407.1 |
-| MTP3 steady | 116.2 | 213.2 | **degraded** | **degraded** |
-| DFlash2 K=7 steady | 147.9 | **degraded** | incomplete | incomplete |
+| MTP3 steady | 116.2 | 213.2 | 381.5 | blocked: T>16 |
+| DFlash2 K=7 steady | 147.9 | 264.8 | blocked: T>16 | blocked: T>16 |
 
 MTP0 is the first MTP0 saturation record for this route. MTP3 C=1/C=2 steady reaches
 79/73 percent of the NVFP4 MTP3 rows at half the weight footprint. MTP3 acceptance at
@@ -164,12 +164,14 @@ this fixture is 47-50 percent (the AIME domain, below TEB's agentic 85 percent);
 DFlash2 collapses to ~30 percent here. Makespans: MTP0 138.3/142.1/151.1/165.9 s;
 MTP3 71.0/78.0 s at C=1/C=2.
 
-**Open defect (blocks the C>=4 speculative rows):** every speculative wave at
-C>=4 degrades ~20x (MTP3 C=4 makespan 1799 s vs 71 s at C=1; DFlash2 steps 530 ms
-flat at 16-33 tok/s). The mtp0 rows at the same C are clean, so the record rounds
-at batch>=4 run uncaptured or hit a per-round host stall — the decomposed record
-path's capture coverage at B>=4 is the prime suspect. The C=1/C=2 speculative rows
-and all MTP0 rows are valid; the C>=4 speculative rows await this fix.
+**Root cause of the C>=4 collapse, found and fixed:** the record rounds project at
+T = width x batch; past the register route's T<=8 domain the EXL3 linear composed
+its route and dequantized a 176 MB prime per layer per round. The register domain
+now covers T<=16 (the kernel's validated bound; T=32/64 produce non-finite columns
+on the token tiling and stay composed until launch_linear's token tiling extends).
+Re-measured with the fix: MTP3 C=4 381.5 tok/s steady (was 18.1; makespan 88.9 s),
+DFlash2 C=2 264.8 tok/s (was 11.8; makespan 64.4 s). The MTP3 C=8 (T=32) and
+DFlash2 C>=4 (T>=32) rows await the kernel's token-tiling extension.
 
 **Window:** development iterations are short (single-request speculative rounds); one
 medium window for the acceptance battery.

@@ -111,8 +111,8 @@ int exl3_dense_a16_conformance() {
         Invocation{1}, Invocation{2, CallForm::Policy, ops::LinearPolicy::A16Only, true},
         Invocation{3}, Invocation{4}, Invocation{5}, Invocation{6},
         Invocation{7}, Invocation{8, CallForm::Policy, ops::LinearPolicy::A16Only, true},
-        Invocation{16}, Invocation{32}, Invocation{48, CallForm::Policy,
-                                                 ops::LinearPolicy::A16Only, true},
+        Invocation{16}, Invocation{17}, Invocation{32}, Invocation{33},
+        Invocation{48, CallForm::Policy, ops::LinearPolicy::A16Only, true},
         Invocation{64}, Invocation{72},
     };
     failures += run_shape("EXL3_DENSE_A16", ActivationCompute::A16,

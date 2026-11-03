@@ -12777,25 +12777,6 @@ ProgramImplCore::decode_dflash_batch(std::span<const std::uint32_t> lanes,
             const std::uint32_t extent =
                 std::min({draft_window, max_by_budget, capacity - frontier - 1U});
             dflash_host_ingress->anchors[row] = sequence.ledger.back();
-            if (std::getenv("NINFER_DFLASH2_DUMP") != nullptr) {
-                fprintf(stderr,
-                        "[dflash2-ing] ledger.size=%zu back=%d front=%d E=%u cf=%u\n",
-                        sequence.ledger.size(), (int)sequence.ledger.back(),
-                        (int)sequence.ledger.front(), sequence.execution_frontier,
-                        sequence.dflash_context_frontier);
-                {
-                    std::string head, tail;
-                    for (std::size_t i = 0; i < sequence.ledger.size() && i < 6; ++i) {
-                        head += " " + std::to_string((int)sequence.ledger[i]);
-                    }
-                    for (std::size_t i = sequence.ledger.size() >= 8 ? sequence.ledger.size() - 8 : 0;
-                         i < sequence.ledger.size(); ++i) {
-                        tail += " " + std::to_string((int)sequence.ledger[i]);
-                    }
-                    fprintf(stderr, "[dflash2-ing] ledger head:%s tail:%s\n", head.c_str(),
-                            tail.c_str());
-                }
-            }
             dflash_host_ingress->execution_frontiers[row] =
                 checked_i32(frontier, "DFlash batch frontier");
             dflash_host_ingress->context_frontiers[row] =

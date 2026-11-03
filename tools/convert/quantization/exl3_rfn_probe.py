@@ -105,11 +105,14 @@ class BF16Source:
 
 
 def span_rows(sources: list[str]) -> list[int]:
-    """Cumulative row counts from a method record's `rows(...)` source refs."""
+    """Row counts from a method record's sources: `rows(..., M rows)` refs give their
+    count; a plain `path:name.weight` ref means the full tensor (the caller passes n)."""
 
     counts = []
     for ref in sources:
-        m = re.search(r", (\d+) rows\)", ref)
+        m = re.search(r", (\d+) rows\)$", ref)
+        if m is None:
+            return []  # plain full-tensor ref; the caller defaults to n
         counts.append(int(m.group(1)))
     return counts
 
@@ -140,27 +143,18 @@ def main() -> int:
             payload = artifact.read_range(obj.offset, obj.bytes)
             w_q, k2, codebook = parse_leaf(payload, n, k)
 
-            # The reference rows: the parameter list order matches the sources' spans;
-            # the leaf stacks each parameter's rows from its span begin.
-            params, srcs = record["parameters"], record["sources"]
-            counts = span_rows(srcs)
+            # The reference rows: banded leaves (his interleaved q_proj: query rows
+            # then gate rows per head) select 16-row bands of the source; grouped
+            # leaves (the GDN fused qkv) take contiguous role spans; plain leaves
+            # take the full tensor. The sources' row counts give the leaf's total.
             tensor_name = mp["tensor"] + ".weight"
-            begin = 0
-            ref_rows = []
-            for name_param, count in zip(record["parameters"], counts):
-                if "row_bands" in mp and name_param in (
-                        "text/attention_gate",) or mp.get("row_bands") and len(srcs) == 1:
-                    bands = mp["row_bands"]
-                    rows = torch.cat([source.rows(tensor_name, b * 16, 16)
-                                      for b in bands]) if False else None
-                ref_rows.append((name_param, count, begin))
-                begin += count
-            # Single-tensor leaves (the common case: one parameter, full rows).
-            if len(set(srcs)) == 1 and len(record["parameters"]) == 1:
-                ref = source.rows(tensor_name, 0, n)
+            if "row_bands" in mp:
+                bands = mp["row_bands"]
+                ref = torch.cat([source.rows(tensor_name, b * 16, 16) for b in bands])
             else:
-                # Grouped leaves (the GDN fused qkv): contiguous role spans.
-                ref = torch.cat([source.rows(tensor_name, 0, sum(counts))])
+                counts = span_rows(record["sources"]) if any(
+                    "rows(" in s for s in record["sources"]) else [n]
+                ref = source.rows(tensor_name, 0, sum(counts))
             ref = ref[:n].contiguous()  # [n, k], matching w_q
             if ref.shape != w_q.shape:
                 raise ValueError(f"reference shape {tuple(ref.shape)} != {tuple(w_q.shape)}")

@@ -201,7 +201,13 @@ execution transcripts) plus long agent sessions — our domain, English. Pack 25
 rows (`sc_trace.py` format). His trace was 196×2048 of Spanish sysadmin; domain match
 is rationale #2 of their pipeline and the explicit reason for doing this.
 
-**W2.2 rfn probe (5090, short window).** Dequant our accepted 2.00bpw artifact
+**W2.2 rfn probe (5090, short window).** DONE 2026-11-03: all 416 EXL3 leaves
+measured (`profiles/rfn/rfn_sc385_df2.json`, zero failures) with our own decode route —
+the artifact's trellis + suh/svh decoded via the converter's validated numpy decoder,
+the reference rows joined per-leaf through the conversion report's provenance (banded
+q/gate leaves select his interleaved 16-row bands). The amplitude-halving law holds:
+median rfn 0.150 (K=3, n=79) / 0.076 (K=4, n=291) / 0.040 (K=5, n=44) — the anchors
+for W2.4's per-K extrapolation. Dequant our accepted 2.00bpw artifact
 per-tensor, record `rfn_t = ‖W_q − W‖/‖W‖` (`sc_rfn_probe.py` against the checkpoint).
 K=2 anchors extrapolate across K per the amplitude-halving law — our artifact is the
 anchor.

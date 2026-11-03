@@ -89,7 +89,15 @@ occupancy, catalogued prompts (`kept_prompts`), context length, Device and Host 
 occupancy, and Host KV spill occupancy. Consumers delta-sample the counters between polls
 (EngineMetrics does this for its live throughput panel); a request counter only moves when the
 corresponding request reaches its terminal state, so a poll taken mid-request sees no partial
-values. The endpoint remains unauthenticated alongside `/health` so monitoring tools poll
+values. The Flash-Next lane has no request pause, preemption, or replay machinery (its OOM
+backoff is admission-level), so `preemptions_total`, `snapshot_restores_total`,
+`replay_restores_total`, `replayed_tokens_total`, `requests_paused`, and
+`requests_replaying` stay zero while a Flash-Next model is resident; they move only on a
+runtime whose lifecycle supports those paths. The per-position speculative series render the
+configured draft window and read zero until speculative requests commit; the Engine-side
+`SpeculativeStats` vectors behind them grow on a request's first committed round, so direct
+Engine consumers must size-guard. The endpoint remains
+unauthenticated alongside `/health` so monitoring tools poll
 without credentials.
 
 [Output and tool constraints](#output-constraints) add counters that settle with each constrained

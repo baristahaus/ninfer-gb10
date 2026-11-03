@@ -231,7 +231,9 @@ struct SpeculativeStats {
     std::uint64_t committed_draft_tokens = 0;
     std::uint64_t fallback_steps         = 0;
     // Per block position: tokens attempted (drafted) and accepted. Attempted is the
-    // denominator for the position's acceptance rate.
+    // denominator for the position's acceptance rate. Both vectors are empty until the
+    // request's first committed speculative round sizes them to the draft window; any
+    // consumer reading them before that must size-guard (the /metrics renderer does).
     std::vector<std::uint64_t> attempted_per_position;
     std::vector<std::uint64_t> accepted_per_position;
 };

@@ -1,0 +1,6710 @@
+{
+  "model": "/nfs/models--Qwen--Qwen3.8-27B/snapshots/1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
+  "rows": 10,
+  "length": 1024,
+  "draws": 1,
+  "mode": "shaped",
+  "trace": "/nfs/cal-trace/cal_trace.safetensors",
+  "h_rows": 64,
+  "rfn_ref": null,
+  "rfn_scale": null,
+  "rfn": "0.29,0.145",
+  "results": [
+    {
+      "idx": 1,
+      "key": "model.language_model.layers.0.linear_attn.qkvz",
+      "qbits_key": "bits",
+      "numel": 83886080,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000851177275,
+          "draw": 0,
+          "kld": 0.011620379737178155,
+          "inj_rfn": 0.00478581714311807
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500012419144395,
+          "draw": 0,
+          "kld": 0.00685510669204632,
+          "inj_rfn": 0.002413635994149727
+        }
+      ],
+      "members": [
+        "model.language_model.layers.0.linear_attn.in_proj_qkv",
+        "model.language_model.layers.0.linear_attn.in_proj_z"
+      ],
+      "w_norm": 145.22035721081772
+    },
+    {
+      "idx": 1,
+      "key": "model.language_model.layers.0.linear_attn.out_proj",
+      "qbits_key": "bits",
+      "numel": 31457280,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.28999990168702144,
+          "draw": 0,
+          "kld": 0.01628052475862205,
+          "inj_rfn": 0.009474367808157368
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500004888061657,
+          "draw": 0,
+          "kld": 0.005162659949382942,
+          "inj_rfn": 0.004731180075837714
+        }
+      ],
+      "w_norm": 88.21649450269348
+    },
+    {
+      "idx": 1,
+      "key": "model.language_model.layers.0.mlp.gate_up",
+      "qbits_key": "bits",
+      "numel": 178257920,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000005066402823,
+          "draw": 0,
+          "kld": 0.006029928102793747,
+          "inj_rfn": 0.0019968437394793904
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450001155580696,
+          "draw": 0,
+          "kld": 0.005223890835509337,
+          "inj_rfn": 0.0009974196902573869
+        }
+      ],
+      "members": [
+        "model.language_model.layers.0.mlp.gate_proj",
+        "model.language_model.layers.0.mlp.up_proj"
+      ],
+      "w_norm": 133.43422493053458
+    },
+    {
+      "idx": 1,
+      "key": "model.language_model.layers.0.mlp.down_proj",
+      "qbits_key": "bits",
+      "numel": 89128960,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000332014015,
+          "draw": 0,
+          "kld": 0.004545317612064536,
+          "inj_rfn": 0.002809056928914139
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500013912912652,
+          "draw": 0,
+          "kld": 0.006979278732262628,
+          "inj_rfn": 0.0014031189946043003
+        }
+      ],
+      "w_norm": 100.38931054586938
+    },
+    {
+      "idx": 2,
+      "key": "model.language_model.layers.1.linear_attn.qkvz",
+      "qbits_key": "bits",
+      "numel": 83886080,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000002594093216,
+          "draw": 0,
+          "kld": 0.015353611962541435,
+          "inj_rfn": 0.0034159847311413553
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500014384244042,
+          "draw": 0,
+          "kld": 0.00962508855827764,
+          "inj_rfn": 0.0017334811527116006
+        }
+      ],
+      "members": [
+        "model.language_model.layers.1.linear_attn.in_proj_qkv",
+        "model.language_model.layers.1.linear_attn.in_proj_z"
+      ],
+      "w_norm": 141.78248807868076
+    },
+    {
+      "idx": 2,
+      "key": "model.language_model.layers.1.linear_attn.out_proj",
+      "qbits_key": "bits",
+      "numel": 31457280,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900001229248031,
+          "draw": 0,
+          "kld": 0.015729984681593125,
+          "inj_rfn": 0.005498865295589213
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450002137316699,
+          "draw": 0,
+          "kld": 0.009032713675719607,
+          "inj_rfn": 0.0027572260693569206
+        }
+      ],
+      "w_norm": 90.11324526758678
+    },
+    {
+      "idx": 2,
+      "key": "model.language_model.layers.1.mlp.gate_up",
+      "qbits_key": "bits",
+      "numel": 178257920,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000002189262875,
+          "draw": 0,
+          "kld": 0.0121607241672109,
+          "inj_rfn": 0.0030957809529051886
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500012733384487,
+          "draw": 0,
+          "kld": 0.008206207443640779,
+          "inj_rfn": 0.0015464342302764348
+        }
+      ],
+      "members": [
+        "model.language_model.layers.1.mlp.gate_proj",
+        "model.language_model.layers.1.mlp.up_proj"
+      ],
+      "w_norm": 140.68629219828063
+    },
+    {
+      "idx": 2,
+      "key": "model.language_model.layers.1.mlp.down_proj",
+      "qbits_key": "bits",
+      "numel": 89128960,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000006844773185,
+          "draw": 0,
+          "kld": 0.007268632576074197,
+          "inj_rfn": 0.0034149570332429194
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450001147006526,
+          "draw": 0,
+          "kld": 0.006518004072177064,
+          "inj_rfn": 0.0017085367093538962
+        }
+      ],
+      "w_norm": 101.9787096729631
+    },
+    {
+      "idx": 3,
+      "key": "model.language_model.layers.2.linear_attn.qkvz",
+      "qbits_key": "bits",
+      "numel": 83886080,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000005451971067,
+          "draw": 0,
+          "kld": 0.01034399864893203,
+          "inj_rfn": 0.005480134094317236
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450001706227603,
+          "draw": 0,
+          "kld": 0.006314368167431894,
+          "inj_rfn": 0.002807965784462409
+        }
+      ],
+      "members": [
+        "model.language_model.layers.2.linear_attn.in_proj_qkv",
+        "model.language_model.layers.2.linear_attn.in_proj_z"
+      ],
+      "w_norm": 144.16060583057182
+    },
+    {
+      "idx": 3,
+      "key": "model.language_model.layers.2.linear_attn.out_proj",
+      "qbits_key": "bits",
+      "numel": 31457280,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.28999992866090674,
+          "draw": 0,
+          "kld": 0.022979233411024324,
+          "inj_rfn": 0.00724919234961277
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500012853426106,
+          "draw": 0,
+          "kld": 0.004093063400364372,
+          "inj_rfn": 0.003612412902779525
+        }
+      ],
+      "w_norm": 90.83599360592143
+    },
+    {
+      "idx": 3,
+      "key": "model.language_model.layers.2.mlp.gate_up",
+      "qbits_key": "bits",
+      "numel": 178257920,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000121573832,
+          "draw": 0,
+          "kld": 0.011134585611353031,
+          "inj_rfn": 0.006103786008968159
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500014677735681,
+          "draw": 0,
+          "kld": 0.005710893362720526,
+          "inj_rfn": 0.0030390756854218022
+        }
+      ],
+      "members": [
+        "model.language_model.layers.2.mlp.gate_proj",
+        "model.language_model.layers.2.mlp.up_proj"
+      ],
+      "w_norm": 144.1879334627208
+    },
+    {
+      "idx": 3,
+      "key": "model.language_model.layers.2.mlp.down_proj",
+      "qbits_key": "bits",
+      "numel": 89128960,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000281621284,
+          "draw": 0,
+          "kld": 0.012664730410506309,
+          "inj_rfn": 0.006193506730576234
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450001189238342,
+          "draw": 0,
+          "kld": 0.009096374046930578,
+          "inj_rfn": 0.0030887522216196256
+        }
+      ],
+      "w_norm": 103.57257042166135
+    },
+    {
+      "idx": 4,
+      "key": "model.language_model.layers.3.self_attn.qkv",
+      "qbits_key": "bits",
+      "numel": 73400320,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000636233179,
+          "draw": 0,
+          "kld": 0.014089039192549535,
+          "inj_rfn": 0.003994964002430733
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500015229918367,
+          "draw": 0,
+          "kld": 0.01489372700198146,
+          "inj_rfn": 0.0020070180128069198
+        }
+      ],
+      "members": [
+        "model.language_model.layers.3.self_attn.q_proj",
+        "model.language_model.layers.3.self_attn.k_proj",
+        "model.language_model.layers.3.self_attn.v_proj"
+      ],
+      "w_norm": 146.65368298946674
+    },
+    {
+      "idx": 4,
+      "key": "model.language_model.layers.3.self_attn.o_proj",
+      "qbits_key": "bits",
+      "numel": 31457280,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000015957584574,
+          "draw": 0,
+          "kld": 0.007381940790492081,
+          "inj_rfn": 0.0037211883861174924
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500031327415686,
+          "draw": 0,
+          "kld": 0.006299002999401182,
+          "inj_rfn": 0.00186618490297654
+        }
+      ],
+      "w_norm": 89.44257170281108
+    },
+    {
+      "idx": 4,
+      "key": "model.language_model.layers.3.mlp.gate_up",
+      "qbits_key": "bits",
+      "numel": 178257920,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000516030179,
+          "draw": 0,
+          "kld": 0.009345240736843152,
+          "inj_rfn": 0.004122713695884559
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500010862588503,
+          "draw": 0,
+          "kld": 0.006371423369273543,
+          "inj_rfn": 0.0020554165318934113
+        }
+      ],
+      "members": [
+        "model.language_model.layers.3.mlp.gate_proj",
+        "model.language_model.layers.3.mlp.up_proj"
+      ],
+      "w_norm": 145.6104304675235
+    },
+    {
+      "idx": 4,
+      "key": "model.language_model.layers.3.mlp.down_proj",
+      "qbits_key": "bits",
+      "numel": 89128960,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000000939179055,
+          "draw": 0,
+          "kld": 0.0055539477850061305,
+          "inj_rfn": 0.0037151908925717814
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500014424968868,
+          "draw": 0,
+          "kld": 0.0035191771465179046,
+          "inj_rfn": 0.0018583265014359054
+        }
+      ],
+      "w_norm": 103.43274158239257
+    },
+    {
+      "idx": 5,
+      "key": "model.language_model.layers.4.linear_attn.qkvz",
+      "qbits_key": "bits",
+      "numel": 83886080,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000004540423124,
+          "draw": 0,
+          "kld": 0.011279622775600729,
+          "inj_rfn": 0.004280386889906613
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500015448863735,
+          "draw": 0,
+          "kld": 0.008677883872883286,
+          "inj_rfn": 0.0021652295708870554
+        }
+      ],
+      "members": [
+        "model.language_model.layers.4.linear_attn.in_proj_qkv",
+        "model.language_model.layers.4.linear_attn.in_proj_z"
+      ],
+      "w_norm": 147.7642726555966
+    },
+    {
+      "idx": 5,
+      "key": "model.language_model.layers.4.linear_attn.out_proj",
+      "qbits_key": "bits",
+      "numel": 31457280,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000337706948,
+          "draw": 0,
+          "kld": 0.006939251237326971,
+          "inj_rfn": 0.005024207690125048
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500011848186067,
+          "draw": 0,
+          "kld": 0.005639947495092201,
+          "inj_rfn": 0.0025105636855811955
+        }
+      ],
+      "w_norm": 91.0293672565343
+    },
+    {
+      "idx": 5,
+      "key": "model.language_model.layers.4.mlp.gate_up",
+      "qbits_key": "bits",
+      "numel": 178257920,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000522757725,
+          "draw": 0,
+          "kld": 0.007533977729008256,
+          "inj_rfn": 0.004775901510598892
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500017032383902,
+          "draw": 0,
+          "kld": 0.007064778999665578,
+          "inj_rfn": 0.0023806104898623248
+        }
+      ],
+      "members": [
+        "model.language_model.layers.4.mlp.gate_proj",
+        "model.language_model.layers.4.mlp.up_proj"
+      ],
+      "w_norm": 146.8487277034602
+    },
+    {
+      "idx": 5,
+      "key": "model.language_model.layers.4.mlp.down_proj",
+      "qbits_key": "bits",
+      "numel": 89128960,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000656507429,
+          "draw": 0,
+          "kld": 0.006362494912991679,
+          "inj_rfn": 0.0038960575793279832
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500010951554848,
+          "draw": 0,
+          "kld": 0.004213505456596068,
+          "inj_rfn": 0.0019472220374142728
+        }
+      ],
+      "w_norm": 103.5383100143372
+    },
+    {
+      "idx": 6,
+      "key": "model.language_model.layers.5.linear_attn.qkvz",
+      "qbits_key": "bits",
+      "numel": 83886080,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.290000002885768,
+          "draw": 0,
+          "kld": 0.012890501102674534,
+          "inj_rfn": 0.004096056598045074
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500011089317125,
+          "draw": 0,
+          "kld": 0.006307748914764488,
+          "inj_rfn": 0.002062856483443469
+        }
+      ],
+      "members": [
+        "model.language_model.layers.5.linear_attn.in_proj_qkv",
+        "model.language_model.layers.5.linear_attn.in_proj_z"
+      ],
+      "w_norm": 145.64475791394793
+    },
+    {
+      "idx": 6,
+      "key": "model.language_model.layers.5.linear_attn.out_proj",
+      "qbits_key": "bits",
+      "numel": 31457280,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900001034314326,
+          "draw": 0,
+          "kld": 0.012282566223075265,
+          "inj_rfn": 0.004745177675226397
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450000322209521,
+          "draw": 0,
+          "kld": 0.011163886691497283,
+          "inj_rfn": 0.0023745601557317517
+        }
+      ],
+      "w_norm": 89.98344302998886
+    },
+    {
+      "idx": 6,
+      "key": "model.language_model.layers.5.mlp.gate_up",
+      "qbits_key": "bits",
+      "numel": 178257920,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000691384349,
+          "draw": 0,
+          "kld": 0.007035753197624217,
+          "inj_rfn": 0.005071671296594815
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500013958051344,
+          "draw": 0,
+          "kld": 0.005393637907855009,
+          "inj_rfn": 0.002523447540980601
+        }
+      ],
+      "members": [
+        "model.language_model.layers.5.mlp.gate_proj",
+        "model.language_model.layers.5.mlp.up_proj"
+      ],
+      "w_norm": 146.94338501081802
+    },
+    {
+      "idx": 6,
+      "key": "model.language_model.layers.5.mlp.down_proj",
+      "qbits_key": "bits",
+      "numel": 89128960,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000004909732,
+          "draw": 0,
+          "kld": 0.008552760600514376,
+          "inj_rfn": 0.004390784489458595
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500012625147898,
+          "draw": 0,
+          "kld": 0.0032707091478641815,
+          "inj_rfn": 0.0021966640263399568
+        }
+      ],
+      "w_norm": 103.14124871989867
+    },
+    {
+      "idx": 7,
+      "key": "model.language_model.layers.6.linear_attn.qkvz",
+      "qbits_key": "bits",
+      "numel": 83886080,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000002910222034,
+          "draw": 0,
+          "kld": 0.017167472382152483,
+          "inj_rfn": 0.00531512639604828
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500016833976692,
+          "draw": 0,
+          "kld": 0.009565910260425881,
+          "inj_rfn": 0.0026927701285535924
+        }
+      ],
+      "members": [
+        "model.language_model.layers.6.linear_attn.in_proj_qkv",
+        "model.language_model.layers.6.linear_attn.in_proj_z"
+      ],
+      "w_norm": 145.71805972386366
+    },
+    {
+      "idx": 7,
+      "key": "model.language_model.layers.6.linear_attn.out_proj",
+      "qbits_key": "bits",
+      "numel": 31457280,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000166325613,
+          "draw": 0,
+          "kld": 0.00943752204834709,
+          "inj_rfn": 0.005729934254482517
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500016814429914,
+          "draw": 0,
+          "kld": 0.00636228429636958,
+          "inj_rfn": 0.002862908714648872
+        }
+      ],
+      "w_norm": 89.80850939290218
+    },
+    {
+      "idx": 7,
+      "key": "model.language_model.layers.6.mlp.gate_up",
+      "qbits_key": "bits",
+      "numel": 178257920,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000665318571,
+          "draw": 0,
+          "kld": 0.008942335863685003,
+          "inj_rfn": 0.006023381849682069
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500013390999741,
+          "draw": 0,
+          "kld": 0.008283215919038866,
+          "inj_rfn": 0.003005537815512184
+        }
+      ],
+      "members": [
+        "model.language_model.layers.6.mlp.gate_proj",
+        "model.language_model.layers.6.mlp.up_proj"
+      ],
+      "w_norm": 146.51750375381775
+    },
+    {
+      "idx": 7,
+      "key": "model.language_model.layers.6.mlp.down_proj",
+      "qbits_key": "bits",
+      "numel": 89128960,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000786202954,
+          "draw": 0,
+          "kld": 0.00929257702873656,
+          "inj_rfn": 0.005161388416710052
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500012859169797,
+          "draw": 0,
+          "kld": 0.00594074712719248,
+          "inj_rfn": 0.0025805428534048202
+        }
+      ],
+      "w_norm": 102.0970691226614
+    },
+    {
+      "idx": 8,
+      "key": "model.language_model.layers.7.self_attn.qkv",
+      "qbits_key": "bits",
+      "numel": 73400320,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000007620877005,
+          "draw": 0,
+          "kld": 0.01649379094824326,
+          "inj_rfn": 0.004944136776184964
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450000937514166,
+          "draw": 0,
+          "kld": 0.009064611723692906,
+          "inj_rfn": 0.0024290900911408068
+        }
+      ],
+      "members": [
+        "model.language_model.layers.7.self_attn.q_proj",
+        "model.language_model.layers.7.self_attn.k_proj",
+        "model.language_model.layers.7.self_attn.v_proj"
+      ],
+      "w_norm": 139.22488456251386
+    },
+    {
+      "idx": 8,
+      "key": "model.language_model.layers.7.self_attn.o_proj",
+      "qbits_key": "bits",
+      "numel": 31457280,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000013321888224,
+          "draw": 0,
+          "kld": 0.008745159317822982,
+          "inj_rfn": 0.004457023030736709
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450002424213435,
+          "draw": 0,
+          "kld": 0.008697669428306654,
+          "inj_rfn": 0.0022270525733480164
+        }
+      ],
+      "w_norm": 86.92953549067774
+    },
+    {
+      "idx": 8,
+      "key": "model.language_model.layers.7.mlp.gate_up",
+      "qbits_key": "bits",
+      "numel": 178257920,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000005375582044,
+          "draw": 0,
+          "kld": 0.01382578131460832,
+          "inj_rfn": 0.0062734519333734395
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500011011708663,
+          "draw": 0,
+          "kld": 0.0051846964592868975,
+          "inj_rfn": 0.0031286786407585107
+        }
+      ],
+      "members": [
+        "model.language_model.layers.7.mlp.gate_proj",
+        "model.language_model.layers.7.mlp.up_proj"
+      ],
+      "w_norm": 147.94215376076895
+    },
+    {
+      "idx": 8,
+      "key": "model.language_model.layers.7.mlp.down_proj",
+      "qbits_key": "bits",
+      "numel": 89128960,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000287071028,
+          "draw": 0,
+          "kld": 0.007804393044079916,
+          "inj_rfn": 0.00535646398108741
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450001563382678,
+          "draw": 0,
+          "kld": 0.0030714650340541994,
+          "inj_rfn": 0.0026783453095080845
+        }
+      ],
+      "w_norm": 103.21885407200324
+    },
+    {
+      "idx": 9,
+      "key": "model.language_model.layers.8.linear_attn.qkvz",
+      "qbits_key": "bits",
+      "numel": 83886080,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000003523836637,
+          "draw": 0,
+          "kld": 0.015478365218677936,
+          "inj_rfn": 0.004722562791688881
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450001257687199,
+          "draw": 0,
+          "kld": 0.008040177231441703,
+          "inj_rfn": 0.0023827386427882624
+        }
+      ],
+      "members": [
+        "model.language_model.layers.8.linear_attn.in_proj_qkv",
+        "model.language_model.layers.8.linear_attn.in_proj_z"
+      ],
+      "w_norm": 145.4766277405068
+    },
+    {
+      "idx": 9,
+      "key": "model.language_model.layers.8.linear_attn.out_proj",
+      "qbits_key": "bits",
+      "numel": 31457280,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000429095691,
+          "draw": 0,
+          "kld": 0.015464102488203934,
+          "inj_rfn": 0.005360432311614309
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500022410072244,
+          "draw": 0,
+          "kld": 0.004946042458300326,
+          "inj_rfn": 0.002679875176822596
+        }
+      ],
+      "w_norm": 89.35409502017801
+    },
+    {
+      "idx": 9,
+      "key": "model.language_model.layers.8.mlp.gate_up",
+      "qbits_key": "bits",
+      "numel": 178257920,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000005347077956,
+          "draw": 0,
+          "kld": 0.0073232208595982225,
+          "inj_rfn": 0.006400987079427042
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500009982805717,
+          "draw": 0,
+          "kld": 0.007674083501797213,
+          "inj_rfn": 0.003193525946406726
+        }
+      ],
+      "members": [
+        "model.language_model.layers.8.mlp.gate_proj",
+        "model.language_model.layers.8.mlp.up_proj"
+      ],
+      "w_norm": 148.17466532883583
+    },
+    {
+      "idx": 9,
+      "key": "model.language_model.layers.8.mlp.down_proj",
+      "qbits_key": "bits",
+      "numel": 89128960,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000818747176,
+          "draw": 0,
+          "kld": 0.0057889200510999215,
+          "inj_rfn": 0.005508350824589515
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500013173340837,
+          "draw": 0,
+          "kld": 0.006208551784857264,
+          "inj_rfn": 0.002754126652415865
+        }
+      ],
+      "w_norm": 103.71597710213214
+    },
+    {
+      "idx": 10,
+      "key": "model.language_model.layers.9.linear_attn.qkvz",
+      "qbits_key": "bits",
+      "numel": 83886080,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000177937111,
+          "draw": 0,
+          "kld": 0.023289184840405142,
+          "inj_rfn": 0.0044847557954662805
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500013457730782,
+          "draw": 0,
+          "kld": 0.007758351230540939,
+          "inj_rfn": 0.0022584773827062595
+        }
+      ],
+      "members": [
+        "model.language_model.layers.9.linear_attn.in_proj_qkv",
+        "model.language_model.layers.9.linear_attn.in_proj_z"
+      ],
+      "w_norm": 144.40965493172538
+    },
+    {
+      "idx": 10,
+      "key": "model.language_model.layers.9.linear_attn.out_proj",
+      "qbits_key": "bits",
+      "numel": 31457280,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000007707889186,
+          "draw": 0,
+          "kld": 0.011562596011663118,
+          "inj_rfn": 0.0055280413760311385
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450002113191491,
+          "draw": 0,
+          "kld": 0.007820065202599836,
+          "inj_rfn": 0.0027613509739783117
+        }
+      ],
+      "w_norm": 89.40856832453895
+    },
+    {
+      "idx": 10,
+      "key": "model.language_model.layers.9.mlp.gate_up",
+      "qbits_key": "bits",
+      "numel": 178257920,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000691281188,
+          "draw": 0,
+          "kld": 0.015781596828401235,
+          "inj_rfn": 0.006364150334610604
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500013323471495,
+          "draw": 0,
+          "kld": 0.005235857935008426,
+          "inj_rfn": 0.0031697262766145133
+        }
+      ],
+      "members": [
+        "model.language_model.layers.9.mlp.gate_proj",
+        "model.language_model.layers.9.mlp.up_proj"
+      ],
+      "w_norm": 147.5242796489361
+    },
+    {
+      "idx": 10,
+      "key": "model.language_model.layers.9.mlp.down_proj",
+      "qbits_key": "bits",
+      "numel": 89128960,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000008271233974,
+          "draw": 0,
+          "kld": 0.011316600276541067,
+          "inj_rfn": 0.005647859975324128
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500012215881825,
+          "draw": 0,
+          "kld": 0.01020959393360954,
+          "inj_rfn": 0.0028234991258018222
+        }
+      ],
+      "w_norm": 103.26158095614505
+    },
+    {
+      "idx": 11,
+      "key": "model.language_model.layers.10.linear_attn.qkvz",
+      "qbits_key": "bits",
+      "numel": 83886080,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000004461910533,
+          "draw": 0,
+          "kld": 0.014030799731699517,
+          "inj_rfn": 0.004607598440494856
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450001599666355,
+          "draw": 0,
+          "kld": 0.012516998108503685,
+          "inj_rfn": 0.0023320062653186236
+        }
+      ],
+      "members": [
+        "model.language_model.layers.10.linear_attn.in_proj_qkv",
+        "model.language_model.layers.10.linear_attn.in_proj_z"
+      ],
+      "w_norm": 144.33108267376522
+    },
+    {
+      "idx": 11,
+      "key": "model.language_model.layers.10.linear_attn.out_proj",
+      "qbits_key": "bits",
+      "numel": 31457280,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000015812110386,
+          "draw": 0,
+          "kld": 0.01681457619288267,
+          "inj_rfn": 0.005609752489704879
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.145000165568749,
+          "draw": 0,
+          "kld": 0.0055656833777220525,
+          "inj_rfn": 0.002806354642171592
+        }
+      ],
+      "w_norm": 88.9209099293088
+    },
+    {
+      "idx": 11,
+      "key": "model.language_model.layers.10.mlp.gate_up",
+      "qbits_key": "bits",
+      "numel": 178257920,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000003751027104,
+          "draw": 0,
+          "kld": 0.01362338305607409,
+          "inj_rfn": 0.006184377353665628
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450001363858439,
+          "draw": 0,
+          "kld": 0.0076091726111144455,
+          "inj_rfn": 0.0030856351120803864
+        }
+      ],
+      "members": [
+        "model.language_model.layers.10.mlp.gate_proj",
+        "model.language_model.layers.10.mlp.up_proj"
+      ],
+      "w_norm": 145.85888875789334
+    },
+    {
+      "idx": 11,
+      "key": "model.language_model.layers.10.mlp.down_proj",
+      "qbits_key": "bits",
+      "numel": 89128960,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000349360228,
+          "draw": 0,
+          "kld": 0.00949590398095097,
+          "inj_rfn": 0.0056935808814266185
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500009891129245,
+          "draw": 0,
+          "kld": 0.004527141751941599,
+          "inj_rfn": 0.002847485395784726
+        }
+      ],
+      "w_norm": 102.06648989445557
+    },
+    {
+      "idx": 12,
+      "key": "model.language_model.layers.11.self_attn.qkv",
+      "qbits_key": "bits",
+      "numel": 73400320,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000313987119,
+          "draw": 0,
+          "kld": 0.027836029653326478,
+          "inj_rfn": 0.004700713955957648
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500013454688424,
+          "draw": 0,
+          "kld": 0.012713302748488786,
+          "inj_rfn": 0.0023510949151673986
+        }
+      ],
+      "members": [
+        "model.language_model.layers.11.self_attn.q_proj",
+        "model.language_model.layers.11.self_attn.k_proj",
+        "model.language_model.layers.11.self_attn.v_proj"
+      ],
+      "w_norm": 138.77475672999304
+    },
+    {
+      "idx": 12,
+      "key": "model.language_model.layers.11.self_attn.o_proj",
+      "qbits_key": "bits",
+      "numel": 31457280,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000002641391903,
+          "draw": 0,
+          "kld": 0.0158519269138651,
+          "inj_rfn": 0.004755899921843164
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450001292177851,
+          "draw": 0,
+          "kld": 0.006387937510589836,
+          "inj_rfn": 0.002378434175631168
+        }
+      ],
+      "w_norm": 86.50747630714498
+    },
+    {
+      "idx": 12,
+      "key": "model.language_model.layers.11.mlp.gate_up",
+      "qbits_key": "bits",
+      "numel": 178257920,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000466116303,
+          "draw": 0,
+          "kld": 0.0198919108370319,
+          "inj_rfn": 0.005914779802344629
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500013873596446,
+          "draw": 0,
+          "kld": 0.006083583187637487,
+          "inj_rfn": 0.002952280525819055
+        }
+      ],
+      "members": [
+        "model.language_model.layers.11.mlp.gate_proj",
+        "model.language_model.layers.11.mlp.up_proj"
+      ],
+      "w_norm": 146.9521340011774
+    },
+    {
+      "idx": 12,
+      "key": "model.language_model.layers.11.mlp.down_proj",
+      "qbits_key": "bits",
+      "numel": 89128960,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000406617674,
+          "draw": 0,
+          "kld": 0.011640166187044087,
+          "inj_rfn": 0.005593725946965436
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500012240850788,
+          "draw": 0,
+          "kld": 0.006319186424252621,
+          "inj_rfn": 0.0027972273141244823
+        }
+      ],
+      "w_norm": 102.79514006173882
+    },
+    {
+      "idx": 13,
+      "key": "model.language_model.layers.12.linear_attn.qkvz",
+      "qbits_key": "bits",
+      "numel": 83886080,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000007114386117,
+          "draw": 0,
+          "kld": 0.009572035224027785,
+          "inj_rfn": 0.004896174011904311
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500013891712374,
+          "draw": 0,
+          "kld": 0.01116106533297625,
+          "inj_rfn": 0.002453634702683967
+        }
+      ],
+      "members": [
+        "model.language_model.layers.12.linear_attn.in_proj_qkv",
+        "model.language_model.layers.12.linear_attn.in_proj_z"
+      ],
+      "w_norm": 145.35829251585548
+    },
+    {
+      "idx": 13,
+      "key": "model.language_model.layers.12.linear_attn.out_proj",
+      "qbits_key": "bits",
+      "numel": 31457280,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000381560297,
+          "draw": 0,
+          "kld": 0.01713637164757529,
+          "inj_rfn": 0.005380707391440043
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500008539478773,
+          "draw": 0,
+          "kld": 0.0076941044321984006,
+          "inj_rfn": 0.002689377062738958
+        }
+      ],
+      "w_norm": 89.07365335864613
+    },
+    {
+      "idx": 13,
+      "key": "model.language_model.layers.12.mlp.gate_up",
+      "qbits_key": "bits",
+      "numel": 178257920,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000008937622157,
+          "draw": 0,
+          "kld": 0.01470156318964655,
+          "inj_rfn": 0.005805287986495482
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500014180288315,
+          "draw": 0,
+          "kld": 0.004627862730967536,
+          "inj_rfn": 0.002896797938422411
+        }
+      ],
+      "members": [
+        "model.language_model.layers.12.mlp.gate_proj",
+        "model.language_model.layers.12.mlp.up_proj"
+      ],
+      "w_norm": 146.63752410813032
+    },
+    {
+      "idx": 13,
+      "key": "model.language_model.layers.12.mlp.down_proj",
+      "qbits_key": "bits",
+      "numel": 89128960,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000006846959486,
+          "draw": 0,
+          "kld": 0.009492551929679394,
+          "inj_rfn": 0.005583910867995126
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500014638029343,
+          "draw": 0,
+          "kld": 0.0056916617708566266,
+          "inj_rfn": 0.0027929393045921153
+        }
+      ],
+      "w_norm": 102.74512895236202
+    },
+    {
+      "idx": 14,
+      "key": "model.language_model.layers.13.linear_attn.qkvz",
+      "qbits_key": "bits",
+      "numel": 83886080,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000564988869,
+          "draw": 0,
+          "kld": 0.023265952981046212,
+          "inj_rfn": 0.004895437603563053
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500015565281324,
+          "draw": 0,
+          "kld": 0.009428953341148372,
+          "inj_rfn": 0.00246624848578248
+        }
+      ],
+      "members": [
+        "model.language_model.layers.13.linear_attn.in_proj_qkv",
+        "model.language_model.layers.13.linear_attn.in_proj_z"
+      ],
+      "w_norm": 145.21834315092568
+    },
+    {
+      "idx": 14,
+      "key": "model.language_model.layers.13.linear_attn.out_proj",
+      "qbits_key": "bits",
+      "numel": 31457280,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000000894904154,
+          "draw": 0,
+          "kld": 0.02149617306486107,
+          "inj_rfn": 0.006316681727912117
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500015564068167,
+          "draw": 0,
+          "kld": 0.006202993677993618,
+          "inj_rfn": 0.003159803700277789
+        }
+      ],
+      "w_norm": 89.47414190878
+    },
+    {
+      "idx": 14,
+      "key": "model.language_model.layers.13.mlp.gate_up",
+      "qbits_key": "bits",
+      "numel": 178257920,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000609759183,
+          "draw": 0,
+          "kld": 0.0195263444408738,
+          "inj_rfn": 0.00598627561480593
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450001508058767,
+          "draw": 0,
+          "kld": 0.008602593942123348,
+          "inj_rfn": 0.0029888379340620155
+        }
+      ],
+      "members": [
+        "model.language_model.layers.13.mlp.gate_proj",
+        "model.language_model.layers.13.mlp.up_proj"
+      ],
+      "w_norm": 146.01015322144553
+    },
+    {
+      "idx": 14,
+      "key": "model.language_model.layers.13.mlp.down_proj",
+      "qbits_key": "bits",
+      "numel": 89128960,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000004391638756,
+          "draw": 0,
+          "kld": 0.0064816370527296385,
+          "inj_rfn": 0.005999410962132752
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500011950928737,
+          "draw": 0,
+          "kld": 0.007899866144180123,
+          "inj_rfn": 0.0029991138793080997
+        }
+      ],
+      "w_norm": 102.22702312897749
+    },
+    {
+      "idx": 15,
+      "key": "model.language_model.layers.14.linear_attn.qkvz",
+      "qbits_key": "bits",
+      "numel": 83886080,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000011956534166,
+          "draw": 0,
+          "kld": 0.02286966961382859,
+          "inj_rfn": 0.005096687725823287
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500013351588895,
+          "draw": 0,
+          "kld": 0.009018802787841196,
+          "inj_rfn": 0.002568788132512561
+        }
+      ],
+      "members": [
+        "model.language_model.layers.14.linear_attn.in_proj_qkv",
+        "model.language_model.layers.14.linear_attn.in_proj_z"
+      ],
+      "w_norm": 145.09094332844313
+    },
+    {
+      "idx": 15,
+      "key": "model.language_model.layers.14.linear_attn.out_proj",
+      "qbits_key": "bits",
+      "numel": 31457280,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000000847747676,
+          "draw": 0,
+          "kld": 0.015083959253934154,
+          "inj_rfn": 0.006606113617872353
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450001343636756,
+          "draw": 0,
+          "kld": 0.0044041582618547185,
+          "inj_rfn": 0.0033022864322924013
+        }
+      ],
+      "w_norm": 88.79693411268488
+    },
+    {
+      "idx": 15,
+      "key": "model.language_model.layers.14.mlp.gate_up",
+      "qbits_key": "bits",
+      "numel": 178257920,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000745791368,
+          "draw": 0,
+          "kld": 0.02244735707890868,
+          "inj_rfn": 0.006035757534588304
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500015978789105,
+          "draw": 0,
+          "kld": 0.009886366128375812,
+          "inj_rfn": 0.0030125992355581766
+        }
+      ],
+      "members": [
+        "model.language_model.layers.14.mlp.gate_proj",
+        "model.language_model.layers.14.mlp.up_proj"
+      ],
+      "w_norm": 145.3527296462815
+    },
+    {
+      "idx": 15,
+      "key": "model.language_model.layers.14.mlp.down_proj",
+      "qbits_key": "bits",
+      "numel": 89128960,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000462015456,
+          "draw": 0,
+          "kld": 0.005932977593329269,
+          "inj_rfn": 0.006159800525281417
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500015138752595,
+          "draw": 0,
+          "kld": 0.006378625755769462,
+          "inj_rfn": 0.00307974643552082
+        }
+      ],
+      "w_norm": 101.76552783850728
+    },
+    {
+      "idx": 16,
+      "key": "model.language_model.layers.15.self_attn.qkv",
+      "qbits_key": "bits",
+      "numel": 73400320,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000005884135954,
+          "draw": 0,
+          "kld": 0.03298935358088784,
+          "inj_rfn": 0.005313896599663596
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500012530307532,
+          "draw": 0,
+          "kld": 0.01724713858548057,
+          "inj_rfn": 0.0026590787375597395
+        }
+      ],
+      "members": [
+        "model.language_model.layers.15.self_attn.q_proj",
+        "model.language_model.layers.15.self_attn.k_proj",
+        "model.language_model.layers.15.self_attn.v_proj"
+      ],
+      "w_norm": 136.59378530012697
+    },
+    {
+      "idx": 16,
+      "key": "model.language_model.layers.15.self_attn.o_proj",
+      "qbits_key": "bits",
+      "numel": 31457280,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900001472263009,
+          "draw": 0,
+          "kld": 0.00571160454423989,
+          "inj_rfn": 0.005682309580317745
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500010362617594,
+          "draw": 0,
+          "kld": 0.004201823720222819,
+          "inj_rfn": 0.0028385137043619576
+        }
+      ],
+      "w_norm": 86.3178231975442
+    },
+    {
+      "idx": 16,
+      "key": "model.language_model.layers.15.mlp.gate_up",
+      "qbits_key": "bits",
+      "numel": 178257920,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000005577113513,
+          "draw": 0,
+          "kld": 0.015334051957415796,
+          "inj_rfn": 0.006616830098604103
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500017195797177,
+          "draw": 0,
+          "kld": 0.01362673879209524,
+          "inj_rfn": 0.00330133344504772
+        }
+      ],
+      "members": [
+        "model.language_model.layers.15.mlp.gate_proj",
+        "model.language_model.layers.15.mlp.up_proj"
+      ],
+      "w_norm": 146.4786807226567
+    },
+    {
+      "idx": 16,
+      "key": "model.language_model.layers.15.mlp.down_proj",
+      "qbits_key": "bits",
+      "numel": 89128960,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000102265105,
+          "draw": 0,
+          "kld": 0.007827321722015768,
+          "inj_rfn": 0.0067241339765367015
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500017354302142,
+          "draw": 0,
+          "kld": 0.004396200255087024,
+          "inj_rfn": 0.003361122664189004
+        }
+      ],
+      "w_norm": 102.49026725895733
+    },
+    {
+      "idx": 17,
+      "key": "model.language_model.layers.16.linear_attn.qkvz",
+      "qbits_key": "bits",
+      "numel": 83886080,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000005014048585,
+          "draw": 0,
+          "kld": 0.024597441125752083,
+          "inj_rfn": 0.005446987894460182
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450001350570836,
+          "draw": 0,
+          "kld": 0.009026384055641757,
+          "inj_rfn": 0.0027467463371685947
+        }
+      ],
+      "members": [
+        "model.language_model.layers.16.linear_attn.in_proj_qkv",
+        "model.language_model.layers.16.linear_attn.in_proj_z"
+      ],
+      "w_norm": 144.8768907609578
+    },
+    {
+      "idx": 17,
+      "key": "model.language_model.layers.16.linear_attn.out_proj",
+      "qbits_key": "bits",
+      "numel": 31457280,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000005917115546,
+          "draw": 0,
+          "kld": 0.009289452882330806,
+          "inj_rfn": 0.006228376491971507
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500011655472478,
+          "draw": 0,
+          "kld": 0.008573775911736447,
+          "inj_rfn": 0.003113839068208112
+        }
+      ],
+      "w_norm": 88.68496461756497
+    },
+    {
+      "idx": 17,
+      "key": "model.language_model.layers.16.mlp.gate_up",
+      "qbits_key": "bits",
+      "numel": 178257920,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000010223627243,
+          "draw": 0,
+          "kld": 0.009419952194821234,
+          "inj_rfn": 0.007232954024518587
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500014065781475,
+          "draw": 0,
+          "kld": 0.0033388723174539335,
+          "inj_rfn": 0.0036089059757646942
+        }
+      ],
+      "members": [
+        "model.language_model.layers.16.mlp.gate_proj",
+        "model.language_model.layers.16.mlp.up_proj"
+      ],
+      "w_norm": 147.20384065344558
+    },
+    {
+      "idx": 17,
+      "key": "model.language_model.layers.16.mlp.down_proj",
+      "qbits_key": "bits",
+      "numel": 89128960,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000003433537574,
+          "draw": 0,
+          "kld": 0.007868114959546802,
+          "inj_rfn": 0.0072042703147415
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500019269158615,
+          "draw": 0,
+          "kld": 0.003833810584637831,
+          "inj_rfn": 0.0036010937819612606
+        }
+      ],
+      "w_norm": 102.52132019121682
+    },
+    {
+      "idx": 18,
+      "key": "model.language_model.layers.17.linear_attn.qkvz",
+      "qbits_key": "bits",
+      "numel": 83886080,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000328206208,
+          "draw": 0,
+          "kld": 0.03036760251929991,
+          "inj_rfn": 0.006362998077139694
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500011691162307,
+          "draw": 0,
+          "kld": 0.007612351661373395,
+          "inj_rfn": 0.0032018073603385785
+        }
+      ],
+      "members": [
+        "model.language_model.layers.17.linear_attn.in_proj_qkv",
+        "model.language_model.layers.17.linear_attn.in_proj_z"
+      ],
+      "w_norm": 145.16369396951498
+    },
+    {
+      "idx": 18,
+      "key": "model.language_model.layers.17.linear_attn.out_proj",
+      "qbits_key": "bits",
+      "numel": 31457280,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000753933712,
+          "draw": 0,
+          "kld": 0.009406753128359924,
+          "inj_rfn": 0.006683243607715926
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500019390198945,
+          "draw": 0,
+          "kld": 0.007830280088728613,
+          "inj_rfn": 0.0033426769694990923
+        }
+      ],
+      "w_norm": 88.97067909306554
+    },
+    {
+      "idx": 18,
+      "key": "model.language_model.layers.17.mlp.gate_up",
+      "qbits_key": "bits",
+      "numel": 178257920,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000006584056187,
+          "draw": 0,
+          "kld": 0.020898850052890338,
+          "inj_rfn": 0.008129401542140119
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500013808060128,
+          "draw": 0,
+          "kld": 0.009501459058992624,
+          "inj_rfn": 0.004053802665910595
+        }
+      ],
+      "members": [
+        "model.language_model.layers.17.mlp.gate_proj",
+        "model.language_model.layers.17.mlp.up_proj"
+      ],
+      "w_norm": 147.84735318479665
+    },
+    {
+      "idx": 18,
+      "key": "model.language_model.layers.17.mlp.down_proj",
+      "qbits_key": "bits",
+      "numel": 89128960,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000004368709936,
+          "draw": 0,
+          "kld": 0.011926790385496133,
+          "inj_rfn": 0.00796037727870568
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450001481468608,
+          "draw": 0,
+          "kld": 0.0027616267668008733,
+          "inj_rfn": 0.003981114235332325
+        }
+      ],
+      "w_norm": 103.06794823379866
+    },
+    {
+      "idx": 19,
+      "key": "model.language_model.layers.18.linear_attn.qkvz",
+      "qbits_key": "bits",
+      "numel": 83886080,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000273706472,
+          "draw": 0,
+          "kld": 0.01641458928834254,
+          "inj_rfn": 0.006644401242489391
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500012989053607,
+          "draw": 0,
+          "kld": 0.012216097400141734,
+          "inj_rfn": 0.0033448063738885704
+        }
+      ],
+      "members": [
+        "model.language_model.layers.18.linear_attn.in_proj_qkv",
+        "model.language_model.layers.18.linear_attn.in_proj_z"
+      ],
+      "w_norm": 145.68631689245046
+    },
+    {
+      "idx": 19,
+      "key": "model.language_model.layers.18.linear_attn.out_proj",
+      "qbits_key": "bits",
+      "numel": 31457280,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000325030625,
+          "draw": 0,
+          "kld": 0.011419126745158792,
+          "inj_rfn": 0.007003967033435108
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500011944762947,
+          "draw": 0,
+          "kld": 0.008083087214845363,
+          "inj_rfn": 0.0035045391672534785
+        }
+      ],
+      "w_norm": 88.17880671184545
+    },
+    {
+      "idx": 19,
+      "key": "model.language_model.layers.18.mlp.gate_up",
+      "qbits_key": "bits",
+      "numel": 178257920,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000535121676,
+          "draw": 0,
+          "kld": 0.01678373751565232,
+          "inj_rfn": 0.009463301807786938
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500015042455908,
+          "draw": 0,
+          "kld": 0.009735067701149092,
+          "inj_rfn": 0.004725927119084339
+        }
+      ],
+      "members": [
+        "model.language_model.layers.18.mlp.gate_proj",
+        "model.language_model.layers.18.mlp.up_proj"
+      ],
+      "w_norm": 148.47340684130106
+    },
+    {
+      "idx": 19,
+      "key": "model.language_model.layers.18.mlp.down_proj",
+      "qbits_key": "bits",
+      "numel": 89128960,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000553993928,
+          "draw": 0,
+          "kld": 0.012758574394320021,
+          "inj_rfn": 0.009091741637558118
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500016877347097,
+          "draw": 0,
+          "kld": 0.0072196894639318995,
+          "inj_rfn": 0.0045472328143917155
+        }
+      ],
+      "w_norm": 102.87401275346461
+    },
+    {
+      "idx": 20,
+      "key": "model.language_model.layers.19.self_attn.qkv",
+      "qbits_key": "bits",
+      "numel": 73400320,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.290000024140229,
+          "draw": 0,
+          "kld": 0.019693176429609594,
+          "inj_rfn": 0.008812772736431083
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500017254690992,
+          "draw": 0,
+          "kld": 0.0157361085474804,
+          "inj_rfn": 0.004416674747771827
+        }
+      ],
+      "members": [
+        "model.language_model.layers.19.self_attn.q_proj",
+        "model.language_model.layers.19.self_attn.k_proj",
+        "model.language_model.layers.19.self_attn.v_proj"
+      ],
+      "w_norm": 136.70745667642822
+    },
+    {
+      "idx": 20,
+      "key": "model.language_model.layers.19.self_attn.o_proj",
+      "qbits_key": "bits",
+      "numel": 31457280,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000453558744,
+          "draw": 0,
+          "kld": 0.016052546266837452,
+          "inj_rfn": 0.009784361951766712
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500015750898732,
+          "draw": 0,
+          "kld": 0.005438032175175067,
+          "inj_rfn": 0.00489386378097987
+        }
+      ],
+      "w_norm": 89.44228236689848
+    },
+    {
+      "idx": 20,
+      "key": "model.language_model.layers.19.mlp.gate_up",
+      "qbits_key": "bits",
+      "numel": 178257920,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000692531449,
+          "draw": 0,
+          "kld": 0.015504837648495595,
+          "inj_rfn": 0.012295118077514886
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500013988898097,
+          "draw": 0,
+          "kld": 0.007578206882362793,
+          "inj_rfn": 0.006131156463109894
+        }
+      ],
+      "members": [
+        "model.language_model.layers.19.mlp.gate_proj",
+        "model.language_model.layers.19.mlp.up_proj"
+      ],
+      "w_norm": 149.35279973627044
+    },
+    {
+      "idx": 20,
+      "key": "model.language_model.layers.19.mlp.down_proj",
+      "qbits_key": "bits",
+      "numel": 89128960,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000004463506673,
+          "draw": 0,
+          "kld": 0.014056772910407744,
+          "inj_rfn": 0.011265129658049716
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500016261236223,
+          "draw": 0,
+          "kld": 0.002012875343871201,
+          "inj_rfn": 0.005634060992651377
+        }
+      ],
+      "w_norm": 104.28913477832914
+    },
+    {
+      "idx": 21,
+      "key": "model.language_model.layers.20.linear_attn.qkvz",
+      "qbits_key": "bits",
+      "numel": 83886080,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000002670048824,
+          "draw": 0,
+          "kld": 0.007561577914657391,
+          "inj_rfn": 0.008624627226042353
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500014877176773,
+          "draw": 0,
+          "kld": 0.007629481648791625,
+          "inj_rfn": 0.004337794932516493
+        }
+      ],
+      "members": [
+        "model.language_model.layers.20.linear_attn.in_proj_qkv",
+        "model.language_model.layers.20.linear_attn.in_proj_z"
+      ],
+      "w_norm": 147.588764339888
+    },
+    {
+      "idx": 21,
+      "key": "model.language_model.layers.20.linear_attn.out_proj",
+      "qbits_key": "bits",
+      "numel": 31457280,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.28999996724891,
+          "draw": 0,
+          "kld": 0.006351322527143566,
+          "inj_rfn": 0.007803914174774028
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500014506583006,
+          "draw": 0,
+          "kld": 0.002457417821801755,
+          "inj_rfn": 0.0039039227819002917
+        }
+      ],
+      "w_norm": 88.44211836439271
+    },
+    {
+      "idx": 21,
+      "key": "model.language_model.layers.20.mlp.gate_up",
+      "qbits_key": "bits",
+      "numel": 178257920,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000007209705797,
+          "draw": 0,
+          "kld": 0.009411926595294062,
+          "inj_rfn": 0.014370825378220528
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450001383583252,
+          "draw": 0,
+          "kld": 0.011745841287211078,
+          "inj_rfn": 0.007167502305960631
+        }
+      ],
+      "members": [
+        "model.language_model.layers.20.mlp.gate_proj",
+        "model.language_model.layers.20.mlp.up_proj"
+      ],
+      "w_norm": 149.67824867027272
+    },
+    {
+      "idx": 21,
+      "key": "model.language_model.layers.20.mlp.down_proj",
+      "qbits_key": "bits",
+      "numel": 89128960,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000005458477285,
+          "draw": 0,
+          "kld": 0.007720562279791921,
+          "inj_rfn": 0.012230860134248494
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500012923886924,
+          "draw": 0,
+          "kld": 0.007045242177264299,
+          "inj_rfn": 0.00611393442479699
+        }
+      ],
+      "w_norm": 104.26288889149389
+    },
+    {
+      "idx": 22,
+      "key": "model.language_model.layers.21.linear_attn.qkvz",
+      "qbits_key": "bits",
+      "numel": 83886080,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000620430699,
+          "draw": 0,
+          "kld": 0.006297266198271245,
+          "inj_rfn": 0.008760986586845468
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500015273626343,
+          "draw": 0,
+          "kld": 0.003935564304129002,
+          "inj_rfn": 0.004435127746462531
+        }
+      ],
+      "members": [
+        "model.language_model.layers.21.linear_attn.in_proj_qkv",
+        "model.language_model.layers.21.linear_attn.in_proj_z"
+      ],
+      "w_norm": 147.84396467433157
+    },
+    {
+      "idx": 22,
+      "key": "model.language_model.layers.21.linear_attn.out_proj",
+      "qbits_key": "bits",
+      "numel": 31457280,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000038396984,
+          "draw": 0,
+          "kld": 0.006239480598333102,
+          "inj_rfn": 0.008743773141995547
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500015318267512,
+          "draw": 0,
+          "kld": 0.002808977540166779,
+          "inj_rfn": 0.00437059243967052
+        }
+      ],
+      "w_norm": 87.97511078246791
+    },
+    {
+      "idx": 22,
+      "key": "model.language_model.layers.21.mlp.gate_up",
+      "qbits_key": "bits",
+      "numel": 178257920,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000598486163,
+          "draw": 0,
+          "kld": 0.0105058788714814,
+          "inj_rfn": 0.015296725621115318
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500013422143662,
+          "draw": 0,
+          "kld": 0.006874601802110192,
+          "inj_rfn": 0.007637019324239791
+        }
+      ],
+      "members": [
+        "model.language_model.layers.21.mlp.gate_proj",
+        "model.language_model.layers.21.mlp.up_proj"
+      ],
+      "w_norm": 149.93723947455481
+    },
+    {
+      "idx": 22,
+      "key": "model.language_model.layers.21.mlp.down_proj",
+      "qbits_key": "bits",
+      "numel": 89128960,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000895194618,
+          "draw": 0,
+          "kld": 0.008613786361092935,
+          "inj_rfn": 0.013022552398118573
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500015195913607,
+          "draw": 0,
+          "kld": 0.007144263460168077,
+          "inj_rfn": 0.006511754279666114
+        }
+      ],
+      "w_norm": 104.35635125317002
+    },
+    {
+      "idx": 23,
+      "key": "model.language_model.layers.22.linear_attn.qkvz",
+      "qbits_key": "bits",
+      "numel": 83886080,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000005728255385,
+          "draw": 0,
+          "kld": 0.011528367376467941,
+          "inj_rfn": 0.009154356183178775
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500013262688885,
+          "draw": 0,
+          "kld": 0.009259997787603424,
+          "inj_rfn": 0.004623593735080375
+        }
+      ],
+      "members": [
+        "model.language_model.layers.22.linear_attn.in_proj_qkv",
+        "model.language_model.layers.22.linear_attn.in_proj_z"
+      ],
+      "w_norm": 145.67182388312952
+    },
+    {
+      "idx": 23,
+      "key": "model.language_model.layers.22.linear_attn.out_proj",
+      "qbits_key": "bits",
+      "numel": 31457280,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000003750149733,
+          "draw": 0,
+          "kld": 0.010518573108311103,
+          "inj_rfn": 0.008909504995478866
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450001480943598,
+          "draw": 0,
+          "kld": 0.004456326223862561,
+          "inj_rfn": 0.004452994722345931
+        }
+      ],
+      "w_norm": 87.91545343752144
+    },
+    {
+      "idx": 23,
+      "key": "model.language_model.layers.22.mlp.gate_up",
+      "qbits_key": "bits",
+      "numel": 178257920,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000005047537686,
+          "draw": 0,
+          "kld": 0.010904109717921528,
+          "inj_rfn": 0.016081085990737362
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500014238991712,
+          "draw": 0,
+          "kld": 0.008471998045661167,
+          "inj_rfn": 0.008015339808942725
+        }
+      ],
+      "members": [
+        "model.language_model.layers.22.mlp.gate_proj",
+        "model.language_model.layers.22.mlp.up_proj"
+      ],
+      "w_norm": 151.71641347325442
+    },
+    {
+      "idx": 23,
+      "key": "model.language_model.layers.22.mlp.down_proj",
+      "qbits_key": "bits",
+      "numel": 89128960,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000011196015507,
+          "draw": 0,
+          "kld": 0.007586618603272655,
+          "inj_rfn": 0.013284666746336592
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500014706876252,
+          "draw": 0,
+          "kld": 0.005031710350976937,
+          "inj_rfn": 0.006645692193751485
+        }
+      ],
+      "w_norm": 103.72341526868463
+    },
+    {
+      "idx": 24,
+      "key": "model.language_model.layers.23.self_attn.qkv",
+      "qbits_key": "bits",
+      "numel": 73400320,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000009100016033,
+          "draw": 0,
+          "kld": 0.022162495501288505,
+          "inj_rfn": 0.010301792552335041
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.145000090338465,
+          "draw": 0,
+          "kld": 0.007678926097241856,
+          "inj_rfn": 0.005170495840944692
+        }
+      ],
+      "members": [
+        "model.language_model.layers.23.self_attn.q_proj",
+        "model.language_model.layers.23.self_attn.k_proj",
+        "model.language_model.layers.23.self_attn.v_proj"
+      ],
+      "w_norm": 133.22436093552744
+    },
+    {
+      "idx": 24,
+      "key": "model.language_model.layers.23.self_attn.o_proj",
+      "qbits_key": "bits",
+      "numel": 31457280,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2899999900472112,
+          "draw": 0,
+          "kld": 0.008002285849852343,
+          "inj_rfn": 0.011298157435726618
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500009357596022,
+          "draw": 0,
+          "kld": 0.0035901914487340035,
+          "inj_rfn": 0.005646325758499518
+        }
+      ],
+      "w_norm": 88.74082809120331
+    },
+    {
+      "idx": 24,
+      "key": "model.language_model.layers.23.mlp.gate_up",
+      "qbits_key": "bits",
+      "numel": 178257920,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000007432271596,
+          "draw": 0,
+          "kld": 0.009919590311437788,
+          "inj_rfn": 0.01840769431532725
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500016633413046,
+          "draw": 0,
+          "kld": 0.007478829213687277,
+          "inj_rfn": 0.009192295785108166
+        }
+      ],
+      "members": [
+        "model.language_model.layers.23.mlp.gate_proj",
+        "model.language_model.layers.23.mlp.up_proj"
+      ],
+      "w_norm": 151.78878725880907
+    },
+    {
+      "idx": 24,
+      "key": "model.language_model.layers.23.mlp.down_proj",
+      "qbits_key": "bits",
+      "numel": 89128960,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000002742327474,
+          "draw": 0,
+          "kld": 0.0047560756125676566,
+          "inj_rfn": 0.014744755724763242
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500018430490802,
+          "draw": 0,
+          "kld": 0.006045636234875929,
+          "inj_rfn": 0.007371081571112297
+        }
+      ],
+      "w_norm": 104.8231909797994
+    },
+    {
+      "idx": 25,
+      "key": "model.language_model.layers.24.linear_attn.qkvz",
+      "qbits_key": "bits",
+      "numel": 83886080,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000001824801086,
+          "draw": 0,
+          "kld": 0.01301855647998309,
+          "inj_rfn": 0.010755944592002242
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500013821793542,
+          "draw": 0,
+          "kld": 0.0024090272394005296,
+          "inj_rfn": 0.005380667967524765
+        }
+      ],
+      "members": [
+        "model.language_model.layers.24.linear_attn.in_proj_qkv",
+        "model.language_model.layers.24.linear_attn.in_proj_z"
+      ],
+      "w_norm": 143.4675571040584
+    },
+    {
+      "idx": 25,
+      "key": "model.language_model.layers.24.linear_attn.out_proj",
+      "qbits_key": "bits",
+      "numel": 31457280,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000000808081644,
+          "draw": 0,
+          "kld": 0.009464920581012847,
+          "inj_rfn": 0.011312453261273923
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450001753601918,
+          "draw": 0,
+          "kld": 0.001820400891438112,
+          "inj_rfn": 0.0056531583954932225
+        }
+      ],
+      "w_norm": 87.62482168312812
+    },
+    {
+      "idx": 25,
+      "key": "model.language_model.layers.24.mlp.gate_up",
+      "qbits_key": "bits",
+      "numel": 178257920,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000005774010174,
+          "draw": 0,
+          "kld": 0.014074796364729992,
+          "inj_rfn": 0.019853292538508958
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500014603193262,
+          "draw": 0,
+          "kld": 0.008681387563819953,
+          "inj_rfn": 0.00990052792613724
+        }
+      ],
+      "members": [
+        "model.language_model.layers.24.mlp.gate_proj",
+        "model.language_model.layers.24.mlp.up_proj"
+      ],
+      "w_norm": 152.99976702903012
+    },
+    {
+      "idx": 25,
+      "key": "model.language_model.layers.24.mlp.down_proj",
+      "qbits_key": "bits",
+      "numel": 89128960,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000003734976965,
+          "draw": 0,
+          "kld": 0.01192271499603521,
+          "inj_rfn": 0.015827136213010743
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500016492019027,
+          "draw": 0,
+          "kld": 0.0013321306572834147,
+          "inj_rfn": 0.007914033005768685
+        }
+      ],
+      "w_norm": 105.39582664146384
+    },
+    {
+      "idx": 26,
+      "key": "model.language_model.layers.25.linear_attn.qkvz",
+      "qbits_key": "bits",
+      "numel": 83886080,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000459284649,
+          "draw": 0,
+          "kld": 0.008489421445665358,
+          "inj_rfn": 0.011056516232117312
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500014313205248,
+          "draw": 0,
+          "kld": 0.007393237806036268,
+          "inj_rfn": 0.005548192893608992
+        }
+      ],
+      "members": [
+        "model.language_model.layers.25.linear_attn.in_proj_qkv",
+        "model.language_model.layers.25.linear_attn.in_proj_z"
+      ],
+      "w_norm": 143.97866663263866
+    },
+    {
+      "idx": 26,
+      "key": "model.language_model.layers.25.linear_attn.out_proj",
+      "qbits_key": "bits",
+      "numel": 31457280,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000001903974876,
+          "draw": 0,
+          "kld": 0.01169547208610311,
+          "inj_rfn": 0.01155733367358203
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500011642465327,
+          "draw": 0,
+          "kld": 0.0010517099270600737,
+          "inj_rfn": 0.005780035652020529
+        }
+      ],
+      "w_norm": 88.7406024954192
+    },
+    {
+      "idx": 26,
+      "key": "model.language_model.layers.25.mlp.gate_up",
+      "qbits_key": "bits",
+      "numel": 178257920,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000007323997623,
+          "draw": 0,
+          "kld": 0.019060341793738188,
+          "inj_rfn": 0.019551937655060567
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500015478527334,
+          "draw": 0,
+          "kld": 0.014004501606723351,
+          "inj_rfn": 0.00973423244551283
+        }
+      ],
+      "members": [
+        "model.language_model.layers.25.mlp.gate_proj",
+        "model.language_model.layers.25.mlp.up_proj"
+      ],
+      "w_norm": 153.16859710993307
+    },
+    {
+      "idx": 26,
+      "key": "model.language_model.layers.25.mlp.down_proj",
+      "qbits_key": "bits",
+      "numel": 89128960,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000536339171,
+          "draw": 0,
+          "kld": 0.0059920147547927625,
+          "inj_rfn": 0.016028631039302577
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500006145230168,
+          "draw": 0,
+          "kld": 0.003960661053997683,
+          "inj_rfn": 0.00801558260811146
+        }
+      ],
+      "w_norm": 106.29545902518602
+    },
+    {
+      "idx": 27,
+      "key": "model.language_model.layers.26.linear_attn.qkvz",
+      "qbits_key": "bits",
+      "numel": 83886080,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000497048654,
+          "draw": 0,
+          "kld": 0.02565727619903555,
+          "inj_rfn": 0.01082077377951669
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450001583888312,
+          "draw": 0,
+          "kld": 0.0050175809302345446,
+          "inj_rfn": 0.005426183783718266
+        }
+      ],
+      "members": [
+        "model.language_model.layers.26.linear_attn.in_proj_qkv",
+        "model.language_model.layers.26.linear_attn.in_proj_z"
+      ],
+      "w_norm": 143.39840323651185
+    },
+    {
+      "idx": 27,
+      "key": "model.language_model.layers.26.linear_attn.out_proj",
+      "qbits_key": "bits",
+      "numel": 31457280,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000003010380154,
+          "draw": 0,
+          "kld": 0.009023575245737447,
+          "inj_rfn": 0.011239745152085133
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500019101825076,
+          "draw": 0,
+          "kld": 0.00232426766028766,
+          "inj_rfn": 0.005617321761069496
+        }
+      ],
+      "w_norm": 88.17241632165924
+    },
+    {
+      "idx": 27,
+      "key": "model.language_model.layers.26.mlp.gate_up",
+      "qbits_key": "bits",
+      "numel": 178257920,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000785842098,
+          "draw": 0,
+          "kld": 0.01788707803025318,
+          "inj_rfn": 0.018198694058266886
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500014215155954,
+          "draw": 0,
+          "kld": 0.0065151140909620155,
+          "inj_rfn": 0.009066898080275384
+        }
+      ],
+      "members": [
+        "model.language_model.layers.26.mlp.gate_proj",
+        "model.language_model.layers.26.mlp.up_proj"
+      ],
+      "w_norm": 152.56133820225392
+    },
+    {
+      "idx": 27,
+      "key": "model.language_model.layers.26.mlp.down_proj",
+      "qbits_key": "bits",
+      "numel": 89128960,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000191858871,
+          "draw": 0,
+          "kld": 0.006707283115429163,
+          "inj_rfn": 0.015367794539128342
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450001646138811,
+          "draw": 0,
+          "kld": 0.004195788043580251,
+          "inj_rfn": 0.00768289973630492
+        }
+      ],
+      "w_norm": 106.73156493336448
+    },
+    {
+      "idx": 28,
+      "key": "model.language_model.layers.27.self_attn.qkv",
+      "qbits_key": "bits",
+      "numel": 73400320,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000385975678,
+          "draw": 0,
+          "kld": 0.015095673732866998,
+          "inj_rfn": 0.013511957041172787
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500013575840906,
+          "draw": 0,
+          "kld": 0.008159702290276983,
+          "inj_rfn": 0.0067779441609266255
+        }
+      ],
+      "members": [
+        "model.language_model.layers.27.self_attn.q_proj",
+        "model.language_model.layers.27.self_attn.k_proj",
+        "model.language_model.layers.27.self_attn.v_proj"
+      ],
+      "w_norm": 134.64206020036977
+    },
+    {
+      "idx": 28,
+      "key": "model.language_model.layers.27.self_attn.o_proj",
+      "qbits_key": "bits",
+      "numel": 31457280,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000009741753424,
+          "draw": 0,
+          "kld": 0.009848033142407075,
+          "inj_rfn": 0.015357024701864912
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500012623754352,
+          "draw": 0,
+          "kld": 0.006493202037427181,
+          "inj_rfn": 0.007679875843590843
+        }
+      ],
+      "w_norm": 87.37872454955068
+    },
+    {
+      "idx": 28,
+      "key": "model.language_model.layers.27.mlp.gate_up",
+      "qbits_key": "bits",
+      "numel": 178257920,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000254170154,
+          "draw": 0,
+          "kld": 0.008251377496162605,
+          "inj_rfn": 0.019669176631974417
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500014128278282,
+          "draw": 0,
+          "kld": 0.0078116869702171245,
+          "inj_rfn": 0.009807816711153081
+        }
+      ],
+      "members": [
+        "model.language_model.layers.27.mlp.gate_proj",
+        "model.language_model.layers.27.mlp.up_proj"
+      ],
+      "w_norm": 152.64517296044772
+    },
+    {
+      "idx": 28,
+      "key": "model.language_model.layers.27.mlp.down_proj",
+      "qbits_key": "bits",
+      "numel": 89128960,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000713034229,
+          "draw": 0,
+          "kld": 0.005591866141185164,
+          "inj_rfn": 0.016954354773472985
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500014914394338,
+          "draw": 0,
+          "kld": 0.004464358007953706,
+          "inj_rfn": 0.008479424048279002
+        }
+      ],
+      "w_norm": 107.52372103837135
+    },
+    {
+      "idx": 29,
+      "key": "model.language_model.layers.28.linear_attn.qkvz",
+      "qbits_key": "bits",
+      "numel": 83886080,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000003982407224,
+          "draw": 0,
+          "kld": 0.005219716494320892,
+          "inj_rfn": 0.013465110157169266
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450000977215929,
+          "draw": 0,
+          "kld": 0.002798488886992345,
+          "inj_rfn": 0.0067504000718353035
+        }
+      ],
+      "members": [
+        "model.language_model.layers.28.linear_attn.in_proj_qkv",
+        "model.language_model.layers.28.linear_attn.in_proj_z"
+      ],
+      "w_norm": 142.8755946509935
+    },
+    {
+      "idx": 29,
+      "key": "model.language_model.layers.28.linear_attn.out_proj",
+      "qbits_key": "bits",
+      "numel": 31457280,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000000169673895,
+          "draw": 0,
+          "kld": 0.006594834066345356,
+          "inj_rfn": 0.013441023460337074
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500016909462293,
+          "draw": 0,
+          "kld": 0.001123000024290377,
+          "inj_rfn": 0.006721871825671001
+        }
+      ],
+      "w_norm": 87.9783492764342
+    },
+    {
+      "idx": 29,
+      "key": "model.language_model.layers.28.mlp.gate_up",
+      "qbits_key": "bits",
+      "numel": 178257920,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000003849640615,
+          "draw": 0,
+          "kld": 0.01622964333873824,
+          "inj_rfn": 0.019822880588972854
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450001224600579,
+          "draw": 0,
+          "kld": 0.0018139523521313095,
+          "inj_rfn": 0.00988391041694674
+        }
+      ],
+      "members": [
+        "model.language_model.layers.28.mlp.gate_proj",
+        "model.language_model.layers.28.mlp.up_proj"
+      ],
+      "w_norm": 151.56669452958656
+    },
+    {
+      "idx": 29,
+      "key": "model.language_model.layers.28.mlp.down_proj",
+      "qbits_key": "bits",
+      "numel": 89128960,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000003919590683,
+          "draw": 0,
+          "kld": 0.002371732444225927,
+          "inj_rfn": 0.017496335123225754
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500010568788912,
+          "draw": 0,
+          "kld": 0.0039026755471240904,
+          "inj_rfn": 0.008751166276819253
+        }
+      ],
+      "w_norm": 107.40592267916374
+    },
+    {
+      "idx": 30,
+      "key": "model.language_model.layers.29.linear_attn.qkvz",
+      "qbits_key": "bits",
+      "numel": 83886080,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000002778436473,
+          "draw": 0,
+          "kld": 0.009962728366372176,
+          "inj_rfn": 0.012111225224644324
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450001315769428,
+          "draw": 0,
+          "kld": 0.005877680516005057,
+          "inj_rfn": 0.006075034385881708
+        }
+      ],
+      "members": [
+        "model.language_model.layers.29.linear_attn.in_proj_qkv",
+        "model.language_model.layers.29.linear_attn.in_proj_z"
+      ],
+      "w_norm": 142.53057169318973
+    },
+    {
+      "idx": 30,
+      "key": "model.language_model.layers.29.linear_attn.out_proj",
+      "qbits_key": "bits",
+      "numel": 31457280,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000004498497023,
+          "draw": 0,
+          "kld": 0.016123084227547223,
+          "inj_rfn": 0.014541779032214139
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500020492960028,
+          "draw": 0,
+          "kld": 0.0028895686867144834,
+          "inj_rfn": 0.0072720332640572975
+        }
+      ],
+      "w_norm": 88.24419576344667
+    },
+    {
+      "idx": 30,
+      "key": "model.language_model.layers.29.mlp.gate_up",
+      "qbits_key": "bits",
+      "numel": 178257920,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000251909722,
+          "draw": 0,
+          "kld": 0.009798924950155196,
+          "inj_rfn": 0.019400588395634216
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500013832971065,
+          "draw": 0,
+          "kld": 0.007010732860362623,
+          "inj_rfn": 0.009671560089743665
+        }
+      ],
+      "members": [
+        "model.language_model.layers.29.mlp.gate_proj",
+        "model.language_model.layers.29.mlp.up_proj"
+      ],
+      "w_norm": 150.93267008317815
+    },
+    {
+      "idx": 30,
+      "key": "model.language_model.layers.29.mlp.down_proj",
+      "qbits_key": "bits",
+      "numel": 89128960,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000413935748,
+          "draw": 0,
+          "kld": 0.002617280507365649,
+          "inj_rfn": 0.017859029533878232
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500015975713001,
+          "draw": 0,
+          "kld": 0.0008447218721812533,
+          "inj_rfn": 0.008930232321303126
+        }
+      ],
+      "w_norm": 106.98476636594108
+    },
+    {
+      "idx": 31,
+      "key": "model.language_model.layers.30.linear_attn.qkvz",
+      "qbits_key": "bits",
+      "numel": 83886080,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000003746779957,
+          "draw": 0,
+          "kld": 0.011312207117589424,
+          "inj_rfn": 0.013101099558411282
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500014803658484,
+          "draw": 0,
+          "kld": 0.0031775477362316453,
+          "inj_rfn": 0.006587696918239352
+        }
+      ],
+      "members": [
+        "model.language_model.layers.30.linear_attn.in_proj_qkv",
+        "model.language_model.layers.30.linear_attn.in_proj_z"
+      ],
+      "w_norm": 142.64026642385645
+    },
+    {
+      "idx": 31,
+      "key": "model.language_model.layers.30.linear_attn.out_proj",
+      "qbits_key": "bits",
+      "numel": 31457280,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000500865356,
+          "draw": 0,
+          "kld": 0.005401976043322066,
+          "inj_rfn": 0.015308770098969911
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450001527163858,
+          "draw": 0,
+          "kld": 0.0028236527652552466,
+          "inj_rfn": 0.007656772714778227
+        }
+      ],
+      "w_norm": 87.31664382614863
+    },
+    {
+      "idx": 31,
+      "key": "model.language_model.layers.30.mlp.gate_up",
+      "qbits_key": "bits",
+      "numel": 178257920,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000373171293,
+          "draw": 0,
+          "kld": 0.007712825176349724,
+          "inj_rfn": 0.018731397384476708
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450001471714472,
+          "draw": 0,
+          "kld": 0.006027345537904694,
+          "inj_rfn": 0.009350786284923364
+        }
+      ],
+      "members": [
+        "model.language_model.layers.30.mlp.gate_proj",
+        "model.language_model.layers.30.mlp.up_proj"
+      ],
+      "w_norm": 150.23180331262253
+    },
+    {
+      "idx": 31,
+      "key": "model.language_model.layers.30.mlp.down_proj",
+      "qbits_key": "bits",
+      "numel": 89128960,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000007762136737,
+          "draw": 0,
+          "kld": 0.0033295419054411466,
+          "inj_rfn": 0.01740692832526778
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450001501112875,
+          "draw": 0,
+          "kld": 0.0005669206741004019,
+          "inj_rfn": 0.00870258704674368
+        }
+      ],
+      "w_norm": 107.2079381024908
+    },
+    {
+      "idx": 32,
+      "key": "model.language_model.layers.31.self_attn.qkv",
+      "qbits_key": "bits",
+      "numel": 73400320,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000206863122,
+          "draw": 0,
+          "kld": 0.01349194736321806,
+          "inj_rfn": 0.016653806708763593
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500015200483957,
+          "draw": 0,
+          "kld": 0.007795893739694293,
+          "inj_rfn": 0.008339921499182158
+        }
+      ],
+      "members": [
+        "model.language_model.layers.31.self_attn.q_proj",
+        "model.language_model.layers.31.self_attn.k_proj",
+        "model.language_model.layers.31.self_attn.v_proj"
+      ],
+      "w_norm": 130.71144950702123
+    },
+    {
+      "idx": 32,
+      "key": "model.language_model.layers.31.self_attn.o_proj",
+      "qbits_key": "bits",
+      "numel": 31457280,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000010120958863,
+          "draw": 0,
+          "kld": 0.009455975658784154,
+          "inj_rfn": 0.02313087494439932
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500012496790454,
+          "draw": 0,
+          "kld": 0.004945870628307603,
+          "inj_rfn": 0.011564263775129223
+        }
+      ],
+      "w_norm": 88.22231993308156
+    },
+    {
+      "idx": 32,
+      "key": "model.language_model.layers.31.mlp.gate_up",
+      "qbits_key": "bits",
+      "numel": 178257920,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000866818481,
+          "draw": 0,
+          "kld": 0.008597176882904022,
+          "inj_rfn": 0.02052349235385856
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500013804164233,
+          "draw": 0,
+          "kld": 0.003254334468329034,
+          "inj_rfn": 0.010239732596685454
+        }
+      ],
+      "members": [
+        "model.language_model.layers.31.mlp.gate_proj",
+        "model.language_model.layers.31.mlp.up_proj"
+      ],
+      "w_norm": 149.89129524633844
+    },
+    {
+      "idx": 32,
+      "key": "model.language_model.layers.31.mlp.down_proj",
+      "qbits_key": "bits",
+      "numel": 89128960,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000006330129974,
+          "draw": 0,
+          "kld": 0.0012389065073875826,
+          "inj_rfn": 0.019278341798588127
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500018067452008,
+          "draw": 0,
+          "kld": 0.0032579004218860064,
+          "inj_rfn": 0.009634678671518819
+        }
+      ],
+      "w_norm": 107.73723822337382
+    },
+    {
+      "idx": 33,
+      "key": "model.language_model.layers.32.linear_attn.qkvz",
+      "qbits_key": "bits",
+      "numel": 83886080,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000501549759,
+          "draw": 0,
+          "kld": 0.004872964356036391,
+          "inj_rfn": 0.015376005245788292
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450001189697781,
+          "draw": 0,
+          "kld": 0.0021734306272264805,
+          "inj_rfn": 0.0077177836327094
+        }
+      ],
+      "members": [
+        "model.language_model.layers.32.linear_attn.in_proj_qkv",
+        "model.language_model.layers.32.linear_attn.in_proj_z"
+      ],
+      "w_norm": 141.2938952812541
+    },
+    {
+      "idx": 33,
+      "key": "model.language_model.layers.32.linear_attn.out_proj",
+      "qbits_key": "bits",
+      "numel": 31457280,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000360407474,
+          "draw": 0,
+          "kld": 0.004937066186448647,
+          "inj_rfn": 0.01631780136508552
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500023274636434,
+          "draw": 0,
+          "kld": 0.0005835566541463777,
+          "inj_rfn": 0.008165865773298493
+        }
+      ],
+      "w_norm": 87.15642087200891
+    },
+    {
+      "idx": 33,
+      "key": "model.language_model.layers.32.mlp.gate_up",
+      "qbits_key": "bits",
+      "numel": 178257920,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000002477248576,
+          "draw": 0,
+          "kld": 0.008073781173879978,
+          "inj_rfn": 0.02227362381002022
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500015790566442,
+          "draw": 0,
+          "kld": 0.005078343870081881,
+          "inj_rfn": 0.011117560020229218
+        }
+      ],
+      "members": [
+        "model.language_model.layers.32.mlp.gate_proj",
+        "model.language_model.layers.32.mlp.up_proj"
+      ],
+      "w_norm": 149.4235015400857
+    },
+    {
+      "idx": 33,
+      "key": "model.language_model.layers.32.mlp.down_proj",
+      "qbits_key": "bits",
+      "numel": 89128960,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000005490379166,
+          "draw": 0,
+          "kld": 0.002441027136046614,
+          "inj_rfn": 0.02041560187077074
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500014812922066,
+          "draw": 0,
+          "kld": 0.003381620896016102,
+          "inj_rfn": 0.010209543855005224
+        }
+      ],
+      "w_norm": 107.74394559556467
+    },
+    {
+      "idx": 34,
+      "key": "model.language_model.layers.33.linear_attn.qkvz",
+      "qbits_key": "bits",
+      "numel": 83886080,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000499508167,
+          "draw": 0,
+          "kld": 0.0055810330912208885,
+          "inj_rfn": 0.01736143308038791
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450001413257143,
+          "draw": 0,
+          "kld": 0.001495149727406897,
+          "inj_rfn": 0.008721556097676664
+        }
+      ],
+      "members": [
+        "model.language_model.layers.33.linear_attn.in_proj_qkv",
+        "model.language_model.layers.33.linear_attn.in_proj_z"
+      ],
+      "w_norm": 141.6597037964131
+    },
+    {
+      "idx": 34,
+      "key": "model.language_model.layers.33.linear_attn.out_proj",
+      "qbits_key": "bits",
+      "numel": 31457280,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000006921329735,
+          "draw": 0,
+          "kld": 0.004430338882593787,
+          "inj_rfn": 0.01667080426381158
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500015454961565,
+          "draw": 0,
+          "kld": 0.000281541217918857,
+          "inj_rfn": 0.008331286457274375
+        }
+      ],
+      "w_norm": 87.6178363913778
+    },
+    {
+      "idx": 34,
+      "key": "model.language_model.layers.33.mlp.gate_up",
+      "qbits_key": "bits",
+      "numel": 178257920,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000594218247,
+          "draw": 0,
+          "kld": 0.006248863275686745,
+          "inj_rfn": 0.02303143108924686
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450001154061295,
+          "draw": 0,
+          "kld": 0.0014460791795499971,
+          "inj_rfn": 0.011493824425594405
+        }
+      ],
+      "members": [
+        "model.language_model.layers.33.mlp.gate_proj",
+        "model.language_model.layers.33.mlp.up_proj"
+      ],
+      "w_norm": 149.31750004708925
+    },
+    {
+      "idx": 34,
+      "key": "model.language_model.layers.33.mlp.down_proj",
+      "qbits_key": "bits",
+      "numel": 89128960,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000006409664414,
+          "draw": 0,
+          "kld": 0.0038336120720487087,
+          "inj_rfn": 0.02009678383416934
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450001617884929,
+          "draw": 0,
+          "kld": 0.0026862460407755862,
+          "inj_rfn": 0.010047443474046082
+        }
+      ],
+      "w_norm": 107.97981582221745
+    },
+    {
+      "idx": 35,
+      "key": "model.language_model.layers.34.linear_attn.qkvz",
+      "qbits_key": "bits",
+      "numel": 83886080,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000004175242716,
+          "draw": 0,
+          "kld": 0.007735118643358874,
+          "inj_rfn": 0.016148504402351604
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450001136651571,
+          "draw": 0,
+          "kld": 0.0027796732807019,
+          "inj_rfn": 0.008098667258299408
+        }
+      ],
+      "members": [
+        "model.language_model.layers.34.linear_attn.in_proj_qkv",
+        "model.language_model.layers.34.linear_attn.in_proj_z"
+      ],
+      "w_norm": 141.8819003002585
+    },
+    {
+      "idx": 35,
+      "key": "model.language_model.layers.34.linear_attn.out_proj",
+      "qbits_key": "bits",
+      "numel": 31457280,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000003431398874,
+          "draw": 0,
+          "kld": 0.0006527652337354084,
+          "inj_rfn": 0.01514419220458192
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500018892313046,
+          "draw": 0,
+          "kld": 0.0004521836335243279,
+          "inj_rfn": 0.0075680224651493615
+        }
+      ],
+      "w_norm": 86.63136362809084
+    },
+    {
+      "idx": 35,
+      "key": "model.language_model.layers.34.mlp.gate_up",
+      "qbits_key": "bits",
+      "numel": 178257920,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000439594045,
+          "draw": 0,
+          "kld": 0.0014983047436544438,
+          "inj_rfn": 0.024194730804526367
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500014003664882,
+          "draw": 0,
+          "kld": 0.0009440262118005193,
+          "inj_rfn": 0.012078702629050413
+        }
+      ],
+      "members": [
+        "model.language_model.layers.34.mlp.gate_proj",
+        "model.language_model.layers.34.mlp.up_proj"
+      ],
+      "w_norm": 149.18616136286738
+    },
+    {
+      "idx": 35,
+      "key": "model.language_model.layers.34.mlp.down_proj",
+      "qbits_key": "bits",
+      "numel": 89128960,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000498703499,
+          "draw": 0,
+          "kld": 0.0009470328033785336,
+          "inj_rfn": 0.02041755763306489
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500006566973495,
+          "draw": 0,
+          "kld": 0.0003849862434890383,
+          "inj_rfn": 0.010204234263162014
+        }
+      ],
+      "w_norm": 108.19407114648196
+    },
+    {
+      "idx": 36,
+      "key": "model.language_model.layers.35.self_attn.qkv",
+      "qbits_key": "bits",
+      "numel": 73400320,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000007618387125,
+          "draw": 0,
+          "kld": 0.008976445828739087,
+          "inj_rfn": 0.02061418298815588
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500015150446968,
+          "draw": 0,
+          "kld": 0.0018799139154907607,
+          "inj_rfn": 0.010311215997036364
+        }
+      ],
+      "members": [
+        "model.language_model.layers.35.self_attn.q_proj",
+        "model.language_model.layers.35.self_attn.k_proj",
+        "model.language_model.layers.35.self_attn.v_proj"
+      ],
+      "w_norm": 128.334831037493
+    },
+    {
+      "idx": 36,
+      "key": "model.language_model.layers.35.self_attn.o_proj",
+      "qbits_key": "bits",
+      "numel": 31457280,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000001378936513,
+          "draw": 0,
+          "kld": 0.0006820586298999842,
+          "inj_rfn": 0.022001911527300286
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450001339998328,
+          "draw": 0,
+          "kld": 0.00019822110534732927,
+          "inj_rfn": 0.011002356883539025
+        }
+      ],
+      "w_norm": 92.12050001730071
+    },
+    {
+      "idx": 36,
+      "key": "model.language_model.layers.35.mlp.gate_up",
+      "qbits_key": "bits",
+      "numel": 178257920,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000616406999,
+          "draw": 0,
+          "kld": 0.0014880042406730353,
+          "inj_rfn": 0.024250139613264186
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500016775833519,
+          "draw": 0,
+          "kld": 0.0002970305473354529,
+          "inj_rfn": 0.012098118665934268
+        }
+      ],
+      "members": [
+        "model.language_model.layers.35.mlp.gate_proj",
+        "model.language_model.layers.35.mlp.up_proj"
+      ],
+      "w_norm": 149.84585504256532
+    },
+    {
+      "idx": 36,
+      "key": "model.language_model.layers.35.mlp.down_proj",
+      "qbits_key": "bits",
+      "numel": 89128960,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000657928502,
+          "draw": 0,
+          "kld": 0.0003298447762063006,
+          "inj_rfn": 0.0196591490145668
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500017703954976,
+          "draw": 0,
+          "kld": 0.00032013445484153636,
+          "inj_rfn": 0.009831997529161394
+        }
+      ],
+      "w_norm": 108.81470776048613
+    },
+    {
+      "idx": 37,
+      "key": "model.language_model.layers.36.linear_attn.qkvz",
+      "qbits_key": "bits",
+      "numel": 83886080,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000012009068915,
+          "draw": 0,
+          "kld": 0.000291730889784958,
+          "inj_rfn": 0.012573823205092342
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450001055807248,
+          "draw": 0,
+          "kld": 0.0001157108571533172,
+          "inj_rfn": 0.006307558531163689
+        }
+      ],
+      "members": [
+        "model.language_model.layers.36.linear_attn.in_proj_qkv",
+        "model.language_model.layers.36.linear_attn.in_proj_z"
+      ],
+      "w_norm": 145.21713436534014
+    },
+    {
+      "idx": 37,
+      "key": "model.language_model.layers.36.linear_attn.out_proj",
+      "qbits_key": "bits",
+      "numel": 31457280,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000012257828833,
+          "draw": 0,
+          "kld": 0.0002393439684965415,
+          "inj_rfn": 0.010918244749146008
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500012975330495,
+          "draw": 0,
+          "kld": 5.4412544636761594e-05,
+          "inj_rfn": 0.005462416168285719
+        }
+      ],
+      "w_norm": 87.66560778927219
+    },
+    {
+      "idx": 37,
+      "key": "model.language_model.layers.36.mlp.gate_up",
+      "qbits_key": "bits",
+      "numel": 178257920,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000765167131,
+          "draw": 0,
+          "kld": 0.003292678103571234,
+          "inj_rfn": 0.022774503651797957
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450001484339931,
+          "draw": 0,
+          "kld": 0.00018518285723985174,
+          "inj_rfn": 0.011370871016407946
+        }
+      ],
+      "members": [
+        "model.language_model.layers.36.mlp.gate_proj",
+        "model.language_model.layers.36.mlp.up_proj"
+      ],
+      "w_norm": 150.31629413090917
+    },
+    {
+      "idx": 37,
+      "key": "model.language_model.layers.36.mlp.down_proj",
+      "qbits_key": "bits",
+      "numel": 89128960,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000783217596,
+          "draw": 0,
+          "kld": 0.00034182371646238605,
+          "inj_rfn": 0.018195838921889564
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500018872412326,
+          "draw": 0,
+          "kld": 8.945945482992101e-05,
+          "inj_rfn": 0.009100052614064956
+        }
+      ],
+      "w_norm": 106.72184292736188
+    },
+    {
+      "idx": 38,
+      "key": "model.language_model.layers.37.linear_attn.qkvz",
+      "qbits_key": "bits",
+      "numel": 83886080,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000005904658227,
+          "draw": 0,
+          "kld": 0.00023185573454611585,
+          "inj_rfn": 0.011622526560574824
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500016809200356,
+          "draw": 0,
+          "kld": 7.871520137996413e-05,
+          "inj_rfn": 0.005867003510205708
+        }
+      ],
+      "members": [
+        "model.language_model.layers.37.linear_attn.in_proj_qkv",
+        "model.language_model.layers.37.linear_attn.in_proj_z"
+      ],
+      "w_norm": 145.37350701888138
+    },
+    {
+      "idx": 38,
+      "key": "model.language_model.layers.37.linear_attn.out_proj",
+      "qbits_key": "bits",
+      "numel": 31457280,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900001005827998,
+          "draw": 0,
+          "kld": 0.00018727352617133874,
+          "inj_rfn": 0.01058286786765829
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500015882284786,
+          "draw": 0,
+          "kld": 5.538091277230705e-05,
+          "inj_rfn": 0.005293240052031101
+        }
+      ],
+      "w_norm": 86.68599325024343
+    },
+    {
+      "idx": 38,
+      "key": "model.language_model.layers.37.mlp.gate_up",
+      "qbits_key": "bits",
+      "numel": 178257920,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000803321942,
+          "draw": 0,
+          "kld": 0.0008091362646155176,
+          "inj_rfn": 0.021457925369700624
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450001505602212,
+          "draw": 0,
+          "kld": 0.00023676824139329256,
+          "inj_rfn": 0.010715757977387797
+        }
+      ],
+      "members": [
+        "model.language_model.layers.37.mlp.gate_proj",
+        "model.language_model.layers.37.mlp.up_proj"
+      ],
+      "w_norm": 150.66258283723766
+    },
+    {
+      "idx": 38,
+      "key": "model.language_model.layers.37.mlp.down_proj",
+      "qbits_key": "bits",
+      "numel": 89128960,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.28999997601590605,
+          "draw": 0,
+          "kld": 0.0003008254085216322,
+          "inj_rfn": 0.017401319658134885
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500013363896752,
+          "draw": 0,
+          "kld": 8.103665491034917e-05,
+          "inj_rfn": 0.008704129671654643
+        }
+      ],
+      "w_norm": 106.04463148687678
+    },
+    {
+      "idx": 39,
+      "key": "model.language_model.layers.38.linear_attn.qkvz",
+      "qbits_key": "bits",
+      "numel": 83886080,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000006158631086,
+          "draw": 0,
+          "kld": 0.00029950392549835667,
+          "inj_rfn": 0.009710978358486829
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450001267390264,
+          "draw": 0,
+          "kld": 9.471230755480065e-05,
+          "inj_rfn": 0.004858732651155711
+        }
+      ],
+      "members": [
+        "model.language_model.layers.38.linear_attn.in_proj_qkv",
+        "model.language_model.layers.38.linear_attn.in_proj_z"
+      ],
+      "w_norm": 145.30418995055683
+    },
+    {
+      "idx": 39,
+      "key": "model.language_model.layers.38.linear_attn.out_proj",
+      "qbits_key": "bits",
+      "numel": 31457280,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000013518968726,
+          "draw": 0,
+          "kld": 0.00010782666181512468,
+          "inj_rfn": 0.00927605599327767
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500017051657102,
+          "draw": 0,
+          "kld": 4.69574924409244e-05,
+          "inj_rfn": 0.0046397306807329395
+        }
+      ],
+      "w_norm": 86.83670468903112
+    },
+    {
+      "idx": 39,
+      "key": "model.language_model.layers.38.mlp.gate_up",
+      "qbits_key": "bits",
+      "numel": 178257920,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000003207168845,
+          "draw": 0,
+          "kld": 0.0009501520446065115,
+          "inj_rfn": 0.02104919623926094
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450001307731914,
+          "draw": 0,
+          "kld": 0.0002060625372450886,
+          "inj_rfn": 0.01049768187712447
+        }
+      ],
+      "members": [
+        "model.language_model.layers.38.mlp.gate_proj",
+        "model.language_model.layers.38.mlp.up_proj"
+      ],
+      "w_norm": 153.39814604791513
+    },
+    {
+      "idx": 39,
+      "key": "model.language_model.layers.38.mlp.down_proj",
+      "qbits_key": "bits",
+      "numel": 89128960,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000534089076,
+          "draw": 0,
+          "kld": 0.0002413211930615944,
+          "inj_rfn": 0.016277205784693577
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500014347753518,
+          "draw": 0,
+          "kld": 7.480285116798769e-05,
+          "inj_rfn": 0.008138227247134483
+        }
+      ],
+      "w_norm": 103.58384662315838
+    },
+    {
+      "idx": 40,
+      "key": "model.language_model.layers.39.self_attn.qkv",
+      "qbits_key": "bits",
+      "numel": 73400320,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000929852459,
+          "draw": 0,
+          "kld": 0.0007852478924178285,
+          "inj_rfn": 0.015322829812847879
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450002034599333,
+          "draw": 0,
+          "kld": 0.0002988140812703932,
+          "inj_rfn": 0.007657045494720243
+        }
+      ],
+      "members": [
+        "model.language_model.layers.39.self_attn.q_proj",
+        "model.language_model.layers.39.self_attn.k_proj",
+        "model.language_model.layers.39.self_attn.v_proj"
+      ],
+      "w_norm": 127.8331675489031
+    },
+    {
+      "idx": 40,
+      "key": "model.language_model.layers.39.self_attn.o_proj",
+      "qbits_key": "bits",
+      "numel": 31457280,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.290000076354313,
+          "draw": 0,
+          "kld": 0.00028593118440767284,
+          "inj_rfn": 0.01632071274103465
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500017242843335,
+          "draw": 0,
+          "kld": 8.599065781709215e-05,
+          "inj_rfn": 0.00815600560396032
+        }
+      ],
+      "w_norm": 89.63520088827408
+    },
+    {
+      "idx": 40,
+      "key": "model.language_model.layers.39.mlp.gate_up",
+      "qbits_key": "bits",
+      "numel": 178257920,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000006325862004,
+          "draw": 0,
+          "kld": 0.0006252500377740943,
+          "inj_rfn": 0.021545038509470222
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500013186886282,
+          "draw": 0,
+          "kld": 0.00016058130504461587,
+          "inj_rfn": 0.010746704882295533
+        }
+      ],
+      "members": [
+        "model.language_model.layers.39.mlp.gate_proj",
+        "model.language_model.layers.39.mlp.up_proj"
+      ],
+      "w_norm": 152.8344852538605
+    },
+    {
+      "idx": 40,
+      "key": "model.language_model.layers.39.mlp.down_proj",
+      "qbits_key": "bits",
+      "numel": 89128960,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000003902478283,
+          "draw": 0,
+          "kld": 0.00018252838744956535,
+          "inj_rfn": 0.01640932387577696
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500020478836032,
+          "draw": 0,
+          "kld": 6.532133434120624e-05,
+          "inj_rfn": 0.008204632994203183
+        }
+      ],
+      "w_norm": 104.73348803331722
+    },
+    {
+      "idx": 41,
+      "key": "model.language_model.layers.40.linear_attn.qkvz",
+      "qbits_key": "bits",
+      "numel": 83886080,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.290000063020566,
+          "draw": 0,
+          "kld": 0.0004378376389468031,
+          "inj_rfn": 0.011372153903347556
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500013985827395,
+          "draw": 0,
+          "kld": 6.701045649606385e-05,
+          "inj_rfn": 0.005711099605937229
+        }
+      ],
+      "members": [
+        "model.language_model.layers.40.linear_attn.in_proj_qkv",
+        "model.language_model.layers.40.linear_attn.in_proj_z"
+      ],
+      "w_norm": 142.06964896222556
+    },
+    {
+      "idx": 41,
+      "key": "model.language_model.layers.40.linear_attn.out_proj",
+      "qbits_key": "bits",
+      "numel": 31457280,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000522250062,
+          "draw": 0,
+          "kld": 0.00013329899047676008,
+          "inj_rfn": 0.011208338558112738
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450001960419095,
+          "draw": 0,
+          "kld": 4.7006253225845285e-05,
+          "inj_rfn": 0.005607349220409596
+        }
+      ],
+      "w_norm": 86.20495313676876
+    },
+    {
+      "idx": 41,
+      "key": "model.language_model.layers.40.mlp.gate_up",
+      "qbits_key": "bits",
+      "numel": 178257920,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000685455376,
+          "draw": 0,
+          "kld": 0.0005681730621290626,
+          "inj_rfn": 0.022822269096277836
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500016748775177,
+          "draw": 0,
+          "kld": 0.00019644936564873207,
+          "inj_rfn": 0.011388702003175242
+        }
+      ],
+      "members": [
+        "model.language_model.layers.40.mlp.gate_proj",
+        "model.language_model.layers.40.mlp.up_proj"
+      ],
+      "w_norm": 153.7022855331859
+    },
+    {
+      "idx": 41,
+      "key": "model.language_model.layers.40.mlp.down_proj",
+      "qbits_key": "bits",
+      "numel": 89128960,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000925503594,
+          "draw": 0,
+          "kld": 0.00025283238574047573,
+          "inj_rfn": 0.017097213409588093
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500013741585288,
+          "draw": 0,
+          "kld": 8.010743454178737e-05,
+          "inj_rfn": 0.008551885270414276
+        }
+      ],
+      "w_norm": 104.56012773758457
+    },
+    {
+      "idx": 42,
+      "key": "model.language_model.layers.41.linear_attn.qkvz",
+      "qbits_key": "bits",
+      "numel": 83886080,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000426480435,
+          "draw": 0,
+          "kld": 0.00020683672246377683,
+          "inj_rfn": 0.011344256611327826
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500014070802802,
+          "draw": 0,
+          "kld": 7.043697764856916e-05,
+          "inj_rfn": 0.005679411659586766
+        }
+      ],
+      "members": [
+        "model.language_model.layers.41.linear_attn.in_proj_qkv",
+        "model.language_model.layers.41.linear_attn.in_proj_z"
+      ],
+      "w_norm": 141.80426031042757
+    },
+    {
+      "idx": 42,
+      "key": "model.language_model.layers.41.linear_attn.out_proj",
+      "qbits_key": "bits",
+      "numel": 31457280,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000490972947,
+          "draw": 0,
+          "kld": 0.0001569305202792748,
+          "inj_rfn": 0.01109533600626028
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500015501545338,
+          "draw": 0,
+          "kld": 4.7198229572131824e-05,
+          "inj_rfn": 0.005547607815417584
+        }
+      ],
+      "w_norm": 86.9583963474057
+    },
+    {
+      "idx": 42,
+      "key": "model.language_model.layers.41.mlp.gate_up",
+      "qbits_key": "bits",
+      "numel": 178257920,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000005393387573,
+          "draw": 0,
+          "kld": 0.0007383411510090809,
+          "inj_rfn": 0.02207561057838456
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500015557216,
+          "draw": 0,
+          "kld": 0.0001593810218764702,
+          "inj_rfn": 0.011009343683982542
+        }
+      ],
+      "members": [
+        "model.language_model.layers.41.mlp.gate_proj",
+        "model.language_model.layers.41.mlp.up_proj"
+      ],
+      "w_norm": 152.79424418049098
+    },
+    {
+      "idx": 42,
+      "key": "model.language_model.layers.41.mlp.down_proj",
+      "qbits_key": "bits",
+      "numel": 89128960,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000005773680876,
+          "draw": 0,
+          "kld": 0.0001848030149631086,
+          "inj_rfn": 0.01767729944394826
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500012368851392,
+          "draw": 0,
+          "kld": 7.049338314573106e-05,
+          "inj_rfn": 0.008840947913266253
+        }
+      ],
+      "w_norm": 106.00423322177987
+    },
+    {
+      "idx": 43,
+      "key": "model.language_model.layers.42.linear_attn.qkvz",
+      "qbits_key": "bits",
+      "numel": 83886080,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000006005924756,
+          "draw": 0,
+          "kld": 0.0003226230224754545,
+          "inj_rfn": 0.0115840887286216
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500015448964346,
+          "draw": 0,
+          "kld": 6.390138187271078e-05,
+          "inj_rfn": 0.005822188995517842
+        }
+      ],
+      "members": [
+        "model.language_model.layers.42.linear_attn.in_proj_qkv",
+        "model.language_model.layers.42.linear_attn.in_proj_z"
+      ],
+      "w_norm": 141.05336839074423
+    },
+    {
+      "idx": 43,
+      "key": "model.language_model.layers.42.linear_attn.out_proj",
+      "qbits_key": "bits",
+      "numel": 31457280,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000007673060485,
+          "draw": 0,
+          "kld": 0.0001252950192792923,
+          "inj_rfn": 0.011039529309351486
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500016129492366,
+          "draw": 0,
+          "kld": 4.324053543314221e-05,
+          "inj_rfn": 0.005524974435237484
+        }
+      ],
+      "w_norm": 86.54692436584618
+    },
+    {
+      "idx": 43,
+      "key": "model.language_model.layers.42.mlp.gate_up",
+      "qbits_key": "bits",
+      "numel": 178257920,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000543158337,
+          "draw": 0,
+          "kld": 0.0005232068460827577,
+          "inj_rfn": 0.020701106637691324
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450001275248795,
+          "draw": 0,
+          "kld": 0.00016725572504583397,
+          "inj_rfn": 0.010327416218434565
+        }
+      ],
+      "members": [
+        "model.language_model.layers.42.mlp.gate_proj",
+        "model.language_model.layers.42.mlp.up_proj"
+      ],
+      "w_norm": 151.98477899735553
+    },
+    {
+      "idx": 43,
+      "key": "model.language_model.layers.42.mlp.down_proj",
+      "qbits_key": "bits",
+      "numel": 89128960,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000002316331597,
+          "draw": 0,
+          "kld": 0.00020103692932025297,
+          "inj_rfn": 0.017167025118165324
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450001232099637,
+          "draw": 0,
+          "kld": 5.948070438535069e-05,
+          "inj_rfn": 0.008585064252581999
+        }
+      ],
+      "w_norm": 106.7749211615841
+    },
+    {
+      "idx": 44,
+      "key": "model.language_model.layers.43.self_attn.qkv",
+      "qbits_key": "bits",
+      "numel": 73400320,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000009693794043,
+          "draw": 0,
+          "kld": 0.0007850747362681432,
+          "inj_rfn": 0.016283190259234644
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500017110150706,
+          "draw": 0,
+          "kld": 0.00017676526013019612,
+          "inj_rfn": 0.008141559584508174
+        }
+      ],
+      "members": [
+        "model.language_model.layers.43.self_attn.q_proj",
+        "model.language_model.layers.43.self_attn.k_proj",
+        "model.language_model.layers.43.self_attn.v_proj"
+      ],
+      "w_norm": 127.05631911691391
+    },
+    {
+      "idx": 44,
+      "key": "model.language_model.layers.43.self_attn.o_proj",
+      "qbits_key": "bits",
+      "numel": 31457280,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000474533594,
+          "draw": 0,
+          "kld": 0.0003270939672802342,
+          "inj_rfn": 0.017797390315875416
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500013502132175,
+          "draw": 0,
+          "kld": 7.547742166025273e-05,
+          "inj_rfn": 0.008896817798749915
+        }
+      ],
+      "w_norm": 88.32136256839281
+    },
+    {
+      "idx": 44,
+      "key": "model.language_model.layers.43.mlp.gate_up",
+      "qbits_key": "bits",
+      "numel": 178257920,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.290000065385367,
+          "draw": 0,
+          "kld": 0.0004697862736065872,
+          "inj_rfn": 0.020399261684708663
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450001458056421,
+          "draw": 0,
+          "kld": 0.00013905179448556738,
+          "inj_rfn": 0.010174152721581772
+        }
+      ],
+      "members": [
+        "model.language_model.layers.43.mlp.gate_proj",
+        "model.language_model.layers.43.mlp.up_proj"
+      ],
+      "w_norm": 152.60226783517177
+    },
+    {
+      "idx": 44,
+      "key": "model.language_model.layers.43.mlp.down_proj",
+      "qbits_key": "bits",
+      "numel": 89128960,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000001794386127,
+          "draw": 0,
+          "kld": 0.00019879012397723274,
+          "inj_rfn": 0.01700427432153164
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500016174985564,
+          "draw": 0,
+          "kld": 5.595479860858177e-05,
+          "inj_rfn": 0.008504116384464211
+        }
+      ],
+      "w_norm": 108.4093983760172
+    },
+    {
+      "idx": 45,
+      "key": "model.language_model.layers.44.linear_attn.qkvz",
+      "qbits_key": "bits",
+      "numel": 83886080,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000006407484197,
+          "draw": 0,
+          "kld": 0.00025299348762928273,
+          "inj_rfn": 0.013476833762123662
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450001408605773,
+          "draw": 0,
+          "kld": 7.769745739096833e-05,
+          "inj_rfn": 0.006760741485241575
+        }
+      ],
+      "members": [
+        "model.language_model.layers.44.linear_attn.in_proj_qkv",
+        "model.language_model.layers.44.linear_attn.in_proj_z"
+      ],
+      "w_norm": 141.27869246745067
+    },
+    {
+      "idx": 45,
+      "key": "model.language_model.layers.44.linear_attn.out_proj",
+      "qbits_key": "bits",
+      "numel": 31457280,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000578362036,
+          "draw": 0,
+          "kld": 0.00015456574410563917,
+          "inj_rfn": 0.013304015157547335
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500012770134577,
+          "draw": 0,
+          "kld": 4.956166553711227e-05,
+          "inj_rfn": 0.006655596802419754
+        }
+      ],
+      "w_norm": 86.35416603839968
+    },
+    {
+      "idx": 45,
+      "key": "model.language_model.layers.44.mlp.gate_up",
+      "qbits_key": "bits",
+      "numel": 178257920,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000364204765,
+          "draw": 0,
+          "kld": 0.0004387716093333438,
+          "inj_rfn": 0.020622572801152345
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450001461867105,
+          "draw": 0,
+          "kld": 0.0001514137007688987,
+          "inj_rfn": 0.010287412120512355
+        }
+      ],
+      "members": [
+        "model.language_model.layers.44.mlp.gate_proj",
+        "model.language_model.layers.44.mlp.up_proj"
+      ],
+      "w_norm": 152.24362735534285
+    },
+    {
+      "idx": 45,
+      "key": "model.language_model.layers.44.mlp.down_proj",
+      "qbits_key": "bits",
+      "numel": 89128960,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000500132777,
+          "draw": 0,
+          "kld": 0.0002169012532249326,
+          "inj_rfn": 0.01746010549801367
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450001820399673,
+          "draw": 0,
+          "kld": 5.838533120368083e-05,
+          "inj_rfn": 0.008732956171084954
+        }
+      ],
+      "w_norm": 108.58233303293405
+    },
+    {
+      "idx": 46,
+      "key": "model.language_model.layers.45.linear_attn.qkvz",
+      "qbits_key": "bits",
+      "numel": 83886080,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000003176491634,
+          "draw": 0,
+          "kld": 0.0001782719407856348,
+          "inj_rfn": 0.011498640104926768
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500007175800236,
+          "draw": 0,
+          "kld": 5.650171237903123e-05,
+          "inj_rfn": 0.005769583912465203
+        }
+      ],
+      "members": [
+        "model.language_model.layers.45.linear_attn.in_proj_qkv",
+        "model.language_model.layers.45.linear_attn.in_proj_z"
+      ],
+      "w_norm": 141.1462786355214
+    },
+    {
+      "idx": 46,
+      "key": "model.language_model.layers.45.linear_attn.out_proj",
+      "qbits_key": "bits",
+      "numel": 31457280,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000002551927084,
+          "draw": 0,
+          "kld": 0.00014160483533487422,
+          "inj_rfn": 0.01348531428624085
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500013977919077,
+          "draw": 0,
+          "kld": 4.804572217835812e-05,
+          "inj_rfn": 0.006740214205602661
+        }
+      ],
+      "w_norm": 87.54099764985118
+    },
+    {
+      "idx": 46,
+      "key": "model.language_model.layers.45.mlp.gate_up",
+      "qbits_key": "bits",
+      "numel": 178257920,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000006340088497,
+          "draw": 0,
+          "kld": 0.0005047938531788532,
+          "inj_rfn": 0.02026240502658435
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450001478935207,
+          "draw": 0,
+          "kld": 0.0001252104244485963,
+          "inj_rfn": 0.01010723198777788
+        }
+      ],
+      "members": [
+        "model.language_model.layers.45.mlp.gate_proj",
+        "model.language_model.layers.45.mlp.up_proj"
+      ],
+      "w_norm": 152.15542205566484
+    },
+    {
+      "idx": 46,
+      "key": "model.language_model.layers.45.mlp.down_proj",
+      "qbits_key": "bits",
+      "numel": 89128960,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000005190719247,
+          "draw": 0,
+          "kld": 0.0001818138513044687,
+          "inj_rfn": 0.017665196715041617
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500016757404444,
+          "draw": 0,
+          "kld": 6.0995567582722285e-05,
+          "inj_rfn": 0.008831159233081396
+        }
+      ],
+      "w_norm": 108.5030376518902
+    },
+    {
+      "idx": 47,
+      "key": "model.language_model.layers.46.linear_attn.qkvz",
+      "qbits_key": "bits",
+      "numel": 83886080,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000000468998605,
+          "draw": 0,
+          "kld": 0.00030453900872089433,
+          "inj_rfn": 0.013544167078996952
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500019571967784,
+          "draw": 0,
+          "kld": 8.056428846430208e-05,
+          "inj_rfn": 0.006811584108527855
+        }
+      ],
+      "members": [
+        "model.language_model.layers.46.linear_attn.in_proj_qkv",
+        "model.language_model.layers.46.linear_attn.in_proj_z"
+      ],
+      "w_norm": 141.71833310302517
+    },
+    {
+      "idx": 47,
+      "key": "model.language_model.layers.46.linear_attn.out_proj",
+      "qbits_key": "bits",
+      "numel": 31457280,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000313097012,
+          "draw": 0,
+          "kld": 0.00017886186160467332,
+          "inj_rfn": 0.01502243387407222
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500011701868698,
+          "draw": 0,
+          "kld": 5.3485050648305334e-05,
+          "inj_rfn": 0.007512275590461047
+        }
+      ],
+      "w_norm": 86.00562356704502
+    },
+    {
+      "idx": 47,
+      "key": "model.language_model.layers.46.mlp.gate_up",
+      "qbits_key": "bits",
+      "numel": 178257920,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000422485654,
+          "draw": 0,
+          "kld": 0.0005019540807552403,
+          "inj_rfn": 0.020572876444234525
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450001577382244,
+          "draw": 0,
+          "kld": 0.0001478118648265081,
+          "inj_rfn": 0.010266634356990167
+        }
+      ],
+      "members": [
+        "model.language_model.layers.46.mlp.gate_proj",
+        "model.language_model.layers.46.mlp.up_proj"
+      ],
+      "w_norm": 151.46066166252544
+    },
+    {
+      "idx": 47,
+      "key": "model.language_model.layers.46.mlp.down_proj",
+      "qbits_key": "bits",
+      "numel": 89128960,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000868425005,
+          "draw": 0,
+          "kld": 0.00020237903909219311,
+          "inj_rfn": 0.01792010733164615
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450000897227767,
+          "draw": 0,
+          "kld": 5.690749735549616e-05,
+          "inj_rfn": 0.008955933242965548
+        }
+      ],
+      "w_norm": 108.58187435064842
+    },
+    {
+      "idx": 48,
+      "key": "model.language_model.layers.47.self_attn.qkv",
+      "qbits_key": "bits",
+      "numel": 73400320,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000004711476424,
+          "draw": 0,
+          "kld": 0.0005393317438574741,
+          "inj_rfn": 0.017259236618771084
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500015868600455,
+          "draw": 0,
+          "kld": 0.00018223473525722512,
+          "inj_rfn": 0.0086638326837482
+        }
+      ],
+      "members": [
+        "model.language_model.layers.47.self_attn.q_proj",
+        "model.language_model.layers.47.self_attn.k_proj",
+        "model.language_model.layers.47.self_attn.v_proj"
+      ],
+      "w_norm": 127.5015500441931
+    },
+    {
+      "idx": 48,
+      "key": "model.language_model.layers.47.self_attn.o_proj",
+      "qbits_key": "bits",
+      "numel": 31457280,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000717649109,
+          "draw": 0,
+          "kld": 0.0002449751820677193,
+          "inj_rfn": 0.01825785833498331
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500012566285617,
+          "draw": 0,
+          "kld": 6.116719937381277e-05,
+          "inj_rfn": 0.009127978671955975
+        }
+      ],
+      "w_norm": 92.18370225228264
+    },
+    {
+      "idx": 48,
+      "key": "model.language_model.layers.47.mlp.gate_up",
+      "qbits_key": "bits",
+      "numel": 178257920,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000004236924626,
+          "draw": 0,
+          "kld": 0.0004482536791329039,
+          "inj_rfn": 0.022079266749107797
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450001703033445,
+          "draw": 0,
+          "kld": 0.00014877874782541766,
+          "inj_rfn": 0.011011322354863472
+        }
+      ],
+      "members": [
+        "model.language_model.layers.47.mlp.gate_proj",
+        "model.language_model.layers.47.mlp.up_proj"
+      ],
+      "w_norm": 152.31500369813378
+    },
+    {
+      "idx": 48,
+      "key": "model.language_model.layers.47.mlp.down_proj",
+      "qbits_key": "bits",
+      "numel": 89128960,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000443739536,
+          "draw": 0,
+          "kld": 0.00017155973700937465,
+          "inj_rfn": 0.019165693298605572
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500010181004885,
+          "draw": 0,
+          "kld": 5.1068769698758844e-05,
+          "inj_rfn": 0.009580843880097093
+        }
+      ],
+      "w_norm": 109.063073064397
+    },
+    {
+      "idx": 49,
+      "key": "model.language_model.layers.48.linear_attn.qkvz",
+      "qbits_key": "bits",
+      "numel": 83886080,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000006627333164,
+          "draw": 0,
+          "kld": 0.00023761927131999984,
+          "inj_rfn": 0.014491770226640608
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500014283057347,
+          "draw": 0,
+          "kld": 8.417243698204402e-05,
+          "inj_rfn": 0.007270081383474539
+        }
+      ],
+      "members": [
+        "model.language_model.layers.48.linear_attn.in_proj_qkv",
+        "model.language_model.layers.48.linear_attn.in_proj_z"
+      ],
+      "w_norm": 141.83091963893133
+    },
+    {
+      "idx": 49,
+      "key": "model.language_model.layers.48.linear_attn.out_proj",
+      "qbits_key": "bits",
+      "numel": 31457280,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000742943727,
+          "draw": 0,
+          "kld": 0.00010447032755109831,
+          "inj_rfn": 0.014327341279262364
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500014263015437,
+          "draw": 0,
+          "kld": 3.134537987534713e-05,
+          "inj_rfn": 0.007164143592763625
+        }
+      ],
+      "w_norm": 85.77599027590705
+    },
+    {
+      "idx": 49,
+      "key": "model.language_model.layers.48.mlp.gate_up",
+      "qbits_key": "bits",
+      "numel": 178257920,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000448244031,
+          "draw": 0,
+          "kld": 0.00043697189103113486,
+          "inj_rfn": 0.023981916722515633
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500013918605759,
+          "draw": 0,
+          "kld": 0.0001241008687429712,
+          "inj_rfn": 0.011970433240242056
+        }
+      ],
+      "members": [
+        "model.language_model.layers.48.mlp.gate_proj",
+        "model.language_model.layers.48.mlp.up_proj"
+      ],
+      "w_norm": 152.33220148535568
+    },
+    {
+      "idx": 49,
+      "key": "model.language_model.layers.48.mlp.down_proj",
+      "qbits_key": "bits",
+      "numel": 89128960,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000699659604,
+          "draw": 0,
+          "kld": 0.00017320715815003496,
+          "inj_rfn": 0.020468653343634884
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450001458211814,
+          "draw": 0,
+          "kld": 4.9801795057646814e-05,
+          "inj_rfn": 0.010233782330604924
+        }
+      ],
+      "w_norm": 109.21170846399666
+    },
+    {
+      "idx": 50,
+      "key": "model.language_model.layers.49.linear_attn.qkvz",
+      "qbits_key": "bits",
+      "numel": 83886080,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000006024931707,
+          "draw": 0,
+          "kld": 0.00020587604612956056,
+          "inj_rfn": 0.016786788274897168
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450000988245157,
+          "draw": 0,
+          "kld": 6.029040769135463e-05,
+          "inj_rfn": 0.008439642675109417
+        }
+      ],
+      "members": [
+        "model.language_model.layers.49.linear_attn.in_proj_qkv",
+        "model.language_model.layers.49.linear_attn.in_proj_z"
+      ],
+      "w_norm": 143.6354587820544
+    },
+    {
+      "idx": 50,
+      "key": "model.language_model.layers.49.linear_attn.out_proj",
+      "qbits_key": "bits",
+      "numel": 31457280,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900001055539345,
+          "draw": 0,
+          "kld": 0.00010781378587125801,
+          "inj_rfn": 0.016036755920424868
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500015271240688,
+          "draw": 0,
+          "kld": 3.487924077489879e-05,
+          "inj_rfn": 0.008008031132048638
+        }
+      ],
+      "w_norm": 87.37458366764187
+    },
+    {
+      "idx": 50,
+      "key": "model.language_model.layers.49.mlp.gate_up",
+      "qbits_key": "bits",
+      "numel": 178257920,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000440164749,
+          "draw": 0,
+          "kld": 0.0004446926857781364,
+          "inj_rfn": 0.02558862109504004
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500015431960794,
+          "draw": 0,
+          "kld": 0.00012957002327311783,
+          "inj_rfn": 0.012759851072125928
+        }
+      ],
+      "members": [
+        "model.language_model.layers.49.mlp.gate_proj",
+        "model.language_model.layers.49.mlp.up_proj"
+      ],
+      "w_norm": 152.36168484173604
+    },
+    {
+      "idx": 50,
+      "key": "model.language_model.layers.49.mlp.down_proj",
+      "qbits_key": "bits",
+      "numel": 89128960,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.290000060246948,
+          "draw": 0,
+          "kld": 0.00016300948300340679,
+          "inj_rfn": 0.021870262537501347
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500015855784132,
+          "draw": 0,
+          "kld": 5.0387341116220344e-05,
+          "inj_rfn": 0.010934466816349265
+        }
+      ],
+      "w_norm": 109.4669970242173
+    },
+    {
+      "idx": 51,
+      "key": "model.language_model.layers.50.linear_attn.qkvz",
+      "qbits_key": "bits",
+      "numel": 83886080,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000005153055297,
+          "draw": 0,
+          "kld": 0.00018883851753344062,
+          "inj_rfn": 0.017222379415190656
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500012834620066,
+          "draw": 0,
+          "kld": 6.0727439313268404e-05,
+          "inj_rfn": 0.008636041631113877
+        }
+      ],
+      "members": [
+        "model.language_model.layers.50.linear_attn.in_proj_qkv",
+        "model.language_model.layers.50.linear_attn.in_proj_z"
+      ],
+      "w_norm": 143.57311127523147
+    },
+    {
+      "idx": 51,
+      "key": "model.language_model.layers.50.linear_attn.out_proj",
+      "qbits_key": "bits",
+      "numel": 31457280,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000750374855,
+          "draw": 0,
+          "kld": 0.00012715090124402196,
+          "inj_rfn": 0.017620203774898095
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500018980981316,
+          "draw": 0,
+          "kld": 3.9222308032549336e-05,
+          "inj_rfn": 0.008811979639671936
+        }
+      ],
+      "w_norm": 85.17914829750002
+    },
+    {
+      "idx": 51,
+      "key": "model.language_model.layers.50.mlp.gate_up",
+      "qbits_key": "bits",
+      "numel": 178257920,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000781646857,
+          "draw": 0,
+          "kld": 0.0004615267906046938,
+          "inj_rfn": 0.029924151745161994
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450001703547855,
+          "draw": 0,
+          "kld": 0.00012801089933418553,
+          "inj_rfn": 0.014941544123602997
+        }
+      ],
+      "members": [
+        "model.language_model.layers.50.mlp.gate_proj",
+        "model.language_model.layers.50.mlp.up_proj"
+      ],
+      "w_norm": 153.45393560141264
+    },
+    {
+      "idx": 51,
+      "key": "model.language_model.layers.50.mlp.down_proj",
+      "qbits_key": "bits",
+      "numel": 89128960,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000004700829984,
+          "draw": 0,
+          "kld": 0.0001956351443368476,
+          "inj_rfn": 0.025853931313172113
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500013896532524,
+          "draw": 0,
+          "kld": 5.685081728188379e-05,
+          "inj_rfn": 0.012926719111559584
+        }
+      ],
+      "w_norm": 109.11163828563386
+    },
+    {
+      "idx": 52,
+      "key": "model.language_model.layers.51.self_attn.qkv",
+      "qbits_key": "bits",
+      "numel": 73400320,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000449555241,
+          "draw": 0,
+          "kld": 0.0004921396626741626,
+          "inj_rfn": 0.02323023028017523
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450001737500636,
+          "draw": 0,
+          "kld": 0.00011793182693509152,
+          "inj_rfn": 0.0116550626730424
+        }
+      ],
+      "members": [
+        "model.language_model.layers.51.self_attn.q_proj",
+        "model.language_model.layers.51.self_attn.k_proj",
+        "model.language_model.layers.51.self_attn.v_proj"
+      ],
+      "w_norm": 126.49113728834918
+    },
+    {
+      "idx": 52,
+      "key": "model.language_model.layers.51.self_attn.o_proj",
+      "qbits_key": "bits",
+      "numel": 31457280,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900001287236738,
+          "draw": 0,
+          "kld": 0.00018136233084078412,
+          "inj_rfn": 0.02335333145114717
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500014306100162,
+          "draw": 0,
+          "kld": 5.479540523083415e-05,
+          "inj_rfn": 0.011682650967988966
+        }
+      ],
+      "w_norm": 98.45999742915902
+    },
+    {
+      "idx": 52,
+      "key": "model.language_model.layers.51.mlp.gate_up",
+      "qbits_key": "bits",
+      "numel": 178257920,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000647921756,
+          "draw": 0,
+          "kld": 0.00044153203525638675,
+          "inj_rfn": 0.02952300568796477
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500014841415704,
+          "draw": 0,
+          "kld": 0.00011247218817516114,
+          "inj_rfn": 0.014754030230792109
+        }
+      ],
+      "members": [
+        "model.language_model.layers.51.mlp.gate_proj",
+        "model.language_model.layers.51.mlp.up_proj"
+      ],
+      "w_norm": 155.12862291800792
+    },
+    {
+      "idx": 52,
+      "key": "model.language_model.layers.51.mlp.down_proj",
+      "qbits_key": "bits",
+      "numel": 89128960,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000005637264237,
+          "draw": 0,
+          "kld": 0.00016423899396613705,
+          "inj_rfn": 0.024204276327435756
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500014115653462,
+          "draw": 0,
+          "kld": 5.430391256595612e-05,
+          "inj_rfn": 0.012104363817394043
+        }
+      ],
+      "w_norm": 111.22781555494561
+    },
+    {
+      "idx": 53,
+      "key": "model.language_model.layers.52.linear_attn.qkvz",
+      "qbits_key": "bits",
+      "numel": 83886080,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000329272528,
+          "draw": 0,
+          "kld": 9.768899763002991e-05,
+          "inj_rfn": 0.013718167442346017
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500012922005373,
+          "draw": 0,
+          "kld": 3.633789970081125e-05,
+          "inj_rfn": 0.006868353684083932
+        }
+      ],
+      "members": [
+        "model.language_model.layers.52.linear_attn.in_proj_qkv",
+        "model.language_model.layers.52.linear_attn.in_proj_z"
+      ],
+      "w_norm": 149.27152208203512
+    },
+    {
+      "idx": 53,
+      "key": "model.language_model.layers.52.linear_attn.out_proj",
+      "qbits_key": "bits",
+      "numel": 31457280,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000006302065284,
+          "draw": 0,
+          "kld": 7.366146273852791e-05,
+          "inj_rfn": 0.01305101422239433
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500008859423363,
+          "draw": 0,
+          "kld": 2.543496643738763e-05,
+          "inj_rfn": 0.006522498801360496
+        }
+      ],
+      "w_norm": 85.87150875363143
+    },
+    {
+      "idx": 53,
+      "key": "model.language_model.layers.52.mlp.gate_up",
+      "qbits_key": "bits",
+      "numel": 178257920,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000010313336977,
+          "draw": 0,
+          "kld": 0.00033177745863213206,
+          "inj_rfn": 0.02484411486343635
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500016902859575,
+          "draw": 0,
+          "kld": 8.55207735185104e-05,
+          "inj_rfn": 0.012416110813715946
+        }
+      ],
+      "members": [
+        "model.language_model.layers.52.mlp.gate_proj",
+        "model.language_model.layers.52.mlp.up_proj"
+      ],
+      "w_norm": 157.40697897885596
+    },
+    {
+      "idx": 53,
+      "key": "model.language_model.layers.52.mlp.down_proj",
+      "qbits_key": "bits",
+      "numel": 89128960,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000002583525925,
+          "draw": 0,
+          "kld": 0.00014454878901233316,
+          "inj_rfn": 0.021024102700076472
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500017293126505,
+          "draw": 0,
+          "kld": 4.122534417092538e-05,
+          "inj_rfn": 0.010507000775478403
+        }
+      ],
+      "w_norm": 110.20876850890768
+    },
+    {
+      "idx": 54,
+      "key": "model.language_model.layers.53.linear_attn.qkvz",
+      "qbits_key": "bits",
+      "numel": 83886080,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000404573493,
+          "draw": 0,
+          "kld": 0.00010833063688551193,
+          "inj_rfn": 0.012207617979520167
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450001759209112,
+          "draw": 0,
+          "kld": 3.4689484755290324e-05,
+          "inj_rfn": 0.0061337904012217165
+        }
+      ],
+      "members": [
+        "model.language_model.layers.53.linear_attn.in_proj_qkv",
+        "model.language_model.layers.53.linear_attn.in_proj_z"
+      ],
+      "w_norm": 149.70114107990292
+    },
+    {
+      "idx": 54,
+      "key": "model.language_model.layers.53.linear_attn.out_proj",
+      "qbits_key": "bits",
+      "numel": 31457280,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000788046955,
+          "draw": 0,
+          "kld": 6.992989269747341e-05,
+          "inj_rfn": 0.01256700620327028
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450000828659205,
+          "draw": 0,
+          "kld": 2.5586506239960727e-05,
+          "inj_rfn": 0.006277589186598049
+        }
+      ],
+      "w_norm": 86.98377295687109
+    },
+    {
+      "idx": 54,
+      "key": "model.language_model.layers.53.mlp.gate_up",
+      "qbits_key": "bits",
+      "numel": 178257920,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000667608704,
+          "draw": 0,
+          "kld": 0.00033269116102019325,
+          "inj_rfn": 0.02392310941204463
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500013739380618,
+          "draw": 0,
+          "kld": 8.126763782456692e-05,
+          "inj_rfn": 0.011940830712782648
+        }
+      ],
+      "members": [
+        "model.language_model.layers.53.mlp.gate_proj",
+        "model.language_model.layers.53.mlp.up_proj"
+      ],
+      "w_norm": 158.83923119679062
+    },
+    {
+      "idx": 54,
+      "key": "model.language_model.layers.53.mlp.down_proj",
+      "qbits_key": "bits",
+      "numel": 89128960,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000884520772,
+          "draw": 0,
+          "kld": 0.00013151377934264019,
+          "inj_rfn": 0.020332861588918654
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500012963458503,
+          "draw": 0,
+          "kld": 4.043626104248688e-05,
+          "inj_rfn": 0.01016537530950704
+        }
+      ],
+      "w_norm": 109.7797955710658
+    },
+    {
+      "idx": 55,
+      "key": "model.language_model.layers.54.linear_attn.qkvz",
+      "qbits_key": "bits",
+      "numel": 83886080,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2899999979815353,
+          "draw": 0,
+          "kld": 6.979773324928828e-05,
+          "inj_rfn": 0.009951825984647377
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500016710703117,
+          "draw": 0,
+          "kld": 2.3968839946064692e-05,
+          "inj_rfn": 0.004991012345313071
+        }
+      ],
+      "members": [
+        "model.language_model.layers.54.linear_attn.in_proj_qkv",
+        "model.language_model.layers.54.linear_attn.in_proj_z"
+      ],
+      "w_norm": 148.87131017152868
+    },
+    {
+      "idx": 55,
+      "key": "model.language_model.layers.54.linear_attn.out_proj",
+      "qbits_key": "bits",
+      "numel": 31457280,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000006870308204,
+          "draw": 0,
+          "kld": 5.039621078140044e-05,
+          "inj_rfn": 0.00963534816424523
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500016864477683,
+          "draw": 0,
+          "kld": 1.7059843412425834e-05,
+          "inj_rfn": 0.004817246855864102
+        }
+      ],
+      "w_norm": 87.40798733525443
+    },
+    {
+      "idx": 55,
+      "key": "model.language_model.layers.54.mlp.gate_up",
+      "qbits_key": "bits",
+      "numel": 178257920,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900001062001472,
+          "draw": 0,
+          "kld": 0.00035100857421639376,
+          "inj_rfn": 0.02336975525533232
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500015411161313,
+          "draw": 0,
+          "kld": 9.113863143284107e-05,
+          "inj_rfn": 0.011631778267278294
+        }
+      ],
+      "members": [
+        "model.language_model.layers.54.mlp.gate_proj",
+        "model.language_model.layers.54.mlp.up_proj"
+      ],
+      "w_norm": 162.3894846551417
+    },
+    {
+      "idx": 55,
+      "key": "model.language_model.layers.54.mlp.down_proj",
+      "qbits_key": "bits",
+      "numel": 89128960,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000005854182775,
+          "draw": 0,
+          "kld": 0.00015918091048661154,
+          "inj_rfn": 0.02043704449831225
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500019161521824,
+          "draw": 0,
+          "kld": 4.551501965579519e-05,
+          "inj_rfn": 0.010216571194741895
+        }
+      ],
+      "w_norm": 110.24476496924922
+    },
+    {
+      "idx": 56,
+      "key": "model.language_model.layers.55.self_attn.qkv",
+      "qbits_key": "bits",
+      "numel": 73400320,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000490388143,
+          "draw": 0,
+          "kld": 0.0001522222657513339,
+          "inj_rfn": 0.0155823829617651
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500009495179217,
+          "draw": 0,
+          "kld": 4.364819717466162e-05,
+          "inj_rfn": 0.007829901937006363
+        }
+      ],
+      "members": [
+        "model.language_model.layers.55.self_attn.q_proj",
+        "model.language_model.layers.55.self_attn.k_proj",
+        "model.language_model.layers.55.self_attn.v_proj"
+      ],
+      "w_norm": 130.7239915351831
+    },
+    {
+      "idx": 56,
+      "key": "model.language_model.layers.55.self_attn.o_proj",
+      "qbits_key": "bits",
+      "numel": 31457280,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900001080828324,
+          "draw": 0,
+          "kld": 0.00011182956550328526,
+          "inj_rfn": 0.01648795854172309
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500012974280196,
+          "draw": 0,
+          "kld": 3.6046667833034005e-05,
+          "inj_rfn": 0.00823984469124454
+        }
+      ],
+      "w_norm": 100.39058487353283
+    },
+    {
+      "idx": 56,
+      "key": "model.language_model.layers.55.mlp.gate_up",
+      "qbits_key": "bits",
+      "numel": 178257920,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000310502597,
+          "draw": 0,
+          "kld": 0.0003006478880706709,
+          "inj_rfn": 0.023015505013607683
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500016677919808,
+          "draw": 0,
+          "kld": 8.325836997755687e-05,
+          "inj_rfn": 0.011483831426028494
+        }
+      ],
+      "members": [
+        "model.language_model.layers.55.mlp.gate_proj",
+        "model.language_model.layers.55.mlp.up_proj"
+      ],
+      "w_norm": 161.52434873533772
+    },
+    {
+      "idx": 56,
+      "key": "model.language_model.layers.55.mlp.down_proj",
+      "qbits_key": "bits",
+      "numel": 89128960,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000929219429,
+          "draw": 0,
+          "kld": 0.00014359642800627627,
+          "inj_rfn": 0.018015057507439893
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500014321385749,
+          "draw": 0,
+          "kld": 4.043166823066713e-05,
+          "inj_rfn": 0.009005632951866701
+        }
+      ],
+      "w_norm": 111.2294090846144
+    },
+    {
+      "idx": 57,
+      "key": "model.language_model.layers.56.linear_attn.qkvz",
+      "qbits_key": "bits",
+      "numel": 83886080,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000586096611,
+          "draw": 0,
+          "kld": 0.00010408377993371687,
+          "inj_rfn": 0.01170886946489402
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500015713877823,
+          "draw": 0,
+          "kld": 3.085455789459956e-05,
+          "inj_rfn": 0.005886167302338116
+        }
+      ],
+      "members": [
+        "model.language_model.layers.56.linear_attn.in_proj_qkv",
+        "model.language_model.layers.56.linear_attn.in_proj_z"
+      ],
+      "w_norm": 151.48172138598935
+    },
+    {
+      "idx": 57,
+      "key": "model.language_model.layers.56.linear_attn.out_proj",
+      "qbits_key": "bits",
+      "numel": 31457280,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000969529401,
+          "draw": 0,
+          "kld": 6.77581671425287e-05,
+          "inj_rfn": 0.011041666488674547
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500022568659676,
+          "draw": 0,
+          "kld": 2.0573978747506772e-05,
+          "inj_rfn": 0.005528246000227331
+        }
+      ],
+      "w_norm": 87.43899938403487
+    },
+    {
+      "idx": 57,
+      "key": "model.language_model.layers.56.mlp.gate_up",
+      "qbits_key": "bits",
+      "numel": 178257920,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000604252931,
+          "draw": 0,
+          "kld": 0.00033763448300305754,
+          "inj_rfn": 0.022744321171694195
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450001405771918,
+          "draw": 0,
+          "kld": 9.231050180460442e-05,
+          "inj_rfn": 0.011351524737053418
+        }
+      ],
+      "members": [
+        "model.language_model.layers.56.mlp.gate_proj",
+        "model.language_model.layers.56.mlp.up_proj"
+      ],
+      "w_norm": 163.66882828309886
+    },
+    {
+      "idx": 57,
+      "key": "model.language_model.layers.56.mlp.down_proj",
+      "qbits_key": "bits",
+      "numel": 89128960,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2899999817813188,
+          "draw": 0,
+          "kld": 0.000133348009603651,
+          "inj_rfn": 0.01761187111503629
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450001256067942,
+          "draw": 0,
+          "kld": 4.139322522860312e-05,
+          "inj_rfn": 0.008805628296159539
+        }
+      ],
+      "w_norm": 111.79596544878085
+    },
+    {
+      "idx": 58,
+      "key": "model.language_model.layers.57.linear_attn.qkvz",
+      "qbits_key": "bits",
+      "numel": 83886080,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000551689172,
+          "draw": 0,
+          "kld": 9.150171053988743e-05,
+          "inj_rfn": 0.011697737314279576
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500011387285353,
+          "draw": 0,
+          "kld": 2.8835879561484035e-05,
+          "inj_rfn": 0.005861661400150049
+        }
+      ],
+      "members": [
+        "model.language_model.layers.57.linear_attn.in_proj_qkv",
+        "model.language_model.layers.57.linear_attn.in_proj_z"
+      ],
+      "w_norm": 152.47184678654614
+    },
+    {
+      "idx": 58,
+      "key": "model.language_model.layers.57.linear_attn.out_proj",
+      "qbits_key": "bits",
+      "numel": 31457280,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.28999999127220544,
+          "draw": 0,
+          "kld": 5.1792833983199674e-05,
+          "inj_rfn": 0.010325493255860893
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500015105975345,
+          "draw": 0,
+          "kld": 1.8975702971602004e-05,
+          "inj_rfn": 0.005163676819927413
+        }
+      ],
+      "w_norm": 88.71843078491356
+    },
+    {
+      "idx": 58,
+      "key": "model.language_model.layers.57.mlp.gate_up",
+      "qbits_key": "bits",
+      "numel": 178257920,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000600558273,
+          "draw": 0,
+          "kld": 0.00036956133699277415,
+          "inj_rfn": 0.0249378320982386
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450001617317048,
+          "draw": 0,
+          "kld": 0.00011304088338874863,
+          "inj_rfn": 0.01243544037535679
+        }
+      ],
+      "members": [
+        "model.language_model.layers.57.mlp.gate_proj",
+        "model.language_model.layers.57.mlp.up_proj"
+      ],
+      "w_norm": 166.78014919067107
+    },
+    {
+      "idx": 58,
+      "key": "model.language_model.layers.57.mlp.down_proj",
+      "qbits_key": "bits",
+      "numel": 89128960,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000004408442714,
+          "draw": 0,
+          "kld": 0.0001573257061863842,
+          "inj_rfn": 0.019142508206176672
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500010910806407,
+          "draw": 0,
+          "kld": 4.441629882876441e-05,
+          "inj_rfn": 0.009565645862435272
+        }
+      ],
+      "w_norm": 113.32258728542382
+    },
+    {
+      "idx": 59,
+      "key": "model.language_model.layers.58.linear_attn.qkvz",
+      "qbits_key": "bits",
+      "numel": 83886080,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000892324687,
+          "draw": 0,
+          "kld": 0.00011492615494717029,
+          "inj_rfn": 0.012705645066523061
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450001063404064,
+          "draw": 0,
+          "kld": 3.3514666097289594e-05,
+          "inj_rfn": 0.006351527374563816
+        }
+      ],
+      "members": [
+        "model.language_model.layers.58.linear_attn.in_proj_qkv",
+        "model.language_model.layers.58.linear_attn.in_proj_z"
+      ],
+      "w_norm": 152.23619600804534
+    },
+    {
+      "idx": 59,
+      "key": "model.language_model.layers.58.linear_attn.out_proj",
+      "qbits_key": "bits",
+      "numel": 31457280,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000098114077,
+          "draw": 0,
+          "kld": 6.841387671556731e-05,
+          "inj_rfn": 0.011402873920329301
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500022080203204,
+          "draw": 0,
+          "kld": 2.1707865744247102e-05,
+          "inj_rfn": 0.00570865132431471
+        }
+      ],
+      "w_norm": 88.65497223259675
+    },
+    {
+      "idx": 59,
+      "key": "model.language_model.layers.58.mlp.gate_up",
+      "qbits_key": "bits",
+      "numel": 178257920,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000007897996305,
+          "draw": 0,
+          "kld": 0.0004865373070060741,
+          "inj_rfn": 0.029332351281996173
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450001690385293,
+          "draw": 0,
+          "kld": 0.00013683179213330732,
+          "inj_rfn": 0.014608620271161379
+        }
+      ],
+      "members": [
+        "model.language_model.layers.58.mlp.gate_proj",
+        "model.language_model.layers.58.mlp.up_proj"
+      ],
+      "w_norm": 169.73935384049128
+    },
+    {
+      "idx": 59,
+      "key": "model.language_model.layers.58.mlp.down_proj",
+      "qbits_key": "bits",
+      "numel": 89128960,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000007005280165,
+          "draw": 0,
+          "kld": 0.0001755043584125815,
+          "inj_rfn": 0.02254675292772851
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500018200861572,
+          "draw": 0,
+          "kld": 5.124343583702284e-05,
+          "inj_rfn": 0.011269247460612121
+        }
+      ],
+      "w_norm": 115.57280494211214
+    },
+    {
+      "idx": 60,
+      "key": "model.language_model.layers.59.self_attn.qkv",
+      "qbits_key": "bits",
+      "numel": 73400320,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000008267876043,
+          "draw": 0,
+          "kld": 0.00021560293880611424,
+          "inj_rfn": 0.02153418256007861
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500010992492848,
+          "draw": 0,
+          "kld": 5.8849090009971405e-05,
+          "inj_rfn": 0.010743196786961388
+        }
+      ],
+      "members": [
+        "model.language_model.layers.59.self_attn.q_proj",
+        "model.language_model.layers.59.self_attn.k_proj",
+        "model.language_model.layers.59.self_attn.v_proj"
+      ],
+      "w_norm": 133.19425282036383
+    },
+    {
+      "idx": 60,
+      "key": "model.language_model.layers.59.self_attn.o_proj",
+      "qbits_key": "bits",
+      "numel": 31457280,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000630139325,
+          "draw": 0,
+          "kld": 0.00014135608453216263,
+          "inj_rfn": 0.022545095722720895
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450000556042353,
+          "draw": 0,
+          "kld": 4.067621939611854e-05,
+          "inj_rfn": 0.011279216366705954
+        }
+      ],
+      "w_norm": 109.58683949555713
+    },
+    {
+      "idx": 60,
+      "key": "model.language_model.layers.59.mlp.gate_up",
+      "qbits_key": "bits",
+      "numel": 178257920,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000657478639,
+          "draw": 0,
+          "kld": 0.0005601833414402791,
+          "inj_rfn": 0.027911887574651465
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500015568915142,
+          "draw": 0,
+          "kld": 0.00014427167971007294,
+          "inj_rfn": 0.013905140111950959
+        }
+      ],
+      "members": [
+        "model.language_model.layers.59.mlp.gate_proj",
+        "model.language_model.layers.59.mlp.up_proj"
+      ],
+      "w_norm": 169.501938710336
+    },
+    {
+      "idx": 60,
+      "key": "model.language_model.layers.59.mlp.down_proj",
+      "qbits_key": "bits",
+      "numel": 89128960,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000002537242614,
+          "draw": 0,
+          "kld": 0.00014418968839891022,
+          "inj_rfn": 0.02092738122470245
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500014552607368,
+          "draw": 0,
+          "kld": 4.4683629221253794e-05,
+          "inj_rfn": 0.010462425762911709
+        }
+      ],
+      "w_norm": 116.04760186422423
+    },
+    {
+      "idx": 61,
+      "key": "model.language_model.layers.60.linear_attn.qkvz",
+      "qbits_key": "bits",
+      "numel": 83886080,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000001253097163,
+          "draw": 0,
+          "kld": 0.00011762931162593305,
+          "inj_rfn": 0.015641602227426034
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500015109999018,
+          "draw": 0,
+          "kld": 3.49207932003992e-05,
+          "inj_rfn": 0.007877027181344011
+        }
+      ],
+      "members": [
+        "model.language_model.layers.60.linear_attn.in_proj_qkv",
+        "model.language_model.layers.60.linear_attn.in_proj_z"
+      ],
+      "w_norm": 154.18362378589367
+    },
+    {
+      "idx": 61,
+      "key": "model.language_model.layers.60.linear_attn.out_proj",
+      "qbits_key": "bits",
+      "numel": 31457280,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2899999491953691,
+          "draw": 0,
+          "kld": 5.6375668555119775e-05,
+          "inj_rfn": 0.013545948222414785
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500013459539815,
+          "draw": 0,
+          "kld": 1.9809271202575472e-05,
+          "inj_rfn": 0.006775146573120847
+        }
+      ],
+      "w_norm": 88.84023251918299
+    },
+    {
+      "idx": 61,
+      "key": "model.language_model.layers.60.mlp.gate_up",
+      "qbits_key": "bits",
+      "numel": 178257920,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000618059791,
+          "draw": 0,
+          "kld": 0.0004036278105559177,
+          "inj_rfn": 0.0253259071880514
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450001465838168,
+          "draw": 0,
+          "kld": 0.00011135890554214711,
+          "inj_rfn": 0.012612023323532603
+        }
+      ],
+      "members": [
+        "model.language_model.layers.60.mlp.gate_proj",
+        "model.language_model.layers.60.mlp.up_proj"
+      ],
+      "w_norm": 169.69730346911084
+    },
+    {
+      "idx": 61,
+      "key": "model.language_model.layers.60.mlp.down_proj",
+      "qbits_key": "bits",
+      "numel": 89128960,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000792405725,
+          "draw": 0,
+          "kld": 0.0001059674956195522,
+          "inj_rfn": 0.018833073650722166
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500014546952522,
+          "draw": 0,
+          "kld": 3.198303163571836e-05,
+          "inj_rfn": 0.009409479180576441
+        }
+      ],
+      "w_norm": 116.51926979849728
+    },
+    {
+      "idx": 62,
+      "key": "model.language_model.layers.61.linear_attn.qkvz",
+      "qbits_key": "bits",
+      "numel": 83886080,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000419187486,
+          "draw": 0,
+          "kld": 0.00012236841580488546,
+          "inj_rfn": 0.013560169403349842
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500011367197954,
+          "draw": 0,
+          "kld": 3.8840531078676574e-05,
+          "inj_rfn": 0.0068134506225483475
+        }
+      ],
+      "members": [
+        "model.language_model.layers.61.linear_attn.in_proj_qkv",
+        "model.language_model.layers.61.linear_attn.in_proj_z"
+      ],
+      "w_norm": 149.96025840722768
+    },
+    {
+      "idx": 62,
+      "key": "model.language_model.layers.61.linear_attn.out_proj",
+      "qbits_key": "bits",
+      "numel": 31457280,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900001000421023,
+          "draw": 0,
+          "kld": 4.582095386922447e-05,
+          "inj_rfn": 0.011183834668835822
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500015956930964,
+          "draw": 0,
+          "kld": 1.6133700967202458e-05,
+          "inj_rfn": 0.0056047009642288485
+        }
+      ],
+      "w_norm": 90.36132709070706
+    },
+    {
+      "idx": 62,
+      "key": "model.language_model.layers.61.mlp.gate_up",
+      "qbits_key": "bits",
+      "numel": 178257920,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000003938656244,
+          "draw": 0,
+          "kld": 0.00038061097602621886,
+          "inj_rfn": 0.024807830673444307
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500013381391372,
+          "draw": 0,
+          "kld": 0.00011041965608455939,
+          "inj_rfn": 0.012330783864270516
+        }
+      ],
+      "members": [
+        "model.language_model.layers.61.mlp.gate_proj",
+        "model.language_model.layers.61.mlp.up_proj"
+      ],
+      "w_norm": 171.6946098819063
+    },
+    {
+      "idx": 62,
+      "key": "model.language_model.layers.61.mlp.down_proj",
+      "qbits_key": "bits",
+      "numel": 89128960,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000003091228616,
+          "draw": 0,
+          "kld": 8.72314326443302e-05,
+          "inj_rfn": 0.017847882119205922
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450001589836085,
+          "draw": 0,
+          "kld": 2.6330776313443495e-05,
+          "inj_rfn": 0.008921190476734241
+        }
+      ],
+      "w_norm": 117.93093764864035
+    },
+    {
+      "idx": 63,
+      "key": "model.language_model.layers.62.linear_attn.qkvz",
+      "qbits_key": "bits",
+      "numel": 83886080,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.290000043244842,
+          "draw": 0,
+          "kld": 0.00026593269521981713,
+          "inj_rfn": 0.021780253946520143
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500012519029357,
+          "draw": 0,
+          "kld": 7.543097817688249e-05,
+          "inj_rfn": 0.01096219152200895
+        }
+      ],
+      "members": [
+        "model.language_model.layers.62.linear_attn.in_proj_qkv",
+        "model.language_model.layers.62.linear_attn.in_proj_z"
+      ],
+      "w_norm": 150.35864513877726
+    },
+    {
+      "idx": 63,
+      "key": "model.language_model.layers.62.linear_attn.out_proj",
+      "qbits_key": "bits",
+      "numel": 31457280,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.28999998990903103,
+          "draw": 0,
+          "kld": 9.649257845012471e-05,
+          "inj_rfn": 0.01995090930202852
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500013246765744,
+          "draw": 0,
+          "kld": 2.7887975352314243e-05,
+          "inj_rfn": 0.00996567192606537
+        }
+      ],
+      "w_norm": 91.74875467479109
+    },
+    {
+      "idx": 63,
+      "key": "model.language_model.layers.62.mlp.gate_up",
+      "qbits_key": "bits",
+      "numel": 178257920,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000006585195726,
+          "draw": 0,
+          "kld": 0.0005668121222697664,
+          "inj_rfn": 0.02716723457664391
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500015608375508,
+          "draw": 0,
+          "kld": 0.00014362720376084325,
+          "inj_rfn": 0.01354378195115216
+        }
+      ],
+      "members": [
+        "model.language_model.layers.62.mlp.gate_proj",
+        "model.language_model.layers.62.mlp.up_proj"
+      ],
+      "w_norm": 172.54700163560508
+    },
+    {
+      "idx": 63,
+      "key": "model.language_model.layers.62.mlp.down_proj",
+      "qbits_key": "bits",
+      "numel": 89128960,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000010739088367,
+          "draw": 0,
+          "kld": 9.479910395384649e-05,
+          "inj_rfn": 0.019652187172972537
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500011398987075,
+          "draw": 0,
+          "kld": 2.9614129857691296e-05,
+          "inj_rfn": 0.009827515497522027
+        }
+      ],
+      "w_norm": 116.77028229872958
+    },
+    {
+      "idx": 64,
+      "key": "model.language_model.layers.63.self_attn.qkv",
+      "qbits_key": "bits",
+      "numel": 73400320,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000012415750615,
+          "draw": 0,
+          "kld": 0.0005187319799006218,
+          "inj_rfn": 0.023111228324883864
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450001578420092,
+          "draw": 0,
+          "kld": 0.00014292317723629822,
+          "inj_rfn": 0.01155889307551487
+        }
+      ],
+      "members": [
+        "model.language_model.layers.63.self_attn.q_proj",
+        "model.language_model.layers.63.self_attn.k_proj",
+        "model.language_model.layers.63.self_attn.v_proj"
+      ],
+      "w_norm": 132.07885144127684
+    },
+    {
+      "idx": 64,
+      "key": "model.language_model.layers.63.self_attn.o_proj",
+      "qbits_key": "bits",
+      "numel": 31457280,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000756672582,
+          "draw": 0,
+          "kld": 0.00010278112094965763,
+          "inj_rfn": 0.018091811878693922
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500017880119317,
+          "draw": 0,
+          "kld": 2.9866900467823144e-05,
+          "inj_rfn": 0.009048942577830793
+        }
+      ],
+      "w_norm": 100.38831344615019
+    },
+    {
+      "idx": 64,
+      "key": "model.language_model.layers.63.mlp.gate_up",
+      "qbits_key": "bits",
+      "numel": 178257920,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.290000074451812,
+          "draw": 0,
+          "kld": 0.0011717728528310544,
+          "inj_rfn": 0.029521073111949552
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450001668760037,
+          "draw": 0,
+          "kld": 0.00027943535224039806,
+          "inj_rfn": 0.014705327792158735
+        }
+      ],
+      "members": [
+        "model.language_model.layers.63.mlp.gate_proj",
+        "model.language_model.layers.63.mlp.up_proj"
+      ],
+      "w_norm": 178.84302649250822
+    },
+    {
+      "idx": 64,
+      "key": "model.language_model.layers.63.mlp.down_proj",
+      "qbits_key": "bits",
+      "numel": 89128960,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.29000005110061167,
+          "draw": 0,
+          "kld": 0.0001969141336303437,
+          "inj_rfn": 0.021239544860080145
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.1450001283487511,
+          "draw": 0,
+          "kld": 5.453667417896213e-05,
+          "inj_rfn": 0.010615422572336723
+        }
+      ],
+      "w_norm": 109.81921400932079
+    },
+    {
+      "idx": 66,
+      "key": "lm_head",
+      "qbits_key": "head_bits",
+      "numel": 1271398400,
+      "shaped": true,
+      "levels": [
+        {
+          "rfn": 0.29,
+          "rfn_actual": 0.2900000556796298,
+          "draw": 0,
+          "kld": 0.004538623912958428,
+          "inj_rfn": 0.0
+        },
+        {
+          "rfn": 0.145,
+          "rfn_actual": 0.14500014060380964,
+          "draw": 0,
+          "kld": 0.0011638457101071254,
+          "inj_rfn": 0.0
+        }
+      ],
+      "w_norm": 490.1472674105202
+    }
+  ]
+}

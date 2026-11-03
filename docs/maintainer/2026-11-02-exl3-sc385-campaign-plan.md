@@ -222,6 +222,18 @@ suffix-forward from cached boundary states, KLD vs clean reference, two noise le
 Fallback if the GB10 test setup lags: the 5090 tiered lane (experimental for 54 GB
 dense; flagged, not planned).
 
+**W2.4 Greedy allocation → recipe diff (CPU).** DONE 2026-11-03: twoTwo's table
+(profiles/w24/sc_measure_results.json, 257 fused-module keys — 64-layer hybrid, the
+work order's "36 layers" was off) consumed unchanged through our anchor adapter
+(rfn_to_ref.py, 257/257 key coverage). Recipes at profiles/w24/recipe_{385,25}.yaml
+(achieved 3.849 bpw, predicted KLD 0.056 at 3.85). The 3.85 head-to-head vs his
+published per-tensor bits (400 common keys, exact granularity): our English agentic
+trace shifts budget TOWARD the attention projections (q/k/v +0.75 bits/weight) and
+the GDN out projections (+0.33), and AWAY from the GDN down_proj (-0.52); the MLP
+gate/up agree within 0.03. Exact per-tensor agreement 4% — the allocation pattern
+differs coherently by class, the domain effect the P2 rationale predicts. The 2.5
+recipe stands for our W2.5 quant; his table has no 2.5 counterpart.
+
 **W2.4 Greedy allocation → recipe diff (CPU).** `sc_optimize.py` at two targets —
 **3.85 bpw** (his size point, head-to-head) and **2.5 bpw** (a smaller point inside our
 current 7.92-GiB posture). Then the re-validation itself: diff our per-tensor

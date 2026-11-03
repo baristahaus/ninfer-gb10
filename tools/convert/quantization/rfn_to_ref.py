@@ -19,13 +19,17 @@ from pathlib import Path
 def main() -> int:
     out = Path(sys.argv[2])
     # His measurement keys are the BF16 model's HF tensor names; the GDN's fused
-    # in_proj_qkv is one such tensor, as is his interleaved q_proj (query + gate).
-    # The first input file wins per key: pass the 2.00bpw anchor first.
-    role_tensor = {"query": "q_proj", "gate": "q_proj", "key": "k_proj",
-                   "value": "v_proj", "output": "o_proj", "z": "in_proj_z",
-                   "out": "out_proj", "down": "down_proj"}
+    # in_proj_qkv is one such tensor, as is his interleaved q_proj (the query and
+    # gate leaves of one module). Multiple leaves mapping to one key combine via
+    # err_sq = sum((rfn*ref_norm)^2) and ref_sq = sum(ref_norm^2), the same
+    # weighted form his grouped-member logic uses.
+    role_tensor = {"query": "q_proj", "gate": "q_proj", "attention_gate": "q_proj",
+                   "key": "k_proj", "value": "v_proj", "output": "o_proj",
+                   "z": "in_proj_z", "out": "out_proj", "gate_proj": "gate_proj",
+                   "up": "up_proj", "up_proj": "up_proj", "down": "down_proj",
+                   "down_proj": "down_proj"}
     inputs = [sys.argv[1]] + sys.argv[3:]  # the first input is the primary anchor
-    anchors = {}
+    modules: dict[str, list[tuple[int, float, float]]] = {}
     for path in inputs:
         data = json.load(open(path))
         for r in data["results"]:
@@ -37,8 +41,18 @@ def main() -> int:
                 stem = ("self_attn" if "/attention/" in param else
                         "linear_attn" if "/gdn/" in param else "mlp")
                 key = f"model.language_model.layers.{layer}.{stem}.{role_tensor[role]}.weight"
-                anchors.setdefault(key, (r["k2"], r["rfn"]))
-    results = [dict(key=k, K=kv[0], rfn=kv[1]) for k, kv in sorted(anchors.items())]
+                modules.setdefault(key, []).append((r["k2"], r["rfn"],
+                                                    r.get("ref_norm", 0.0)))
+    results = []
+    for key, entries in sorted(modules.items()):
+        if len({e[0] for e in entries}) == 1:
+            k_common = entries[0][0]
+        else:
+            k_common = max({e[0] for e in entries}, key=lambda k: sum(1 for e in entries if e[0] == k))
+        err_sq = sum((rfn * ref) ** 2 for _, rfn, ref in entries)
+        ref_sq = sum(ref ** 2 for _, _, ref in entries)
+        rfn = (err_sq / ref_sq) ** 0.5 if ref_sq else min(e[1] for e in entries)
+        results.append(dict(key=key, K=k_common, rfn=rfn))
     json.dump(dict(results=results), open(out, "w"), indent=1)
     print(f"{len(results)} anchors -> {out}")
     return 0

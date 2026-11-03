@@ -155,8 +155,8 @@ Steady-decode tok/s (the published definition; the NVFP4 MTP3 reference rows are
 | Mode | C=1 | C=2 | C=4 | C=8 |
 |---|---|---|---|---|
 | MTP0 steady | 59.5 | 116.3 | 220.5 | 407.1 |
-| MTP3 steady | 116.2 | 213.2 | 381.5 | blocked: T>16 |
-| DFlash2 K=7 steady | 147.9 | 264.8 | blocked: T>16 | blocked: T>16 |
+| MTP3 steady | 116.2 | 213.2 | 381.5 | 466.4 |
+| DFlash2 K=7 steady | 147.9 | 264.8 | 311.9 | 351.4 |
 
 MTP0 is the first MTP0 saturation record for this route. MTP3 C=1/C=2 steady reaches
 79/73 percent of the NVFP4 MTP3 rows at half the weight footprint. MTP3 acceptance at
@@ -172,6 +172,18 @@ on the token tiling and stay composed until launch_linear's token tiling extends
 Re-measured with the fix: MTP3 C=4 381.5 tok/s steady (was 18.1; makespan 88.9 s),
 DFlash2 C=2 264.8 tok/s (was 11.8; makespan 64.4 s). The MTP3 C=8 (T=32) and
 DFlash2 C>=4 (T>=32) rows await the kernel's token-tiling extension.
+
+**Token-tiling extension (2026-11-03):** the record-round shapes beyond 16 tokens now
+take the register route — the launch tiles the tokens in 16-row passes (each tile owns
+its rotated activations, counter block, split-K partials, and an output band, so tiles
+are independent), and the dense token domain extends to T<=128 (the composed prefill
+route still serves prefill shapes). This also fixes a latent workspace bug: the
+split-K partials pointer previously skipped only one counter block, which would have
+corrupted any T>16 launch. The FP64 oracle passes at T in {1..8, 16, 32, 48, 64, 72}.
+Re-measured: MTP3 C=8 466.4 tok/s steady (146.1 s makespan, 47.3% acceptance — was
+~41 tok/s on the composed route), DFlash2 C=4 311.9, C=8 351.4. The C=8 MTP3 reaches
+50.6 percent of the NVFP4 reference row; the mode verdict is unchanged (MTP3's
+acceptance holds, DFlash2 collapses to ~30 percent on this domain).
 
 **Window:** development iterations are short (single-request speculative rounds); one
 medium window for the acceptance battery.

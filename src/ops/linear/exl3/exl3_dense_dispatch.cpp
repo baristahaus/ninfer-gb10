@@ -46,7 +46,7 @@ bool exl3_dense_registered(std::int32_t n, std::int32_t k) {
 
 std::size_t exl3_dense_workspace_bytes(std::int32_t n, std::int32_t k, std::int32_t max_tokens) {
     if (max_tokens <= 0 || max_tokens > kExl3DenseMaxTokens) {
-        throw std::invalid_argument("exl3 dense workspace: token interval outside 1..8");
+        throw std::invalid_argument("exl3 dense workspace: token interval outside 1..128");
     }
     if (!exl3_dense_registered(n, k)) {
         throw std::invalid_argument("exl3 dense workspace: unregistered problem " +
@@ -123,7 +123,7 @@ void exl3_dense_dispatch(const Tensor& x, const Weight& w, Tensor& out, MemoryAr
     }
     const std::int32_t tokens = out.ne[1];
     if (tokens <= 0 || tokens > kExl3DenseMaxTokens) {
-        throw std::invalid_argument("exl3 dense linear: registers decode shapes T in 1..8, got " +
+        throw std::invalid_argument("exl3 dense linear: registers decode and record shapes T in 1..128, got " +
                                     std::to_string(tokens));
     }
     if (workspace == nullptr) {

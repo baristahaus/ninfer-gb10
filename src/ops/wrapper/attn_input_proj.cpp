@@ -269,10 +269,12 @@ std::size_t attn_input_proj_workspace_capacity_bytes(QType parent_qtype, std::in
         // The dense EXL3 route (SP-7): decode-shape dispatches use the row slices'
         // capacity; the composed prefill route adds one decoded [14336, 5120] plane and
         // the transformed activation.
-        return std::max(detail::exl3_dense_workspace_bytes(6144, 5120, std::min(max_tokens, 8)),
-                        max_tokens > 8 ? detail::exl3_prefill_workspace_bytes(
-                                             parent_rows, input_rows, max_tokens)
-                                       : std::size_t{0});
+        return std::max(
+            detail::exl3_dense_workspace_bytes(
+                6144, 5120, std::min(max_tokens, detail::kExl3DenseMaxTokens)),
+            max_tokens > detail::kExl3DenseMaxTokens
+                ? detail::exl3_prefill_workspace_bytes(parent_rows, input_rows, max_tokens)
+                : std::size_t{0});
     case QType::Q4_G64_FP16:
     case QType::Q5_G64_FP16:
     case QType::Q6_G64_FP16:

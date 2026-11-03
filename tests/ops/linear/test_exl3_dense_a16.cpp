@@ -55,8 +55,8 @@ int admission_refusals() {
     // the capacity covers the decoded [n, k] plane plus the transformed activation.
     {
         const auto capacity = ops::linear_workspace_capacity_bytes(
-            QType::EXL3, 1024, 5120, ops::LinearPolicy::A16Only, 65, 65);
-        const auto expected = sizeof(std::uint16_t) * (1024ULL * 5120ULL + 5120ULL * 65ULL);
+            QType::EXL3, 1024, 5120, ops::LinearPolicy::A16Only, 200, 200);
+        const auto expected = sizeof(std::uint16_t) * (1024ULL * 5120ULL + 5120ULL * 200ULL);
         if (capacity < expected) {
             std::cerr << "exl3 dense: composed prefill capacity below its planes\n";
             ++failures;
@@ -111,6 +111,9 @@ int exl3_dense_a16_conformance() {
         Invocation{1}, Invocation{2, CallForm::Policy, ops::LinearPolicy::A16Only, true},
         Invocation{3}, Invocation{4}, Invocation{5}, Invocation{6},
         Invocation{7}, Invocation{8, CallForm::Policy, ops::LinearPolicy::A16Only, true},
+        Invocation{16}, Invocation{32}, Invocation{48, CallForm::Policy,
+                                                 ops::LinearPolicy::A16Only, true},
+        Invocation{64}, Invocation{72},
     };
     failures += run_shape("EXL3_DENSE_A16", ActivationCompute::A16,
                           [](std::int32_t n, std::int32_t k, std::uint32_t seed) {

@@ -344,45 +344,59 @@ void exl3_dense_launch_nf(const void* x, const void* payload,
         throw std::invalid_argument("tf exl3 linear: k does not divide into the split");
     }
     // Rotated fp16 activations first (16-byte aligned).
-    auto* xh = scratch;
-    // Then the arrival counters, zeroed for this launch.
+    auto* xh = reinterpret_cast<half*>(scratch);
+    // Then the arrival counters, zeroed for this launch: one [nb] block per 16-row tile.
+    const int tiles = (tokens + 15) / 16;
     auto* counters = reinterpret_cast<int*>(scratch + ((static_cast<std::size_t>(tokens) * k * 2 + 15) & ~std::size_t{15}));
-    // Then the fp32 split-K partials.
+    // Then the fp32 split-K partials, past every tile's counter block.
     auto* z = reinterpret_cast<float*>(reinterpret_cast<unsigned char*>(counters) +
-                                       ((static_cast<std::size_t>(nb) * 4 + 15) & ~std::size_t{15}));
+                                       (((static_cast<std::size_t>(tiles) * nb * 4 + 15) &
+                                         ~std::size_t{15})));
 
-    tf_exl3::RotInArgs rot;
-    rot.x = x;
-    rot.suh = reinterpret_cast<const half*>(static_cast<const std::uint8_t*>(payload) + suh_offset);
-    rot.xh  = reinterpret_cast<half*>(xh);
-    rot.x_dtype = 1; /* bf16 */
-    rot.m = tokens;
-    rot.k = k;
-    const dim3 rot_grid(static_cast<unsigned>((k + 511) / 512), static_cast<unsigned>(tokens));
-    tf_exl3::tf_exl3_rot_in<<<rot_grid, 128, 0, stream>>>(rot);
+    // The kernel's validated token domain is one 16-row tile per launch; the record rounds at
+    // width x batch beyond 16 tokens launch once per tile. Tiles are independent: each owns its
+    // rotated-activation rows, counter block, split-K partials, and a contiguous band of the
+    // token-major [tokens, n] output plane, so plain pointer offsets place every tile.
+    for (int tile = 0; tile < tiles; ++tile) {
+        const auto base = static_cast<std::size_t>(tile) * 16;
+        const int m = std::min(16, tokens - static_cast<int>(base));
 
-    cudaMemsetAsync(counters, 0, (static_cast<std::size_t>(tokens + 15) / 16) * nb * 4,
-                    stream);
+        tf_exl3::RotInArgs rot;
+        rot.x = static_cast<const unsigned char*>(x) + base * k * 2;
+        rot.suh = reinterpret_cast<const half*>(static_cast<const std::uint8_t*>(payload) + suh_offset);
+        rot.xh  = xh + base * k;
+        rot.x_dtype = 1; /* bf16 */
+        rot.m = m;
+        rot.k = k;
+        const dim3 rot_grid(static_cast<unsigned>((k + 511) / 512), static_cast<unsigned>(m));
+        tf_exl3::tf_exl3_rot_in<<<rot_grid, 128, 0, stream>>>(rot);
+    }
 
-    tf_exl3::LinearArgs args;
-    args.xh = xh;
-    args.t = reinterpret_cast<const std::uint32_t*>(static_cast<const std::uint8_t*>(payload) +
-                                                    trellis_offset);
-    args.stride_k = static_cast<long long>(t_n) * tw;
-    args.stride_nb = static_cast<long long>(8) * tw;
-    args.svh = reinterpret_cast<const half*>(static_cast<const std::uint8_t*>(payload) + svh_offset);
-    args.bias = nullptr;
-    args.y = y;
-    args.z = z;
-    args.counters = counters;
-    args.y_dtype = 1; /* bf16 */
-    args.n = n;
-    args.sk = sk;
-    args.m = tokens;
-    args.k = k;
-    const std::size_t shmem = 8 * 8 * 128 * sizeof(float);
-    tf_exl3::launch_linear(k2, codebook, 8, dim3(static_cast<unsigned>(nb * sk)), shmem, stream,
-                           args);
+    cudaMemsetAsync(counters, 0, static_cast<std::size_t>(tiles) * nb * 4, stream);
+
+    for (int tile = 0; tile < tiles; ++tile) {
+        const auto base = static_cast<std::size_t>(tile) * 16;
+        const int m = std::min(16, tokens - static_cast<int>(base));
+        tf_exl3::LinearArgs args;
+        args.xh = xh + base * k;
+        args.t = reinterpret_cast<const std::uint32_t*>(static_cast<const std::uint8_t*>(payload) +
+                                                        trellis_offset);
+        args.stride_k = static_cast<long long>(t_n) * tw;
+        args.stride_nb = static_cast<long long>(8) * tw;
+        args.svh = reinterpret_cast<const half*>(static_cast<const std::uint8_t*>(payload) + svh_offset);
+        args.bias = nullptr;
+        args.y = static_cast<unsigned char*>(y) + base * n * 2;
+        args.z = z + base * n * 8;
+        args.counters = counters + static_cast<std::ptrdiff_t>(tile) * nb;
+        args.y_dtype = 1; /* bf16 */
+        args.n = n;
+        args.sk = sk;
+        args.m = m;
+        args.k = k;
+        const std::size_t shmem = 8 * 8 * 128 * sizeof(float);
+        tf_exl3::launch_linear(k2, codebook, 8, dim3(static_cast<unsigned>(nb * sk)), shmem, stream,
+                               args);
+    }
 }
 
 }  // namespace ninfer_tf

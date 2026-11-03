@@ -150,12 +150,13 @@ std::size_t gdn_input_proj_exl3_workspace_capacity_bytes(std::int32_t parent_row
     // token-major fused buffer receives 2D copies), adding one qkv-sized plane.
     const std::size_t staging =
         static_cast<std::size_t>(10240) * static_cast<std::size_t>(max_tokens) * 2;
-    return std::max(detail::exl3_dense_workspace_bytes(6144, 5120, std::min(max_tokens, 8)) +
-                        staging,
-                    max_tokens > 8 ? detail::exl3_prefill_workspace_bytes(parent_rows, input_rows,
-                                                                          max_tokens) +
-                                         staging
-                                   : std::size_t{0});
+    return std::max(
+        detail::exl3_dense_workspace_bytes(6144, 5120,
+                                           std::min(max_tokens, detail::kExl3DenseMaxTokens)) +
+            staging,
+        max_tokens > detail::kExl3DenseMaxTokens
+            ? detail::exl3_prefill_workspace_bytes(parent_rows, input_rows, max_tokens) + staging
+            : std::size_t{0});
 }
 
 } // namespace ninfer::ops

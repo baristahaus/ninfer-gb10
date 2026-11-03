@@ -181,7 +181,7 @@ def main():
     with ThreadPoolExecutor(max_workers=2) as pool:
         list(pool.map(work, range(len(seeds))))
 
-    packed = torch.tensor(rows, dtype=torch.long)
+    packed = torch.tensor([rows[i] for i in sorted(rows)], dtype=torch.long)
     lengths = torch.tensor([ROW_TOKENS] * len(rows), dtype=torch.long)
     st.save_file({"input_ids": packed, "lengths": lengths},
                  str(OUT / "cal_trace.safetensors"))

@@ -149,17 +149,20 @@ predates that counter's landing). Both modes beat his anchors.
 `run_serve_concurrency.py`, `long_decode_aime26_15`, 8192-token budgets; points under
 `profiles/bench/p3-exl3sc/points/`):**
 
+Steady-decode tok/s (the published definition; the NVFP4 MTP3 reference rows are
+147.7/291.0/522.2/922.4):
+
 | Mode | C=1 | C=2 | C=4 | C=8 |
 |---|---|---|---|---|
-| MTP0 makespan (s) | 138.3 | 142.1 | 151.1 | 165.9 |
-| MTP3 makespan (s) | 71.0 | 78.0 | **invalid** | **invalid** |
-| DFlash2 K=7 makespan (s) | 55.7 | 1353.0 | incomplete | incomplete |
+| MTP0 steady | 59.5 | 116.3 | 220.5 | 407.1 |
+| MTP3 steady | 116.2 | 213.2 | **degraded** | **degraded** |
+| DFlash2 K=7 steady | 147.9 | **degraded** | incomplete | incomplete |
 
-MTP0 scales 58.8/113.4/210.5/371.3 tok/s aggregate (97/96/93/89 percent of the dense
-fused route's 60.4/117.9/225.4/418.8) — the 3.85bpw artifact serves within 3-11
-percent of NVFP4-class rates. MTP3 acceptance at this fixture is 47-50 percent (the
-AIME domain, below TEB's agentic 85 percent). DFlash2 acceptance collapses to ~30
-percent on this domain and its C=2 wave already degrades 10x.
+MTP0 is the first MTP0 saturation record for this route. MTP3 C=1/C=2 steady reaches
+79/73 percent of the NVFP4 MTP3 rows at half the weight footprint. MTP3 acceptance at
+this fixture is 47-50 percent (the AIME domain, below TEB's agentic 85 percent);
+DFlash2 collapses to ~30 percent here. Makespans: MTP0 138.3/142.1/151.1/165.9 s;
+MTP3 71.0/78.0 s at C=1/C=2.
 
 **Open defect (blocks the C>=4 speculative rows):** every speculative wave at
 C>=4 degrades ~20x (MTP3 C=4 makespan 1799 s vs 71 s at C=1; DFlash2 steps 530 ms

@@ -145,6 +145,29 @@ Tokens/step = generation_tokens / (rounds + fallback steps); DFlash2's
 `spec_decode_accepted_tokens_per_pos_total` series render on /metrics (the MTP run
 predates that counter's landing). Both modes beat his anchors.
 
+**P3 decode-saturation progress (same artifact, the published driver
+`run_serve_concurrency.py`, `long_decode_aime26_15`, 8192-token budgets; points under
+`profiles/bench/p3-exl3sc/points/`):**
+
+| Mode | C=1 | C=2 | C=4 | C=8 |
+|---|---|---|---|---|
+| MTP0 makespan (s) | 138.3 | 142.1 | 151.1 | 165.9 |
+| MTP3 makespan (s) | 71.0 | 78.0 | **invalid** | **invalid** |
+| DFlash2 K=7 makespan (s) | 55.7 | 1353.0 | incomplete | incomplete |
+
+MTP0 scales 58.8/113.4/210.5/371.3 tok/s aggregate (97/96/93/89 percent of the dense
+fused route's 60.4/117.9/225.4/418.8) — the 3.85bpw artifact serves within 3-11
+percent of NVFP4-class rates. MTP3 acceptance at this fixture is 47-50 percent (the
+AIME domain, below TEB's agentic 85 percent). DFlash2 acceptance collapses to ~30
+percent on this domain and its C=2 wave already degrades 10x.
+
+**Open defect (blocks the C>=4 speculative rows):** every speculative wave at
+C>=4 degrades ~20x (MTP3 C=4 makespan 1799 s vs 71 s at C=1; DFlash2 steps 530 ms
+flat at 16-33 tok/s). The mtp0 rows at the same C are clean, so the record rounds
+at batch>=4 run uncaptured or hit a per-round host stall — the decomposed record
+path's capture coverage at B>=4 is the prime suspect. The C=1/C=2 speculative rows
+and all MTP0 rows are valid; the C>=4 speculative rows await this fix.
+
 **Window:** development iterations are short (single-request speculative rounds); one
 medium window for the acceptance battery.
 

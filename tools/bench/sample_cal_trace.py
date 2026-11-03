@@ -98,23 +98,50 @@ def build_seeds():
     return seeds[:ROWS]
 
 
-def sample_continuation(seed_text):
+def chat(messages):
     body = json.dumps({
         "model": "qwen3.8-27b",
-        "messages": [{"role": "user", "content": seed_text}],
-        "max_tokens": 2600,
+        "messages": messages,
+        "max_tokens": 700,
         "temperature": 0.6,
         "top_p": 0.95,
         "top_k": 20,
         "min_p": 0.0,
         "presence_penalty": 1.0,
         "frequency_penalty": 0.0,
-        "ignore_eos": True,
     }).encode()
     req = urllib.request.Request(POOL + "/v1/chat/completions", data=body,
                                  headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=3600) as resp:
-        return json.load(resp)["choices"][0]["message"]["content"]
+        message = json.load(resp)["choices"][0]["message"]
+    # Thinking mode: the reasoning text is genuine on-domain model output; with a
+    # bounded max_tokens the visible content can be empty while thinking continues.
+    return ((message.get("reasoning_content") or "") + "\n" +
+            (message.get("content") or "")).strip()
+
+
+def sample_continuation(seed_text, tokenizer):
+    """Multi-turn continuation until 2048 tokens of real content accumulate.
+
+    A single chat turn ends at <|im_end|>; with ignore_eos the serve would just loop
+    the eos token. Instead the assistant's text is appended and the model is asked
+    to continue, so every token in the row is genuine domain content.
+    """
+
+    messages = [{"role": "user", "content": seed_text}]
+    texts = []
+    token_count = 0
+    for turn in range(8):
+        reply = chat(messages)
+        if not reply or reply.strip() == "":
+            break
+        texts.append(reply)
+        token_count += len(tokenizer.encode(reply))
+        if token_count >= ROW_TOKENS:
+            break
+        messages.append({"role": "assistant", "content": reply})
+        messages.append({"role": "user", "content": "Continue exactly where you left off."})
+    return "\n".join(texts)
 
 
 def main():
@@ -127,28 +154,32 @@ def main():
     seeds = build_seeds()
     print(f"{len(seeds)} seeds", flush=True)
 
-    rows = []
     manifest = {"rows": ROWS, "row_tokens": ROW_TOKENS, "profile": "deployment-default",
-                "source": "W2.1 self-trace", "seeds": []}
+                "source": "W2.1 self-trace", "seeds": [None] * len(seeds)}
+    rows: dict[int, list] = {}
     t0 = time.time()
-    for i, seed in enumerate(seeds):
-        text = seed + "\n\n" + sample_continuation(seed)
-        ids = tokenizer.encode(text)
-        ids = ids[:ROW_TOKENS]
+    from concurrent.futures import ThreadPoolExecutor
+    import hashlib
+    def work(i):
+        text = seeds[i] + "\n\n" + sample_continuation(seeds[i], tokenizer)
+        ids = tokenizer.encode(text)[:ROW_TOKENS]
         if len(ids) < ROW_TOKENS:
             ids = ids + [tokenizer.eos_token_id] * (ROW_TOKENS - len(ids))
-        rows.append(ids)
-        import hashlib
-        manifest["seeds"].append({"row": i, "chars": len(seed),
-                                  "seed_sha256": hashlib.sha256(seed.encode()).hexdigest()})
-        if (i + 1) % 10 == 0 or i == len(seeds) - 1:
+        manifest["seeds"][i] = {"row": i, "chars": len(seeds[i]),
+                                "seed_sha256": hashlib.sha256(seeds[i].encode()).hexdigest()}
+        rows[i] = ids
+        done = len(rows)
+        if done % 10 == 0 or done == len(seeds):
             el = time.time() - t0
-            print(f"row {i+1}/{len(seeds)} elapsed {el:.0f}s eta {el/(i+1)*(len(seeds)-i-1):.0f}s", flush=True)
-        if (i + 1) % 25 == 0:  # incremental save so the run is resumable
-            st.save_file({"input_ids": torch.tensor(rows, dtype=torch.long),
-                          "lengths": torch.tensor([ROW_TOKENS] * len(rows), dtype=torch.long)},
+            print(f"row {done}/{len(seeds)} elapsed {el:.0f}s eta {el/done*(len(seeds)-done):.0f}s", flush=True)
+        if done % 25 == 0:
+            ordered = [rows[i] for i in sorted(rows)]
+            st.save_file({"input_ids": torch.tensor(ordered, dtype=torch.long),
+                          "lengths": torch.tensor([ROW_TOKENS] * len(ordered), dtype=torch.long)},
                          str(OUT / "cal_trace.partial.safetensors"))
             json.dump(manifest, open(OUT / "manifest.json", "w"), indent=1)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        list(pool.map(work, range(len(seeds))))
 
     packed = torch.tensor(rows, dtype=torch.long)
     lengths = torch.tensor([ROW_TOKENS] * len(rows), dtype=torch.long)

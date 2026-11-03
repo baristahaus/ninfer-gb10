@@ -57,8 +57,10 @@ std::size_t exl3_dense_workspace_bytes(std::int32_t n, std::int32_t k, std::int3
     const std::size_t activations =
         (static_cast<std::size_t>(max_tokens) * static_cast<std::size_t>(k) * 2 + 15) &
         ~std::size_t{15};
+    // The split-K arrival counters are indexed per 16-row pass.
     const std::size_t counters =
-        (static_cast<std::size_t>(n) / 128 * sizeof(int) + 15) & ~std::size_t{15};
+        ((static_cast<std::size_t>(n) / 128 * sizeof(int) + 15) & ~std::size_t{15}) *
+        ((static_cast<std::size_t>(max_tokens) + 15) / 16);
     const std::size_t partials = 8ULL * static_cast<std::size_t>(max_tokens) *
                                  static_cast<std::size_t>(n) * sizeof(float);
     // TensorFold stores y as [tokens, N] before the tiled transpose into the out view.

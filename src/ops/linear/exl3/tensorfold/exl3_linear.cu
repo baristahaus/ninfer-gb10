@@ -361,7 +361,8 @@ void exl3_dense_launch_nf(const void* x, const void* payload,
     const dim3 rot_grid(static_cast<unsigned>((k + 511) / 512), static_cast<unsigned>(tokens));
     tf_exl3::tf_exl3_rot_in<<<rot_grid, 128, 0, stream>>>(rot);
 
-    cudaMemsetAsync(counters, 0, static_cast<std::size_t>(nb) * 4, stream);
+    cudaMemsetAsync(counters, 0, (static_cast<std::size_t>(tokens + 15) / 16) * nb * 4,
+                    stream);
 
     tf_exl3::LinearArgs args;
     args.xh = xh;

@@ -132,6 +132,7 @@ int exl3_dense_a16_conformance() {
     // Every remaining registered problem, sampled rows and columns at the decode shapes.
     constexpr std::array kSampled{
         Invocation{1}, Invocation{4}, Invocation{8}, Invocation{12}, Invocation{16},
+        Invocation{32}, Invocation{64},
     };
     const test::linear::WeightGenerator mcg =
         [](std::int32_t n, std::int32_t k, std::uint32_t seed) {

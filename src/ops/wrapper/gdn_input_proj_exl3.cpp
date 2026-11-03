@@ -97,7 +97,7 @@ void gdn_input_proj_exl3(const Tensor& x, const Weight& weight, Tensor& qkv, Ten
             static_cast<std::byte*>(qkv.data) + row_begin * 2, kQkvRows * 2, stage.data, rows * 2,
             rows * 2, cols, cudaMemcpyDeviceToDevice, stream));
     };
-    if (cols <= 16) {
+    if (cols <= detail::kExl3DenseMaxTokens) {
         detail::exl3_dense_dispatch(x, query_w, q_stage, &workspace, stream);
         detail::exl3_dense_dispatch(x, key_w, k_stage, &workspace, stream);
         detail::exl3_dense_dispatch(x, value_w, v_stage, &workspace, stream);

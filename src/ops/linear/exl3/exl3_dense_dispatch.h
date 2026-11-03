@@ -14,6 +14,10 @@
 
 namespace ninfer::ops::detail {
 
+// The register route's token domain: decode shapes plus the speculative record
+// rounds (T = width x batch). The composed prefill route serves anything above.
+inline constexpr std::int32_t kExl3DenseMaxTokens = 16;
+
 // The registered dense problems (SP-7 dense step): the 27B dense-route projection geometries
 // that the converter's dense layout emits, at the decode token shapes T in 1..8. Prefill token
 // counts are unregistered until their route exists and are refused at admission.

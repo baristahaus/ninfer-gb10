@@ -33,7 +33,6 @@ constexpr int kProblems[][2] = {
     {248320, 5120}, // the 27B output head (the SC import's 5-bit EXL3 lm_head)
 };
 
-constexpr std::int32_t kMaxTokens = 16;  // decode shapes and record rounds to four concurrent rows (T = width x batch <= 16)
 
 } // namespace
 
@@ -46,7 +45,7 @@ bool exl3_dense_registered(std::int32_t n, std::int32_t k) {
 }
 
 std::size_t exl3_dense_workspace_bytes(std::int32_t n, std::int32_t k, std::int32_t max_tokens) {
-    if (max_tokens <= 0 || max_tokens > kMaxTokens) {
+    if (max_tokens <= 0 || max_tokens > kExl3DenseMaxTokens) {
         throw std::invalid_argument("exl3 dense workspace: token interval outside 1..8");
     }
     if (!exl3_dense_registered(n, k)) {
@@ -121,7 +120,7 @@ void exl3_dense_dispatch(const Tensor& x, const Weight& w, Tensor& out, MemoryAr
                                     std::to_string(w.n) + "x" + std::to_string(w.k));
     }
     const std::int32_t tokens = out.ne[1];
-    if (tokens <= 0 || tokens > kMaxTokens) {
+    if (tokens <= 0 || tokens > kExl3DenseMaxTokens) {
         throw std::invalid_argument("exl3 dense linear: registers decode shapes T in 1..8, got " +
                                     std::to_string(tokens));
     }

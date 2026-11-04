@@ -400,3 +400,14 @@ W0.1 → {W0.2, W0.3, W0.4} → P0 acceptance → W1.1 → W1.2 → W1.3 → P1 
 (needs P1). W2.1 → W2.2 ∥ W2.3 → W2.4 → W2.5 → P2 acceptance. P3 consumes P1 and P2
 winners. P0 acceptance (oracle on his tensors) is the earliest hard gate; if the
 import fails the oracle, stop and re-check format compatibility before spending P1.
+
+
+## P2 closeout (2026-11-04)
+
+P2 closes as delivered: W2.1-W2.5 complete per the sections above. The one
+deferred item is the supplementary cross-check quantizing recipe_385 with our own
+oracle-validated quantizer (the plan's parity note) - it is NOT scheduled; the
+his-quantizer artifact is the primary deliverable and the rfn anchor set already
+cross-validates the two implementations' error models at 1.3 percent. If a later
+window wants it, the recipe + trace on the tank and the adapter are the inputs.
+Follow-on work (SP-6/4/5) moves to docs/maintainer/2026-11-04-sp645-workplan.md.

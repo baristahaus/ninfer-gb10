@@ -561,6 +561,8 @@ struct GroupedWork {
     const std::uint32_t* residency = nullptr;
     const void* cold_codes         = nullptr;
     const void* cold_scales        = nullptr;
+    // SP-4 adaptive tiers: the always-armed per-expert activation counters, one add per job.
+    std::uint32_t* expert_activations = nullptr;
 
     __device__ __forceinline__ int work_count(int rows_per_block) const {
         return *job_count * (output_rows / rows_per_block);
@@ -577,6 +579,7 @@ struct GroupedWork {
         token_begin          = offsets[expert] + job_columns[job];
         active_tokens        = offsets[expert + 1];
         row_begin            = row_block * rows_per_block;
+        if (expert_activations != nullptr) { atomicAdd(&expert_activations[expert], 1U); }
         if (residency == nullptr) {
             tier_codes  = static_cast<const std::uint8_t*>(cold_codes);
             tier_scales = static_cast<const std::uint8_t*>(cold_scales);
@@ -611,6 +614,7 @@ struct DecodeRouteWork {
     const std::uint32_t* residency = nullptr;
     const void* cold_codes         = nullptr;
     const void* cold_scales        = nullptr;
+    std::uint32_t* expert_activations = nullptr;
 
     __device__ __forceinline__ int work_count(int rows_per_block) const {
         return assignments * (output_rows / rows_per_block);
@@ -627,6 +631,7 @@ struct DecodeRouteWork {
         token_begin          = assignment;
         active_tokens        = assignment + 1;
         row_begin            = (work - assignment * row_blocks) * rows_per_block;
+        if (expert_activations != nullptr) { atomicAdd(&expert_activations[expert], 1U); }
         if (residency == nullptr) {
             alpha       = 1.0F / (weight_divisors[expert] * input_divisors[expert]);
             rows.expert = expert;
@@ -940,7 +945,7 @@ void run_nvfp4_decode_routes(const Tensor& input, const FlashNextMoeWeights& wei
         weights.routed_gate_up.warm_codes, weights.routed_gate_up.warm_scales,
         weights.routed_gate_up.warm_weight_scale_divisors,
         weights.routed_gate_up.expert_residency, weights.routed_gate_up.codes,
-        weights.routed_gate_up.scales};
+        weights.routed_gate_up.scales, weights.routed_gate_up.expert_activations};
     const auto gate_output = GroupedSiluQuantizedOutput{
         GroupedSiluOutput{static_cast<__nv_bfloat16*>(routed_activation.data)},
         static_cast<std::uint8_t*>(down_codes.data), static_cast<std::uint8_t*>(down_scales.data),
@@ -967,7 +972,7 @@ void run_nvfp4_decode_routes(const Tensor& input, const FlashNextMoeWeights& wei
         weights.routed_down.warm_codes,         weights.routed_down.warm_scales,
         weights.routed_down.warm_weight_scale_divisors,
         weights.routed_down.expert_residency,   weights.routed_down.codes,
-        weights.routed_down.scales};
+        weights.routed_down.scales, weights.routed_down.expert_activations};
     constexpr int kDownRowsPerBlock = DecodeDownSchedule::kBlockN;
     const int down_blocks           = assignments * (kHidden / kDownRowsPerBlock);
     detail::flash_next::nvfp4_w4a4_mma_kernel<
@@ -1289,7 +1294,7 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
                 weights.routed_gate_up.warm_codes,       weights.routed_gate_up.warm_scales,
                 weights.routed_gate_up.warm_weight_scale_divisors,
                 weights.routed_gate_up.expert_residency, weights.routed_gate_up.codes,
-                weights.routed_gate_up.scales};
+                weights.routed_gate_up.scales,           weights.routed_gate_up.expert_activations};
             if (decode_grouped) {
                 constexpr int kGateRowsPerBlock = DecodeGateSchedule::kBlockN / 2;
                 const int gate_blocks =
@@ -1371,7 +1376,7 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
                 weights.routed_down.warm_codes,           weights.routed_down.warm_scales,
                 weights.routed_down.warm_weight_scale_divisors,
                 weights.routed_down.expert_residency,     weights.routed_down.codes,
-                weights.routed_down.scales};
+                weights.routed_down.scales,              weights.routed_down.expert_activations};
             if (decode_grouped) {
                 constexpr int kDownRowsPerBlock = DecodeDownSchedule::kBlockN;
                 const int down_blocks = std::min(persistent_blocks, assignments * (kHidden / kDownRowsPerBlock));

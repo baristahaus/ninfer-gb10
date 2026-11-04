@@ -563,9 +563,13 @@ MaterializedArtifact materialize(const Reader& reader, MaterializationPlan&& pla
         {
             std::vector<std::uint32_t> residency(experts, 0);
             for (std::size_t slot = 0; slot < experts; ++slot) {
+                // The rank indexes its tier's mini-bank: hot slots are device-mini positions;
+                // warm slots are warm-mini positions (slot - hot_experts), flagged bit 31.
+                const auto rank = slot >= tier.hot_experts
+                                      ? static_cast<std::uint32_t>(slot - tier.hot_experts)
+                                      : static_cast<std::uint32_t>(slot);
                 residency[tier.new_order[slot]] =
-                    static_cast<std::uint32_t>(slot) |
-                    (slot >= tier.hot_experts ? 0x80000000u : 0u);
+                    rank | (slot >= tier.hot_experts ? 0x80000000u : 0u);
             }
             storage.tier_state->copy_from_host(residency.data(),
                                                residency.size() * sizeof(std::uint32_t));

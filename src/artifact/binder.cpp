@@ -151,10 +151,6 @@ void Binder::remap_tiered_parts(ParameterReference& out, Residency residency) {
         // through the host parent by the consumer. Per-expert parts take the strict path.
         if (residency == Residency::Device && part.begin == 0 &&
             part.end == total_rows * elements_per_row) {
-            std::fprintf(stderr, "tier-remap: obj=%u hot=%u rpe=%zu epr=%zu part.end %zu->%zu\n",
-                         part.object.index, tier.hot_experts, rows_per_expert,
-                         elements_per_row, part.end,
-                         tier.hot_experts * rows_per_expert * elements_per_row);
             part.end = tier.hot_experts * rows_per_expert * elements_per_row;
             tier.device = true;
             out.tiered = true;

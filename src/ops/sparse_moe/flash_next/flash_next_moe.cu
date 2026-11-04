@@ -1023,22 +1023,6 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
     // 5090's 170 SMs). The grouped GEMMs stride their work list by gridDim.x,
     // so any grid is correct.
     const int persistent_blocks = kPrefillBlocksPerSm * device_sm_count();
-    {
-        static std::atomic<int> entry_n{0};
-        if (entry_n.fetch_add(1) == 0) {
-            std::fprintf(stderr, "[tierdump] moe entry: tokens=%d nvfp4=%d a16=%d\n", tokens,
-                         static_cast<int>(weights.routed_gate_up.qtype == QType::NVFP4),
-                         static_cast<int>(weights.routed_gate_up.input_scale_divisors == nullptr));
-            const auto& g = weights.routed_gate_up;
-            std::fprintf(stderr,
-                         "[tierdump] ptr codes=%p warm_codes=%p scales=%p warm_scales=%p "
-                         "wdiv=%p warm_wdiv=%p residency=%p warm_div_is_null=%d\n",
-                         g.codes, g.warm_codes, g.scales, g.warm_scales,
-                         g.weight_scale_divisors, g.warm_weight_scale_divisors,
-                         g.expert_residency,
-                         static_cast<int>(g.warm_weight_scale_divisors == nullptr));
-        }
-    }
     if (input.dtype != DType::BF16 || !input.is_contiguous() || input.ne[0] != kHidden ||
         tokens <= 0 || destination.dtype != DType::BF16 || !destination.is_contiguous() ||
         destination.ne[0] != kHidden || destination.ne[1] != tokens ||
@@ -1109,7 +1093,6 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
     }
     const auto i32 = [](Tensor& tensor) { return static_cast<int*>(tensor.data); };
     route_kernel<<<(tokens + kRouteWarps - 1) / kRouteWarps, kRouteWarps * 32, 0, stream>>>(
-        // (dump added after this launch below)
         static_cast<const __nv_bfloat16*>(scores.data),
         static_cast<const __nv_bfloat16*>(input.data),
         static_cast<const __nv_bfloat16*>(weights.shared_scale.qdata),
@@ -1204,33 +1187,6 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
 #endif
         Tensor grouped_output;
         if (a16_bank) {
-            // TEMPORARY tier NaN bisect: dump the first call's routing, divisors, and a
-            // decoded weight sample. Remove after the oracle localizes the wrong read.
-            {
-                static std::atomic<int> dump_n{0};
-                if (dump_n.fetch_add(1) == 0) {
-                    const int n_experts = weights.routed_gate_up.experts;
-                    std::vector<float> div(n_experts, 0.f);
-                    cudaMemcpy(div.data(), weights.routed_gate_up.weight_scale_divisors,
-                               n_experts * sizeof(float), cudaMemcpyDeviceToHost);
-                    std::fprintf(stderr, "[tierdump] divisors[:12]:");
-                    for (int e = 0; e < 12; ++e) { std::fprintf(stderr, " %.6g", div[e]); }
-                    std::fprintf(stderr, "\n[tierdump] divisors[248:260]:");
-                    for (int e = 248; e < 260; ++e) { std::fprintf(stderr, " %.6g", div[e]); }
-                    if (weights.routed_gate_up.expert_residency != nullptr) {
-                        std::vector<std::uint32_t> res(n_experts, 0);
-                        cudaMemcpy(res.data(), weights.routed_gate_up.expert_residency,
-                                   n_experts * sizeof(std::uint32_t), cudaMemcpyDeviceToHost);
-                        std::fprintf(stderr, "\n[tierdump] residency[:8]:");
-                        for (int e = 0; e < 8; ++e) {
-                            std::fprintf(stderr, " %u", res[e]);
-                        }
-                        std::fprintf(stderr, " residency[300]: %u residency[511]: %u", res[300],
-                                     res[511]);
-                    }
-                    std::fprintf(stderr, "\n");
-                }
-            }
             // W4A16 grouped route: gather the packed assignments as BF16 rows and run the
             // dequant-in-kernel MMA; no activation quantization stage exists on this route.
             using W4a16GroupedSchedule =
@@ -1323,23 +1279,6 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
                           kExperts * sizeof(float));
                     gdump("down_weight_divs", weights.routed_down.weight_scale_divisors,
                           kExperts * sizeof(float));
-                }
-            }
-            {
-                static std::atomic<int> job_dump_n{0};
-                if (job_dump_n.fetch_add(1) == 0) {
-                    int jc = -1;
-                    cudaMemcpy(&jc, job_count.data, sizeof(int), cudaMemcpyDeviceToHost);
-                    std::vector<int> je(24, -7);
-                    cudaMemcpy(je.data(), job_experts.data,
-                               std::min<std::size_t>(24, job_experts.bytes()),
-                               cudaMemcpyDeviceToHost);
-                    std::fprintf(stderr, "[tierdump] grouped: assignments=%zu job_count=%d jobs[:24]:",
-                                 static_cast<std::size_t>(assignments), jc);
-                    for (std::size_t i = 0; i < je.size(); ++i) {
-                        std::fprintf(stderr, " %d", je[i]);
-                    }
-                    std::fprintf(stderr, "\n");
                 }
             }
             const GroupedWork<GroupedGateRows> gate_work{
@@ -1544,57 +1483,6 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
             static_cast<__nv_bfloat16*>(destination.data), tokens, nullptr, nullptr, nullptr,
             nullptr);
     } else {
-        {
-            static std::atomic<int> pair_dump_n{0};
-            if (pair_dump_n.fetch_add(1) == 0) {
-                const int n_experts = weights.routed_gate_up.experts;
-                std::vector<float> div(n_experts, 0.f);
-                cudaMemcpy(div.data(), weights.routed_gate_up.weight_scale_divisors,
-                           n_experts * sizeof(float), cudaMemcpyDeviceToHost);
-                std::fprintf(stderr, "[tierdump] hot divisors[:8]:");
-                for (int e = 0; e < 8; ++e) { std::fprintf(stderr, " %.6g", div[e]); }
-                std::fprintf(stderr, "\n[tierdump] hot divisors[248:256]:");
-                for (int e = 248; e < 256; ++e) { std::fprintf(stderr, " %.6g", div[e]); }
-                if (weights.routed_gate_up.expert_residency != nullptr) {
-                    std::vector<std::uint32_t> res(n_experts, 0);
-                    cudaMemcpy(res.data(), weights.routed_gate_up.expert_residency,
-                               n_experts * sizeof(std::uint32_t), cudaMemcpyDeviceToHost);
-                    std::fprintf(stderr, "\n[tierdump] residency[:6]:");
-                    for (int e = 0; e < 6; ++e) { std::fprintf(stderr, " %u", res[e]); }
-                    std::fprintf(stderr, " [300]=%u [511]=%u", res[300], res[511]);
-                    std::vector<std::uint8_t> hot_codes(64, 0), hot_scales(64, 0);
-                    cudaMemcpy(hot_codes.data(), weights.routed_gate_up.codes, 64,
-                               cudaMemcpyDeviceToHost);
-                    cudaMemcpy(hot_scales.data(), weights.routed_gate_up.scales, 64,
-                               cudaMemcpyDeviceToHost);
-                    std::fprintf(stderr, "\n[tierdump] hot codes[:16]:");
-                    for (int b = 0; b < 16; ++b) { std::fprintf(stderr, " %02x", hot_codes[b]); }
-                    std::fprintf(stderr, "\n[tierdump] hot scales[:16]:");
-                    for (int b = 0; b < 16; ++b) { std::fprintf(stderr, " %02x", hot_scales[b]); }
-                    if (weights.routed_gate_up.warm_codes != nullptr) {
-                        std::vector<std::uint8_t> warm_codes(64, 0), warm_scales(64, 0);
-                        cudaMemcpy(warm_codes.data(), weights.routed_gate_up.warm_codes, 64,
-                                   cudaMemcpyDeviceToHost);
-                        cudaMemcpy(warm_scales.data(), weights.routed_gate_up.warm_scales, 64,
-                                   cudaMemcpyDeviceToHost);
-                        std::fprintf(stderr, "\n[tierdump] warm codes[:16]:");
-                        for (int b = 0; b < 16; ++b) { std::fprintf(stderr, " %02x", warm_codes[b]); }
-                        std::fprintf(stderr, "\n[tierdump] warm scales[:16]:");
-                        for (int b = 0; b < 16; ++b) { std::fprintf(stderr, " %02x", warm_scales[b]); }
-                        std::vector<float> wdiv(8, 0.f);
-                        cudaMemcpy(wdiv.data(), weights.routed_gate_up.warm_weight_scale_divisors,
-                                   8 * sizeof(float), cudaMemcpyDeviceToHost);
-                        std::fprintf(stderr, "\n[tierdump] warm divisors[:8]:");
-                        for (int e = 0; e < 8; ++e) { std::fprintf(stderr, " %.6g", wdiv[e]); }
-                    } else {
-                        std::fprintf(stderr, "\n[tierdump] warm codes NULL");
-                    }
-                } else {
-                    std::fprintf(stderr, "\n[tierdump] residency NULL");
-                }
-                std::fprintf(stderr, "\n");
-            }
-        }
         routed_gate_up_kernel<false><<<gate_grid, kWarps * 32, 0, stream>>>(
             static_cast<const __nv_bfloat16*>(input.data), static_cast<const int*>(ids.data),
             static_cast<const std::uint8_t*>(weights.routed_gate_up.codes),

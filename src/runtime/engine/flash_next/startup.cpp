@@ -213,17 +213,6 @@ ConstructedFlashNextModel construct_flash_next(EngineOptions& options, artifact:
                      storage.device_capacity_bytes + tier_pinned + host_backing <= obtainable
                          ? "FITS"
                          : "DOES_NOT_FIT");
-        for (const auto& tier : storage.tier_objects) {
-            std::fprintf(stderr, "budget-dry-run: tier bank obj=%u hot=%u slots=%u bytes=%zu MiB\n",
-                         tier.object.index, tier.hot_experts, tier.cache_slots,
-                         tier.bytes >> 20);
-        }
-        for (std::size_t i = 0; i < storage.objects.size(); ++i) {
-            if (storage.objects[i]) {
-                std::fprintf(stderr, "budget-dry-run: objmap obj=%zu storage=%u\n", i,
-                             storage.objects[i]->index);
-            }
-        }
         throw std::invalid_argument("budget dry run complete");
     }
     if (device->properties().integrated &&

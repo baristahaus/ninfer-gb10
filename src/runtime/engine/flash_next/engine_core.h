@@ -968,6 +968,7 @@ private:
         result.stats.engine_timing = request->host_timing.public_snapshot();
         result.stats.reused_prompt_tokens = result.reused_prompt_tokens;
         result.stats.prefix_reuse_path    = result.prefix_reuse_path;
+        result.stats.computed_prefill_tokens = request->computed_prompt_tokens;
         result.stats.speculative          = result.speculative;
         {
             std::lock_guard lock(request->mutex);

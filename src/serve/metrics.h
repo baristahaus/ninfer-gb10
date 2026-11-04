@@ -9,6 +9,9 @@
 
 namespace ninfer::serve {
 
+// Upper bound on the speculative draft window (the per-position arrays are fixed-size).
+inline constexpr std::size_t kSpeculativePositions = 16;
+
 // Fixed-size request aggregates. Runtime counters remain owned and published by Engine.
 class Metrics {
 public:
@@ -38,6 +41,10 @@ private:
         std::uint64_t response_failures = 0;
         std::array<std::uint64_t, 3> constraint_outcomes{};
         std::array<std::uint64_t, 3> constraint_cache{};
+        // Per speculative block position: attempted (drafted) and accepted tokens observed
+        // by settled requests. Attempted is the acceptance-rate denominator.
+        std::array<std::uint64_t, kSpeculativePositions> spec_attempted_per_position{};
+        std::array<std::uint64_t, kSpeculativePositions> spec_accepted_per_position{};
         double constraint_prepare_seconds     = 0;
         double constraint_mask_seconds        = 0;
         double constraint_matcher_seconds     = 0;

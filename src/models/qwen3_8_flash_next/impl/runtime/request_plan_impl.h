@@ -1,3 +1,4 @@
+#include "models/load_options.h"
 #include "models/qwen3_8_flash_next/impl/runtime/instance.h"
 #include "models/qwen3_8_flash_next/impl/runtime/program.h"
 #include "models/qwen3_8_flash_next/impl/runtime/rebuild_work.h"
@@ -48,7 +49,7 @@ std::uint32_t pages_for_tokens(std::uint32_t tokens) noexcept {
 std::uint32_t backend_frontier_at(SpeculativeBackend backend,
                                   std::uint32_t main_frontier) noexcept {
     if (backend == SpeculativeBackend::Mtp) { return main_frontier == 0 ? 0U : main_frontier - 1U; }
-    return backend == SpeculativeBackend::DFlash ? main_frontier : 0U;
+    return ninfer::models::is_masked_draft_backend(backend) ? main_frontier : 0U;
 }
 
 std::uint64_t segmented_prefill_chunks(std::uint32_t begin, std::uint32_t end,
@@ -272,7 +273,7 @@ RequestBasePlan ProgramImplCore::plan_request(const PreparedPromptData& prompt,
         const std::uint32_t mtp_tokens    = static_cast<std::uint32_t>(std::min<std::uint64_t>(
             capacity, static_cast<std::uint64_t>(reserved_context_tokens) + draft_window - 1ULL));
         base->backend_kv_page_entitlement = pages_for_tokens(mtp_tokens);
-    } else if (speculative_backend == SpeculativeBackend::DFlash) {
+    } else if (ninfer::models::is_masked_draft_backend(speculative_backend)) {
         base->backend_kv_page_entitlement = pages_for_tokens(reserved_context_tokens);
     }
     detail::PhysicalDeviceResources root_active{
@@ -563,7 +564,7 @@ std::optional<AdmissionCandidate> ProgramImplCore::inspect_lane(
     if ((is_rewrite_checkpoint_restore(plan->reuse) ||
          plan->reuse == ReusePath::PrivateLongAnchor ||
          plan->reuse == ReusePath::SharedStablePrefix) &&
-        speculative_backend == SpeculativeBackend::DFlash &&
+        ninfer::models::is_masked_draft_backend(speculative_backend) &&
         (!dflash ||
          (source != nullptr && (!source->kv || !source->kv->backend ||
                                 source->dflash_context_frontier < plan->reuse_base)) ||
@@ -833,7 +834,7 @@ std::optional<AdmissionCandidate> ProgramImplCore::inspect_lane(
             (plan->source_mode == runtime::PrivateSourceMode::Retain && !splits_private_both) ||
             (plan->source_mode == runtime::PrivateSourceMode::ConsumeToActive &&
              plan->state_fork_required);
-        if (speculative_backend == SpeculativeBackend::DFlash && forks_device_state &&
+        if (ninfer::models::is_masked_draft_backend(speculative_backend) && forks_device_state &&
             selected_state_residency != StateReplicaResidency::HostOnly) {
             // DFlash has lane-local recurrent state which is copied eagerly when a retained
             // checkpoint forks. The copy completes on the compute stream in the publication

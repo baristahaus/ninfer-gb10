@@ -1438,10 +1438,17 @@ public:
                                cudaStream_t stream = nullptr) {
         Address& address           = require_active(handle);
         const std::uint32_t target = pages_for_tokens(tokens);
-        if (target < address.page_count || target > entitlement(address)) {
-            throw std::invalid_argument("KV materialization exceeds active entitlement");
+        if (target > entitlement(address)) {
+            throw std::invalid_argument(
+                "KV materialization exceeds active entitlement: target=" +
+                std::to_string(target) + " pages, entitlement=" +
+                std::to_string(entitlement(address)) + " pages, mapped=" +
+                std::to_string(address.page_count) + " pages, tokens=" +
+                std::to_string(tokens));
         }
-        if (target == address.page_count) { return; }
+        // A target at or below the mapped count is already satisfied: the partial-prefix-reuse
+        // admission may map one page more than the decode round's exact watermark.
+        if (target <= address.page_count) { return; }
         const std::uint32_t begin       = address.page_count;
         const std::uint32_t count       = target - begin;
         const std::size_t address_index = static_cast<std::size_t>(&address - addresses_.data());

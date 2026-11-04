@@ -254,7 +254,8 @@ void propose_dflash2_batch(DraftExecutionView& execution, const DraftInputs& inp
                 std::array outputs{query_flat, key_flat, value_flat};
                 ops::linear_split(branch.prepared.view({dimension(target.hidden_size), columns}),
                                   layer.query_key_value.weight, outputs, cuda);
-                ops::rmsnorm_rope(positions, layer.query_norm, layer.key_norm, query, key, cuda);
+                ops::rmsnorm_rope(positions, layer.query_norm, layer.key_norm, query, key,
+                                  config.rope_theta, cuda);
                 Tensor attention = work.alloc(
                     DType::BF16, {dimension(config.attention.head_dim),
                                   dimension(config.attention.num_attention_heads), width, batch});

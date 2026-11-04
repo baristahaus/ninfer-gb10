@@ -161,25 +161,24 @@ void EngineCore<Instance>::commit_pending(PendingBatch&& pending, ComputeFlight 
             counters.accepted_tokens - observed.accepted_tokens;
         cumulative_stats_.speculative_fallback_steps +=
             counters.fallback_steps - observed.fallback_steps;
-        if (!counters.accepted_per_position.empty()) {
-            auto& cum_accepted = cumulative_stats_.speculative_accepted_per_position;
-            if (cum_accepted.size() < counters.accepted_per_position.size()) {
-                cum_accepted.resize(counters.accepted_per_position.size(), 0);
-            }
-            for (std::size_t position = 0; position < counters.accepted_per_position.size();
-                 ++position) {
-                const auto accepted_seen = position < observed.accepted_per_position.size()
-                                               ? observed.accepted_per_position[position]
-                                               : 0;
-                cum_accepted[position] += counters.accepted_per_position[position] - accepted_seen;
-            }
+        const std::size_t positions = counters.attempted_per_position.size();
+        if (cumulative_stats_.speculative_attempted_per_position.size() < positions) {
+            cumulative_stats_.speculative_attempted_per_position.resize(positions, 0);
+            cumulative_stats_.speculative_accepted_per_position.resize(positions, 0);
+        }
+        for (std::size_t i = 0; i < positions; ++i) {
+            cumulative_stats_.speculative_attempted_per_position[i] +=
+                counters.attempted_per_position[i] - observed.attempted_per_position[i];
+            cumulative_stats_.speculative_accepted_per_position[i] +=
+                counters.accepted_per_position[i] - observed.accepted_per_position[i];
+            observed.attempted_per_position[i] = counters.attempted_per_position[i];
+            observed.accepted_per_position[i]  = counters.accepted_per_position[i];
         }
         observed.rounds                 = counters.rounds;
         observed.drafted_tokens         = counters.drafted_tokens;
         observed.accepted_tokens        = counters.accepted_tokens;
         observed.fallback_steps         = counters.fallback_steps;
         observed.committed_draft_tokens = counters.committed_draft_tokens;
-        observed.accepted_per_position = counters.accepted_per_position;
         if (cancelled[row] || failed[row]) {
             request->speculative_stats = std::move(committed.rows[row].speculative);
         }

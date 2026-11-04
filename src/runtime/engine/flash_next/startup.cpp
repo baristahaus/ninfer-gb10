@@ -186,7 +186,10 @@ ConstructedFlashNextModel construct_flash_next(EngineOptions& options, artifact:
 
     const auto free = obtainable_device_bytes(*device, options, true);
     if (storage.device_capacity_bytes > free) {
-        throw std::invalid_argument("Flash-Next weights exceed free GPU memory");
+        throw std::invalid_argument(
+            "Flash-Next weights exceed free GPU memory: need " +
+            std::to_string(storage.device_capacity_bytes >> 20) + " MiB, obtainable " +
+            std::to_string(free >> 20) + " MiB");
     }
     (void)resolve_kv_capacity(options.kv_capacity, curve, free - storage.device_capacity_bytes);
 

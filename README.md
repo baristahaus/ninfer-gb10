@@ -14,7 +14,8 @@ The engine serves the Qwen3.8 Flash-Next 125B-A6B model on the GB10 as a local H
 
 - text generation with thinking and non-thinking prompts;
 - image and video input (Vision);
-- MTP speculative decoding (the model drafts several tokens per decode step);
+- MTP and DFlash2 speculative decoding (the model drafts several tokens per decode step),
+  with per-position acceptance visible on `GET /metrics`;
 - exact prefix reuse across requests (the server reuses work from earlier prompts);
 - OpenAI Chat Completions, OpenAI Responses Core, and Anthropic Messages APIs, with streaming,
   tools, token counting, and usage accounting;
@@ -55,6 +56,30 @@ drafts add more: K=3 is 32.9% ahead of DGPP at four requests. Acceptance is 2.9 
 at K=3.
 
 Single-stream, no speculation: 31.5-32.6 tok/s. Prefill: about 2,500 tok/s from 8K to 64K prompts.
+
+### Speculative drafting
+
+Two draft lanes run on the same artifact. Acceptance is greedy, measured with the CLI
+(`--temperature 0 --spec <lane> --draft-tokens 3 --no-cuda-graph`):
+
+| lane | acceptance | per block position | notes |
+|---|---:|---|---|
+| MTP | 89.6% short / 50.2% long | 18/18, 18/12, 18/9 attempted/accepted (live scrape) | 43/48 and 307/611 drafted tokens; 45-48 tok/s decode |
+| DFlash2 | 45% (27/60) | 14 / 8 / 5 | draft quality is the limiter, not the round machinery |
+
+The DFlash2 lane is a second, block-diffusion draft head (five sliding-attention layers over
+the target's tap layers 5/15/25/35/45, a candidate path selector, and two-tap dynamic
+convolutions). Its draft forward and selector picks are verified against a reference replay
+of the companion model on the same context. The acceptance trail follows two fixed defects:
+the draft's final RMSNorm ran the 5120-row geometry on the 2560-row draft (8.7% to 25.9%),
+and `column_topk` wrote its candidates column-major against its rank-fastest contract (25.9%
+to 45%). The remaining gap to MTP is draft quality; the decode rate has not been re-measured
+after these fixes. The lane record lives in the beads issue history (`ninfer-gb10-cd3`,
+`ninfer-gb10-j91`).
+
+`/metrics` exposes `ninfer_spec_decode_{rounds,draft_tokens,accepted_tokens}_total` with a
+`speculative_backend` label, the `spec_decode_acceptance_ratio` gauge, and per-position
+attempted/accepted counters, so draft quality is trackable per position over time.
 
 Long prompts (October 2026 cycle, draft-tokens 3):
 

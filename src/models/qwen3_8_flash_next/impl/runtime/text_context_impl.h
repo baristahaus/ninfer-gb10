@@ -223,7 +223,10 @@ void DFlashFeatureSink::capture_layer(int layer, const Tensor& value, cudaStream
 void DFlashFeatureSink::capture_positions(const Tensor& source, cudaStream_t stream) {
     const std::uint32_t complete_mask = layers.size() == 32 ? ~0U : ((1U << layers.size()) - 1U);
     if (captured_mask != complete_mask) {
-        throw std::logic_error("DFlash target call did not publish every feature layer");
+        throw std::logic_error("DFlash target call did not publish every feature layer: captured 0x" +
+                               std::to_string(captured_mask) + " expected 0x" +
+                               std::to_string(complete_mask) + " layers " +
+                               std::to_string(layers.size()));
     }
     if (batch_features != nullptr) {
         if (source.dtype != DType::I32 || source.ne[0] != batch_width ||
@@ -1264,7 +1267,7 @@ void TextContext::mlp_tail(const Tensor* post_norm, const MlpW& m, Tensor& x, Ph
 template <class Tap>
 void TextContext::run_layers(Tensor& x, Phase ph, Tap& tap) {
     if constexpr (Variant::flash_next) {
-        run_flash_next_layers(x, ph);
+        run_flash_next_layers(x, ph, tap);
         return;
     }
     const bool prefill = ph == Phase::Prefill;
@@ -1315,7 +1318,8 @@ void TextContext::run_layers(Tensor& x, Phase ph, Tap& tap) {
     }
 }
 
-void TextContext::run_flash_next_layers(Tensor& x, Phase ph) {
+template <class Tap>
+void TextContext::run_flash_next_layers(Tensor& x, Phase ph, Tap& tap) {
     NINFER_PERF_SCOPE(ph == Phase::Prefill ? "ninfer.region/1|target.prefill"
                                          : "ninfer.region/1|target.verify");
 #ifndef NINFER_QWEN38_FLASH_NEXT
@@ -1370,7 +1374,7 @@ void TextContext::run_flash_next_layers(Tensor& x, Phase ph) {
     bool pending             = false;
     std::size_t full_index   = 0;
     std::size_t gdn_index    = 0;
-    const auto execute_layer = [&](const auto& source) {
+    const auto execute_layer = [&](const auto& source, int layer) {
         if (source.has_ple) {
             if (pending) {
                 ops::hyperconnection_combine(hyper, block_output, injection, stream);
@@ -1432,6 +1436,22 @@ void TextContext::run_flash_next_layers(Tensor& x, Phase ph) {
                                              block_input, &injection, work_, stream);
         } else {
             ops::hyperconnection_mix(hyper, attention_hc, block_input, &injection, work_, stream);
+        }
+        // block_input now carries the completed previous layer (residual, attention, and MLP);
+        // that is the target hidden state the masked-draft feature projection consumes.
+        // A/B 2026-11-02: tagging block L's input as layer L (the HF hidden_states convention)
+        // instead of layer-1 changed neither the acceptance nor the draft-vs-target overlap
+        // (0.163 vs 0.166 top-2k) — the tap index is not the defect; the original semantics
+        // are kept.
+        if constexpr (Tap::enabled) {
+            if (layer > 0) {
+                // The reference tap is the completed, zero-based layer output averaged over the
+                // four hyper-connection streams (dflash2 capture patch), not the mixed input.
+                auto mean_scope = work_.scope();
+                Tensor mean_hidden = work_.alloc(DType::BF16, {TextConfig::hidden, tokens});
+                ops::hyperconnection_mean(hyper, mean_hidden, stream);
+                tap.capture_layer(layer - 1, mean_hidden, stream);
+            }
         }
         if constexpr (std::is_same_v<std::remove_cvref_t<decltype(source)>,
                                      typename LoadedModelData::FullLayer>) {
@@ -1497,9 +1517,9 @@ void TextContext::run_flash_next_layers(Tensor& x, Phase ph) {
     };
     for (int layer = 0; layer < TextConfig::layers; ++layer) {
         if (TextConfig::is_full_attention(layer)) {
-            execute_layer(weights_.full_layers.at(full_index));
+            execute_layer(weights_.full_layers.at(full_index), layer);
         } else {
-            execute_layer(weights_.gdn_layers.at(gdn_index));
+            execute_layer(weights_.gdn_layers.at(gdn_index), layer);
         }
     }
     if (pending) { ops::hyperconnection_combine(hyper, block_output, injection, stream); }

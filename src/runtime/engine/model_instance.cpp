@@ -253,9 +253,15 @@ ConstructedModel construct_flash_next(const EngineOptions& options, DeviceContex
     auto plan        = Model::plan_load(binder, options, profile);
     auto planner     = Model::make_sequence_planner(device, options, profile);
     const auto curve = planner.capacity_curve();
+    // A process that just exited returns its tens of GiB over several seconds on the
+    // integrated pool; sizing before the release fails the weights check.
+    wait_for_integrated_memory_release(device);
     const auto free  = obtainable_device_bytes(device, options, true);
     if (plan.materialization().device_capacity_bytes > free) {
-        throw std::invalid_argument("Flash-Next weights exceed free GPU memory");
+        throw std::invalid_argument(
+            "Flash-Next weights exceed free GPU memory: need " +
+            std::to_string(plan.materialization().device_capacity_bytes >> 20) +
+            " MiB, obtainable " + std::to_string(free >> 20) + " MiB");
     }
     (void)resolve_kv_capacity(options.kv_capacity, curve,
                               free - plan.materialization().device_capacity_bytes);

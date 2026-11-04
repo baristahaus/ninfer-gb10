@@ -620,7 +620,13 @@ private:
             ++cumulative_stats_.shared_stable_prefix_selections;
             break;
         }
+        // The generic core's vocabulary: a non-root selection is a checkpoint selection. The
+        // private_* counters above stay the lane's detailed breakdown.
+        if (summary.prefix_reuse_path != PrefixReusePath::Root) {
+            ++cumulative_stats_.checkpoint_selections;
+        }
         cumulative_stats_.reused_prompt_tokens += summary.reusable_prompt_tokens;
+        cumulative_stats_.prompt_tokens += summary.prompt_tokens;
         cumulative_stats_.last_selected_frontier_tokens = summary.reusable_prompt_tokens;
     }
 
@@ -728,6 +734,7 @@ private:
     record_committed_output(const std::shared_ptr<Request>& request,
                             std::uint32_t accepted_tokens) {
         if (accepted_tokens == 0) { return std::nullopt; }
+        cumulative_stats_.generated_tokens += accepted_tokens;
         const bool observe_wall =
             request->observation.phase_timings || request->observation.live_timings;
         const bool need_now         = !request->first_token || observe_wall;
@@ -1320,6 +1327,39 @@ private:
 
         for (std::size_t row = 0; row < row_count; ++row) {
             const auto& request = slots_[lane_indices[row]];
+            auto& observed      = request->speculative_stats;
+            const auto& counters = committed.rows[row].speculative;
+            cumulative_stats_.speculative_rounds += counters.rounds - observed.rounds;
+            cumulative_stats_.speculative_draft_tokens +=
+                counters.drafted_tokens - observed.drafted_tokens;
+            cumulative_stats_.speculative_accepted_tokens +=
+                counters.accepted_tokens - observed.accepted_tokens;
+            cumulative_stats_.speculative_fallback_steps +=
+                counters.fallback_steps - observed.fallback_steps;
+            const std::size_t positions = counters.attempted_per_position.size();
+            if (cumulative_stats_.speculative_attempted_per_position.size() < positions) {
+                cumulative_stats_.speculative_attempted_per_position.resize(positions, 0);
+                cumulative_stats_.speculative_accepted_per_position.resize(positions, 0);
+            }
+            // The Engine-side request record starts without per-position storage; the
+            // program-side record owns it. Size the observed baseline before subtracting.
+            if (observed.attempted_per_position.size() < positions) {
+                observed.attempted_per_position.resize(positions, 0);
+                observed.accepted_per_position.resize(positions, 0);
+            }
+            for (std::size_t i = 0; i < positions; ++i) {
+                cumulative_stats_.speculative_attempted_per_position[i] +=
+                    counters.attempted_per_position[i] - observed.attempted_per_position[i];
+                cumulative_stats_.speculative_accepted_per_position[i] +=
+                    counters.accepted_per_position[i] - observed.accepted_per_position[i];
+                observed.attempted_per_position[i] = counters.attempted_per_position[i];
+                observed.accepted_per_position[i]  = counters.accepted_per_position[i];
+            }
+            observed.rounds                 = counters.rounds;
+            observed.drafted_tokens         = counters.drafted_tokens;
+            observed.accepted_tokens        = counters.accepted_tokens;
+            observed.fallback_steps         = counters.fallback_steps;
+            observed.committed_draft_tokens = counters.committed_draft_tokens;
             if (cancelled[row]) {
                 request->generation_timings = committed.rows[row].timings;
                 request->speculative_stats  = std::move(committed.rows[row].speculative);

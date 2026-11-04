@@ -8,14 +8,19 @@
 #include "ninfer/ops/linear.h"
 #include "ninfer/ops/linear_split.h"
 #include "ninfer/ops/linear_swiglu.h"
-#include "ninfer/ops/linear_topk.h"
+#include "ninfer/ops/column_topk.h"
 #include "ninfer/ops/prepare_masked_block.h"
 #include "ninfer/ops/rmsnorm.h"
 #include "ninfer/ops/rmsnorm_pack_tail.h"
 #include "ninfer/ops/rmsnorm_rope.h"
 #include "ninfer/ops/sliding_window_attention.h"
 
+#include <algorithm>
+#include <array>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <vector>
 #include <stdexcept>
 
 namespace ninfer::models::qwen3_8_flash_next::detail::NINFER_QWEN38_FLASH_NEXT_RUNTIME_NS::
@@ -60,8 +65,6 @@ void finish_branch(const Tensor& input, const Weight& projection, const Tensor& 
                                          residual, scratch, execution);
 }
 
-} // namespace
-
 // The DFlash2 draft's proposal pass: masked block drafting with the two-tap dynamic
 // convolutions, then the candidate selector's coherent path. The draft reuses the target's
 // token embedding and output head; the context K/V come from the target's tap layers through
@@ -89,13 +92,14 @@ void propose_dflash2_batch_impl(DFlashBatchContext& state,
 
         auto& work = state.execution.work;
         work.reset();
+        ;
+        ;
         ops::prepare_masked_block(anchors, frontiers, valid_columns, Config::mask_token, ids,
-                                  positions, state.execution.device.execution_view());
+                                  positions, state.execution.device.stream());
         Tensor residual = work.alloc(DType::BF16, {Config::hidden, width, batch_size});
         Tensor flat_residual = residual.view({Config::hidden, columns});
         ops::embedding(ids.view({columns}), state.execution.model.token_embedding, flat_residual,
                        state.execution.device.execution_view());
-
         for (int layer = 0; layer < Config::layers; ++layer) {
             nvtx::ScopedRange layer_range(nvtx::Name::DFlashLayer, nvtx::Category::DFlash,
                                           static_cast<std::uint64_t>(layer));
@@ -126,6 +130,7 @@ void propose_dflash2_batch_impl(DFlashBatchContext& state,
                                   weight.query_key_value, outputs,
                                   state.execution.device.execution_view());
                 ops::rmsnorm_rope(positions, weight.query_norm, weight.key_norm, query, key,
+                                  Config::rope_theta,
                                   state.execution.device.execution_view());
                 Tensor attention =
                     work.alloc(DType::BF16, {Config::head_dim, Config::query_heads, width,
@@ -141,7 +146,7 @@ void propose_dflash2_batch_impl(DFlashBatchContext& state,
                     attention.view({Config::query_size, width, batch_size}), weight.output,
                     weight.attention_conv_base_kernel, branch, residual, work,
                     state.execution.device.execution_view());
-            }
+                }
             {
                 nvtx::ScopedRange mlp_range(nvtx::Name::DFlashMlp, nvtx::Category::PostMixer,
                                             static_cast<std::uint64_t>(layer));
@@ -153,32 +158,43 @@ void propose_dflash2_batch_impl(DFlashBatchContext& state,
                                        state.execution.device.execution_view());
                 Tensor intermediate =
                     work.alloc(DType::BF16, {Config::intermediate, width, batch_size});
-                ops::linear_swiglu(branch.prepared.view({Config::hidden, columns}),
-                                   weight.mlp_gate_up,
-                                   intermediate.view({Config::intermediate, columns}), work,
+                Tensor intermediate_flat = intermediate.view({Config::intermediate, columns});
+                Tensor prepared_flat     = branch.prepared.view({Config::hidden, columns});
+                ops::linear_swiglu(prepared_flat, weight.mlp_gate_up, intermediate_flat, work,
                                    state.execution.device.execution_view());
                 finish_branch<Config>(intermediate, weight.mlp_down, weight.mlp_conv_base_kernel,
                                       branch, residual, work,
                                       state.execution.device.execution_view());
-            }
+                }
         }
 
         const std::int32_t mask_columns = static_cast<std::int32_t>(k) * batch_size;
         Tensor proposal_hidden = work.alloc(DType::BF16, {Config::hidden, mask_columns});
         ops::rmsnorm_pack_tail(residual, state.execution.model.dflash2->final_norm,
                                proposal_hidden, state.execution.device.execution_view());
+        Tensor candidates = frame.proposal_candidates.slice(2, 0, batch_size);
+        Tensor scores     = frame.proposal_scores.slice(2, 0, batch_size);
+        Tensor logits     = work.alloc(DType::BF16, {TextConfig::output_rows, mask_columns});
 
-        Tensor candidates = frame.proposal_candidates.slice(1, 0, batch_size);
-        Tensor scores     = frame.proposal_scores.slice(1, 0, batch_size);
-        ops::linear_topk(proposal_hidden, state.execution.model.output_head, TextConfig::token_domain,
-                         candidates, scores, work,
-                         state.execution.device.execution_view());
-
+        // The BF16 draft head has no fused linear_topk profile; project the logits and take the
+        // top candidates per column.
+        ops::linear(proposal_hidden, state.execution.model.output_head, logits,
+                    state.execution.device.execution_view());
+        ops::column_topk(logits.view({TextConfig::output_rows, static_cast<std::int32_t>(k),
+                                      batch_size}),
+                         candidates, scores, state.execution.device.execution_view());
         Tensor projected = work.alloc(DType::BF16, {Config::selector_rank, mask_columns});
         ops::linear(proposal_hidden, state.execution.model.dflash2->selector_hidden_projection,
                     projected, state.execution.device.execution_view());
 
-        Tensor proposal_q = frame.proposal_q.slice(1, 0, batch_size);
+        if (std::getenv("NINFER_DFLASH2_BYPASS") != nullptr) {
+            // Diagnostic: zero the selector's projected hidden so the edge score collapses to
+            // the unary head score and the selector picks the per-column head argmax.
+            CUDA_CHECK(cudaMemsetAsync(projected.data, 0,
+                                       static_cast<std::size_t>(projected.bytes()),
+                                       state.execution.device.stream()));
+        }
+        Tensor proposal_q = frame.proposal_q.slice(2, 0, batch_size);
         ops::candidate_selector_path(
             candidates, scores,
             projected.view({Config::selector_rank, static_cast<std::int32_t>(k), batch_size}),
@@ -191,4 +207,4 @@ void propose_dflash2_batch_impl(DFlashBatchContext& state,
 }
 
 } // namespace
-  // ninfer::models::qwen3_8_flash_next::detail::NINFER_QWEN38_FLASH_NEXT_RUNTIME_NS::schedule
+} // namespace ninfer::models::qwen3_8_flash_next::detail::NINFER_QWEN38_FLASH_NEXT_RUNTIME_NS::schedule

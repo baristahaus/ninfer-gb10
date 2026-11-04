@@ -43,4 +43,22 @@ __device__ __forceinline__ void rope_d128_theta1e7_sincos(const std::int32_t* po
     sincosf(reduced, sine, cosine);
 }
 
+// Theta-capable form of the same range reduction. The theta=1e7 checkpoint family keeps the
+// precomputed constant table; any other theta derives its frequency in double precision.
+__device__ __forceinline__ void rope_d128_sincos(float theta, const std::int32_t* positions,
+                                                 int token, int pair, float* sine, float* cosine) {
+    if (theta == 1.0e7F) {
+        rope_d128_theta1e7_sincos(positions, token, pair, sine, cosine);
+        return;
+    }
+    constexpr double kInvTwoPi = 1.59154943091895336e-01;
+    constexpr double kTwoPi    = 6.28318530717958648e+00;
+    const double frequency =
+        pow(static_cast<double>(theta), -2.0 * static_cast<double>(pair) / 128.0);
+    const double angle = static_cast<double>(positions[token]) * frequency;
+    const double turns = angle * kInvTwoPi;
+    const float reduced = static_cast<float>(angle - nearbyint(turns) * kTwoPi);
+    sincosf(reduced, sine, cosine);
+}
+
 } // namespace ninfer::ops::detail

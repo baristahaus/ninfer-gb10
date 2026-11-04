@@ -8,6 +8,7 @@
 #include <cuda_bf16.h>
 
 #include <stdexcept>
+#include <string>
 
 namespace ninfer::ops::detail::flash_next {
 namespace {
@@ -62,6 +63,9 @@ void launch_bf16_mma(const Tensor& x, const Weight& weight, Tensor& out, cudaStr
     NINFER_BF16_MMA(12288, 2560)
     NINFER_BF16_MMA(512, 2560)
     NINFER_BF16_MMA(128, 2560)
+    NINFER_BF16_MMA(256, 2560)
+    NINFER_BF16_MMA(1024, 2560)
+    NINFER_BF16_MMA(2560, 12800)
     NINFER_BF16_MMA(2560, 6144)
     NINFER_BF16_MMA(640, 2560)
     NINFER_BF16_MMA(10240, 2560)
@@ -81,7 +85,8 @@ void launch_bf16_mma(const Tensor& x, const Weight& weight, Tensor& out, cudaStr
     NINFER_BF16_MMA(34816, 5120)
     NINFER_BF16_MMA(5120, 17408)
 #undef NINFER_BF16_MMA
-    throw std::invalid_argument("bf16 linear MMA: unsupported exact problem");
+    throw std::invalid_argument("bf16 linear MMA: unsupported exact problem (n=" +
+                                std::to_string(weight.n) + ", k=" + std::to_string(weight.k) + ")");
 }
 
 } // namespace ninfer::ops::detail::flash_next

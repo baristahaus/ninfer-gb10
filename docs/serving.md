@@ -78,19 +78,30 @@ unavailable. The endpoint remains unauthenticated.
 metrics. Counters (delta-sample between polls; a request counter moves only when the request
 reaches its terminal state): completed, rejected, and failed requests with reason labels;
 prompt, cached, computed-prefill, generated, committed-decode, and replayed tokens; decode
-rounds and batch-size sums; speculative rounds, drafted/accepted/fallback tokens,
-per-position accepted drafts (`spec_decode_accepted_tokens_per_pos_total{position}`,
-1-based), and finish-reason labels; constrained-decoding request, branch, cache, mask, and
-preparation counters; context-transfer and tier-traffic totals; admission and context-cache
-pressure counters; and `http_requests_total`. Histograms: `request_duration_seconds`,
+rounds and batch-size sums; finish-reason labels; constrained-decoding request, branch, cache,
+mask, and preparation counters; context-transfer and tier-traffic totals; admission and
+context-cache pressure counters; and `http_requests_total`. The speculative series carry the
+configured backend as a `speculative_backend` label (`mtp`, `dflash2`, or `none`):
+verification rounds, drafted/accepted/fallback token counters, the
+`spec_decode_acceptance_ratio` gauge (accepted over drafted since startup), and per block
+position `spec_decode_attempted_per_position_total` and
+`spec_decode_accepted_per_position_total` counters — attempted is that position's acceptance
+denominator, so per-position draft quality is trackable across polls; the series render the
+configured draft window and read zero until speculative requests commit (the Engine-side
+`SpeculativeStats` vectors grow on a request's first committed round, so direct Engine
+consumers must size-guard). Histograms: `request_duration_seconds`,
 `request_prefill_time_seconds`, `request_decode_time_seconds`,
 `inter_token_latency_seconds` (per-request mean), and `decode_batch_tokens`.
 Gauges: running/prefilling/waiting/paused requests, `spec_decode_draft_window`, per-pool Main
 KV occupancy and capacity (page groups and tokens), Device/Host State slot occupancy, Host
 context and KV spill bytes, `kv_cache_usage_ratio` per pool, `ninfer_engine_info` (model card
 with quoted label values), `process_resident_memory_bytes`, and `process_cpu_seconds_total`.
-The endpoint remains unauthenticated alongside `/health` so monitoring tools poll without
-credentials.
+The Flash-Next lane has no request pause, preemption, or replay machinery (its OOM
+backoff is admission-level), so `preemptions_total`, `snapshot_restores_total`,
+`replay_restores_total`, `replayed_tokens_total`, `requests_paused`, and
+`requests_replaying` stay zero while a Flash-Next model is resident; they move only on a
+runtime whose lifecycle supports those paths. The endpoint remains unauthenticated alongside
+`/health` so monitoring tools poll without credentials.
 
 [Output and tool constraints](#output-constraints) add counters that settle with each constrained
 request, including length-interrupted and cancelled ones; preparation failures and execution

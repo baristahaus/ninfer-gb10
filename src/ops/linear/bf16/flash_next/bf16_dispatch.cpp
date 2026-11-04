@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <stdexcept>
+#include <string>
 
 namespace ninfer::ops::detail::flash_next {
 
@@ -13,7 +14,8 @@ Bf16Launch select_bf16_a16_launch(std::int32_t n, std::int32_t k, std::int32_t t
         (n == 320 && k == 10240) || (n == 48 && k == 2560) ||
         (n == 10240 && k == 320) ||
         (n == 12288 && k == 2560) || (n == 512 && k == 2560) ||
-        (n == 128 && k == 2560) ||
+        (n == 128 && k == 2560) || (n == 256 && k == 2560) ||
+        (n == 1024 && k == 2560) || (n == 2560 && k == 12800) ||
         (n == 2560 && k == 6144) || (n == 640 && k == 2560) ||
         (n == 10240 && k == 2560) || (n == 6144 && k == 2560) ||
         (n == 2560 && k == 640) || (n == 2560 && k == 2560) ||
@@ -25,7 +27,9 @@ Bf16Launch select_bf16_a16_launch(std::int32_t n, std::int32_t k, std::int32_t t
         (n == 16384 && k == 5120) || (n == 17408 && k == 5120) ||
         (n == 34816 && k == 5120) || (n == 5120 && k == 17408);
     if (!flash_next_problem || t <= 0) {
-        throw std::invalid_argument("bf16 linear: unsupported shape or T");
+        throw std::invalid_argument("bf16 linear: unsupported shape or T (n=" +
+                                    std::to_string(n) + ", k=" + std::to_string(k) +
+                                    ", t=" + std::to_string(t) + ")");
     }
     // The dense-route problems serve the composed EXL3 prefill route at every T above
     // the register route; their small-T table has no registered rows, so they go

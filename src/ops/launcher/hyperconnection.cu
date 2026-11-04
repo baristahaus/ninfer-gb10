@@ -53,6 +53,23 @@ __global__ void add_repeated_kernel(const __nv_bfloat16* embedding, __nv_bfloat1
     }
 }
 
+// DFlash2 tap: average the four hyper-connection streams per (hidden, token) element.
+__global__ void mean_streams_kernel(const __nv_bfloat16* hyper, __nv_bfloat16* out,
+                                    std::int64_t count) {
+    for (std::int64_t i = static_cast<std::int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+         i < count; i += static_cast<std::int64_t>(blockDim.x) * gridDim.x) {
+        const int d = static_cast<int>(i % kHidden);
+        const std::int64_t token = i / kHidden;
+        const std::int64_t base  = static_cast<std::int64_t>(d) +
+                                  static_cast<std::int64_t>(kHidden) * token;
+        float sum = 0.0F;
+        for (int s = 0; s < kStreams; ++s) {
+            sum += __bfloat162float(hyper[base + static_cast<std::int64_t>(s) * kHidden]);
+        }
+        out[i] = __float2bfloat16_rn(sum * 0.25F);
+    }
+}
+
 // One block of kGroupThreads normalizes one (stream, token) group; thread t owns elements
 // t, t + kGroupThreads, ... and keeps them in registers. With injection weights it also writes
 // the group's injection partials: the dot of each destination stream's injection row with this
@@ -503,6 +520,22 @@ void hyperconnection_add_repeated(const Tensor& embedding, Tensor& hyper,
     add_repeated_kernel<<<grid_for(hyper.numel()), 256, 0, stream>>>(
         static_cast<const __nv_bfloat16*>(embedding.data),
         static_cast<__nv_bfloat16*>(hyper.data), hyper.numel());
+    CUDA_CHECK(cudaGetLastError());
+}
+
+void hyperconnection_mean(const Tensor& hyper, Tensor& out, cudaStream_t stream) {
+    NINFER_PERF_SCOPE("hyper.mean", hyper.ne[1], 0, 0,
+                       flash_next_work::dense(0, hyper.ne[1], 3 * (10240 + 2560) * hyper.ne[1]));
+
+    if (hyper.dtype != DType::BF16 || !hyper.is_contiguous() || hyper.ne[0] != kHyper ||
+        hyper.ne[1] <= 0 || hyper.ne[2] != 1 || hyper.ne[3] != 1 || hyper.data == nullptr ||
+        out.dtype != DType::BF16 || !out.is_contiguous() || out.ne[0] != kHidden ||
+        out.ne[1] != hyper.ne[1] || out.ne[2] != 1 || out.ne[3] != 1 || out.data == nullptr) {
+        throw std::invalid_argument("hyperconnection_mean: invalid Flash-Next geometry");
+    }
+    mean_streams_kernel<<<grid_for(out.numel()), 256, 0, stream>>>(
+        static_cast<const __nv_bfloat16*>(hyper.data),
+        static_cast<__nv_bfloat16*>(out.data), out.numel());
     CUDA_CHECK(cudaGetLastError());
 }
 

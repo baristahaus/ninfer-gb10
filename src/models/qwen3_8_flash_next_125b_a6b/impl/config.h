@@ -73,7 +73,10 @@ struct DFlashConfig {
     static constexpr int feature_rows   = 5 * hidden;
     static constexpr int mask_token     = 248077;
     static constexpr float rms_epsilon  = 1.0e-6F;
-    static constexpr float rope_theta   = 1.0e7F;
+    // The DFlash2 companion checkpoint's config.json declares rope_parameters.rope_theta = 10000
+    // (validated against the artifact's dflash2 component record at load). This is the config the
+    // masked-draft lane reads (Variant::DFlashConfig); the text target itself is 1e7.
+    static constexpr float rope_theta   = 1.0e4F;
     static constexpr float attention_scale = 1.0F / 11.3137085F;  // 1/sqrt(128)
     static constexpr std::array<int, 5> target_feature_layers = {5, 15, 25, 35, 45};
     static constexpr int selector_rank   = 256;
@@ -105,6 +108,10 @@ struct DFlash2Config {
     static constexpr std::size_t target_layers   = 5;
     static constexpr int feature_projection_cols = target_layers * hidden;
     static constexpr std::array<int, target_layers> target_layer_ids = {5, 15, 25, 35, 45};
+    // The companion checkpoint's config.json declares rope_parameters.rope_theta = 10000
+    // (validated against the artifact's dflash2 component record at load). The text target
+    // itself is 1e7; the draft is a different model.
+    static constexpr float rope_theta = 1.0e4F;
 };
 
 inline constexpr float kAttentionScale                   = 0.0625F;

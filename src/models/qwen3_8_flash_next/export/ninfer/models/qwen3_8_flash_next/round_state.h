@@ -120,6 +120,9 @@ struct DFlashDecodeIngress {
     std::array<std::int32_t, kMaximumConcurrency> state_source_slots{};
     std::array<std::int32_t, kMaximumConcurrency> state_destination_slots{};
     std::array<ops::SamplingConfig, kMaximumConcurrency> sampling{};
+    // Per row b, the two tokens before the anchor, nearest first: {t_-1, t_-2}; negative where
+    // the sequence has no token. The PLE n-gram hash of the verify columns reads them.
+    std::array<TokenId, 2 * kMaximumConcurrency> ple_history{};
 };
 
 struct DFlashDecodeEgress {
@@ -186,6 +189,7 @@ struct DFlashDecodeStateLayout {
     TensorRegion target_logits;
     TensorRegion target_hidden;
     TensorRegion target_continuation_hidden;
+    TensorRegion ple_history;
     // The DFlash2 draft's per-position candidate block and the selector's proposal draws.
     TensorRegion proposal_candidates;
     TensorRegion proposal_scores;
@@ -338,6 +342,7 @@ struct DFlashDecodeState {
     Tensor target_logits;
     Tensor target_hidden;
     Tensor target_continuation_hidden;
+    Tensor ple_history;
     Tensor proposal_candidates;
     Tensor proposal_scores;
     Tensor proposal_q;

@@ -59,7 +59,8 @@ struct RuntimeStats {
     std::uint64_t speculative_draft_tokens    = 0;
     std::uint64_t speculative_accepted_tokens = 0;
     std::uint64_t speculative_fallback_steps  = 0;
-    // Per-position accepted draft totals, indexed from the first drafted position.
+    // Per block position: tokens attempted (drafted) and accepted, cumulative over the Engine.
+    std::vector<std::uint64_t> speculative_attempted_per_position;
     std::vector<std::uint64_t> speculative_accepted_per_position;
     // Initial prompt tokens evaluated by prefill. Reused checkpoint-prefix tokens and replay
     // recomputation are excluded; replayed_tokens separately counts that additional model work.

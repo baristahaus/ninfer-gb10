@@ -790,6 +790,33 @@ int main() {
             if (exercise_concurrent_state(engine, expected_prefix, fixture) != 0) { return 1; }
             if (exercise_prefill_yield(engine) != 0) { return 1; }
             if (exercise_vision(engine) != 0) { return 1; }
+            // The Flash-Next lane has no pause, preemption, or replay machinery (OOM backoff
+            // is admission-level), so these counters are structurally zero for the whole
+            // battery; a nonzero value means a lifecycle path landed without its accounting
+            // contract (docs/serving.md documents the consumer-facing zeros).
+            const ninfer::RuntimeStats lane = engine.runtime_stats();
+            if (lane.preemptions != 0 || lane.snapshot_restores != 0 ||
+                lane.replay_restores != 0 || lane.replayed_tokens != 0 ||
+                lane.paused_requests != 0 || lane.replaying_requests != 0) {
+                std::cerr << "Flash-Next lane reports nonzero pause/preempt/replay counters:"
+                          << " preemptions=" << lane.preemptions
+                          << " snapshot_restores=" << lane.snapshot_restores
+                          << " replay_restores=" << lane.replay_restores
+                          << " replayed_tokens=" << lane.replayed_tokens
+                          << " paused=" << lane.paused_requests
+                          << " replaying=" << lane.replaying_requests << '\n';
+                return 1;
+            }
+            // The speculative exercises ran with draft_tokens 3; the Engine-cumulative
+            // per-position vectors must be grown to that window by now, never beyond it.
+            if (lane.speculative_attempted_per_position.size() != 3 ||
+                lane.speculative_accepted_per_position.size() != 3) {
+                std::cerr << "Flash-Next cumulative per-position vectors are not draft-window"
+                          << " sized: attempted="
+                          << lane.speculative_attempted_per_position.size()
+                          << " accepted=" << lane.speculative_accepted_per_position.size() << '\n';
+                return 1;
+            }
         }
         if (exercise_ordinary_greedy(artifact, canonical_output()) != 0) { return 1; }
         if (exercise_serving_shape(artifact) != 0) { return 1; }

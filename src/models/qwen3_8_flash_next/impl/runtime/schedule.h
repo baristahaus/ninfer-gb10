@@ -108,6 +108,11 @@ struct DFlashBatchContext {
     const qwen3_8_flash_next::DFlashDecodeIngress& host_ingress;
     qwen3_8_flash_next::DFlashDecodeEgress& host_egress;
     Tensor& continuation_hidden_store;
+    // The Flash-Next target's verify columns consume PLE rows exactly as the MTP round's do:
+    // either pre-staged rows or the host gather stage the round publishes into.
+    const Tensor* ple_embeddings                      = nullptr;
+    ops::FlashNextPleStageMailbox* ple_stage_mailbox   = nullptr;
+    const void* ple_stage_staging                     = nullptr;
 };
 
 struct DFlashAppendContext {

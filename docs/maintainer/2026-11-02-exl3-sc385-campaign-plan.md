@@ -243,7 +243,15 @@ explained by the domain (English vs Spanish sysadmin) and the reference model
 (our NVFP4-sampled trace vs his). This is the "what was used per layer, and does our
 independent measurement agree" record.
 
-**W2.5 Our quant (GB10 or 5090 window, ~1–2 h).** His `convert.py -rcp recipe.yaml
+**W2.5 Our quant (GB10 or 5090 window, ~1–2 h).** DONE 2026-11-04: his convert.py
+v1.6.1 on the GB10 (~1h50m, 64 layers + embed/head, RSS 15.4 GiB, resumable
+checkpoints) with our recipe_385.yaml and our trace — output w25/out_385
+(401 quantized tensors, head_bits 6, overall 3.85 bpw, SHA256SUMS on the tank).
+Imported via the sc385 route (our converter's import_exl3_dense against the
+converted dir): out/qwen3_8_27b_exl3_sc385_ours.ninfer — 823 objects, 14.5 GB,
+95 s import. Remaining P2 item: the supplementary cross-check quantizing the
+same recipe with our own quantizer (the oracle-validated reimplementation),
+per the plan's parity note. His `convert.py -rcp recipe.yaml
 -cd cal_trace.safetensors` (his quantizer, primary) → standard-format EXL3 → import via
 W0.1 → `out/qwen3_8_27b_exl3_sc385_ours.ninfer`. **Cross-check:** the same recipe
 quantized by our converter (the exllamav3 reimplementation) on the full artifact;

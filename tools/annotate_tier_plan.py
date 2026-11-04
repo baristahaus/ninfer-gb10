@@ -306,7 +306,10 @@ def annotate(input_path: Path, output_path: Path, plan_path: Path) -> None:
         plan = build_tier_plan(plan_raw)
 
     # The plan's banks must name real tensor objects, and each bank's row count must be exactly
-    # experts * rows_per_expert so the runtime's semantic check passes.
+    # experts * rows_per_expert so the runtime's semantic check passes. Two forms carry that
+    # row count: the rank-2 row-split [experts*rows_per_expert, k] and the batched
+    # expert-block rank-3 [experts, rows_per_expert, k] (the NVFP4 banks); their payloads are
+    # byte-identical for an identity-ordered tier split.
     for bank in plan["banks"]:
         obj = by_id.get(bank["object"])
         if obj is None:
@@ -315,7 +318,10 @@ def annotate(input_path: Path, output_path: Path, plan_path: Path) -> None:
             raise SystemExit(f"tier plan bank is not a tensor: {bank['object']}")
         shape = obj.get("shape") or []
         expected = bank["experts"] * bank["rows_per_expert"]
-        if not shape or shape[0] != expected:
+        row_count_ok = (len(shape) == 2 and shape[0] == expected) or (
+            len(shape) == 3 and shape[0] == bank["experts"]
+            and shape[1] == bank["rows_per_expert"])
+        if not shape or not row_count_ok:
             raise SystemExit(
                 f"{bank['object']}: shape {shape} does not match "
                 f"experts * rows_per_expert = {expected}"

@@ -42,6 +42,9 @@ public:
     LoadPlan& operator=(const LoadPlan&) = delete;
     [[nodiscard]] artifact::PreparedResources& materialization();
     [[nodiscard]] std::vector<artifact::ObjectHandle>& device_objects();
+    // SP-4 tiered banks: the binder's tier state from the artifact's tier plan; empty for an
+    // untiered artifact.
+    [[nodiscard]] std::vector<artifact::TierPlanInput>& tier_inputs();
 private:
     class Impl;
     explicit LoadPlan(std::unique_ptr<Impl> impl) noexcept;

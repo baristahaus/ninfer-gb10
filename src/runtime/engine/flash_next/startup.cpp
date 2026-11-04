@@ -181,17 +181,74 @@ ConstructedFlashNextModel construct_flash_next(EngineOptions& options, artifact:
     for (const auto object : plan.device_objects()) {
         requests.push_back({object, device->device(), artifact::HostAccess::CpuOnly});
     }
-    auto storage =
-        artifact::plan_materialization(reader, requests, std::move(plan.materialization()));
+    // SP-4 tiered banks: the device budget = the obtainable bytes less the startup reserve
+    // (state slots, workspaces, graph pools, KV headroom); the plain device objects and the
+    // hot mini-banks consume first, and the remainder buys whole-expert cache tail slots.
+    // NINFER_EXPERT_TAIL_SLOTS caps the tail for the tail-limited measurements.
+    const auto obtainable = obtainable_device_bytes(*device, options, true);
+    constexpr std::uint64_t kTierStartupReserveBytes = 6ULL << 30;
+    artifact::TierBudget tier_budget{
+        .device_bytes = obtainable > kTierStartupReserveBytes
+                            ? obtainable - kTierStartupReserveBytes
+                            : 0,
+        .slot_cap     = 0};
+    if (const char* cap = std::getenv("NINFER_EXPERT_TAIL_SLOTS")) {
+        tier_budget.slot_cap = static_cast<std::uint32_t>(std::stoul(cap));
+    }
+    auto storage = artifact::plan_materialization(reader, requests, plan.tier_inputs(),
+                                                  tier_budget,
+                                                  std::move(plan.materialization()));
 
-    const auto free = obtainable_device_bytes(*device, options, true);
-    if (storage.device_capacity_bytes > free) {
+    // SP-4: on an integrated device the device arena, the pinned tiered warm mini-banks, and
+    // the Host-resident weights all draw from one MemAvailable; the budget counts them all.
+    // NINFER_BUDGET_DRY_RUN prints the resident-set budget and exits before any allocation.
+    const auto tier_pinned  = storage.tier_pinned_bytes;
+    const auto host_backing = storage.host_capacity_bytes;
+    if (std::getenv("NINFER_BUDGET_DRY_RUN") != nullptr) {
+        std::fprintf(stderr,
+                     "budget-dry-run: device=%zu MiB tier_pinned=%zu MiB host=%zu MiB "
+                     "obtainable=%zu MiB verdict=%s\n",
+                     storage.device_capacity_bytes >> 20, tier_pinned >> 20,
+                     host_backing >> 20, obtainable >> 20,
+                     storage.device_capacity_bytes + tier_pinned + host_backing <= obtainable
+                         ? "FITS"
+                         : "DOES_NOT_FIT");
+        for (const auto& tier : storage.tier_objects) {
+            std::fprintf(stderr, "budget-dry-run: tier bank obj=%u hot=%u slots=%u bytes=%zu MiB\n",
+                         tier.object.index, tier.hot_experts, tier.cache_slots,
+                         tier.bytes >> 20);
+        }
+        for (std::size_t i = 0; i < storage.objects.size(); ++i) {
+            if (storage.objects[i]) {
+                std::fprintf(stderr, "budget-dry-run: objmap obj=%zu storage=%u\n", i,
+                             storage.objects[i]->index);
+            }
+        }
+        throw std::invalid_argument("budget dry run complete");
+    }
+    if (device->properties().integrated &&
+        storage.device_capacity_bytes + tier_pinned + host_backing > obtainable) {
+        throw std::invalid_argument(
+            "Flash-Next resident set exceeds integrated-pool budget: need " +
+            std::to_string(storage.device_capacity_bytes >> 20) + " MiB device + " +
+            std::to_string(tier_pinned >> 20) + " MiB pinned tiered warm banks + " +
+            std::to_string(host_backing >> 20) + " MiB Host weights, obtainable " +
+            std::to_string(obtainable >> 20) + " MiB");
+    }
+    if (storage.device_capacity_bytes > obtainable) {
         throw std::invalid_argument(
             "Flash-Next weights exceed free GPU memory: need " +
             std::to_string(storage.device_capacity_bytes >> 20) + " MiB, obtainable " +
-            std::to_string(free >> 20) + " MiB");
+            std::to_string(obtainable >> 20) + " MiB");
     }
-    (void)resolve_kv_capacity(options.kv_capacity, curve, free - storage.device_capacity_bytes);
+    if (tier_pinned != 0 && device->properties().integrated &&
+        options.kv_capacity.mode == KvCapacityMode::Automatic) {
+        throw std::invalid_argument(
+            "tiered loads on an integrated device require an explicit --kv-capacity; the "
+            "auto resolver cannot see the pinned warm mini-banks");
+    }
+    (void)resolve_kv_capacity(options.kv_capacity, curve,
+                              obtainable - storage.device_capacity_bytes - tier_pinned);
 
     std::set<std::string> formats{"fp8_e4m3fn"};
     for (const auto& request : requests) {

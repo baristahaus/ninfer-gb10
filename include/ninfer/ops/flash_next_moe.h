@@ -9,6 +9,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <vector>
 #include <variant>
 
 namespace ninfer::ops {
@@ -24,6 +25,18 @@ struct FlashNextExpertBank {
     std::int32_t experts = 0;
     std::int32_t rows = 0;
     std::int32_t columns = 0;
+    // SP-4 tiered banks: the pinned-host warm mini-bank (the same per-expert block layout as
+    // `codes`/`scales`), the always-armed per-expert activation counters, and the residency
+    // table (bit 31 marks the warm tier, the low bits the expert's compacted rank). Null
+    // pointers keep the untiered direct path where every expert reads the device bank at its
+    // own rank. `tiered_hot_experts` is the device mini-bank's hot prefix; the cache tail
+    // slots behind it are addressed by the residency's compacted rank.
+    const void* warm_codes = nullptr;
+    const void* warm_scales = nullptr;
+    const float* warm_weight_scale_divisors = nullptr;
+    std::uint32_t* expert_activations = nullptr;
+    const std::uint32_t* expert_residency = nullptr;
+    std::uint32_t tiered_hot_experts = 0;
 };
 
 // The shared expert's gate and up projections: two BF16 [640,2560] matrices, or one row-scaled
@@ -53,5 +66,11 @@ struct FlashNextMoeWeights {
 // Flash-Next profile). Destination is overwritten with the BF16 result.
 void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Tensor& destination,
                     MemoryArena& workspace, CudaExecutionView execution);
+
+// SP-4 tiered banks: reads and zeroes the per-expert activation counters. Returns the host
+// counts (index = expert id). Synchronous diagnostic; call between rounds. Throws when the
+// bank is untiered (null counters).
+[[nodiscard]] std::vector<std::uint32_t> read_and_reset_expert_activations(
+    const FlashNextExpertBank& bank, CudaExecutionView execution);
 
 } // namespace ninfer::ops

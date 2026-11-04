@@ -60,6 +60,13 @@ struct Nvfp4W4a16GroupedWork {
     const float* weight_divisors;
     int token_tile;
     int output_rows;
+    // SP-4 tiered banks: the pinned-host warm mini-bank and the residency table. Null for
+    // untiered banks; the configure resolves each job's expert to its tier's base pointers
+    // and compacted rank, substituting the rank for the expert in the row math.
+    const void* warm_codes         = nullptr;
+    const void* warm_scales        = nullptr;
+    const float* warm_divisors     = nullptr;
+    const std::uint32_t* residency = nullptr;
 
     __device__ __forceinline__ int work_count(int rows_per_block) const {
         return *job_count * (output_rows / rows_per_block);
@@ -67,7 +74,8 @@ struct Nvfp4W4a16GroupedWork {
 
     __device__ __forceinline__ void configure(int work, int rows_per_block, int& token_begin,
                                               int& token_end, int& row_begin, float& alpha,
-                                              RowPolicy& rows) const {
+                                              RowPolicy& rows, const std::uint8_t*& tier_codes,
+                                              const std::uint8_t*& tier_scales) const {
         const int row_blocks = output_rows / rows_per_block;
         const int job        = work / row_blocks;
         const int row_block  = work - job * row_blocks;
@@ -75,16 +83,30 @@ struct Nvfp4W4a16GroupedWork {
         token_begin          = offsets[expert] + job_columns[job];
         token_end            = min(token_begin + token_tile, offsets[expert + 1]);
         row_begin            = row_block * rows_per_block;
-        alpha                = 1.0F / weight_divisors[expert];
-        rows.expert          = expert;
+        if (residency == nullptr) {
+            tier_codes  = static_cast<const std::uint8_t*>(weight_codes_base);
+            tier_scales = static_cast<const std::uint8_t*>(weight_scales_base);
+            alpha       = 1.0F / weight_divisors[expert];
+            rows.expert = expert;
+            return;
+        }
+        const auto entry = residency[expert];
+        const bool warm  = (entry & 0x80000000u) != 0;
+        const auto rank  = static_cast<int>(entry & 0x7fffffffu);
+        tier_codes  = static_cast<const std::uint8_t*>(warm ? warm_codes : weight_codes_base);
+        tier_scales = static_cast<const std::uint8_t*>(warm ? warm_scales : weight_scales_base);
+        alpha       = 1.0F / (warm && warm_divisors ? warm_divisors : weight_divisors)[rank];
+        rows.expert = rank;
     }
+
+    // The untiered base pointers ride the work policy so one configure resolves both routes.
+    const void* weight_codes_base  = nullptr;
+    const void* weight_scales_base = nullptr;
 };
 
 template <class Schedule, class Output, class RowPolicy, class WorkPolicy, bool PairRows>
 __global__ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void
-nvfp4_w4a16_grouped_mma_kernel(const __nv_bfloat16* __restrict__ x,
-                               const std::uint8_t* __restrict__ weight_codes,
-                               const std::uint8_t* __restrict__ weight_scales, int input_rows,
+nvfp4_w4a16_grouped_mma_kernel(const __nv_bfloat16* __restrict__ x, int input_rows,
                                Output output, RowPolicy row_policy, WorkPolicy work_policy) {
     constexpr int BM      = Schedule::kBlockM;
     constexpr int BN      = Schedule::kBlockN;
@@ -124,8 +146,10 @@ nvfp4_w4a16_grouped_mma_kernel(const __nv_bfloat16* __restrict__ x,
         int token_end;
         int row_begin;
         float work_alpha = 1.0F;
+        const std::uint8_t* tier_codes  = nullptr;
+        const std::uint8_t* tier_scales = nullptr;
         work_policy.configure(work, kRowsPerBlock, token_begin, token_end, row_begin, work_alpha,
-                              row_policy);
+                              row_policy, tier_codes, tier_scales);
 
         const int k_tiles = input_rows / BK;
         float accumulators[MT][NT][4] = {};
@@ -155,7 +179,7 @@ nvfp4_w4a16_grouped_mma_kernel(const __nv_bfloat16* __restrict__ x,
                 const int weight_row = row_policy.weight_row(row_begin, local_row);
                 cp_async<16, Cache::cg>(
                     &code_shared[local_row * Schedule::kCodeRowBytes + chunk * 16],
-                    weight_codes + static_cast<std::int64_t>(weight_row) * (input_rows / 2) +
+                    tier_codes + static_cast<std::int64_t>(weight_row) * (input_rows / 2) +
                         k_begin / 2 + chunk * 16);
             }
             cp_commit();
@@ -171,7 +195,7 @@ nvfp4_w4a16_grouped_mma_kernel(const __nv_bfloat16* __restrict__ x,
                 const int col        = group * 16;
                 const int weight_row = row_policy.weight_row(row_begin, local_row);
                 const std::uint8_t scale_byte = __ldg(
-                    weight_scales +
+                    tier_scales +
                     nvfp4_scale_byte_offset(weight_row, k_begin / 16 + group, input_rows));
                 const auto* codes = &code_shared[local_row * Schedule::kCodeRowBytes + group * 8];
 #pragma unroll

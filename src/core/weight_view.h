@@ -74,6 +74,16 @@ struct WeightGeometry {
     Exl3BankGeometry exl3;  // Empty for every non-EXL3 geometry.
 };
 
+// SP-4 tiered banks: one expert's exact block size — the row planes plus the expert's share
+// of the trailing per-expert divisor table (one float per matrix for NVFP4 banks). The
+// object's raw bytes do not divide by the expert count when the divisor table is present.
+[[nodiscard]] inline std::uint64_t tier_expert_block_bytes(const WeightGeometry& geometry,
+                                                           std::uint64_t experts) {
+    const auto divisor_bytes = geometry.divisor_count * 4;
+    const auto payload       = geometry.bytes - divisor_bytes;
+    return payload / experts + (divisor_bytes ? divisor_bytes / experts : 0);
+}
+
 [[nodiscard]] WeightGeometry weight_geometry(QType format, QuantLayout layout,
                                              std::span<const std::uint64_t> shape);
 [[nodiscard]] std::uint64_t weight_element_count(std::span<const std::uint64_t> shape);

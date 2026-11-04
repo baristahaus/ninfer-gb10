@@ -135,6 +135,15 @@ MaterializationPlan plan_materialization(const Reader& reader,
         }
     }
     LayoutBuilder host_layout, registered_layout, device_layout;
+    // SP-4 tiered banks place through the tier block below (compacted hot mini-banks), not
+    // the plain device loop; their full-size regions must not double-count the arena. The
+    // tier plan carries object handles; the requests index storage slots, so map first.
+    std::vector<bool> tier_marked_storage(out.tensors.size(), false);
+    for (const auto& tier : tiers) {
+        if (tier.object.index < out.objects.size() && out.objects[tier.object.index]) {
+            tier_marked_storage[out.objects[tier.object.index]->index] = true;
+        }
+    };
     for (std::size_t i = 0; i < out.tensors.size(); ++i) {
         const auto& tensor = out.tensors[i];
         const auto& g      = tensor.geometry;
@@ -150,7 +159,7 @@ MaterializationPlan plan_materialization(const Reader& reader,
                 std::max({out.host_alignment, static_cast<std::size_t>(g.alignment),
                           static_cast<std::size_t>(kPayloadAlignment)});
         }
-        if (device[i])
+        if (device[i] && !tier_marked_storage[i])
             out.device_objects.push_back(
                 {{i}, device_layout.add(g.bytes, g.alignment, "device tensor")});
     }
@@ -174,12 +183,12 @@ MaterializationPlan plan_materialization(const Reader& reader,
         for (const auto& tier : tiers) {
             const auto& geometry = reader.geometry(tier.object);
             const auto experts   = tier.new_order.size();
-            slice_cost           = checked_add(slice_cost, geometry.bytes / experts,
-                                               "expert cache slice cost");
+            const auto block     = tier_expert_block_bytes(geometry, experts);
+            slice_cost           = checked_add(slice_cost, block, "expert cache slice cost");
             min_warm = std::min(min_warm, experts - tier.hot_experts);
             hot_bytes = checked_add(
                 hot_bytes,
-                checked_mul(tier.hot_experts, geometry.bytes / experts, "tiered hot bytes"),
+                checked_mul(tier.hot_experts, block, "tiered hot bytes"),
                 "tiered hot total");
         }
         const auto weights_bytes = checked_add(device_layout.finish(), hot_bytes,
@@ -194,10 +203,15 @@ MaterializationPlan plan_materialization(const Reader& reader,
         const auto& geometry = reader.geometry(tier.object);
         const auto experts   = tier.new_order.size();
         const auto bank_bytes =
-            checked_mul(tier.hot_experts + cache_slots, geometry.bytes / experts,
-                        "tiered device bytes");
+            checked_mul(tier.hot_experts + cache_slots,
+                        tier_expert_block_bytes(geometry, experts), "tiered device bytes");
         const auto region = device_layout.add(bank_bytes, tier.alignment,
                                                "tiered hot mini-bank");
+        out.tier_pinned_bytes = checked_add(
+            out.tier_pinned_bytes,
+            checked_mul(experts - tier.hot_experts,
+                        tier_expert_block_bytes(geometry, experts), "tiered pinned bytes"),
+            "tiered pinned total");
         out.tier_objects.push_back({tier.object, region.offset, bank_bytes, tier.alignment,
                                     tier.hot_experts, cache_slots, tier.new_order});
     }

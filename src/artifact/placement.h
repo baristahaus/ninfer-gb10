@@ -95,6 +95,9 @@ struct MaterializationPlan {
     std::vector<TensorPlacement> device_objects;
     // SP-4 tiered banks placed after the plain device objects.
     std::vector<TierPlacementRequest> tier_objects;
+    // SP-4: total pinned-host bytes the tiered warm mini-banks will reserve during
+    // materialization; part of the integrated-pool budget check.
+    std::size_t tier_pinned_bytes = 0;
     // Host placements are relative to their respective registered/ordinary regions.
     std::vector<TensorPlacement> ordinary_host_objects;
     std::vector<TensorPlacement> registered_host_objects;

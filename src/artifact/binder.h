@@ -19,6 +19,9 @@ struct ParameterReference {
     Shape shape;
     Binding binding;
     Residency residency = Residency::Device;
+    // SP-4: set when the binding addresses a tiered bank's hot mini-bank; the view covers
+    // only the hot experts and the warm twin is bound through the host parent.
+    bool tiered = false;
 };
 
 struct HostValues {
@@ -102,6 +105,10 @@ private:
         bool host                 = false;
     };
     [[nodiscard]] TierState& tier_state(ObjectHandle object);
+    // SP-4 tiered banks: remaps a binding's parts to the compacted mini-bank positions and
+    // marks the tier seen. Shared by both binding paths so every residency-aware bind of a
+    // tier-marked object takes the same route.
+    void remap_tiered_parts(ParameterReference& out, Residency residency);
     std::vector<TierState> tier_states_;
     std::uint64_t device_budget_  = 0;
     std::uint32_t cache_slot_cap_ = 0;

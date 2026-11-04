@@ -252,21 +252,27 @@ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void nvfp4_w4a4
     int active_tokens;
     int row_begin;
     float work_alpha = alpha;
+    const std::uint8_t* tier_codes  = nullptr;
+    const std::uint8_t* tier_scales = nullptr;
     if constexpr (WorkPolicy::kPersistent) {
         work_policy.configure(work, kRowsPerBlock, token_begin, active_tokens, row_begin,
-                              work_alpha, row_policy);
+                              work_alpha, row_policy, tier_codes, tier_scales);
     } else {
         token_begin = static_cast<int>(blockIdx.y) * Schedule::kBlockM;
         active_tokens = tokens;
         row_begin = static_cast<int>(blockIdx.x) * kRowsPerBlock;
     }
 
+    if (tier_codes == nullptr) {
+        tier_codes  = weight_codes;
+        tier_scales = weight_scales;
+    }
 #pragma unroll
     for (int stage = 0; stage < Schedule::kStages; ++stage) {
         if (stage < kKTiles) {
             stage_nvfp4_w4a4_activation<Geometry, Schedule>(activation, shared, stage, stage,
                                                             token_begin, active_tokens);
-            stage_nvfp4_w4a4_weight<Geometry, Schedule>(weight_codes, weight_scales, shared, stage,
+            stage_nvfp4_w4a4_weight<Geometry, Schedule>(tier_codes, tier_scales, shared, stage,
                                                         stage, row_begin, row_policy);
             cp_commit();
         }
@@ -361,7 +367,7 @@ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void nvfp4_w4a4
         if (next_k_tile < kKTiles) {
             stage_nvfp4_w4a4_activation<Geometry, Schedule>(activation, shared, stage, next_k_tile,
                                                             token_begin, active_tokens);
-            stage_nvfp4_w4a4_weight<Geometry, Schedule>(weight_codes, weight_scales, shared, stage,
+            stage_nvfp4_w4a4_weight<Geometry, Schedule>(tier_codes, tier_scales, shared, stage,
                                                         next_k_tile, row_begin, row_policy);
         }
         cp_commit();

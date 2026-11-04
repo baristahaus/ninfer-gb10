@@ -1,3 +1,6 @@
+#include <cstdio>
+#include "artifact/binder.h"
+
 #include "artifact/binder.h"
 
 #include "artifact/framing.h"
@@ -43,6 +46,7 @@ ParameterReference Binder::parameter(std::string_view name, Shape shape, Residen
                                      std::optional<QType> exact_format) {
     auto out = parameter(name, std::move(shape), std::move(exact_format));
     out.residency = residency;
+    remap_tiered_parts(out, residency);
     if (residency == Residency::Device) {
         for (const auto& part : out.binding.parts) {
             const bool known =
@@ -66,11 +70,10 @@ void Binder::set_tier(ObjectHandle object, const std::vector<std::uint32_t>& hot
     reader_.validate_object(object);
     const auto& tensor = reader_.directory().tensor(object);
     auto& tier         = tier_state(object);
-    if (tier.device || tier.host || !tier.new_order.empty() || tensor.shape.size() != 2 ||
-        tensor.shape[0] == 0 || tensor.shape[1] == 0 || hot.empty()) {
-        throw ArtifactError("tiered bank requires an untouched two-dimensional object");
-    }
     const auto& geometry = reader_.geometry(object);
+    if (tier.device || tier.host || !tier.new_order.empty() || hot.empty() || warm.empty()) {
+        throw ArtifactError("tiered bank requires an untouched two-dimensional or batched object");
+    }
     if (geometry.format == QType::EXL3) {
         // SP-4's tiered packing assumes one constant per-expert byte size per bank; EXL3's
         // per-expert bitrates give unequal extents, so tiering needs the SP-4 variable-extent
@@ -78,10 +81,21 @@ void Binder::set_tier(ObjectHandle object, const std::vector<std::uint32_t>& hot
         throw ArtifactError("tiered EXL3 weights (banks and dense linears) require the "
                             "variable-extent tiering support that does not exist yet");
     }
-    if (hot.size() > tensor.shape[0] ||
-        hot.size() + warm.size() != tensor.shape[0]) {
+    // The tier lists are expert-granular. Two bank forms:
+    // - rank 2 [experts * rows_per_expert, k]: the experts divide the rows (the row-split
+    //   grouped-integer banks); each expert owns shape[0] / experts consecutive rows.
+    // - rank 3 [experts, rows_per_expert, k]: the batched expert-block form (the NVFP4
+    //   BatchedBlockScaleK16M128x4 banks); shape[0] is the expert count and each expert owns
+    //   shape[1] rows of shape[2] elements. The payload layout is identical to the rank-2
+    //   row-split form flattened over the same expert-major blocks.
+    const auto experts = static_cast<std::uint64_t>(hot.size() + warm.size());
+    const bool batched = geometry.layout == QuantLayout::BatchedBlockScaleK16M128x4;
+    if (batched ? (tensor.shape.size() != 3 || tensor.shape[0] != experts ||
+                   tensor.shape[1] == 0 || tensor.shape[2] == 0)
+                : (tensor.shape.size() != 2 || tensor.shape[0] == 0 ||
+                   tensor.shape[1] == 0 || tensor.shape[0] % experts != 0)) {
         throw ArtifactError("tiered bank requires a strict, nonempty hot/warm expert split "
-                            "covering the bank");
+                            "whose experts divide the rows");
     }
     std::vector<std::uint32_t> cover;
     cover.reserve(hot.size() + warm.size());
@@ -112,6 +126,85 @@ std::uint32_t Binder::tier_hot_experts(ObjectHandle object) const {
     return object.index < tier_states_.size() ? tier_states_[object.index].hot_experts : 0;
 }
 
+void Binder::remap_tiered_parts(ParameterReference& out, Residency residency) {
+    for (auto& part : out.binding.parts) {
+        if (part.object.index >= tier_states_.size()) { continue; }
+        auto& tier = tier_states_[part.object.index];
+        if (tier.new_order.empty()) { continue; }
+        // SP-4 tiered bank: both residencies address the mini-banks, and each part
+        // remaps to its expert's compacted position. The part must stay inside one
+        // expert's row block so a whole-bank or straddling binding cannot alias the
+        // compacted layout. Two bank forms (see set_tier): rank 2 [experts *
+        // rows_per_expert, k] and the batched rank-3 [experts, rows_per_expert, k].
+        const auto& geometry = reader_.geometry(part.object);
+        const auto experts         = static_cast<std::uint64_t>(tier.new_order.size());
+        const bool batched         = geometry.shape.size() == 3;
+        const auto rows_per_expert = batched ? static_cast<std::uint64_t>(geometry.shape[1])
+                                             : geometry.shape[0] / experts;
+        const auto elements_per_row = static_cast<std::uint64_t>(geometry.shape.back());
+        const auto total_rows      = batched ? static_cast<std::uint64_t>(geometry.shape[0]) *
+                                                   rows_per_expert
+                                             : static_cast<std::uint64_t>(geometry.shape[0]);
+        // A whole-object residency binding of a tiered bank addresses the bank's own tier:
+        // the device side is the compacted hot block (the first hot_experts expert blocks of
+        // the hot mini-bank; the cache slots trail unaddressed), and the warm twin is bound
+        // through the host parent by the consumer. Per-expert parts take the strict path.
+        if (residency == Residency::Device && part.begin == 0 &&
+            part.end == total_rows * elements_per_row) {
+            std::fprintf(stderr, "tier-remap: obj=%u hot=%u rpe=%zu epr=%zu part.end %zu->%zu\n",
+                         part.object.index, tier.hot_experts, rows_per_expert,
+                         elements_per_row, part.end,
+                         tier.hot_experts * rows_per_expert * elements_per_row);
+            part.end = tier.hot_experts * rows_per_expert * elements_per_row;
+            tier.device = true;
+            out.tiered = true;
+            continue;
+        }
+        const auto begin_row       = part.begin / elements_per_row;
+        const auto end_row         = part.end / elements_per_row;
+        if (total_rows % experts != 0 ||
+            begin_row / rows_per_expert != (end_row - 1) / rows_per_expert) {
+            throw ArtifactError(out.name + ": tiered part must stay inside one expert's rows");
+        }
+        const auto expert = begin_row / rows_per_expert;
+        const auto within = begin_row % rows_per_expert;
+        const auto position = static_cast<std::size_t>(
+            std::find(tier.new_order.begin(), tier.new_order.end(),
+                      static_cast<std::uint32_t>(expert)) - tier.new_order.begin());
+        if (position >= tier.new_order.size()) {
+            throw ArtifactError(out.name + ": tiered bank lost its expert permutation");
+        }
+        const auto hot_experts = static_cast<std::uint64_t>(tier.hot_experts);
+        if (residency == Residency::Device) {
+            if (position >= hot_experts) {
+                throw ArtifactError(out.name + ": warm-tier expert bound with device residency");
+            }
+            const auto rank = static_cast<std::uint64_t>(position);
+            part.begin      = checked_mul(rank * rows_per_expert + within, elements_per_row,
+                                          "tiered hot rows");
+            part.end        = checked_add(part.begin,
+                                          checked_mul(end_row - begin_row, elements_per_row,
+                                                      "tiered span"),
+                                          "tiered hot end");
+            tier.device = true;
+        } else if (residency == Residency::Host) {
+            if (position < hot_experts) {
+                throw ArtifactError(out.name + ": hot-tier expert bound with host residency");
+            }
+            const auto rank = static_cast<std::uint64_t>(position) - hot_experts;
+            part.begin      = checked_mul(rank * rows_per_expert + within, elements_per_row,
+                                          "tiered warm rows");
+            part.end        = checked_add(part.begin,
+                                          checked_mul(end_row - begin_row, elements_per_row,
+                                                      "tiered warm end"),
+                                          "tiered warm end");
+            tier.host = true;
+        } else {
+            throw ArtifactError(out.name + ": tiered banks do not support value residency");
+        }
+    }
+}
+
 std::vector<TierPlanInput> Binder::tier_inputs() const {
     std::vector<TierPlanInput> out;
     for (std::size_t i = 0; i < tier_states_.size(); ++i) {
@@ -130,60 +223,7 @@ ParameterReference Binder::binding(std::string name, const Binding& binding, Sha
                                    Residency residency, std::optional<QType> exact_format) {
     auto out = this->binding(std::move(name), binding, std::move(shape), std::move(exact_format));
     out.residency = residency;
-    for (auto& part : out.binding.parts) {
-        if (part.object.index >= tier_states_.size()) { continue; }
-        auto& tier = tier_states_[part.object.index];
-        if (tier.new_order.empty()) { continue; }
-        // SP-4 tiered bank: both residencies address the mini-banks, and each part
-        // remaps to its expert's compacted position. The part must stay inside one
-        // expert's row block so a whole-bank or straddling binding cannot alias the
-        // compacted layout.
-        const auto& geometry = reader_.geometry(part.object);
-        const auto experts         = static_cast<std::uint64_t>(tier.new_order.size());
-        const auto rows_per_expert = geometry.shape[0] / experts;
-        const auto begin_row       = part.begin / geometry.shape[1];
-        const auto end_row         = part.end / geometry.shape[1];
-        if (geometry.shape[0] % experts != 0 ||
-            begin_row / rows_per_expert != (end_row - 1) / rows_per_expert) {
-            throw ArtifactError(out.name + ": tiered part must stay inside one expert's rows");
-        }
-        const auto expert = begin_row / rows_per_expert;
-        const auto within = begin_row % rows_per_expert;
-        const auto position = static_cast<std::size_t>(
-            std::find(tier.new_order.begin(), tier.new_order.end(),
-                      static_cast<std::uint32_t>(expert)) - tier.new_order.begin());
-        if (position >= tier.new_order.size()) {
-            throw ArtifactError(out.name + ": tiered bank lost its expert permutation");
-        }
-        const auto hot_experts = static_cast<std::uint64_t>(tier.hot_experts);
-        if (residency == Residency::Device) {
-            if (position >= hot_experts) {
-                throw ArtifactError(out.name + ": warm-tier expert bound with device residency");
-            }
-            const auto rank = static_cast<std::uint64_t>(position);
-            part.begin      = checked_mul(rank * rows_per_expert + within, geometry.shape[1],
-                                          "tiered hot rows");
-            part.end        = checked_add(part.begin,
-                                          checked_mul(end_row - begin_row, geometry.shape[1],
-                                                      "tiered span"),
-                                          "tiered hot end");
-            tier.device = true;
-        } else if (residency == Residency::Host) {
-            if (position < hot_experts) {
-                throw ArtifactError(out.name + ": hot-tier expert bound with host residency");
-            }
-            const auto rank = static_cast<std::uint64_t>(position) - hot_experts;
-            part.begin      = checked_mul(rank * rows_per_expert + within, geometry.shape[1],
-                                          "tiered warm rows");
-            part.end        = checked_add(part.begin,
-                                          checked_mul(end_row - begin_row, geometry.shape[1],
-                                                      "tiered span"),
-                                          "tiered warm end");
-            tier.host = true;
-        } else {
-            throw ArtifactError(out.name + ": tiered banks do not support value residency");
-        }
-    }
+    remap_tiered_parts(out, residency);
     if (residency == Residency::Device) {
         for (const auto& part : out.binding.parts) {
             const bool known =

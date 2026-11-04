@@ -104,21 +104,45 @@ ops::FlashNextExpertBank nvfp4_bank(const artifact::MaterializedArtifact& artifa
                                     const artifact::ParameterReference& handle,
                                     const artifact::ParameterReference& input_divisors, int rows,
                                     int columns) {
-    const std::uint64_t shape[] = {512, static_cast<std::uint64_t>(rows),
-                                   static_cast<std::uint64_t>(columns)};
-    const auto geometry =
-        weight_geometry(QType::NVFP4, QuantLayout::BatchedBlockScaleK16M128x4, shape);
-    const auto* base = data(artifact, handle);
-    return {
+    const auto view = artifact::bind_view(handle, artifact);
+    const auto object = handle.binding.parts.front().object;
+    const auto* state = artifact.tier_state(object);
+    if (!is_complete_weight(view) && state == nullptr) {
+        throw std::logic_error("expert bank requires complete storage");
+    }
+    const auto& parent = state != nullptr
+                             ? artifact.device_parent(object)
+                             : *view.parts.front().parent;
+    const auto* base   = static_cast<const std::byte*>(parent.data);
+    ops::FlashNextExpertBank bank{
         .codes                 = base,
-        .scales                = base + geometry.scale_offset,
-        .weight_scale_divisors = reinterpret_cast<const float*>(base + geometry.divisor_offset),
+        .scales                = base + parent.geometry.scale_offset,
+        .weight_scale_divisors = reinterpret_cast<const float*>(base + parent.geometry.divisor_offset),
         .input_scale_divisors  = reinterpret_cast<const float*>(data(artifact, input_divisors)),
         .qtype                 = QType::NVFP4,
         .experts               = 512,
         .rows                  = rows,
         .columns               = columns,
     };
+    // SP-4 tiered banks: the hot parent is the compacted device mini-bank (its geometry is
+    // the mini layout); the pinned warm mini-bank, the residency table, and the counters
+    // come from the materializer's tier state.
+    if (state != nullptr) {
+        const auto& warm      = artifact.host_parent(object);
+        const auto* warm_base = static_cast<const std::byte*>(warm.data);
+        bank.warm_codes                 = warm_base;
+        bank.warm_scales                = warm_base + warm.geometry.scale_offset;
+        bank.warm_weight_scale_divisors =
+            reinterpret_cast<const float*>(warm_base + warm.geometry.divisor_offset);
+        const auto* state_base          = static_cast<const std::uint32_t*>(state->data());
+        bank.expert_residency           = state_base;
+        // The counters are the state buffer's second half; the kernels atomically arm them.
+        bank.expert_activations         = const_cast<std::uint32_t*>(state_base) + 512;
+        const auto warm_experts         = warm.geometry.shape[0] /
+                                          static_cast<std::uint64_t>(rows);
+        bank.tiered_hot_experts         = 512 - static_cast<std::uint32_t>(warm_experts);
+    }
+    return bank;
 }
 
 ops::FlashNextExpertBank bf16_bank(const artifact::MaterializedArtifact& artifact,

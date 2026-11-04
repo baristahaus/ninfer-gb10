@@ -35,6 +35,11 @@ std::vector<artifact::ObjectHandle>& LoadPlan::device_objects() {
     return impl_->plan.device_objects;
 }
 
+std::vector<artifact::TierPlanInput>& LoadPlan::tier_inputs() {
+    if (!impl_) { throw std::logic_error("Flash-Next load plan is empty"); }
+    return impl_->plan.tier_inputs;
+}
+
 LoadedModel::LoadedModel(std::unique_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {}
 
 LoadedModel::~LoadedModel() = default;

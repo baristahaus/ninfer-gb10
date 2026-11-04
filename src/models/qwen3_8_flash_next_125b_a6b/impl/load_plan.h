@@ -1,6 +1,7 @@
 #pragma once
 
 #include "artifact/binder.h"
+#include "artifact/placement.h"
 #include <ninfer/models/qwen3_8_flash_next/startup_features.h>
 
 #include <array>
@@ -182,6 +183,9 @@ struct ArtifactLoadPlan {
     artifact::MappedRange ple_table;
     // Device-resident tensor objects the plan bound; callers turn them into PlacementRequests.
     std::vector<artifact::ObjectHandle> device_objects;
+    // SP-4 tiered banks: the binder's tier state for the artifact's tier plan, fed to the
+    // tier-aware materialization; empty for an untiered artifact.
+    std::vector<artifact::TierPlanInput> tier_inputs;
     artifact::PreparedResources materialization;
 };
 

@@ -45,6 +45,9 @@ public:
 
     [[nodiscard]] const WeightParent& device_parent(ObjectHandle handle) const;
     [[nodiscard]] const WeightParent& host_parent(ObjectHandle handle) const;
+    // SP-4 tiered banks: the [residency][counters] device state, or nullptr when the object
+    // is not a tiered bank.
+    [[nodiscard]] const DeviceBuffer* tier_state(ObjectHandle handle) const noexcept;
     [[nodiscard]] std::span<const std::byte> host_bytes(ObjectHandle handle) const;
     [[nodiscard]] bool has_device(ObjectHandle handle) const noexcept;
     // Empty for an ordinary Host parent. Registration uses materialize's execution device.
@@ -66,6 +69,9 @@ private:
         // SP-4 tiered bank: the pinned warm mini-bank's storage (core PinnedHostBuffer);
         // `host` holds its parent.
         std::optional<PinnedHostBuffer> pinned;
+        // SP-4 tiered bank state: [residency u32 per expert][activation counters u32 per
+        // expert]. The residency is the initial placement; the counters arm every round.
+        std::optional<DeviceBuffer> tier_state;
     };
 
     HostBuffer host_storage_;

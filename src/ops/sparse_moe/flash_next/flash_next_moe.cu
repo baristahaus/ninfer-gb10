@@ -22,6 +22,7 @@
 #include <cmath>
 #include <atomic>
 #include <cstdint>
+#include <vector>
 
 extern std::atomic<int> ninfer_mtp_phase;
 // Set by the MTP schedule around the draft layer's MoE call; selects the
@@ -551,6 +552,15 @@ struct GroupedWork {
     const float* weight_divisors;
     const float* input_divisors;
     int output_rows;
+    // SP-4 tiered banks: the pinned-host warm mini-bank and the residency table; null for
+    // untiered banks. configure() resolves each job's expert to its tier's base pointers and
+    // compacted rank, substituting the rank for the expert in the row math.
+    const void* warm_codes         = nullptr;
+    const void* warm_scales        = nullptr;
+    const float* warm_weight_divisors = nullptr;
+    const std::uint32_t* residency = nullptr;
+    const void* cold_codes         = nullptr;
+    const void* cold_scales        = nullptr;
 
     __device__ __forceinline__ int work_count(int rows_per_block) const {
         return *job_count * (output_rows / rows_per_block);
@@ -558,7 +568,8 @@ struct GroupedWork {
 
     __device__ __forceinline__ void configure(int work, int rows_per_block, int& token_begin,
                                               int& active_tokens, int& row_begin, float& alpha,
-                                              RowPolicy& rows) const {
+                                              RowPolicy& rows, const std::uint8_t*& tier_codes,
+                                              const std::uint8_t*& tier_scales) const {
         const int row_blocks = output_rows / rows_per_block;
         const int job        = work / row_blocks;
         const int row_block  = work - job * row_blocks;
@@ -566,8 +577,22 @@ struct GroupedWork {
         token_begin          = offsets[expert] + job_columns[job];
         active_tokens        = offsets[expert + 1];
         row_begin            = row_block * rows_per_block;
-        alpha                = 1.0F / (weight_divisors[expert] * input_divisors[expert]);
-        rows.expert          = expert;
+        if (residency == nullptr) {
+            tier_codes  = static_cast<const std::uint8_t*>(cold_codes);
+            tier_scales = static_cast<const std::uint8_t*>(cold_scales);
+            alpha       = 1.0F / (weight_divisors[expert] * input_divisors[expert]);
+            rows.expert = expert;
+            return;
+        }
+        const auto entry = residency[expert];
+        const bool warm  = (entry & 0x80000000u) != 0;
+        const auto rank  = static_cast<int>(entry & 0x7fffffffu);
+        tier_codes = static_cast<const std::uint8_t*>(warm ? warm_codes : cold_codes);
+        tier_scales = static_cast<const std::uint8_t*>(warm ? warm_scales : cold_scales);
+        alpha       = 1.0F / ((warm && warm_weight_divisors ? warm_weight_divisors
+                                                            : weight_divisors)[rank] *
+                              input_divisors[expert]);
+        rows.expert = rank;
     }
 };
 
@@ -578,6 +603,14 @@ struct DecodeRouteWork {
     const float* input_divisors;
     int assignments;
     int output_rows;
+    // SP-4 tiered banks: the same warm/cold resolution as GroupedWork; null tier fields mean
+    // the untiered bank and the kernel falls back to its own base pointers.
+    const void* warm_codes         = nullptr;
+    const void* warm_scales        = nullptr;
+    const float* warm_weight_divisors = nullptr;
+    const std::uint32_t* residency = nullptr;
+    const void* cold_codes         = nullptr;
+    const void* cold_scales        = nullptr;
 
     __device__ __forceinline__ int work_count(int rows_per_block) const {
         return assignments * (output_rows / rows_per_block);
@@ -586,15 +619,28 @@ struct DecodeRouteWork {
     template <class RowPolicy>
     __device__ __forceinline__ void configure(int work, int rows_per_block, int& token_begin,
                                               int& active_tokens, int& row_begin, float& alpha,
-                                              RowPolicy& rows) const {
+                                              RowPolicy& rows, const std::uint8_t*& tier_codes,
+                                              const std::uint8_t*& tier_scales) const {
         const int row_blocks = output_rows / rows_per_block;
         const int assignment = work / row_blocks;
         const int expert     = ids[assignment];
         token_begin          = assignment;
         active_tokens        = assignment + 1;
         row_begin            = (work - assignment * row_blocks) * rows_per_block;
-        alpha                = 1.0F / (weight_divisors[expert] * input_divisors[expert]);
-        rows.expert          = expert;
+        if (residency == nullptr) {
+            alpha       = 1.0F / (weight_divisors[expert] * input_divisors[expert]);
+            rows.expert = expert;
+            return;
+        }
+        const auto entry = residency[expert];
+        const bool warm  = (entry & 0x80000000u) != 0;
+        const auto rank  = static_cast<int>(entry & 0x7fffffffu);
+        tier_codes = static_cast<const std::uint8_t*>(warm ? warm_codes : cold_codes);
+        tier_scales = static_cast<const std::uint8_t*>(warm ? warm_scales : cold_scales);
+        alpha       = 1.0F / ((warm && warm_weight_divisors ? warm_weight_divisors
+                                                            : weight_divisors)[rank] *
+                              input_divisors[expert]);
+        rows.expert = rank;
     }
 };
 
@@ -713,6 +759,31 @@ __device__ __forceinline__ std::int64_t scale_offset(int rows, int columns, int 
            row_mod32 * 16 + row_quartile * 4 + scale_lane;
 }
 
+// SP-4 tiered banks: resolves one expert's read base against its residency entry. Untiered
+// banks (a null residency) read the device bank at the expert's own rank. The per-expert
+// block layout is identical in both mini-banks, so the rank substitutes for the expert id in
+// the row math and the base pointers switch as a unit.
+struct TieredBank {
+    const void* codes;
+    const std::uint8_t* scales;
+    const float* divisors;
+    int rank;
+    __device__ static TieredBank resolve(const void* codes, const void* warm_codes,
+                                         const void* scales, const void* warm_scales,
+                                         const float* divisors, const float* warm_divisors,
+                                         const std::uint32_t* residency, int expert) {
+        if (residency == nullptr) {
+            return {codes, static_cast<const std::uint8_t*>(scales), divisors, expert};
+        }
+        const auto entry     = residency[expert];
+        const bool warm      = (entry & 0x80000000u) != 0;
+        const auto rank      = entry & 0x7fffffffu;
+        return {warm ? warm_codes : codes,
+                static_cast<const std::uint8_t*>(warm ? warm_scales : scales),
+                warm ? warm_divisors : divisors, static_cast<int>(rank)};
+    }
+};
+
 __device__ __forceinline__ float2 nvfp4_pair(const std::uint8_t* codes, const std::uint8_t* scales,
                                              const float* divisors, int rows, int columns,
                                              int expert, int row, int pair) {
@@ -750,7 +821,10 @@ template <bool Bf16>
 __global__ void routed_gate_up_kernel(const __nv_bfloat16* input, const int* ids,
                                       const std::uint8_t* codes, const std::uint8_t* scales,
                                       const float* divisors, __nv_bfloat16* activations,
-                                      int tokens) {
+                                      int tokens, const void* warm_codes,
+                                      const void* warm_scales, const float* warm_divisors,
+                                      const std::uint32_t* expert_residency,
+                                      std::uint32_t* expert_activations) {
     const int token = static_cast<int>(blockIdx.z);
     const int path  = static_cast<int>(blockIdx.y);
     const int warp  = static_cast<int>(threadIdx.x) >> 5;
@@ -758,16 +832,25 @@ __global__ void routed_gate_up_kernel(const __nv_bfloat16* input, const int* ids
     const int row   = static_cast<int>(blockIdx.x) * kWarps + warp;
     if (row >= kIntermediate) { return; }
     const int expert        = ids[path + kTop * token];
+    if (expert_activations != nullptr && lane == 0) {
+        // SP-4: the always-armed per-expert activation counters, one add per (token, path).
+        atomicAdd(&expert_activations[expert], 1U);
+    }
+    const auto bank         = TieredBank::resolve(codes, warm_codes, scales, warm_scales,
+                                                  divisors, warm_divisors, expert_residency,
+                                                  expert);
     float gate              = 0.0F;
     float up                = 0.0F;
     const auto* input_pairs = reinterpret_cast<const __nv_bfloat162*>(input);
     for (int pair = lane; pair < kHidden / 2; pair += 32) {
         const float2 x =
             __bfloat1622float2(input_pairs[pair + static_cast<std::int64_t>(kHidden / 2) * token]);
-        const float2 gate_weight = expert_pair<Bf16>(codes, scales, divisors, 2 * kIntermediate,
-                                                     kHidden, expert, row, pair);
-        const float2 up_weight   = expert_pair<Bf16>(codes, scales, divisors, 2 * kIntermediate,
-                                                     kHidden, expert, kIntermediate + row, pair);
+        const float2 gate_weight = expert_pair<Bf16>(bank.codes, bank.scales, bank.divisors,
+                                                     2 * kIntermediate, kHidden, bank.rank, row,
+                                                     pair);
+        const float2 up_weight   = expert_pair<Bf16>(bank.codes, bank.scales, bank.divisors,
+                                                     2 * kIntermediate, kHidden, bank.rank,
+                                                     kIntermediate + row, pair);
         gate                     = fmaf(gate_weight.x, x.x, gate);
         gate                     = fmaf(gate_weight.y, x.y, gate);
         up                       = fmaf(up_weight.x, x.x, up);
@@ -786,7 +869,9 @@ template <bool Bf16>
 __global__ void
 routed_down_kernel(const __nv_bfloat16* activations, const int* ids, const float* alpha,
                    const std::uint8_t* codes, const std::uint8_t* scales, const float* divisors,
-                   const float* shared_alpha, __nv_bfloat16* destination, int tokens) {
+                   const float* shared_alpha, __nv_bfloat16* destination, int tokens,
+                   const void* warm_codes, const void* warm_scales,
+                   const float* warm_divisors, const std::uint32_t* expert_residency) {
     const int token = static_cast<int>(blockIdx.y);
     const int warp  = static_cast<int>(threadIdx.x) >> 5;
     const int lane  = static_cast<int>(threadIdx.x) & 31;
@@ -795,14 +880,17 @@ routed_down_kernel(const __nv_bfloat16* activations, const int* ids, const float
     float total = 0.0F;
     for (int path = 0; path < kTop; ++path) {
         const int expert             = ids[path + kTop * token];
+        const auto bank              = TieredBank::resolve(codes, warm_codes, scales, warm_scales,
+                                                           divisors, warm_divisors,
+                                                           expert_residency, expert);
         float value                  = 0.0F;
         const auto* activation_pairs = reinterpret_cast<const __nv_bfloat162*>(activations);
         for (int pair = lane; pair < kIntermediate / 2; pair += 32) {
             const float2 x = __bfloat1622float2(
                 activation_pairs[pair + static_cast<std::int64_t>(kIntermediate / 2) *
                                             (path + kTop * token)]);
-            const float2 weight = expert_pair<Bf16>(codes, scales, divisors, kHidden, kIntermediate,
-                                                    expert, row, pair);
+            const float2 weight = expert_pair<Bf16>(bank.codes, bank.scales, bank.divisors,
+                                                    kHidden, kIntermediate, bank.rank, row, pair);
             value               = fmaf(weight.x, x.x, value);
             value               = fmaf(weight.y, x.y, value);
         }
@@ -848,7 +936,11 @@ void run_nvfp4_decode_routes(const Tensor& input, const FlashNextMoeWeights& wei
     Tensor down_scales = workspace.alloc(DType::U8, {kIntermediate / 16, assignments});
     const DecodeRouteWork gate_work{
         static_cast<const int*>(ids.data), weights.routed_gate_up.weight_scale_divisors,
-        weights.routed_gate_up.input_scale_divisors, assignments, kIntermediate};
+        weights.routed_gate_up.input_scale_divisors, assignments, kIntermediate,
+        weights.routed_gate_up.warm_codes, weights.routed_gate_up.warm_scales,
+        weights.routed_gate_up.warm_weight_scale_divisors,
+        weights.routed_gate_up.expert_residency, weights.routed_gate_up.codes,
+        weights.routed_gate_up.scales};
     const auto gate_output = GroupedSiluQuantizedOutput{
         GroupedSiluOutput{static_cast<__nv_bfloat16*>(routed_activation.data)},
         static_cast<std::uint8_t*>(down_codes.data), static_cast<std::uint8_t*>(down_scales.data),
@@ -869,9 +961,13 @@ void run_nvfp4_decode_routes(const Tensor& input, const FlashNextMoeWeights& wei
     const detail::flash_next::Nvfp4W4a4MaterializedActivation down_input{
         static_cast<const std::uint8_t*>(down_codes.data),
         static_cast<const std::uint8_t*>(down_scales.data)};
-    const DecodeRouteWork down_work{static_cast<const int*>(ids.data),
-                                    weights.routed_down.weight_scale_divisors,
-                                    weights.routed_down.input_scale_divisors, assignments, kHidden};
+    const DecodeRouteWork down_work{
+        static_cast<const int*>(ids.data),      weights.routed_down.weight_scale_divisors,
+        weights.routed_down.input_scale_divisors, assignments, kHidden,
+        weights.routed_down.warm_codes,         weights.routed_down.warm_scales,
+        weights.routed_down.warm_weight_scale_divisors,
+        weights.routed_down.expert_residency,   weights.routed_down.codes,
+        weights.routed_down.scales};
     constexpr int kDownRowsPerBlock = DecodeDownSchedule::kBlockN;
     const int down_blocks           = assignments * (kHidden / kDownRowsPerBlock);
     detail::flash_next::nvfp4_w4a4_mma_kernel<
@@ -927,6 +1023,22 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
     // 5090's 170 SMs). The grouped GEMMs stride their work list by gridDim.x,
     // so any grid is correct.
     const int persistent_blocks = kPrefillBlocksPerSm * device_sm_count();
+    {
+        static std::atomic<int> entry_n{0};
+        if (entry_n.fetch_add(1) == 0) {
+            std::fprintf(stderr, "[tierdump] moe entry: tokens=%d nvfp4=%d a16=%d\n", tokens,
+                         static_cast<int>(weights.routed_gate_up.qtype == QType::NVFP4),
+                         static_cast<int>(weights.routed_gate_up.input_scale_divisors == nullptr));
+            const auto& g = weights.routed_gate_up;
+            std::fprintf(stderr,
+                         "[tierdump] ptr codes=%p warm_codes=%p scales=%p warm_scales=%p "
+                         "wdiv=%p warm_wdiv=%p residency=%p warm_div_is_null=%d\n",
+                         g.codes, g.warm_codes, g.scales, g.warm_scales,
+                         g.weight_scale_divisors, g.warm_weight_scale_divisors,
+                         g.expert_residency,
+                         static_cast<int>(g.warm_weight_scale_divisors == nullptr));
+        }
+    }
     if (input.dtype != DType::BF16 || !input.is_contiguous() || input.ne[0] != kHidden ||
         tokens <= 0 || destination.dtype != DType::BF16 || !destination.is_contiguous() ||
         destination.ne[0] != kHidden || destination.ne[1] != tokens ||
@@ -1092,6 +1204,33 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
 #endif
         Tensor grouped_output;
         if (a16_bank) {
+            // TEMPORARY tier NaN bisect: dump the first call's routing, divisors, and a
+            // decoded weight sample. Remove after the oracle localizes the wrong read.
+            {
+                static std::atomic<int> dump_n{0};
+                if (dump_n.fetch_add(1) == 0) {
+                    const int n_experts = weights.routed_gate_up.experts;
+                    std::vector<float> div(n_experts, 0.f);
+                    cudaMemcpy(div.data(), weights.routed_gate_up.weight_scale_divisors,
+                               n_experts * sizeof(float), cudaMemcpyDeviceToHost);
+                    std::fprintf(stderr, "[tierdump] divisors[:12]:");
+                    for (int e = 0; e < 12; ++e) { std::fprintf(stderr, " %.6g", div[e]); }
+                    std::fprintf(stderr, "\n[tierdump] divisors[248:260]:");
+                    for (int e = 248; e < 260; ++e) { std::fprintf(stderr, " %.6g", div[e]); }
+                    if (weights.routed_gate_up.expert_residency != nullptr) {
+                        std::vector<std::uint32_t> res(n_experts, 0);
+                        cudaMemcpy(res.data(), weights.routed_gate_up.expert_residency,
+                                   n_experts * sizeof(std::uint32_t), cudaMemcpyDeviceToHost);
+                        std::fprintf(stderr, "\n[tierdump] residency[:8]:");
+                        for (int e = 0; e < 8; ++e) {
+                            std::fprintf(stderr, " %u", res[e]);
+                        }
+                        std::fprintf(stderr, " residency[300]: %u residency[511]: %u", res[300],
+                                     res[511]);
+                    }
+                    std::fprintf(stderr, "\n");
+                }
+            }
             // W4A16 grouped route: gather the packed assignments as BF16 rows and run the
             // dequant-in-kernel MMA; no activation quantization stage exists on this route.
             using W4a16GroupedSchedule =
@@ -1106,7 +1245,11 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
             CUDA_CHECK(cudaGetLastError());
             const detail::flash_next::Nvfp4W4a16GroupedWork<GroupedGateRows> gate_work{
                 i32(job_count), i32(job_experts), i32(job_columns), i32(offsets),
-                weights.routed_gate_up.weight_scale_divisors, kGroupedTokenTile, kIntermediate};
+                weights.routed_gate_up.weight_scale_divisors, kGroupedTokenTile, kIntermediate,
+                weights.routed_gate_up.warm_codes, weights.routed_gate_up.warm_scales,
+                weights.routed_gate_up.warm_weight_scale_divisors,
+                weights.routed_gate_up.expert_residency,
+                weights.routed_gate_up.codes, weights.routed_gate_up.scales};
             {
                 const int gate_blocks = std::min(
                     persistent_blocks, assignments * (kIntermediate / kGateRowsPerBlock));
@@ -1115,16 +1258,18 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
                     detail::flash_next::Nvfp4W4a16GroupedWork<GroupedGateRows>, true>
                     <<<gate_blocks, W4a16GroupedSchedule::kThreads,
                        W4a16GroupedSchedule::kSharedBytes, stream>>>(
-                        static_cast<const __nv_bfloat16*>(packed_input.data),
-                        static_cast<const std::uint8_t*>(weights.routed_gate_up.codes),
-                        static_cast<const std::uint8_t*>(weights.routed_gate_up.scales), kHidden,
+                        static_cast<const __nv_bfloat16*>(packed_input.data), kHidden,
                         GroupedSiluOutput{static_cast<__nv_bfloat16*>(routed_activation.data)},
                         GroupedGateRows{0, kGateRowsPerBlock}, gate_work);
                 CUDA_CHECK(cudaGetLastError());
             }
             const detail::flash_next::Nvfp4W4a16GroupedWork<GroupedDownRows> down_work{
                 i32(job_count), i32(job_experts), i32(job_columns), i32(offsets),
-                weights.routed_down.weight_scale_divisors, kGroupedTokenTile, kHidden};
+                weights.routed_down.weight_scale_divisors, kGroupedTokenTile, kHidden,
+                weights.routed_down.warm_codes, weights.routed_down.warm_scales,
+                weights.routed_down.warm_weight_scale_divisors,
+                weights.routed_down.expert_residency,
+                weights.routed_down.codes, weights.routed_down.scales};
             grouped_output = workspace.alloc(DType::BF16, {kHidden, assignments});
             {
                 const int down_blocks =
@@ -1135,8 +1280,7 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
                     <<<down_blocks, W4a16GroupedSchedule::kThreads,
                        W4a16GroupedSchedule::kSharedBytes, stream>>>(
                         static_cast<const __nv_bfloat16*>(routed_activation.data),
-                        static_cast<const std::uint8_t*>(weights.routed_down.codes),
-                        static_cast<const std::uint8_t*>(weights.routed_down.scales), kIntermediate,
+                        kIntermediate,
                         GroupedOutput{static_cast<__nv_bfloat16*>(grouped_output.data), kHidden},
                         GroupedDownRows{}, down_work);
                 CUDA_CHECK(cudaGetLastError());
@@ -1181,13 +1325,32 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
                           kExperts * sizeof(float));
                 }
             }
-            const GroupedWork<GroupedGateRows> gate_work{static_cast<const int*>(job_count.data),
-                                                         static_cast<const int*>(job_experts.data),
-                                                         static_cast<const int*>(job_columns.data),
-                                                         static_cast<const int*>(offsets.data),
-                                                         weights.routed_gate_up.weight_scale_divisors,
-                                                         weights.routed_gate_up.input_scale_divisors,
-                                                         kIntermediate};
+            {
+                static std::atomic<int> job_dump_n{0};
+                if (job_dump_n.fetch_add(1) == 0) {
+                    int jc = -1;
+                    cudaMemcpy(&jc, job_count.data, sizeof(int), cudaMemcpyDeviceToHost);
+                    std::vector<int> je(24, -7);
+                    cudaMemcpy(je.data(), job_experts.data,
+                               std::min<std::size_t>(24, job_experts.bytes()),
+                               cudaMemcpyDeviceToHost);
+                    std::fprintf(stderr, "[tierdump] grouped: assignments=%zu job_count=%d jobs[:24]:",
+                                 static_cast<std::size_t>(assignments), jc);
+                    for (std::size_t i = 0; i < je.size(); ++i) {
+                        std::fprintf(stderr, " %d", je[i]);
+                    }
+                    std::fprintf(stderr, "\n");
+                }
+            }
+            const GroupedWork<GroupedGateRows> gate_work{
+                static_cast<const int*>(job_count.data),  static_cast<const int*>(job_experts.data),
+                static_cast<const int*>(job_columns.data), static_cast<const int*>(offsets.data),
+                weights.routed_gate_up.weight_scale_divisors,
+                weights.routed_gate_up.input_scale_divisors, kIntermediate,
+                weights.routed_gate_up.warm_codes,       weights.routed_gate_up.warm_scales,
+                weights.routed_gate_up.warm_weight_scale_divisors,
+                weights.routed_gate_up.expert_residency, weights.routed_gate_up.codes,
+                weights.routed_gate_up.scales};
             if (decode_grouped) {
                 constexpr int kGateRowsPerBlock = DecodeGateSchedule::kBlockN / 2;
                 const int gate_blocks =
@@ -1261,13 +1424,15 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
             detail::flash_next::Nvfp4W4a4MaterializedActivation down_input{
                 static_cast<const std::uint8_t*>(down_codes.data),
                 static_cast<const std::uint8_t*>(down_scales.data)};
-            const GroupedWork<GroupedDownRows> down_work{static_cast<const int*>(job_count.data),
-                                                         static_cast<const int*>(job_experts.data),
-                                                         static_cast<const int*>(job_columns.data),
-                                                         static_cast<const int*>(offsets.data),
-                                                         weights.routed_down.weight_scale_divisors,
-                                                         weights.routed_down.input_scale_divisors,
-                                                         kHidden};
+            const GroupedWork<GroupedDownRows> down_work{
+                static_cast<const int*>(job_count.data),  static_cast<const int*>(job_experts.data),
+                static_cast<const int*>(job_columns.data), static_cast<const int*>(offsets.data),
+                weights.routed_down.weight_scale_divisors,
+                weights.routed_down.input_scale_divisors, kHidden,
+                weights.routed_down.warm_codes,           weights.routed_down.warm_scales,
+                weights.routed_down.warm_weight_scale_divisors,
+                weights.routed_down.expert_residency,     weights.routed_down.codes,
+                weights.routed_down.scales};
             if (decode_grouped) {
                 constexpr int kDownRowsPerBlock = DecodeDownSchedule::kBlockN;
                 const int down_blocks = std::min(persistent_blocks, assignments * (kHidden / kDownRowsPerBlock));
@@ -1369,29 +1534,105 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
         routed_gate_up_kernel<true><<<gate_grid, kWarps * 32, 0, stream>>>(
             static_cast<const __nv_bfloat16*>(input.data), static_cast<const int*>(ids.data),
             static_cast<const std::uint8_t*>(weights.routed_gate_up.codes), nullptr, nullptr,
-            static_cast<__nv_bfloat16*>(routed_activation.data), tokens);
+            static_cast<__nv_bfloat16*>(routed_activation.data), tokens, nullptr, nullptr,
+            nullptr, nullptr, nullptr);
         routed_down_kernel<true><<<down_grid, kWarps * 32, 0, stream>>>(
             static_cast<const __nv_bfloat16*>(routed_activation.data),
             static_cast<const int*>(ids.data), static_cast<const float*>(alpha.data),
             static_cast<const std::uint8_t*>(weights.routed_down.codes), nullptr, nullptr,
             static_cast<const float*>(shared_alpha.data),
-            static_cast<__nv_bfloat16*>(destination.data), tokens);
+            static_cast<__nv_bfloat16*>(destination.data), tokens, nullptr, nullptr, nullptr,
+            nullptr);
     } else {
+        {
+            static std::atomic<int> pair_dump_n{0};
+            if (pair_dump_n.fetch_add(1) == 0) {
+                const int n_experts = weights.routed_gate_up.experts;
+                std::vector<float> div(n_experts, 0.f);
+                cudaMemcpy(div.data(), weights.routed_gate_up.weight_scale_divisors,
+                           n_experts * sizeof(float), cudaMemcpyDeviceToHost);
+                std::fprintf(stderr, "[tierdump] hot divisors[:8]:");
+                for (int e = 0; e < 8; ++e) { std::fprintf(stderr, " %.6g", div[e]); }
+                std::fprintf(stderr, "\n[tierdump] hot divisors[248:256]:");
+                for (int e = 248; e < 256; ++e) { std::fprintf(stderr, " %.6g", div[e]); }
+                if (weights.routed_gate_up.expert_residency != nullptr) {
+                    std::vector<std::uint32_t> res(n_experts, 0);
+                    cudaMemcpy(res.data(), weights.routed_gate_up.expert_residency,
+                               n_experts * sizeof(std::uint32_t), cudaMemcpyDeviceToHost);
+                    std::fprintf(stderr, "\n[tierdump] residency[:6]:");
+                    for (int e = 0; e < 6; ++e) { std::fprintf(stderr, " %u", res[e]); }
+                    std::fprintf(stderr, " [300]=%u [511]=%u", res[300], res[511]);
+                    std::vector<std::uint8_t> hot_codes(64, 0), hot_scales(64, 0);
+                    cudaMemcpy(hot_codes.data(), weights.routed_gate_up.codes, 64,
+                               cudaMemcpyDeviceToHost);
+                    cudaMemcpy(hot_scales.data(), weights.routed_gate_up.scales, 64,
+                               cudaMemcpyDeviceToHost);
+                    std::fprintf(stderr, "\n[tierdump] hot codes[:16]:");
+                    for (int b = 0; b < 16; ++b) { std::fprintf(stderr, " %02x", hot_codes[b]); }
+                    std::fprintf(stderr, "\n[tierdump] hot scales[:16]:");
+                    for (int b = 0; b < 16; ++b) { std::fprintf(stderr, " %02x", hot_scales[b]); }
+                    if (weights.routed_gate_up.warm_codes != nullptr) {
+                        std::vector<std::uint8_t> warm_codes(64, 0), warm_scales(64, 0);
+                        cudaMemcpy(warm_codes.data(), weights.routed_gate_up.warm_codes, 64,
+                                   cudaMemcpyDeviceToHost);
+                        cudaMemcpy(warm_scales.data(), weights.routed_gate_up.warm_scales, 64,
+                                   cudaMemcpyDeviceToHost);
+                        std::fprintf(stderr, "\n[tierdump] warm codes[:16]:");
+                        for (int b = 0; b < 16; ++b) { std::fprintf(stderr, " %02x", warm_codes[b]); }
+                        std::fprintf(stderr, "\n[tierdump] warm scales[:16]:");
+                        for (int b = 0; b < 16; ++b) { std::fprintf(stderr, " %02x", warm_scales[b]); }
+                        std::vector<float> wdiv(8, 0.f);
+                        cudaMemcpy(wdiv.data(), weights.routed_gate_up.warm_weight_scale_divisors,
+                                   8 * sizeof(float), cudaMemcpyDeviceToHost);
+                        std::fprintf(stderr, "\n[tierdump] warm divisors[:8]:");
+                        for (int e = 0; e < 8; ++e) { std::fprintf(stderr, " %.6g", wdiv[e]); }
+                    } else {
+                        std::fprintf(stderr, "\n[tierdump] warm codes NULL");
+                    }
+                } else {
+                    std::fprintf(stderr, "\n[tierdump] residency NULL");
+                }
+                std::fprintf(stderr, "\n");
+            }
+        }
         routed_gate_up_kernel<false><<<gate_grid, kWarps * 32, 0, stream>>>(
             static_cast<const __nv_bfloat16*>(input.data), static_cast<const int*>(ids.data),
             static_cast<const std::uint8_t*>(weights.routed_gate_up.codes),
             static_cast<const std::uint8_t*>(weights.routed_gate_up.scales),
             weights.routed_gate_up.weight_scale_divisors,
-            static_cast<__nv_bfloat16*>(routed_activation.data), tokens);
+            static_cast<__nv_bfloat16*>(routed_activation.data), tokens,
+            weights.routed_gate_up.warm_codes, weights.routed_gate_up.warm_scales,
+            weights.routed_gate_up.warm_weight_scale_divisors,
+            weights.routed_gate_up.expert_residency,
+            weights.routed_gate_up.expert_activations);
         routed_down_kernel<false><<<down_grid, kWarps * 32, 0, stream>>>(
             static_cast<const __nv_bfloat16*>(routed_activation.data),
             static_cast<const int*>(ids.data), static_cast<const float*>(alpha.data),
             static_cast<const std::uint8_t*>(weights.routed_down.codes),
             static_cast<const std::uint8_t*>(weights.routed_down.scales),
             weights.routed_down.weight_scale_divisors, static_cast<const float*>(shared_alpha.data),
-            static_cast<__nv_bfloat16*>(destination.data), tokens);
+            static_cast<__nv_bfloat16*>(destination.data), tokens,
+            weights.routed_down.warm_codes, weights.routed_down.warm_scales,
+            weights.routed_down.warm_weight_scale_divisors,
+            weights.routed_down.expert_residency);
     }
     CUDA_CHECK(cudaGetLastError());
+}
+
+std::vector<std::uint32_t> read_and_reset_expert_activations(const FlashNextExpertBank& bank,
+                                                             CudaExecutionView execution) {
+    if (bank.expert_activations == nullptr) {
+        throw std::invalid_argument("read_and_reset_expert_activations: bank is untiered");
+    }
+    const auto experts = static_cast<std::size_t>(bank.experts);
+    std::vector<std::uint32_t> counts(experts, 0);
+    cudaStream_t stream = execution.stream();
+    CUDA_CHECK(cudaMemcpyAsync(counts.data(), bank.expert_activations,
+                               experts * sizeof(std::uint32_t), cudaMemcpyDeviceToHost, stream));
+    CUDA_CHECK(cudaMemsetAsync(bank.expert_activations, 0, experts * sizeof(std::uint32_t),
+                               stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+    return counts;
 }
 
 } // namespace ninfer::ops

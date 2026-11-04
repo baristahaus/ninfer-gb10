@@ -1,8 +1,10 @@
 #include "models/qwen3_8_flash_next_125b_a6b/impl/load_plan.h"
 
 #include "artifact/formats.h"
+#include "artifact/tier_plan.h"
 #include "models/qwen3_8_flash_next_125b_a6b/impl/config.h"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <initializer_list>
@@ -453,6 +455,35 @@ ArtifactLoadPlan plan_artifact(artifact::Binder& binder,
     }
     ArtifactLoadPlan out;
     out.bindings.features = features;
+    // SP-4 tiered banks: an artifact-carried tier plan marks the routed expert banks for
+    // hot/warm split placement. Applied before the layer bindings so the bank bindings remap
+    // to their experts' compacted mini-bank positions (see Binder::binding's tier block).
+    const auto tier_plan = artifact::parse_tier_plan(directory.metadata);
+    if (tier_plan) {
+        for (const auto& bank : tier_plan->banks) {
+            const auto handle = directory.object_index.find(bank.object);
+            if (handle == directory.object_index.end()) {
+                throw artifact::ArtifactError("tier_plan bank object is absent: " + bank.object);
+            }
+            const auto& shape = directory.tensor(handle->second).shape;
+            const auto expected = static_cast<std::uint64_t>(bank.experts) *
+                                  static_cast<std::uint64_t>(bank.rows_per_expert);
+            const bool row_count_ok =
+                (shape.size() == 2 && static_cast<std::uint64_t>(shape[0]) == expected) ||
+                (shape.size() == 3 &&
+                 static_cast<std::uint64_t>(shape[0]) == bank.experts &&
+                 static_cast<std::uint64_t>(shape[1]) == bank.rows_per_expert);
+            if (shape.empty() || !row_count_ok) {
+                throw artifact::ArtifactError("tier_plan bank " + bank.object +
+                                              " shape does not match experts * rows_per_expert");
+            }
+            auto warm = bank.warm;
+            warm.insert(warm.end(), bank.cold.begin(), bank.cold.end());
+            std::sort(warm.begin(), warm.end());
+            if (bank.hot.size() == bank.experts) { continue; }
+            binder.set_tier(handle->second, bank.hot, warm);
+        }
+    }
     for (std::size_t i = 0; i < resources.size(); ++i) {
         if (i < 4 || features.vision) {
             out.bindings.frontend[i] =
@@ -517,6 +548,9 @@ ArtifactLoadPlan plan_artifact(artifact::Binder& binder,
     out.bindings.vision              = bind_vision(binder, vision_placement);
 
     out.device_objects = binder.device_objects();
+    // The tier state is final once every binding has remapped; capture before the binder's
+    // finish() move.
+    out.tier_inputs = binder.tier_inputs();
     out.materialization = std::move(binder).finish();
     return out;
 }

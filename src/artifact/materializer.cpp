@@ -244,8 +244,10 @@ const WeightParent& MaterializedArtifact::device_parent(ObjectHandle handle) con
 const WeightParent& MaterializedArtifact::parent(StorageId id, Device device) const {
     const auto& tensor = tensors_.at(id.index);
     const auto& value  = device == Device::cpu() ? tensor.host : tensor.device;
-    if (!value || value->device != device)
-        throw ArtifactError("tensor has no backing on requested device");
+    if (!value || value->device != device) {
+        throw ArtifactError("tensor has no backing on requested device (storage " +
+                            std::to_string(id.index) + ")");
+    }
     return *value;
 }
 
@@ -253,6 +255,14 @@ const WeightParent& MaterializedArtifact::host_parent(ObjectHandle handle) const
     if (handle.index >= object_storage_.size() || !object_storage_[handle.index])
         throw ArtifactError("object has no Host weight backing");
     return parent(*object_storage_[handle.index], Device::cpu());
+}
+
+const DeviceBuffer* MaterializedArtifact::tier_state(ObjectHandle handle) const noexcept {
+    if (handle.index >= object_storage_.size() || !object_storage_[handle.index]) {
+        return nullptr;
+    }
+    const auto& tensor = tensors_[object_storage_[handle.index]->index];
+    return tensor.tier_state ? &*tensor.tier_state : nullptr;
 }
 
 std::span<const std::byte> MaterializedArtifact::host_bytes(ObjectHandle handle) const {
@@ -338,7 +348,8 @@ MaterializedArtifact materialize(const Reader& reader, MaterializationPlan&& pla
         storage = std::move(resource.data);
     }
     const auto place = [&](const std::vector<TensorPlacement>& placements, MemorySpan backing,
-                           bool on_device, std::size_t alignment = 1) {
+                           bool on_device, std::size_t alignment = 1,
+                           const std::vector<TierPlacementRequest>* tier_placements = nullptr) {
         LayoutBuilder layout;
         for (const auto& placement : placements) {
             const auto& tensor = plan.tensors.at(placement.storage.index);
@@ -366,6 +377,13 @@ MaterializedArtifact materialize(const Reader& reader, MaterializationPlan&& pla
                     std::memset(bytes.data, 0, bytes.bytes);
             }
         }
+        // SP-4 tiered banks place after the plain tensors in the same arena; their regions
+        // ride the tier plan, not per-tensor placements.
+        if (tier_placements != nullptr) {
+            for (const auto& tier : *tier_placements) {
+                layout.add(tier.bytes, tier.alignment, "tiered hot mini-bank");
+            }
+        }
         if (layout.finish(alignment) != backing.bytes) {
             throw ArtifactError("weight backing capacity differs from placements");
         }
@@ -375,7 +393,7 @@ MaterializedArtifact materialize(const Reader& reader, MaterializationPlan&& pla
           plan.host_alignment);
     place(plan.ordinary_host_objects, out.host_storage_.span().subspan(plan.registered_host_bytes),
           false);
-    place(plan.device_objects, out.device_storage_.span(), true);
+    place(plan.device_objects, out.device_storage_.span(), true, 1, &plan.tier_objects);
     // SP-4 tiered banks: compact hot mini-banks on the device, pinned-host warm mini-banks.
     // Placed after the plain device objects so the arena's sequential offsets match the plan;
     // each bank reads once and packs per expert per plane, in the tier permutation's order.
@@ -386,28 +404,44 @@ MaterializedArtifact materialize(const Reader& reader, MaterializationPlan&& pla
             throw ArtifactError("tiered EXL3 weights (banks and dense linears) require "
                                 "the SP-4 variable-extent change");
         }
-        const auto rows    = geometry.shape[0];
+        const bool batched  = geometry.shape.size() == 3;
+        const auto rows     = batched ? static_cast<std::uint64_t>(geometry.shape[0]) *
+                                            static_cast<std::uint64_t>(geometry.shape[1])
+                                      : static_cast<std::uint64_t>(geometry.shape[0]);
         const auto experts = tier.new_order.size();
-        if (geometry.shape.size() != 2 || rows == 0 || geometry.shape[1] == 0 ||
+        // The object's bytes include the trailing per-expert divisor table for NVFP4 banks;
+        // the per-expert block arithmetic uses the exact block size, not a raw division.
+        const auto block    = tier_expert_block_bytes(geometry, experts);
+        const auto divisor_words = geometry.divisor_count;
+        if ((batched && geometry.layout != QuantLayout::BatchedBlockScaleK16M128x4) ||
+            (!batched && geometry.shape.size() != 2) || rows == 0 ||
+            (batched && geometry.shape[1] == 0) || (!batched && geometry.shape[1] == 0) ||
             experts == 0 || rows % experts != 0 || tier.hot_experts == 0 ||
-            tier.hot_experts >= experts || geometry.bytes % rows != 0 ||
-            tier.bytes != geometry.bytes / experts * (tier.hot_experts + tier.cache_slots)) {
+            tier.hot_experts >= experts ||
+            (geometry.bytes - divisor_words * 4) % rows != 0 ||
+            tier.bytes != block * (tier.hot_experts + tier.cache_slots)) {
             throw ArtifactError(reader.directory().tensor(tier.object).id +
                                 ": tiered placement does not divide into per-expert mini-banks");
+        }
+        if (geometry.divisor_count != 0 && geometry.divisor_count != experts) {
+            throw ArtifactError(reader.directory().tensor(tier.object).id +
+                                ": tiered divisor table must hold one float per expert");
         }
         if (geometry.layout == QuantLayout::BlockScaleK16M128x4 && rows / experts % 128 != 0) {
             throw ArtifactError("tiered swizzled-scale split requires 128-row tile alignment");
         }
         const auto rows_per_expert = rows / experts;
         const auto warm_experts    = experts - tier.hot_experts;
-        auto& storage              = out.tensors_.at(tier.object.index);
+        // The tier plan carries object handles; tensors_ indexes storage slots. The
+        // placement's object map is the bridge (the same mapping the plain loop skipped by).
+        auto& storage              = out.tensors_.at(out.object_storage_.at(tier.object.index)->index);
         if (storage.device || storage.host || storage.pinned.has_value()) {
             throw ArtifactError("duplicate tiered placement");
         }
         const auto hot_bytes = static_cast<std::size_t>(tier.bytes);
         std::vector<std::byte> hot_packed(hot_bytes);
         storage.pinned.emplace(
-            static_cast<std::size_t>(geometry.bytes / experts * warm_experts));
+            static_cast<std::size_t>(block * warm_experts));
         const auto staging = reader.read_object(tier.object);
         out.stats_.read_bytes =
             checked_add(out.stats_.read_bytes, staging.size(), "tiered read bytes");
@@ -455,32 +489,63 @@ MaterializedArtifact materialize(const Reader& reader, MaterializationPlan&& pla
                                      checked_mul(block, warm_experts, "tiered warm plane"),
                                      "tiered warm plane base");
         }
-        const auto hot_slice_bytes =
-            checked_mul(tier.hot_experts, geometry.bytes / experts, "tiered hot slice");
-        if (hot_written != hot_slice_bytes || warm_written != storage.pinned->size()) {
+        // The trailing per-expert divisor table: one float per expert, compacted to the slot
+        // order. The row-plane loop above cannot carry it (it is not per-row data).
+        if (divisor_words != 0) {
+            for (std::size_t slot = 0; slot < experts; ++slot) {
+                const auto expert   = tier.new_order[slot];
+                const bool warm     = slot >= tier.hot_experts;
+                const auto dst_slot = warm ? slot - tier.hot_experts : slot;
+                const auto source   = checked_add(geometry.divisor_offset,
+                                                  checked_mul(expert, 4, "divisor source"),
+                                                  "divisor source offset");
+                const auto destination =
+                    checked_add(warm ? warm_plane : hot_plane,
+                                checked_mul(dst_slot, 4, "divisor slot"),
+                                "divisor destination offset");
+                auto* destination_bytes =
+                    warm ? static_cast<std::byte*>(storage.pinned->data()) + destination
+                         : hot_packed.data() + destination;
+                std::memcpy(destination_bytes, staging.data() + source, 4);
+            }
+        }
+        // The row-plane totals exclude the divisor table; the pinned size includes it.
+        const auto row_block       = block - (divisor_words != 0 ? 4 : 0);
+        const auto hot_slice_bytes = checked_mul(tier.hot_experts, row_block,
+                                                 "tiered hot slice");
+        if (hot_written != hot_slice_bytes ||
+            warm_written + (divisor_words ? warm_experts * 4 : 0) !=
+                static_cast<std::uint64_t>(storage.pinned->size())) {
             throw ArtifactError("tiered expert packing does not cover the mini-banks");
         }
-        // The scaled mini-bank geometries: the same plane structure at the split row counts.
-        const auto mini_geometry = [&](std::uint64_t mini_rows) {
+        // The scaled mini-bank geometries: the same plane structure at the split row counts,
+        // with the compacted divisor table at the tail of each mini-bank.
+        const auto mini_geometry = [&](std::uint64_t mini_rows, std::uint64_t mini_divisors) {
             WeightGeometry mini = geometry;
             mini.shape[0]       = mini_rows;
-            mini.elements       = checked_mul(mini_rows, geometry.shape[1], "tiered elements");
-            mini.bytes          = geometry.bytes / rows * mini_rows;
+            mini.elements       = checked_mul(mini_rows, geometry.shape.back(), "tiered elements");
             mini.code_bytes     = checked_mul(geometry.code_bytes_per_row, mini_rows, "codes");
             mini.high_bytes     = checked_mul(geometry.high_bytes_per_row, mini_rows, "high");
             mini.scale_bytes    = checked_mul(geometry.scale_row_bytes, mini_rows, "scales");
             mini.high_offset    = mini.code_bytes;
             mini.scale_offset   = checked_add(mini.code_bytes, mini.high_bytes, "scale offset");
-            mini.divisor_offset = 0;
+            mini.divisor_offset = checked_add(mini.scale_offset, mini.scale_bytes,
+                                              "divisor offset");
+            mini.divisor_count  = mini_divisors;
+            mini.bytes          = checked_add(mini.divisor_offset,
+                                              checked_mul(mini_divisors, 4, "divisor bytes"),
+                                              "mini bytes");
             return mini;
         };
         const auto hot_region = LayoutRegion{tier.offset, tier.bytes, tier.alignment};
         const auto hot_bound  = hot_region.bind(out.device_storage_.span());
-        storage.device = WeightParent{mini_geometry((tier.hot_experts + tier.cache_slots) *
-                                                    rows_per_expert),
+        storage.device = WeightParent{mini_geometry(
+                                          (tier.hot_experts + tier.cache_slots) * rows_per_expert,
+                                          tier.hot_experts + tier.cache_slots),
                                       hot_bound.device, static_cast<const std::byte*>(hot_bound.data), {}};
-        storage.host   = WeightParent{mini_geometry(warm_experts * rows_per_expert), Device{},
-                                     static_cast<const std::byte*>(storage.pinned->data()), {}};
+        storage.host   = WeightParent{mini_geometry(warm_experts * rows_per_expert, warm_experts),
+                                      Device::cpu(), static_cast<const std::byte*>(storage.pinned->data()),
+                                      {}};
         // One-shot synchronous upload: the staging and packed buffers are per-bank locals.
         check_cuda(
             cudaMemcpy(hot_bound.data, hot_packed.data(), hot_packed.size(),
@@ -488,6 +553,23 @@ MaterializedArtifact materialize(const Reader& reader, MaterializationPlan&& pla
             "tiered hot upload");
         out.stats_.h2d_bytes =
             checked_add(out.stats_.h2d_bytes, hot_packed.size(), "tiered h2d");
+        // The tier state: residency[expert] = compacted slot | warm bit, counters zeroed.
+        // The runtime owns the counters from here; the residency is read-only state until
+        // an adapt round rewrites it.
+        storage.tier_state.emplace(plan.device,
+                                   checked_mul(experts, 2 * sizeof(std::uint32_t),
+                                               "tiered state bytes"));
+        storage.tier_state->fill(0);
+        {
+            std::vector<std::uint32_t> residency(experts, 0);
+            for (std::size_t slot = 0; slot < experts; ++slot) {
+                residency[tier.new_order[slot]] =
+                    static_cast<std::uint32_t>(slot) |
+                    (slot >= tier.hot_experts ? 0x80000000u : 0u);
+            }
+            storage.tier_state->copy_from_host(residency.data(),
+                                               residency.size() * sizeof(std::uint32_t));
+        }
         out.stats_.retained_host_bytes = checked_add(out.stats_.retained_host_bytes,
                                                      storage.pinned->size(), "tiered warm bytes");
         out.stats_.tier_pinned_warm_bytes = checked_add(out.stats_.tier_pinned_warm_bytes,
@@ -495,7 +577,17 @@ MaterializedArtifact materialize(const Reader& reader, MaterializationPlan&& pla
                                                         "tiered warm bytes");
     }
     std::vector<CopyRange> ranges;
+    // SP-4: the tiered banks' payloads are packed by the tier block above; their encoded
+    // copies target full-object offsets that do not exist inside the mini-bank parents.
+    std::vector<bool> tier_packed(out.tensors_.size(), false);
+    for (const auto& tier : plan.tier_objects) {
+        if (tier.object.index < out.object_storage_.size() &&
+            out.object_storage_[tier.object.index]) {
+            tier_packed[out.object_storage_[tier.object.index]->index] = true;
+        }
+    }
     for (std::size_t i = 0; i < out.tensors_.size(); ++i) {
+        if (tier_packed[i]) { continue; }
         auto& object       = out.tensors_[i];
         const auto& tensor = plan.tensors[i];
         object.weight_divisors.resize(tensor.geometry.divisor_count);

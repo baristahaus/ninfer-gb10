@@ -100,7 +100,7 @@ constexpr std::size_t kIntegratedHostReserveBytes = 6ULL << 30;
 // budget is MemAvailable less the host memory that must stay out of Device use.
 std::size_t obtainable_device_bytes(const DeviceContext& device, const EngineOptions& options,
                                     bool host_kv_pending) {
-    if (!device.props.integrated) { return current_free_device_bytes(); }
+    if (!device.properties().integrated) { return current_free_device_bytes(); }
     const std::size_t reserve =
         kIntegratedHostReserveBytes +
         (host_kv_pending ? options.context_cache.host_kv_capacity_bytes : 0);
@@ -114,7 +114,7 @@ std::size_t obtainable_device_bytes(const DeviceContext& device, const EngineOpt
 // MemAvailable stops rising before any sizing: stable means under 256 MiB of growth across one
 // 500 ms window. Bounded so a busy host never blocks startup indefinitely.
 void wait_for_integrated_memory_release(const DeviceContext& device) {
-    if (!device.props.integrated) { return; }
+    if (!device.properties().integrated) { return; }
     constexpr auto kWindow           = std::chrono::milliseconds(500);
     constexpr auto kLimit            = std::chrono::seconds(60);
     constexpr std::size_t kStableGap = 256ULL << 20;
@@ -257,14 +257,48 @@ ConstructedModel construct_flash_next(const EngineOptions& options, DeviceContex
     // integrated pool; sizing before the release fails the weights check.
     wait_for_integrated_memory_release(device);
     const auto free  = obtainable_device_bytes(device, options, true);
+    // NINFER_BUDGET_DRY_RUN: print the resident-set budget and exit before any allocation.
+    // The zero-risk proof the tiered incident rule requires.
+    if (std::getenv("NINFER_BUDGET_DRY_RUN") != nullptr) {
+        const auto& m = plan.materialization();
+        std::fprintf(stderr,
+                     "budget-dry-run: device=%zu MiB tier_pinned=%zu MiB host=%zu MiB "
+                     "registered_host=%zu MiB obtainable=%zu MiB verdict=%s\n",
+                     m.device_capacity_bytes >> 20, m.tier_pinned_bytes >> 20,
+                     m.host_capacity_bytes >> 20, m.registered_host_bytes >> 20, free >> 20,
+                     m.device_capacity_bytes + m.tier_pinned_bytes + m.host_capacity_bytes <= free
+                         ? "FITS"
+                         : "DOES_NOT_FIT");
+        throw std::invalid_argument("budget dry run complete");
+    }
+    // SP-4: on an integrated device every resident byte - the device arena, the pinned
+    // tiered warm mini-banks, and the Host-resident weights - draws from one MemAvailable.
+    const auto tier_pinned = plan.materialization().tier_pinned_bytes;
+    const auto host_backing = plan.materialization().host_capacity_bytes;
+    if (device.properties().integrated &&
+        plan.materialization().device_capacity_bytes + tier_pinned + host_backing > free) {
+        throw std::invalid_argument(
+            "Flash-Next resident set exceeds integrated-pool budget: need " +
+            std::to_string(plan.materialization().device_capacity_bytes >> 20) +
+            " MiB device + " + std::to_string(tier_pinned >> 20) +
+            " MiB pinned tiered warm banks + " + std::to_string(host_backing >> 20) +
+            " MiB Host weights, obtainable " + std::to_string(free >> 20) + " MiB");
+    }
     if (plan.materialization().device_capacity_bytes > free) {
         throw std::invalid_argument(
             "Flash-Next weights exceed free GPU memory: need " +
             std::to_string(plan.materialization().device_capacity_bytes >> 20) +
             " MiB, obtainable " + std::to_string(free >> 20) + " MiB");
     }
+    if (tier_pinned != 0 && device.properties().integrated &&
+        options.kv_capacity.mode == KvCapacityMode::Automatic) {
+        throw std::invalid_argument(
+            "tiered loads on an integrated device require an explicit --kv-capacity; the "
+            "auto resolver cannot see the pinned warm mini-banks");
+    }
     (void)resolve_kv_capacity(options.kv_capacity, curve,
-                              free - plan.materialization().device_capacity_bytes);
+                              free - plan.materialization().device_capacity_bytes -
+                                  tier_pinned);
     std::set<std::string> formats{"fp8_e4m3fn"};
     for (const auto& placement : plan.materialization().device_objects) {
         formats.insert(reader.directory().tensor(placement.object).format);

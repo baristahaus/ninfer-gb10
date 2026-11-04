@@ -71,13 +71,49 @@ Effort: roughly a day after the converter exists. This lane is where the
 strategy's tiered-125B goal actually lives (SP-6 measured the FP8/MTP form
 fully resident; a tiered form is what produces the SP-5-R miss profile).
 
-## Recommendation
+## Decision: Target B — the Flash-Next 125B lane
 
-Decide by lane value: if the near-term goal is the tiered 125B (SP-5-R's
-justification), fund the converter + target B and treat target A as the
-follow-up family-core work. If the 35B stand-in remains the measurement
-vehicle, target A comes first. Either way the converter is step 1; without it
-nothing can be measured.
+Decided 2026-11-04. Rationale, each measurable:
+
+1. **Strategy value**: SP-4/5/6 all aim at the 125B; the 35B was always a
+   stand-in. A tiered 125B is also the only form that produces the SP-5-R miss
+   profile (its gate is closed on the fully-resident FP8/MTP form).
+2. **The Op surface is already in the production path**: the Flash-Next MoE runs
+   `ops::sparse_moe` with `SparseMoeWeights` today (fields null → untiered).
+   Restoring means populating them, not designing a new surface.
+3. **Effort**: ~1 day post-converter vs several days for the converged core.
+4. **Convergence direction**: adding tiering to `moe::Parameters` now would
+   shape the family core around a stand-in lane (SP-8 shrinks families); the
+   125B's tiering requirements (per-expert widths, PLE interaction) are exactly
+   the "variable-extent change" the strategy already schedules — design it once,
+   there, with real requirements.
+
+## Target B execution plan (converter first; nothing measures without it)
+
+1. **Converter**: the tiered-artifact writer — per-expert warm mini-banks
+   (pinned-host twins), the warm-rank table, and the tier metadata for the
+   Flash-Next 512-way MoE; a conversion-policy knob (hot/warm split per bank).
+   Reuses the existing Flash-Next 125b converter route (`tools/convert/
+   qwen3_8_flash_next_125b_a6b/`) as the base.
+2. **Binding**: the Flash-Next MoE binding populates `warm_routed_gate_up`,
+   `warm_routed_down`, `tiered_hot_experts`, and the warm-rank table when the
+   artifact carries them (the fields flow through `variant.cpp`/`text_context_impl.h`
+   today, null).
+3. **Runtime**: the Flash-Next program's parameters chain gains
+   `ExpertCacheState` + the boundary passes (prefill chunk / every eighth decode
+   round), ported from `e7d73e0c` — the device-side pass needs no host
+   readback and is CUDA-Graph-replay-compatible only outside the captured
+   region; verify against the graph frontiers.
+4. **Artifact**: a tiered FP8 125B conversion. **Disk note**: ~65 GB free
+   locally — the artifact goes to the tank or the local cache is cleaned first.
+5. **Measure**: the SP-5-R gate re-runs (the miss profile, the warm-hit rate,
+   the promotion/eviction behavior), the zero-cost counter check, and the
+   bit-identical-generation check at every tail size.
+
+Acceptance mirrors the workplan's, evaluated on the 125B: the counters arm at
+zero measured cost, the residency populates under MoE load, `bench
+--moe-profile` reports, generation stays bit-identical at every tail size, and
+the untiered FP8/MTP form is unchanged.
 
 ## Immediate cleanups available regardless of decision
 

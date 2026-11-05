@@ -306,13 +306,38 @@ private:
     static constexpr std::size_t kTierPolicyCacheCapacity = 64;
 
     // The tier policy is on by default; NINFER_TIER_POLICY=0 disables it entirely
-    // (isolation for tier-path crashes).
+    // (isolation for tier-path crashes). The knob env vars: NINFER_TIER_SWAPS_PER_LAYER
+    // caps the promote/demote pairs per layer per pass (default 2), NINFER_TIER_PIN_TOPK
+    // is the per-layer global most-used expert count to keep hot (0 = off), and
+    // NINFER_TIER_PIN_EVERY is the request interval for the global pin pass.
     [[nodiscard]] static bool tier_policy_enabled() noexcept {
         static const bool enabled = [] {
             const char* value = std::getenv("NINFER_TIER_POLICY");
             return value == nullptr || std::string_view{value} != "0";
         }();
         return enabled;
+    }
+
+    [[nodiscard]] static int tier_env_int(const char* name, int fallback) noexcept {
+        const char* value = std::getenv(name);
+        if (value == nullptr) { return fallback; }
+        const int parsed = std::atoi(value);
+        return parsed > 0 ? parsed : fallback;
+    }
+
+    [[nodiscard]] static int tier_swaps_per_layer() noexcept {
+        static const int value = tier_env_int("NINFER_TIER_SWAPS_PER_LAYER", 2);
+        return value;
+    }
+
+    [[nodiscard]] static int tier_pin_topk() noexcept {
+        static const int value = tier_env_int("NINFER_TIER_PIN_TOPK", 0);
+        return value;
+    }
+
+    [[nodiscard]] static int tier_pin_every() noexcept {
+        static const int value = tier_env_int("NINFER_TIER_PIN_EVERY", 8);
+        return value;
     }
 
     // SP-4 tier policy: attribute one terminal request's expert usage to its session and
@@ -332,6 +357,42 @@ private:
         const auto stats = tier_policy_.stats();
         std::fprintf(stderr, "[tierprof] observed requests=%zu cache_hits=%zu\n", stats.requests,
                      stats.cache_hits);
+        if (tier_pin_topk() > 0 && tier_pin_every() > 0 &&
+            stats.requests % tier_pin_every() == 0) {
+            tier_pin_top_experts();
+        }
+    }
+
+    // SP-4 tier policy: the tiered residency table is device memory; read a bank's copy
+    // through the execution stream.
+    [[nodiscard]] std::vector<std::uint32_t> tier_read_residency(
+        const ops::FlashNextExpertBank& bank) const {
+        const auto experts = static_cast<std::size_t>(bank.experts);
+        std::vector<std::uint32_t> residency(experts, 0);
+        cudaStream_t stream = device_.execution_view().stream();
+        CUDA_CHECK(cudaMemcpyAsync(residency.data(), bank.expert_residency,
+                                   residency.size() * sizeof(std::uint32_t),
+                                   cudaMemcpyDeviceToHost, stream));
+        CUDA_CHECK(cudaStreamSynchronize(stream));
+        return residency;
+    }
+
+    // Applies at most `count` promote/demote pairs to both banks of one layer: the promote
+    // candidates are taken in order, the demote victims are the least-used currently-hot
+    // experts outside `protect`.
+    void tier_apply_layer_swaps(int layer, const ops::FlashNextExpertBank& bank,
+                                const ops::FlashNextExpertBank& down,
+                                const std::vector<int>& promote,
+                                const std::vector<std::uint8_t>& hot,
+                                const std::vector<std::uint8_t>& protect, std::size_t count) {
+        auto demote = tier_policy_.bottom_experts(
+            layer, static_cast<int>(std::min(promote.size(), count)), hot, protect);
+        for (std::size_t i = 0; i < demote.size() && i < promote.size(); ++i) {
+            ops::swap_expert_tier(bank, promote[i], demote[i], device_.execution_view());
+            ops::swap_expert_tier(down, promote[i], demote[i], device_.execution_view());
+            std::fprintf(stderr, "[tierprof] layer=%d promote=%d demote=%d\n", layer, promote[i],
+                         demote[i]);
+        }
     }
 
     // SP-4 tier policy: on a repeat session, promote the experts this session previously
@@ -340,7 +401,7 @@ private:
         if (instance_.model == nullptr || tier_banks_ == 0) { return; }
         if (session.empty() || !tier_policy_.cached(session)) { return; }
         if (!tier_policy_enabled()) { return; }
-        constexpr int kMaxSwapsPerLayer = 2;
+        const auto budget = static_cast<std::size_t>(tier_swaps_per_layer());
         for (int layer = 0; layer < tier_banks_; ++layer) {
             const auto* mask = tier_policy_.cached_mask(session, layer);
             const auto* bank = instance_.model->tier_gate_up_bank(layer);
@@ -349,16 +410,8 @@ private:
                 bank->expert_residency == nullptr) {
                 continue;
             }
-            const auto experts = static_cast<std::size_t>(bank->experts);
-            // The residency table lives in device memory; read it through the stream.
-            std::vector<std::uint32_t> residency(experts, 0);
-            {
-                cudaStream_t stream = device_.execution_view().stream();
-                CUDA_CHECK(cudaMemcpyAsync(residency.data(), bank->expert_residency,
-                                           residency.size() * sizeof(std::uint32_t),
-                                           cudaMemcpyDeviceToHost, stream));
-                CUDA_CHECK(cudaStreamSynchronize(stream));
-            }
+            const auto residency = tier_read_residency(*bank);
+            const auto experts = residency.size();
             std::vector<std::uint8_t> hot(experts, 0);
             std::vector<int> warm;
             for (std::size_t e = 0; e < experts; ++e) {
@@ -367,16 +420,55 @@ private:
                 if (is_warm && (*mask)[e] != 0) { warm.push_back(static_cast<int>(e)); }
             }
             if (warm.empty()) { continue; }
-            auto demote = tier_policy_.bottom_experts(
-                layer, static_cast<int>(std::min(warm.size(), static_cast<std::size_t>(
-                                                            kMaxSwapsPerLayer))),
-                hot, *mask);
-            for (std::size_t i = 0; i < demote.size() && i < warm.size(); ++i) {
-                ops::swap_expert_tier(*bank, warm[i], demote[i], device_.execution_view());
-                ops::swap_expert_tier(*down, warm[i], demote[i], device_.execution_view());
-                std::fprintf(stderr, "[tierprof] layer=%d promote=%d demote=%d\n", layer,
-                             warm[i], demote[i]);
+            // The protect set = this session's cached experts plus the global top-K.
+            std::vector<std::uint8_t> protect = *mask;
+            tier_append_global_protect(layer, protect);
+            tier_apply_layer_swaps(layer, *bank, *down, warm, hot, protect, budget);
+        }
+    }
+
+    // SP-4 tier policy: the global pin pass. Every `NINFER_TIER_PIN_EVERY` requests,
+    // promote the globally most-used warm experts per layer and protect the top-K from
+    // demotion in every later pass, so the steady-state hot tier keeps the load-bearing
+    // experts resident regardless of which session is active.
+    void tier_pin_top_experts() {
+        if (instance_.model == nullptr || tier_banks_ == 0) { return; }
+        const auto topk = tier_pin_topk();
+        if (topk <= 0) { return; }
+        const auto budget = static_cast<std::size_t>(tier_swaps_per_layer());
+        for (int layer = 0; layer < tier_banks_; ++layer) {
+            const auto* bank = instance_.model->tier_gate_up_bank(layer);
+            const auto* down = instance_.model->tier_down_bank(layer);
+            if (bank == nullptr || down == nullptr || bank->expert_residency == nullptr) {
+                continue;
             }
+            const auto residency = tier_read_residency(*bank);
+            const auto experts = residency.size();
+            std::vector<std::uint8_t> hot(experts, 0);
+            std::vector<int> warm_top;
+            for (std::size_t e = 0; e < experts; ++e) {
+                const bool is_warm = (residency[e] & 0x80000000u) != 0;
+                hot[e] = is_warm ? 0 : 1;
+            }
+            for (const int e : tier_policy_.top_experts(layer, topk)) {
+                if (hot[static_cast<std::size_t>(e)] == 0) { warm_top.push_back(e); }
+            }
+            if (warm_top.empty()) { continue; }
+            // The protect set = the global top-K plus every cached session's experts.
+            std::vector<std::uint8_t> protect = tier_policy_.all_sessions_mask(layer);
+            for (const int e : tier_policy_.top_experts(layer, topk)) {
+                protect[static_cast<std::size_t>(e)] = 1;
+            }
+            tier_apply_layer_swaps(layer, *bank, *down, warm_top, hot, protect, budget);
+        }
+    }
+
+    // Extends a protect mask with the global top-K experts of one layer.
+    void tier_append_global_protect(int layer, std::vector<std::uint8_t>& protect) const {
+        const auto topk = tier_pin_topk();
+        if (topk <= 0) { return; }
+        for (const int e : tier_policy_.top_experts(layer, topk)) {
+            protect[static_cast<std::size_t>(e)] = 1;
         }
     }
 

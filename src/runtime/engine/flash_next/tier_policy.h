@@ -74,6 +74,22 @@ public:
         return order;
     }
 
+    // The union of every cached session's expert bitmask for one layer. A global demotion
+    // pass must not evict experts any known session needs.
+    [[nodiscard]] std::vector<std::uint8_t> all_sessions_mask(int layer) const {
+        std::vector<std::uint8_t> out;
+        if (layer >= layers_) { return out; }
+        out.assign(static_cast<std::size_t>(experts_), 0);
+        for (const auto& [key, entry] : cache_) {
+            const auto& mask = entry.mask[static_cast<std::size_t>(layer)];
+            const auto count = std::min(mask.size(), out.size());
+            for (std::size_t e = 0; e < count; ++e) {
+                out[e] = static_cast<std::uint8_t>(out[e] | mask[e]);
+            }
+        }
+        return out;
+    }
+
     // The `count` least-used experts of one layer among `eligible` (the caller's currently
     // hot set), excluding the protected set (the pinned or the always-hot experts the
     // caller must not demote).

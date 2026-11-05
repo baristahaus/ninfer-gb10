@@ -1060,6 +1060,10 @@ std::string_view PreparedPrompt::tier_session_key() const noexcept {
     }
     // Sessionless prompts (e.g. OpenAI chat): the token identity is the session. The hash
     // lives in the data's own storage so the returned view stays valid with the prompt.
+    // Limitation: a multi-turn conversation produces a distinct identity per turn (each
+    // turn's token sequence differs), so the prefetch fires only for the identical
+    // requests. Recognizing the prefix relationship would need a stable, length-independent
+    // key - i.e. a client-provided session id - not a sequential hash.
     if (!data_->tier_session_hash_valid) {
         auto hash = std::uint64_t{0xcbf29ce484222325ULL};
         for (const auto token : data_->token_ids) {

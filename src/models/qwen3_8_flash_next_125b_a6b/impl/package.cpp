@@ -44,6 +44,71 @@ LoadedModel::LoadedModel(std::unique_ptr<Impl> impl) noexcept : impl_(std::move(
 
 LoadedModel::~LoadedModel() = default;
 
+namespace {
+// One MoE layer's tiered banks; the variant's non-FlashNext route has no tier state.
+const ops::FlashNextMoeWeights* tier_moe(const MoeWeights& moe) noexcept {
+    return std::get_if<ops::FlashNextMoeWeights>(&moe);
+}
+} // namespace
+
+int LoadedModel::tier_bank_count() const noexcept {
+    int count = 0;
+    for (const auto& layer : impl_->data.runtime.full_layers) {
+        if (tier_moe(layer.post_mixer) != nullptr) { ++count; }
+    }
+    for (const auto& layer : impl_->data.runtime.gdn_layers) {
+        if (tier_moe(layer.post_mixer) != nullptr) { ++count; }
+    }
+    if (impl_->data.runtime.mtp.has_value() && tier_moe(impl_->data.runtime.mtp->post_mixer) != nullptr) {
+        ++count;
+    }
+    return count;
+}
+
+const ops::FlashNextExpertBank* LoadedModel::tier_gate_up_bank(const int index) const noexcept {
+    int ordinal = 0;
+    auto pick = [&ordinal, index](const MoeWeights& moe) noexcept
+        -> const ops::FlashNextExpertBank* {
+        const auto* weights = tier_moe(moe);
+        if (weights == nullptr) { return nullptr; }
+        if (ordinal == index) { return &weights->routed_gate_up; }
+        ++ordinal;
+        return nullptr;
+    };
+    for (const auto& layer : impl_->data.runtime.full_layers) {
+        if (auto* bank = pick(layer.post_mixer); bank != nullptr) { return bank; }
+    }
+    for (const auto& layer : impl_->data.runtime.gdn_layers) {
+        if (auto* bank = pick(layer.post_mixer); bank != nullptr) { return bank; }
+    }
+    if (impl_->data.runtime.mtp.has_value()) {
+        return pick(impl_->data.runtime.mtp->post_mixer);
+    }
+    return nullptr;
+}
+
+const ops::FlashNextExpertBank* LoadedModel::tier_down_bank(const int index) const noexcept {
+    int ordinal = 0;
+    auto pick = [&ordinal, index](const MoeWeights& moe) noexcept
+        -> const ops::FlashNextExpertBank* {
+        const auto* weights = tier_moe(moe);
+        if (weights == nullptr) { return nullptr; }
+        if (ordinal == index) { return &weights->routed_down; }
+        ++ordinal;
+        return nullptr;
+    };
+    for (const auto& layer : impl_->data.runtime.full_layers) {
+        if (auto* bank = pick(layer.post_mixer); bank != nullptr) { return bank; }
+    }
+    for (const auto& layer : impl_->data.runtime.gdn_layers) {
+        if (auto* bank = pick(layer.post_mixer); bank != nullptr) { return bank; }
+    }
+    if (impl_->data.runtime.mtp.has_value()) {
+        return pick(impl_->data.runtime.mtp->post_mixer);
+    }
+    return nullptr;
+}
+
 } // namespace ninfer::models::qwen3_8_flash_next_125b_a6b::detail
 
 namespace ninfer::models::qwen3_8_flash_next_125b_a6b {

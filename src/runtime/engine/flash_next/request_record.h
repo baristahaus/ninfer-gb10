@@ -158,6 +158,8 @@ struct RequestRecord {
     const std::uint64_t id;
     const std::uint64_t publication_order;
     PreparedPrompt prompt;
+    // SP-4 tier policy: the session identity captured before the prompt data is consumed.
+    std::string tier_session;
     OutputSession output;
     PromptSummary prompt_summary;
     double prepare_seconds = 0.0;

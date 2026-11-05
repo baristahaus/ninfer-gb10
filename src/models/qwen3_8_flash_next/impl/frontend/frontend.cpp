@@ -19,6 +19,7 @@
 #include <cctype>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -1050,6 +1051,33 @@ PreparedPrompt::PreparedPrompt(std::unique_ptr<PreparedPromptData> data) noexcep
 PreparedPrompt::~PreparedPrompt()                                    = default;
 PreparedPrompt::PreparedPrompt(PreparedPrompt&&) noexcept            = default;
 PreparedPrompt& PreparedPrompt::operator=(PreparedPrompt&&) noexcept = default;
+
+std::string_view PreparedPrompt::tier_session_key() const noexcept {
+    if (data_ == nullptr) { return {}; }
+    if (data_->context_cache.session_key.has_value() &&
+        !data_->context_cache.session_key->view().empty()) {
+        return data_->context_cache.session_key->view();
+    }
+    // Sessionless prompts (e.g. OpenAI chat): the token identity is the session. The hash
+    // lives in the data's own storage so the returned view stays valid with the prompt.
+    if (!data_->tier_session_hash_valid) {
+        auto hash = std::uint64_t{0xcbf29ce484222325ULL};
+        for (const auto token : data_->token_ids) {
+            hash ^= static_cast<std::uint64_t>(token);
+            hash *= 0x100000001b3ULL;
+        }
+        for (const auto& item : data_->vision_items) {
+            for (const auto byte : item.content_digest) {
+                hash ^= static_cast<std::uint64_t>(byte);
+                hash *= 0x100000001b3ULL;
+            }
+        }
+        static_assert(sizeof(data_->tier_session_hash) >= sizeof(hash));
+        std::memcpy(data_->tier_session_hash, &hash, sizeof(hash));
+        data_->tier_session_hash_valid = true;
+    }
+    return {data_->tier_session_hash, sizeof(data_->tier_session_hash)};
+}
 
 PromptSummary PreparedPrompt::summary() const {
     if (data_ == nullptr) { throw std::logic_error("prepared prompt is empty"); }

@@ -7,6 +7,7 @@
 #include "artifact/binder.h"
 #include <ninfer/models/qwen3_8_flash_next/frontend.h>
 #include <ninfer/models/qwen3_8_flash_next/runtime.h>
+#include <ninfer/ops/flash_next_moe.h>
 
 #include <cstdint>
 #include <memory>
@@ -57,6 +58,16 @@ public:
     ~LoadedModel();
     LoadedModel(const LoadedModel&)            = delete;
     LoadedModel& operator=(const LoadedModel&) = delete;
+
+    // SP-4 tier-policy support. The tiered expert banks in stable model order: the
+    // full-attention layers, then the GDN layers, then the MTP post-mixer when present.
+    // A null bank means that layer's MoE is not tiered in this artifact. The counters and
+    // residency live in the FlashNextExpertBank fields; the engine applies the policy's
+    // swaps via ops::swap_expert_tier on both banks of a layer with the same expert pair.
+    [[nodiscard]] int tier_bank_count() const noexcept;
+    [[nodiscard]] const ops::FlashNextExpertBank* tier_gate_up_bank(int index) const noexcept;
+    [[nodiscard]] const ops::FlashNextExpertBank* tier_down_bank(int index) const noexcept;
+
 private:
     class Impl;
     explicit LoadedModel(std::unique_ptr<Impl> impl) noexcept;

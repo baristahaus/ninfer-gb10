@@ -146,6 +146,9 @@ struct PreparedPromptData {
     std::vector<std::shared_ptr<const PreparedMediaPayload>> media_payloads;
     std::vector<VisionItem> vision_items;
     PromptIdentity identity;
+    // SP-4 tier policy: the lazy session-identity fallback for sessionless prompts.
+    char tier_session_hash[16] = {};
+    bool tier_session_hash_valid = false;
     PreparedContextCache context_cache;
     std::shared_ptr<const frontend_internal::ToolCallOutputContract> tool_call_output;
     bool starts_in_reasoning = false;

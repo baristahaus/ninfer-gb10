@@ -4,12 +4,14 @@
 
 #include "core/device.h"
 #include "core/nvtx.h"
+#include "ninfer/ops/flash_next_moe.h"
 #include "ninfer/types.h"
 #include "runtime/contract/execution.h"
 #include "runtime/contract/resources.h"
 #include "runtime/engine/flash_next/request_record.h"
 #include "runtime/engine/flash_next/context_cache/resource_manager.h"
 #include "runtime/engine/flash_next/scheduler.h"
+#include "runtime/engine/flash_next/tier_policy.h"
 #include "runtime/engine/generation_budget.h"
 
 #include <algorithm>
@@ -70,6 +72,9 @@ public:
     EngineCore(Instance& instance, DeviceContext& device, const EngineOptions& options,
                ContextMachineCostModel context_cost)
         : instance_(instance), device_(device), max_context_(options.max_context),
+          tier_policy_(instance.model != nullptr ? instance.model->tier_bank_count() : 0,
+                       kTierPolicyExperts, kTierPolicyCacheCapacity),
+          tier_banks_(instance.model != nullptr ? instance.model->tier_bank_count() : 0),
           max_concurrency_(options.max_concurrency),
           reports_token_logprobs_(options.token_logprobs),
           max_outstanding_(static_cast<std::size_t>(options.max_concurrency) +
@@ -214,6 +219,8 @@ public:
 
         std::shared_ptr<Request> request;
         try {
+            tier_prefetch(prompt.tier_session_key());
+            const std::string tier_session_capture(prompt.tier_session_key());
             auto output = instance_.frontend.make_output_session(
                 prompt, options.stop, options.output, options.execution.thinking);
             const std::uint32_t capacity_output =
@@ -229,6 +236,7 @@ public:
                                                 std::move(output), prompt_summary, prepare_seconds,
                                                 std::move(options), consumer_mode, observation,
                                                 pending_deadline, submitted);
+            request->tier_session.assign(tier_session_capture);
         } catch (...) {
             release_reserved_capacity();
             throw;
@@ -293,6 +301,74 @@ public:
     }
 
 private:
+    static constexpr int kTierPolicyExperts = 512;
+    static constexpr std::size_t kTierPolicyCacheCapacity = 64;
+
+    // SP-4 tier policy: attribute one terminal request's expert usage to its session and
+    // log the per-layer counts. Reads and resets the gate-up bank's activation counters.
+    void tier_observe_request(const Request& request) {
+        if (instance_.model == nullptr || tier_banks_ == 0) {
+            std::fprintf(stderr, "[tierprof] observe skip: model=%d banks=%d\n",
+                         instance_.model != nullptr ? 1 : 0, tier_banks_);
+            return;
+        }
+        const std::string_view session{request.tier_session};
+        std::fprintf(stderr, "[tierprof] observe: banks=%d session_len=%zu\n", tier_banks_,
+                     session.size());
+        if (session.empty()) {
+            std::fprintf(stderr, "[tierprof] observe skip: empty session\n");
+            return;
+        }
+        for (int layer = 0; layer < tier_banks_; ++layer) {
+            const auto* bank = instance_.model->tier_gate_up_bank(layer);
+            if (bank == nullptr || bank->expert_activations == nullptr) { continue; }
+            auto counts =
+                ops::read_and_reset_expert_activations(*bank, device_.execution_view());
+            tier_policy_.observe(session, layer, counts);
+        }
+        const auto stats = tier_policy_.stats();
+        std::fprintf(stderr,
+                     "[tierprof] session=%.*s requests=%zu cache_hits=%zu\n",
+                     static_cast<int>(session.size()), session.data(), stats.requests,
+                     stats.cache_hits);
+    }
+
+    // SP-4 tier policy: on a repeat session, promote the experts this session previously
+    // used into the hot tier and demote the least-used hot experts to make room.
+    void tier_prefetch(const std::string_view session) {
+        if (instance_.model == nullptr || tier_banks_ == 0) { return; }
+        if (session.empty() || !tier_policy_.cached(session)) { return; }
+        constexpr int kMaxSwapsPerLayer = 2;
+        for (int layer = 0; layer < tier_banks_; ++layer) {
+            const auto* mask = tier_policy_.cached_mask(session, layer);
+            const auto* bank = instance_.model->tier_gate_up_bank(layer);
+            const auto* down = instance_.model->tier_down_bank(layer);
+            if (mask == nullptr || bank == nullptr || down == nullptr ||
+                bank->expert_residency == nullptr) {
+                continue;
+            }
+            const auto experts = static_cast<std::size_t>(bank->experts);
+            std::vector<std::uint8_t> hot(experts, 0);
+            std::vector<int> warm;
+            for (std::size_t e = 0; e < experts; ++e) {
+                const bool is_warm = (bank->expert_residency[e] & 0x80000000u) != 0;
+                hot[e] = is_warm ? 0 : 1;
+                if (is_warm && (*mask)[e] != 0) { warm.push_back(static_cast<int>(e)); }
+            }
+            if (warm.empty()) { continue; }
+            auto demote = tier_policy_.bottom_experts(
+                layer, static_cast<int>(std::min(warm.size(), static_cast<std::size_t>(
+                                                            kMaxSwapsPerLayer))),
+                hot, *mask);
+            for (std::size_t i = 0; i < demote.size() && i < warm.size(); ++i) {
+                ops::swap_expert_tier(*bank, warm[i], demote[i], device_.execution_view());
+                ops::swap_expert_tier(*down, warm[i], demote[i], device_.execution_view());
+                std::fprintf(stderr, "[tierprof] layer=%d promote=%d demote=%d\n", layer,
+                             warm[i], demote[i]);
+            }
+        }
+    }
+
     enum class HostWorkClass : std::uint8_t {
         Decode,
         Prefill,
@@ -1049,6 +1125,8 @@ private:
             request->generation_timings = finished.timings;
             request->speculative_stats  = std::move(finished.speculative);
             request->terminal_reason.reset();
+
+            tier_observe_request(*request);
 
             finish_engine_phase(boundary, EngineHostPhase::Boundary);
             complete_success(request, reason);
@@ -2474,6 +2552,8 @@ private:
 
     Instance& instance_;
     DeviceContext& device_;
+    TierPolicy tier_policy_;
+    int tier_banks_ = 0;
     const std::uint32_t max_context_;
     const std::uint32_t max_concurrency_;
     const bool reports_token_logprobs_;

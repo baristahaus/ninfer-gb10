@@ -45,6 +45,9 @@ public:
 
     [[nodiscard]] PromptSummary summary() const;
     [[nodiscard]] PromptPreparationStats preparation_stats() const noexcept;
+    // SP-4 tier policy: the context-cache session identity of this prompt, or an empty
+    // view when the prompt has no session key. The view is valid while the prompt is.
+    [[nodiscard]] std::string_view tier_session_key() const noexcept;
     [[nodiscard]] explicit operator bool() const noexcept;
 
 private:

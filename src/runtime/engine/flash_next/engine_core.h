@@ -22,6 +22,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <deque>
 #include <exception>
 #include <future>
@@ -304,21 +305,23 @@ private:
     static constexpr int kTierPolicyExperts = 512;
     static constexpr std::size_t kTierPolicyCacheCapacity = 64;
 
+    // The tier policy is on by default; NINFER_TIER_POLICY=0 disables it entirely
+    // (isolation for tier-path crashes).
+    [[nodiscard]] static bool tier_policy_enabled() noexcept {
+        static const bool enabled = [] {
+            const char* value = std::getenv("NINFER_TIER_POLICY");
+            return value == nullptr || std::string_view{value} != "0";
+        }();
+        return enabled;
+    }
+
     // SP-4 tier policy: attribute one terminal request's expert usage to its session and
     // log the per-layer counts. Reads and resets the gate-up bank's activation counters.
     void tier_observe_request(const Request& request) {
-        if (instance_.model == nullptr || tier_banks_ == 0) {
-            std::fprintf(stderr, "[tierprof] observe skip: model=%d banks=%d\n",
-                         instance_.model != nullptr ? 1 : 0, tier_banks_);
-            return;
-        }
+        if (instance_.model == nullptr || tier_banks_ == 0) { return; }
+        if (!tier_policy_enabled()) { return; }
         const std::string_view session{request.tier_session};
-        std::fprintf(stderr, "[tierprof] observe: banks=%d session_len=%zu\n", tier_banks_,
-                     session.size());
-        if (session.empty()) {
-            std::fprintf(stderr, "[tierprof] observe skip: empty session\n");
-            return;
-        }
+        if (session.empty()) { return; }
         for (int layer = 0; layer < tier_banks_; ++layer) {
             const auto* bank = instance_.model->tier_gate_up_bank(layer);
             if (bank == nullptr || bank->expert_activations == nullptr) { continue; }
@@ -327,9 +330,7 @@ private:
             tier_policy_.observe(session, layer, counts);
         }
         const auto stats = tier_policy_.stats();
-        std::fprintf(stderr,
-                     "[tierprof] session=%.*s requests=%zu cache_hits=%zu\n",
-                     static_cast<int>(session.size()), session.data(), stats.requests,
+        std::fprintf(stderr, "[tierprof] observed requests=%zu cache_hits=%zu\n", stats.requests,
                      stats.cache_hits);
     }
 
@@ -338,6 +339,7 @@ private:
     void tier_prefetch(const std::string_view session) {
         if (instance_.model == nullptr || tier_banks_ == 0) { return; }
         if (session.empty() || !tier_policy_.cached(session)) { return; }
+        if (!tier_policy_enabled()) { return; }
         constexpr int kMaxSwapsPerLayer = 2;
         for (int layer = 0; layer < tier_banks_; ++layer) {
             const auto* mask = tier_policy_.cached_mask(session, layer);
@@ -348,10 +350,19 @@ private:
                 continue;
             }
             const auto experts = static_cast<std::size_t>(bank->experts);
+            // The residency table lives in device memory; read it through the stream.
+            std::vector<std::uint32_t> residency(experts, 0);
+            {
+                cudaStream_t stream = device_.execution_view().stream();
+                CUDA_CHECK(cudaMemcpyAsync(residency.data(), bank->expert_residency,
+                                           residency.size() * sizeof(std::uint32_t),
+                                           cudaMemcpyDeviceToHost, stream));
+                CUDA_CHECK(cudaStreamSynchronize(stream));
+            }
             std::vector<std::uint8_t> hot(experts, 0);
             std::vector<int> warm;
             for (std::size_t e = 0; e < experts; ++e) {
-                const bool is_warm = (bank->expert_residency[e] & 0x80000000u) != 0;
+                const bool is_warm = (residency[e] & 0x80000000u) != 0;
                 hot[e] = is_warm ? 0 : 1;
                 if (is_warm && (*mask)[e] != 0) { warm.push_back(static_cast<int>(e)); }
             }

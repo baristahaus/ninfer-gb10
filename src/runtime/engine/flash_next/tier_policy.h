@@ -27,8 +27,12 @@ public:
 
     // Attributes one layer's counter readback (the deltas since the last reset) to the
     // session. Call once per layer per completed request; the counts accumulate into the
-    // usage ledger and the session's cached expert set.
+    // usage ledger and the session's cached expert set. Layer 0 updates the request stats.
     void observe(std::string_view session, int layer, std::span<const std::uint32_t> counts) {
+        if (layer == 0) {
+            stats_.requests += 1;
+            if (cache_.find(std::string(session)) != cache_.end()) { stats_.cache_hits += 1; }
+        }
         auto& entry = touch(session);
         const auto base = static_cast<std::size_t>(layer) * static_cast<std::size_t>(experts_);
         const auto count = static_cast<std::size_t>(experts_) < counts.size()
@@ -114,10 +118,8 @@ private:
     };
 
     SessionEntry& touch(std::string_view session) {
-        stats_.requests += 1;
         const std::string key(session);
         if (auto found = cache_.find(key); found != cache_.end()) {
-            stats_.cache_hits += 1;
             for (auto it = touch_order_.begin(); it != touch_order_.end(); ++it) {
                 if (*it == key) {
                     touch_order_.splice(touch_order_.end(), touch_order_, it);
@@ -126,11 +128,11 @@ private:
             }
             return found->second;
         }
-        stats_.evictions += 1;
         while (cache_.size() >= cache_capacity_ && !touch_order_.empty()) {
             const auto& oldest = touch_order_.front();
             cache_.erase(oldest);
             touch_order_.pop_front();
+            stats_.evictions += 1;
         }
         touch_order_.emplace_back(key);
         SessionEntry entry;

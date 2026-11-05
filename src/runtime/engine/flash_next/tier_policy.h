@@ -74,6 +74,19 @@ public:
         return order;
     }
 
+    // The router's decay trick: every `interval` observed requests, halve the usage
+    // ledger. Recently-quiet experts fade toward zero and fall out of the top ranking, so
+    // the global pin pass re-balances the hot tier toward the current traffic mix without
+    // any explicit eviction logic. Call after the per-layer observe loop.
+    void age_if_due(std::size_t current_requests, int interval) {
+        if (interval <= 0 || current_requests == 0) { return; }
+        if (current_requests / static_cast<std::size_t>(interval) <= aged_periods_) { return; }
+        aged_periods_ = current_requests / static_cast<std::size_t>(interval);
+        for (auto& value : usage_) {
+            value /= 2;
+        }
+    }
+
     // The union of every cached session's expert bitmask for one layer. A global demotion
     // pass must not evict experts any known session needs.
     [[nodiscard]] std::vector<std::uint8_t> all_sessions_mask(int layer) const {
@@ -162,6 +175,7 @@ private:
     std::vector<std::uint64_t> usage_;
     std::unordered_map<std::string, SessionEntry> cache_;
     std::list<std::string> touch_order_;
+    std::size_t aged_periods_ = 0;
     Stats stats_{};
 };
 

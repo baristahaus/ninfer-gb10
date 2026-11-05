@@ -1058,18 +1058,37 @@ std::string_view PreparedPrompt::tier_session_key() const noexcept {
         !data_->context_cache.session_key->view().empty()) {
         return data_->context_cache.session_key->view();
     }
-    // Sessionless prompts (e.g. OpenAI chat): the token identity is the session. The hash
-    // lives in the data's own storage so the returned view stays valid with the prompt.
-    // Limitation: a multi-turn conversation produces a distinct identity per turn (each
-    // turn's token sequence differs), so the prefetch fires only for the identical
-    // requests. Recognizing the prefix relationship would need a stable, length-independent
-    // key - i.e. a client-provided session id - not a sequential hash.
+    // Sessionless prompts (e.g. OpenAI chat): the workload class is the session. The class
+    // is a coarse signature of what kind of work the prompt is - code, prose, math, CJK -
+    // read off the token-id distribution: the vocabulary is partitioned into 16 regions
+    // and the signature is the two most-populated regions plus a length bucket. The two
+    // dominant regions are stable across the turns of one conversation (the turns keep the
+    // same domain and length class) while separating the kinds: code tokens cluster in
+    // their regions, prose spreads over others. The hash lives in the data's own storage
+    // so the returned view stays valid with the prompt.
     if (!data_->tier_session_hash_valid) {
         auto hash = std::uint64_t{0xcbf29ce484222325ULL};
+        constexpr std::uint64_t kVocabRegions = 16;
+        constexpr std::uint64_t kVocabSize = 248320;
+        std::array<std::uint32_t, kVocabRegions> counts{};
         for (const auto token : data_->token_ids) {
-            hash ^= static_cast<std::uint64_t>(token);
-            hash *= 0x100000001b3ULL;
+            if (token < 0 || static_cast<std::uint64_t>(token) >= kVocabSize) { continue; }
+            counts[static_cast<std::uint64_t>(token) * kVocabRegions / kVocabSize] += 1;
         }
+        std::array<std::uint32_t, kVocabRegions> order{};
+        for (std::size_t i = 0; i < kVocabRegions; ++i) { order[i] = static_cast<std::uint32_t>(i); }
+        std::partial_sort(order.begin(), order.begin() + 2, order.end(),
+                          [&counts](std::uint32_t a, std::uint32_t b) {
+                              return counts[a] > counts[b];
+                          });
+        const auto dominant = (std::uint64_t{order[0]} << 4) | std::uint64_t{order[1]};
+        hash ^= dominant;
+        hash *= 0x100000001b3ULL;
+        // Length bucket: the working-set size scales with the prompt length.
+        const auto length_bucket = std::min<std::uint64_t>(
+            15, data_->token_ids.size() / 1024);
+        hash ^= length_bucket << 8;
+        hash *= 0x100000001b3ULL;
         for (const auto& item : data_->vision_items) {
             for (const auto byte : item.content_digest) {
                 hash ^= static_cast<std::uint64_t>(byte);

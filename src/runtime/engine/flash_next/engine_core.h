@@ -340,6 +340,12 @@ private:
         return value;
     }
 
+    // The usage-ledger aging interval in requests (the halving period).
+    [[nodiscard]] static int tier_age_every() noexcept {
+        static const int value = tier_env_int("NINFER_TIER_AGE_EVERY", 64);
+        return value;
+    }
+
     // SP-4 tier policy: attribute one terminal request's expert usage to its session and
     // log the per-layer counts. Reads and resets the gate-up bank's activation counters.
     void tier_observe_request(const Request& request) {
@@ -357,6 +363,7 @@ private:
         const auto stats = tier_policy_.stats();
         std::fprintf(stderr, "[tierprof] observed requests=%zu cache_hits=%zu\n", stats.requests,
                      stats.cache_hits);
+        tier_policy_.age_if_due(stats.requests, tier_age_every());
         if (tier_pin_topk() > 0 && tier_pin_every() > 0 &&
             stats.requests % tier_pin_every() == 0) {
             tier_pin_top_experts();

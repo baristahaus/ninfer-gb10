@@ -73,4 +73,15 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
 [[nodiscard]] std::vector<std::uint32_t> read_and_reset_expert_activations(
     const FlashNextExpertBank& bank, CudaExecutionView execution);
 
+// SP-4 adaptive tiers: exchanges one warm expert's mini-bank block with one hot expert's
+// device block, capacity-neutrally. The promoted expert's pinned-host block moves into the
+// demoted expert's device slot (promote first, so the demoted data lands in the vacated
+// warm slot), then the tier-state residency is rewritten stream-ordered: the promoted
+// expert gains the device rank, the demoted expert the warm rank. Both banks of a layer
+// must be swapped with the same expert pair to keep their residencies consistent. The
+// caller owns the policy; the copies and the residency writes are stream-ordered on the
+// execution stream.
+void swap_expert_tier(const FlashNextExpertBank& bank, int promote_expert, int demote_expert,
+                      CudaExecutionView execution);
+
 } // namespace ninfer::ops

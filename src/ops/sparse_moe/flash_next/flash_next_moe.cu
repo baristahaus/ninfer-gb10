@@ -22,6 +22,7 @@
 #include <cmath>
 #include <atomic>
 #include <cstdint>
+#include <cstring>
 #include <vector>
 
 extern std::atomic<int> ninfer_mtp_phase;
@@ -1510,6 +1511,65 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
             weights.routed_down.expert_residency);
     }
     CUDA_CHECK(cudaGetLastError());
+}
+
+void swap_expert_tier(const FlashNextExpertBank& bank, int promote_expert, int demote_expert,
+                      CudaExecutionView execution) {
+    if (bank.expert_residency == nullptr || bank.warm_codes == nullptr ||
+        bank.warm_scales == nullptr || bank.experts <= 0 || bank.rows <= 0 ||
+        promote_expert < 0 || promote_expert >= bank.experts || demote_expert < 0 ||
+        demote_expert >= bank.experts || promote_expert == demote_expert) {
+        throw std::invalid_argument("swap_expert_tier: invalid bank or expert pair");
+    }
+    const bool nvfp4 = bank.qtype == QType::NVFP4;
+    // One expert's block: the row planes plus the trailing per-expert divisor float.
+    const std::size_t row_bytes = nvfp4 ? bank.columns / 2 + bank.columns / 16
+                                        : static_cast<std::size_t>(bank.columns) * 2;
+    const std::size_t block     = static_cast<std::size_t>(bank.rows) * row_bytes +
+                              (nvfp4 ? 4 : 0);
+    cudaStream_t stream = execution.stream();
+
+    // Current ranks: the promoted expert sits warm (bit 31), the demoted expert on device.
+    std::uint32_t promote_entry = 0;
+    std::uint32_t demote_entry  = 0;
+    CUDA_CHECK(cudaMemcpyAsync(&promote_entry, bank.expert_residency + promote_expert,
+                               sizeof(std::uint32_t), cudaMemcpyDeviceToHost, stream));
+    CUDA_CHECK(cudaMemcpyAsync(&demote_entry, bank.expert_residency + demote_expert,
+                               sizeof(std::uint32_t), cudaMemcpyDeviceToHost, stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+    if ((promote_entry & 0x80000000u) == 0) {
+        throw std::invalid_argument("swap_expert_tier: promoted expert is not warm");
+    }
+    if ((demote_entry & 0x80000000u) != 0) {
+        throw std::invalid_argument("swap_expert_tier: demoted expert is not hot");
+    }
+    const auto promote_rank = static_cast<std::size_t>(promote_entry & 0x7fffffffu);
+    const auto demote_rank  = static_cast<std::size_t>(demote_entry & 0x7fffffffu);
+
+    // Promote first: the warm block into the demoted expert's device slot. The demote then
+    // overwrites the vacated warm slot with the demoted expert's device block.
+    auto* device_codes = const_cast<std::byte*>(static_cast<const std::byte*>(bank.codes));
+    auto* warm_codes_bytes =
+        const_cast<std::byte*>(static_cast<const std::byte*>(bank.warm_codes));
+    CUDA_CHECK(cudaMemcpyAsync(device_codes + demote_rank * block,
+                               static_cast<const std::byte*>(bank.warm_codes) +
+                                   promote_rank * block,
+                               block, cudaMemcpyHostToDevice, stream));
+    CUDA_CHECK(cudaMemcpyAsync(warm_codes_bytes + promote_rank * block,
+                               static_cast<const std::byte*>(bank.codes) + demote_rank * block,
+                               block, cudaMemcpyDeviceToHost, stream));
+
+    // The residency rewrite, stream-ordered after the copies: the promoted expert gains the
+    // demoted expert's device rank; the demoted expert the promoted expert's warm rank.
+    const std::uint32_t promote_new = static_cast<std::uint32_t>(demote_rank);
+    const std::uint32_t demote_new =
+        static_cast<std::uint32_t>(promote_rank) | 0x80000000u;
+    // The residency is mutable tier state; the interface's const is the read-mostly view.
+    auto* residency = const_cast<std::uint32_t*>(bank.expert_residency);
+    CUDA_CHECK(cudaMemcpyAsync(residency + promote_expert, &promote_new,
+                               sizeof(std::uint32_t), cudaMemcpyHostToDevice, stream));
+    CUDA_CHECK(cudaMemcpyAsync(residency + demote_expert, &demote_new,
+                               sizeof(std::uint32_t), cudaMemcpyHostToDevice, stream));
 }
 
 std::vector<std::uint32_t> read_and_reset_expert_activations(const FlashNextExpertBank& bank,

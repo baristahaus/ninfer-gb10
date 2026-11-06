@@ -1579,13 +1579,28 @@ std::vector<std::uint32_t> read_and_reset_expert_activations(const FlashNextExpe
     }
     const auto experts = static_cast<std::size_t>(bank.experts);
     std::vector<std::uint32_t> counts(experts, 0);
+    read_and_reset_expert_activations_into(bank, counts, execution);
     cudaStream_t stream = execution.stream();
-    CUDA_CHECK(cudaMemcpyAsync(counts.data(), bank.expert_activations,
-                               experts * sizeof(std::uint32_t), cudaMemcpyDeviceToHost, stream));
-    CUDA_CHECK(cudaMemsetAsync(bank.expert_activations, 0, experts * sizeof(std::uint32_t),
-                               stream));
     CUDA_CHECK(cudaStreamSynchronize(stream));
     return counts;
+}
+
+void read_and_reset_expert_activations_into(const FlashNextExpertBank& bank,
+                                            std::span<std::uint32_t> out,
+                                            CudaExecutionView execution) {
+    if (bank.expert_activations == nullptr) {
+        throw std::invalid_argument("read_and_reset_expert_activations_into: bank is untiered");
+    }
+    if (out.size() < static_cast<std::size_t>(bank.experts)) {
+        throw std::invalid_argument("read_and_reset_expert_activations_into: output too small");
+    }
+    cudaStream_t stream = execution.stream();
+    CUDA_CHECK(cudaMemcpyAsync(out.data(), bank.expert_activations,
+                               static_cast<std::size_t>(bank.experts) * sizeof(std::uint32_t),
+                               cudaMemcpyDeviceToHost, stream));
+    CUDA_CHECK(cudaMemsetAsync(bank.expert_activations, 0,
+                               static_cast<std::size_t>(bank.experts) * sizeof(std::uint32_t),
+                               stream));
 }
 
 } // namespace ninfer::ops

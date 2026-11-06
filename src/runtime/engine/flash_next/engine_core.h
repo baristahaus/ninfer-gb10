@@ -353,16 +353,36 @@ private:
         if (!tier_policy_enabled()) { return; }
         const std::string_view session{request.tier_session};
         if (session.empty()) { return; }
+        const auto observe_start = std::chrono::steady_clock::now();
+        // The batched readback: every bank's copy enqueues on the stream, then one
+        // synchronization covers all of them - the 48 per-bank syncs here cost ~0.65ms.
+        std::vector<std::uint32_t> all_counts(
+            static_cast<std::size_t>(tier_banks_) * static_cast<std::size_t>(kTierPolicyExperts),
+            0);
+        std::vector<int> enqueued_layers;
+        enqueued_layers.reserve(static_cast<std::size_t>(tier_banks_));
         for (int layer = 0; layer < tier_banks_; ++layer) {
             const auto* bank = instance_.model->tier_gate_up_bank(layer);
             if (bank == nullptr || bank->expert_activations == nullptr) { continue; }
-            auto counts =
-                ops::read_and_reset_expert_activations(*bank, device_.execution_view());
-            tier_policy_.observe(session, layer, counts);
+            const auto offset =
+                static_cast<std::size_t>(enqueued_layers.size()) *
+                static_cast<std::size_t>(kTierPolicyExperts);
+            ops::read_and_reset_expert_activations_into(
+                *bank, std::span{all_counts}.subspan(offset), device_.execution_view());
+            enqueued_layers.push_back(layer);
+        }
+        CUDA_CHECK(cudaStreamSynchronize(device_.execution_view().stream()));
+        for (std::size_t i = 0; i < enqueued_layers.size(); ++i) {
+            const auto offset = i * static_cast<std::size_t>(kTierPolicyExperts);
+            tier_policy_.observe(session, enqueued_layers[i],
+                                 std::span{all_counts}.subspan(offset));
         }
         const auto stats = tier_policy_.stats();
-        std::fprintf(stderr, "[tierprof] observed requests=%zu cache_hits=%zu\n", stats.requests,
-                     stats.cache_hits);
+        const auto observe_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                                    std::chrono::steady_clock::now() - observe_start)
+                                    .count();
+        std::fprintf(stderr, "[tierprof] observed requests=%zu cache_hits=%zu observe_us=%lld\n",
+                     stats.requests, stats.cache_hits, static_cast<long long>(observe_us));
         tier_policy_.age_if_due(stats.requests, tier_age_every());
         if (tier_pin_topk() > 0 && tier_pin_every() > 0 &&
             stats.requests % tier_pin_every() == 0) {

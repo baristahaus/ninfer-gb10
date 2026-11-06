@@ -9,6 +9,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <vector>
 #include <variant>
 
@@ -72,6 +73,14 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
 // bank is untiered (null counters).
 [[nodiscard]] std::vector<std::uint32_t> read_and_reset_expert_activations(
     const FlashNextExpertBank& bank, CudaExecutionView execution);
+
+// The enqueue-only form: the device-to-host copy and the counter reset land on the
+// execution stream and return immediately; the caller synchronizes the stream once after
+// enqueueing all banks, then reads `out`. `out` must hold at least the bank's expert
+// count. Throws when the bank is untiered or `out` is too small.
+void read_and_reset_expert_activations_into(const FlashNextExpertBank& bank,
+                                            std::span<std::uint32_t> out,
+                                            CudaExecutionView execution);
 
 // SP-4 adaptive tiers: exchanges one warm expert's mini-bank block with one hot expert's
 // device block, capacity-neutrally. The promoted expert's pinned-host block moves into the

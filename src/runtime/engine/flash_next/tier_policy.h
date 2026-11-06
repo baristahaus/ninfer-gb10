@@ -41,10 +41,37 @@ public:
                                : counts.size();
         auto& mask = entry.mask[static_cast<std::size_t>(layer)];
         mask.resize(static_cast<std::size_t>(experts_), 0);
+        auto& usage = entry.usage[static_cast<std::size_t>(layer)];
+        usage.resize(static_cast<std::size_t>(experts_), 0);
         for (std::size_t e = 0; e < count; ++e) {
             usage_[base + e] += counts[e];
+            usage[e] += counts[e];
             if (counts[e] != 0) { mask[e] = 1; }
         }
+    }
+
+    // The `count` experts of one layer most-exercised by this class, most first. Feeds
+    // the burst prefetch: the limited budget goes to the load-bearing experts first.
+    [[nodiscard]] std::vector<int> class_top(std::string_view session, int layer,
+                                             int count) const {
+        const auto found = cache_.find(std::string(session));
+        std::vector<int> out;
+        if (found == cache_.end() || layer >= layers_ || count <= 0) { return out; }
+        const auto& usage = found->second.usage[static_cast<std::size_t>(layer)];
+        std::vector<int> order(usage.size());
+        for (std::size_t e = 0; e < usage.size(); ++e) { order[e] = static_cast<int>(e); }
+        std::partial_sort(order.begin(),
+                          order.begin() + std::min<std::size_t>(static_cast<std::size_t>(count),
+                                                                order.size()),
+                          order.end(), [&usage](int a, int b) {
+                              return usage[static_cast<std::size_t>(a)] >
+                                     usage[static_cast<std::size_t>(b)];
+                          });
+        for (const int e : order) {
+            if (static_cast<int>(out.size()) >= count) { break; }
+            if (usage[static_cast<std::size_t>(e)] > 0) { out.push_back(e); }
+        }
+        return out;
     }
 
     // True when the session's expert sets are cached (the repeat request).
@@ -152,6 +179,9 @@ private:
     struct SessionEntry {
         // Per-layer expert bitmasks: 1 = the session exercised this expert at least once.
         std::vector<std::vector<std::uint8_t>> mask;
+        // Per-layer cumulative usage counts, indexed like mask. Ranks the prefetch's
+        // promote candidates: with a burst budget the most-exercised experts go first.
+        std::vector<std::vector<std::uint64_t>> usage;
         // How many requests have been attributed to this class (layer-0 observes).
         std::size_t requests = 0;
     };
@@ -176,6 +206,7 @@ private:
         touch_order_.emplace_back(key);
         SessionEntry entry;
         entry.mask.resize(static_cast<std::size_t>(layers_));
+        entry.usage.resize(static_cast<std::size_t>(layers_));
         return cache_.emplace(key, std::move(entry)).first->second;
     }
 

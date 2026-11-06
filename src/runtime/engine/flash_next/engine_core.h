@@ -488,12 +488,22 @@ private:
                 if (is_warm && (*mask)[e] != 0) { warm.push_back(static_cast<int>(e)); }
             }
             if (warm.empty()) { continue; }
+            // The burst budget makes the order matter: the class's most-exercised warm
+            // experts go first, not the arbitrary id order.
+            auto ranked = tier_policy_.class_top(session, layer,
+                                                 static_cast<int>(warm.size()));
+            std::vector<int> ordered;
+            ordered.reserve(warm.size());
+            for (const int e : ranked) {
+                    if (hot[static_cast<std::size_t>(e)] != 0) { ordered.push_back(e); }
+            }
             // The protect set = every cached session's experts plus the global top-K.
             // Without the union, one class's prefetch pass demotes another class's
             // promoted experts and the next pass of that class re-promotes them.
             std::vector<std::uint8_t> protect = tier_policy_.all_sessions_mask(layer);
             tier_append_global_protect(layer, protect);
-            tier_apply_layer_swaps(layer, *bank, *down, warm, hot, protect, budget, residency);
+            tier_apply_layer_swaps(layer, *bank, *down, ordered, hot, protect, budget,
+                                   residency);
         }
         std::fprintf(stderr, "[tierprof] prefetch_us=%lld pass1_us=%lld\n",
                      static_cast<long long>(std::chrono::duration_cast<std::chrono::microseconds>(

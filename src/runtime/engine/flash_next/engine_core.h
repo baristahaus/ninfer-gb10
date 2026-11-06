@@ -349,9 +349,12 @@ private:
     // The burst ratchet: a class's first NINFER_TIER_BURST_REQUESTS requests use
     // NINFER_TIER_BURST_BUDGET swaps per layer instead of the steady budget, front-loading
     // the working-set promotion so the steady state arrives sooner. The total swap I/O is
-    // unchanged; only its distribution across requests shifts. 0 = off.
+    // unchanged; only its distribution across requests shifts. The defaults suit the
+    // product contract's long-lived serve (one resident model, 1-8 active requests): the
+    // first requests absorb the ratchet, then every later request is swap-free. A bursty
+    // short-session workload should set NINFER_TIER_BURST_REQUESTS=0 to spread the cost.
     [[nodiscard]] static int tier_burst_requests() noexcept {
-        static const int value = tier_env_int("NINFER_TIER_BURST_REQUESTS", 0);
+        static const int value = tier_env_int("NINFER_TIER_BURST_REQUESTS", 10);
         return value;
     }
 

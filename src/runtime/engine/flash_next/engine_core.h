@@ -346,6 +346,33 @@ private:
         return value;
     }
 
+    // The class-split cosine-distance threshold: a layer's request vector diverging more
+    // than this from the class centroid re-keys the request under a fingerprint-derived
+    // class, so an atypical request does not pollute the coarse class's expert set.
+    // 0 = off.
+    [[nodiscard]] static double tier_split_threshold() noexcept {
+        const char* value = std::getenv("NINFER_TIER_SPLIT");
+        if (value == nullptr) { return 0.6; }
+        const double parsed = std::atof(value);
+        return parsed > 0.0 ? parsed : 0.0;
+    }
+
+    // The fingerprint-derived class key for a divergent request: the class plus a hash of
+    // its own count vector. The next identical request reproduces the same key and hits
+    // the derived entry; the coarse class stays clean for everyone else.
+    [[nodiscard]] static std::string tier_fingerprint_key(std::string_view session,
+                                                          int layer,
+                                                          std::span<const std::uint32_t> counts) {
+        auto hash = std::uint64_t{0xcbf29ce484222325ULL};
+        for (const auto c : counts) {
+            hash ^= static_cast<std::uint64_t>(c);
+            hash *= 0x100000001b3ULL;
+        }
+        hash ^= static_cast<std::uint64_t>(layer) << 40;
+        hash *= 0x100000001b3ULL;
+        return std::string{session} + "#" + std::to_string(hash);
+    }
+
     // The burst ratchet: a class's first NINFER_TIER_BURST_REQUESTS requests use
     // NINFER_TIER_BURST_BUDGET swaps per layer instead of the steady budget, front-loading
     // the working-set promotion so the steady state arrives sooner. The total swap I/O is
@@ -389,10 +416,25 @@ private:
             enqueued_layers.push_back(layer);
         }
         CUDA_CHECK(cudaStreamSynchronize(device_.execution_view().stream()));
+        const auto split = tier_split_threshold();
+        int divergent_layers = 0;
         for (std::size_t i = 0; i < enqueued_layers.size(); ++i) {
             const auto offset = i * static_cast<std::size_t>(kTierPolicyExperts);
-            tier_policy_.observe(session, enqueued_layers[i],
-                                 std::span{all_counts}.subspan(offset));
+            const auto layer_counts = std::span{all_counts}.subspan(offset);
+            if (split > 0.0 && tier_policy_.observe(session, enqueued_layers[i], layer_counts,
+                                                    split)) {
+                // An atypical request: also file it under its fingerprint-derived class so
+                // the next identical request prefetches exactly this expert set.
+                tier_policy_.observe(tier_fingerprint_key(session, enqueued_layers[i],
+                                                          layer_counts),
+                                     enqueued_layers[i], layer_counts);
+                divergent_layers += 1;
+            } else {
+                tier_policy_.observe(session, enqueued_layers[i], layer_counts);
+            }
+        }
+        if (divergent_layers > 0) {
+            std::fprintf(stderr, "[tierprof] split layers=%d\n", divergent_layers);
         }
         const auto stats = tier_policy_.stats();
         const auto observe_us = std::chrono::duration_cast<std::chrono::microseconds>(

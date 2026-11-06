@@ -8,6 +8,7 @@
 
 #include <array>
 #include <list>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -28,7 +29,15 @@ public:
     // Attributes one layer's counter readback (the deltas since the last reset) to the
     // session. Call once per layer per completed request; the counts accumulate into the
     // usage ledger and the session's cached expert set. Layer 0 updates the request stats.
-    void observe(std::string_view session, int layer, std::span<const std::uint32_t> counts) {
+    // Returns true when this layer's counts diverge from the class's running centroid by
+    // more than the threshold (cosine distance): the request is atypical for the class
+    // and the caller should also store it under a fingerprint-derived key.
+    bool observe(std::string_view session, int layer, std::span<const std::uint32_t> counts) {
+        return observe(session, layer, counts, 0.0);
+    }
+
+    bool observe(std::string_view session, int layer, std::span<const std::uint32_t> counts,
+                 double split_threshold) {
         if (layer == 0) {
             stats_.requests += 1;
             if (cache_.find(std::string(session)) != cache_.end()) { stats_.cache_hits += 1; }
@@ -43,11 +52,32 @@ public:
         mask.resize(static_cast<std::size_t>(experts_), 0);
         auto& usage = entry.usage[static_cast<std::size_t>(layer)];
         usage.resize(static_cast<std::size_t>(experts_), 0);
+        // Divergence against the running centroid (the mean of prior request vectors):
+        // the cosine distance between this request's count vector and the centroid.
+        auto& centroid = entry.centroid[static_cast<std::size_t>(layer)];
+        centroid.resize(static_cast<std::size_t>(experts_), 0.0);
+        double divergent = false;
+        if (split_threshold > 0.0 && entry.requests > 1) {
+            double dot = 0.0, norm_c = 0.0, norm_r = 0.0;
+            for (std::size_t e = 0; e < count; ++e) {
+                dot += centroid[e] * static_cast<double>(counts[e]);
+                norm_c += centroid[e] * centroid[e];
+                norm_r += static_cast<double>(counts[e]) * counts[e];
+            }
+            if (norm_c > 0.0 && norm_r > 0.0) {
+                const double cosine = dot / (std::sqrt(norm_c) * std::sqrt(norm_r));
+                divergent = (1.0 - cosine) > split_threshold;
+            }
+        }
+        const auto seen = static_cast<double>(entry.requests - 1);
         for (std::size_t e = 0; e < count; ++e) {
             usage_[base + e] += counts[e];
             usage[e] += counts[e];
+            centroid[e] = (centroid[e] * seen + static_cast<double>(counts[e])) /
+                          static_cast<double>(entry.requests);
             if (counts[e] != 0) { mask[e] = 1; }
         }
+        return divergent;
     }
 
     // The `count` experts of one layer most-exercised by this class, most first. Feeds
@@ -182,6 +212,9 @@ private:
         // Per-layer cumulative usage counts, indexed like mask. Ranks the prefetch's
         // promote candidates: with a burst budget the most-exercised experts go first.
         std::vector<std::vector<std::uint64_t>> usage;
+        // Per-layer running centroid of the per-request count vectors, for the
+        // divergence-based class split.
+        std::vector<std::vector<double>> centroid;
         // How many requests have been attributed to this class (layer-0 observes).
         std::size_t requests = 0;
     };
@@ -207,6 +240,7 @@ private:
         SessionEntry entry;
         entry.mask.resize(static_cast<std::size_t>(layers_));
         entry.usage.resize(static_cast<std::size_t>(layers_));
+        entry.centroid.resize(static_cast<std::size_t>(layers_));
         return cache_.emplace(key, std::move(entry)).first->second;
     }
 

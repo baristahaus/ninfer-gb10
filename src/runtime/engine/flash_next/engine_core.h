@@ -404,18 +404,16 @@ private:
         }
     }
 
-    // SP-4 tier policy: the tiered residency table is device memory; read a bank's copy
-    // through the execution stream.
-    [[nodiscard]] std::vector<std::uint32_t> tier_read_residency(
-        const ops::FlashNextExpertBank& bank) const {
-        const auto experts = static_cast<std::size_t>(bank.experts);
-        std::vector<std::uint32_t> residency(experts, 0);
-        cudaStream_t stream = device_.execution_view().stream();
-        CUDA_CHECK(cudaMemcpyAsync(residency.data(), bank.expert_residency,
-                                   residency.size() * sizeof(std::uint32_t),
-                                   cudaMemcpyDeviceToHost, stream));
-        CUDA_CHECK(cudaStreamSynchronize(stream));
-        return residency;
+    // SP-4 tier policy: the tiered residency table is device memory; enqueue its
+    // device-to-host copy on the execution stream without synchronizing. The caller
+    // synchronizes once after enqueueing all layers - a per-layer sync here costs ~2.4ms
+    // each (116ms for 48 layers measured).
+    void tier_enqueue_residency_read(const ops::FlashNextExpertBank& bank,
+                                     std::span<std::uint32_t> out) const {
+        CUDA_CHECK(cudaMemcpyAsync(out.data(), bank.expert_residency,
+                                   out.size() * sizeof(std::uint32_t),
+                                   cudaMemcpyDeviceToHost,
+                                   device_.execution_view().stream()));
     }
 
     // Applies at most `count` promote/demote pairs to both banks of one layer: the promote
@@ -447,15 +445,31 @@ private:
                                static_cast<std::size_t>(tier_burst_requests());
         const auto budget = static_cast<std::size_t>(
             burst ? tier_burst_budget() : tier_swaps_per_layer());
+        const auto prefetch_start = std::chrono::steady_clock::now();
+        // Pass 1: enqueue every layer's residency copy, then one synchronization.
+        std::vector<std::vector<std::uint32_t>> residencies(
+            static_cast<std::size_t>(tier_banks_));
+        std::vector<int> read_layers;
+        read_layers.reserve(static_cast<std::size_t>(tier_banks_));
         for (int layer = 0; layer < tier_banks_; ++layer) {
+            const auto* bank = instance_.model->tier_gate_up_bank(layer);
+            if (bank == nullptr || bank->expert_residency == nullptr) { continue; }
+            auto& residency = residencies[static_cast<std::size_t>(layer)];
+            residency.resize(static_cast<std::size_t>(bank->experts), 0);
+            tier_enqueue_residency_read(*bank, residency);
+            read_layers.push_back(layer);
+        }
+        CUDA_CHECK(cudaStreamSynchronize(device_.execution_view().stream()));
+        const auto pass1_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                                  std::chrono::steady_clock::now() - prefetch_start)
+                                  .count();
+        // Pass 2: the host-side selection and the swaps.
+        for (const int layer : read_layers) {
             const auto* mask = tier_policy_.cached_mask(session, layer);
             const auto* bank = instance_.model->tier_gate_up_bank(layer);
             const auto* down = instance_.model->tier_down_bank(layer);
-            if (mask == nullptr || bank == nullptr || down == nullptr ||
-                bank->expert_residency == nullptr) {
-                continue;
-            }
-            const auto residency = tier_read_residency(*bank);
+            if (mask == nullptr || bank == nullptr || down == nullptr) { continue; }
+            const auto& residency = residencies[static_cast<std::size_t>(layer)];
             const auto experts = residency.size();
             std::vector<std::uint8_t> hot(experts, 0);
             std::vector<int> warm;
@@ -472,6 +486,12 @@ private:
             tier_append_global_protect(layer, protect);
             tier_apply_layer_swaps(layer, *bank, *down, warm, hot, protect, budget);
         }
+        std::fprintf(stderr, "[tierprof] prefetch_us=%lld pass1_us=%lld\n",
+                     static_cast<long long>(std::chrono::duration_cast<std::chrono::microseconds>(
+                                                std::chrono::steady_clock::now() -
+                                                prefetch_start)
+                                                .count()),
+                     static_cast<long long>(pass1_us));
     }
 
     // SP-4 tier policy: the global pin pass. Every `NINFER_TIER_PIN_EVERY` requests,
@@ -483,13 +503,26 @@ private:
         const auto topk = tier_pin_topk();
         if (topk <= 0) { return; }
         const auto budget = static_cast<std::size_t>(tier_swaps_per_layer());
+        // Pass 1: enqueue every layer's residency copy, then one synchronization.
+        std::vector<std::vector<std::uint32_t>> residencies(
+            static_cast<std::size_t>(tier_banks_));
+        std::vector<int> read_layers;
+        read_layers.reserve(static_cast<std::size_t>(tier_banks_));
         for (int layer = 0; layer < tier_banks_; ++layer) {
             const auto* bank = instance_.model->tier_gate_up_bank(layer);
+            if (bank == nullptr || bank->expert_residency == nullptr) { continue; }
+            auto& residency = residencies[static_cast<std::size_t>(layer)];
+            residency.resize(static_cast<std::size_t>(bank->experts), 0);
+            tier_enqueue_residency_read(*bank, residency);
+            read_layers.push_back(layer);
+        }
+        CUDA_CHECK(cudaStreamSynchronize(device_.execution_view().stream()));
+        // Pass 2: the host-side selection and the swaps.
+        for (const int layer : read_layers) {
+            const auto* bank = instance_.model->tier_gate_up_bank(layer);
             const auto* down = instance_.model->tier_down_bank(layer);
-            if (bank == nullptr || down == nullptr || bank->expert_residency == nullptr) {
-                continue;
-            }
-            const auto residency = tier_read_residency(*bank);
+            if (bank == nullptr || down == nullptr) { continue; }
+            const auto& residency = residencies[static_cast<std::size_t>(layer)];
             const auto experts = residency.size();
             std::vector<std::uint8_t> hot(experts, 0);
             std::vector<int> warm_top;

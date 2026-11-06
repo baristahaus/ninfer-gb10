@@ -346,6 +346,20 @@ private:
         return value;
     }
 
+    // The burst ratchet: a class's first NINFER_TIER_BURST_REQUESTS requests use
+    // NINFER_TIER_BURST_BUDGET swaps per layer instead of the steady budget, front-loading
+    // the working-set promotion so the steady state arrives sooner. The total swap I/O is
+    // unchanged; only its distribution across requests shifts. 0 = off.
+    [[nodiscard]] static int tier_burst_requests() noexcept {
+        static const int value = tier_env_int("NINFER_TIER_BURST_REQUESTS", 0);
+        return value;
+    }
+
+    [[nodiscard]] static int tier_burst_budget() noexcept {
+        static const int value = tier_env_int("NINFER_TIER_BURST_BUDGET", 8);
+        return value;
+    }
+
     // SP-4 tier policy: attribute one terminal request's expert usage to its session and
     // log the per-layer counts. Reads and resets the gate-up bank's activation counters.
     void tier_observe_request(const Request& request) {
@@ -428,7 +442,11 @@ private:
         if (instance_.model == nullptr || tier_banks_ == 0) { return; }
         if (session.empty() || !tier_policy_.cached(session)) { return; }
         if (!tier_policy_enabled()) { return; }
-        const auto budget = static_cast<std::size_t>(tier_swaps_per_layer());
+        const auto burst = tier_burst_requests() > 0 &&
+                           tier_policy_.class_requests(session) <
+                               static_cast<std::size_t>(tier_burst_requests());
+        const auto budget = static_cast<std::size_t>(
+            burst ? tier_burst_budget() : tier_swaps_per_layer());
         for (int layer = 0; layer < tier_banks_; ++layer) {
             const auto* mask = tier_policy_.cached_mask(session, layer);
             const auto* bank = instance_.model->tier_gate_up_bank(layer);
@@ -447,8 +465,10 @@ private:
                 if (is_warm && (*mask)[e] != 0) { warm.push_back(static_cast<int>(e)); }
             }
             if (warm.empty()) { continue; }
-            // The protect set = this session's cached experts plus the global top-K.
-            std::vector<std::uint8_t> protect = *mask;
+            // The protect set = every cached session's experts plus the global top-K.
+            // Without the union, one class's prefetch pass demotes another class's
+            // promoted experts and the next pass of that class re-promotes them.
+            std::vector<std::uint8_t> protect = tier_policy_.all_sessions_mask(layer);
             tier_append_global_protect(layer, protect);
             tier_apply_layer_swaps(layer, *bank, *down, warm, hot, protect, budget);
         }

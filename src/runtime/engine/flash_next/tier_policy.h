@@ -34,6 +34,7 @@ public:
             if (cache_.find(std::string(session)) != cache_.end()) { stats_.cache_hits += 1; }
         }
         auto& entry = touch(session);
+        if (layer == 0) { entry.requests += 1; }
         const auto base = static_cast<std::size_t>(layer) * static_cast<std::size_t>(experts_);
         const auto count = static_cast<std::size_t>(experts_) < counts.size()
                                ? static_cast<std::size_t>(experts_)
@@ -85,6 +86,13 @@ public:
         for (auto& value : usage_) {
             value /= 2;
         }
+    }
+
+    // The number of requests attributed to this class so far (0 when unknown). The
+    // burst-budget decision uses it to front-load a new class's ratchet.
+    [[nodiscard]] std::size_t class_requests(std::string_view session) const {
+        const auto found = cache_.find(std::string(session));
+        return found == cache_.end() ? 0 : found->second.requests;
     }
 
     // The union of every cached session's expert bitmask for one layer. A global demotion
@@ -144,6 +152,8 @@ private:
     struct SessionEntry {
         // Per-layer expert bitmasks: 1 = the session exercised this expert at least once.
         std::vector<std::vector<std::uint8_t>> mask;
+        // How many requests have been attributed to this class (layer-0 observes).
+        std::size_t requests = 0;
     };
 
     SessionEntry& touch(std::string_view session) {

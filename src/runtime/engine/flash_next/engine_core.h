@@ -495,7 +495,7 @@ private:
             std::vector<int> ordered;
             ordered.reserve(warm.size());
             for (const int e : ranked) {
-                    if (hot[static_cast<std::size_t>(e)] != 0) { ordered.push_back(e); }
+                if (hot[static_cast<std::size_t>(e)] == 0) { ordered.push_back(e); }
             }
             // The protect set = every cached session's experts plus the global top-K.
             // Without the union, one class's prefetch pass demotes another class's

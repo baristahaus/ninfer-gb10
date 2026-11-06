@@ -418,17 +418,23 @@ private:
 
     // Applies at most `count` promote/demote pairs to both banks of one layer: the promote
     // candidates are taken in order, the demote victims are the least-used currently-hot
-    // experts outside `protect`.
+    // experts outside `protect`. `residency` is the layer's pass-1 residency table; its
+    // entries feed the no-sync swap variant.
     void tier_apply_layer_swaps(int layer, const ops::FlashNextExpertBank& bank,
                                 const ops::FlashNextExpertBank& down,
                                 const std::vector<int>& promote,
                                 const std::vector<std::uint8_t>& hot,
-                                const std::vector<std::uint8_t>& protect, std::size_t count) {
+                                const std::vector<std::uint8_t>& protect, std::size_t count,
+                                const std::vector<std::uint32_t>& residency) {
         auto demote = tier_policy_.bottom_experts(
             layer, static_cast<int>(std::min(promote.size(), count)), hot, protect);
         for (std::size_t i = 0; i < demote.size() && i < promote.size(); ++i) {
-            ops::swap_expert_tier(bank, promote[i], demote[i], device_.execution_view());
-            ops::swap_expert_tier(down, promote[i], demote[i], device_.execution_view());
+            const auto promote_entry = residency[static_cast<std::size_t>(promote[i])];
+            const auto demote_entry = residency[static_cast<std::size_t>(demote[i])];
+            ops::swap_expert_tier_with_residency(bank, promote[i], demote[i], promote_entry,
+                                                 demote_entry, device_.execution_view());
+            ops::swap_expert_tier_with_residency(down, promote[i], demote[i], promote_entry,
+                                                 demote_entry, device_.execution_view());
             std::fprintf(stderr, "[tierprof] layer=%d promote=%d demote=%d\n", layer, promote[i],
                          demote[i]);
         }
@@ -484,7 +490,7 @@ private:
             // promoted experts and the next pass of that class re-promotes them.
             std::vector<std::uint8_t> protect = tier_policy_.all_sessions_mask(layer);
             tier_append_global_protect(layer, protect);
-            tier_apply_layer_swaps(layer, *bank, *down, warm, hot, protect, budget);
+            tier_apply_layer_swaps(layer, *bank, *down, warm, hot, protect, budget, residency);
         }
         std::fprintf(stderr, "[tierprof] prefetch_us=%lld pass1_us=%lld\n",
                      static_cast<long long>(std::chrono::duration_cast<std::chrono::microseconds>(
@@ -539,7 +545,7 @@ private:
             for (const int e : tier_policy_.top_experts(layer, topk)) {
                 protect[static_cast<std::size_t>(e)] = 1;
             }
-            tier_apply_layer_swaps(layer, *bank, *down, warm_top, hot, protect, budget);
+            tier_apply_layer_swaps(layer, *bank, *down, warm_top, hot, protect, budget, residency);
         }
     }
 

@@ -93,4 +93,15 @@ void read_and_reset_expert_activations_into(const FlashNextExpertBank& bank,
 void swap_expert_tier(const FlashNextExpertBank& bank, int promote_expert, int demote_expert,
                       CudaExecutionView execution);
 
+// The caller-supplied-residency form: identical to swap_expert_tier except the two
+// residency entries come from the caller (read from the bank's residency table before any
+// swap of this pass), so there is no device-to-host readback and no stream
+// synchronization inside - the per-call sync cost ~1.5ms when swapping 96 experts. The
+// entries must be current: the promoted expert's entry warm (bit 31 set), the demoted
+// expert's hot. Within one pass the warm and hot expert sets are disjoint by policy, so
+// the entries of later swaps are not invalidated by earlier ones.
+void swap_expert_tier_with_residency(const FlashNextExpertBank& bank, int promote_expert,
+                                     int demote_expert, std::uint32_t promote_entry,
+                                     std::uint32_t demote_entry, CudaExecutionView execution);
+
 } // namespace ninfer::ops

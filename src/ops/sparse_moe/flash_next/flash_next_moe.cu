@@ -1521,14 +1521,7 @@ void swap_expert_tier(const FlashNextExpertBank& bank, int promote_expert, int d
         demote_expert >= bank.experts || promote_expert == demote_expert) {
         throw std::invalid_argument("swap_expert_tier: invalid bank or expert pair");
     }
-    const bool nvfp4 = bank.qtype == QType::NVFP4;
-    // One expert's block: the row planes plus the trailing per-expert divisor float.
-    const std::size_t row_bytes = nvfp4 ? bank.columns / 2 + bank.columns / 16
-                                        : static_cast<std::size_t>(bank.columns) * 2;
-    const std::size_t block     = static_cast<std::size_t>(bank.rows) * row_bytes +
-                              (nvfp4 ? 4 : 0);
     cudaStream_t stream = execution.stream();
-
     // Current ranks: the promoted expert sits warm (bit 31), the demoted expert on device.
     std::uint32_t promote_entry = 0;
     std::uint32_t demote_entry  = 0;
@@ -1537,11 +1530,35 @@ void swap_expert_tier(const FlashNextExpertBank& bank, int promote_expert, int d
     CUDA_CHECK(cudaMemcpyAsync(&demote_entry, bank.expert_residency + demote_expert,
                                sizeof(std::uint32_t), cudaMemcpyDeviceToHost, stream));
     CUDA_CHECK(cudaStreamSynchronize(stream));
+    swap_expert_tier_with_residency(bank, promote_expert, demote_expert, promote_entry,
+                                    demote_entry, execution);
+}
+
+void swap_expert_tier_with_residency(const FlashNextExpertBank& bank, int promote_expert,
+                                     int demote_expert, std::uint32_t promote_entry,
+                                     std::uint32_t demote_entry, CudaExecutionView execution) {
+    if (bank.expert_residency == nullptr || bank.warm_codes == nullptr ||
+        bank.warm_scales == nullptr || bank.experts <= 0 || bank.rows <= 0 ||
+        promote_expert < 0 || promote_expert >= bank.experts || demote_expert < 0 ||
+        demote_expert >= bank.experts || promote_expert == demote_expert) {
+        throw std::invalid_argument(
+            "swap_expert_tier_with_residency: invalid bank or expert pair");
+    }
+    const bool nvfp4 = bank.qtype == QType::NVFP4;
+    // One expert's block: the row planes plus the trailing per-expert divisor float.
+    const std::size_t row_bytes = nvfp4 ? bank.columns / 2 + bank.columns / 16
+                                        : static_cast<std::size_t>(bank.columns) * 2;
+    const std::size_t block     = static_cast<std::size_t>(bank.rows) * row_bytes +
+                              (nvfp4 ? 4 : 0);
+    cudaStream_t stream = execution.stream();
+
     if ((promote_entry & 0x80000000u) == 0) {
-        throw std::invalid_argument("swap_expert_tier: promoted expert is not warm");
+        throw std::invalid_argument(
+            "swap_expert_tier_with_residency: promoted expert is not warm");
     }
     if ((demote_entry & 0x80000000u) != 0) {
-        throw std::invalid_argument("swap_expert_tier: demoted expert is not hot");
+        throw std::invalid_argument(
+            "swap_expert_tier_with_residency: demoted expert is not hot");
     }
     const auto promote_rank = static_cast<std::size_t>(promote_entry & 0x7fffffffu);
     const auto demote_rank  = static_cast<std::size_t>(demote_entry & 0x7fffffffu);

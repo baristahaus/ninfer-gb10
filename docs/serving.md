@@ -599,6 +599,45 @@ rendered-token frontier is ignored without changing prompt content. `prompt_cach
 Engine session key or prefix identity. Valid TTL/retention values are accepted, but NInfer does not
 promise their wall-clock residency; physical retention follows the resource scheduler.
 
+## Adaptive expert tiers
+
+When the artifact is converted with a tier plan (a hot device tier and a warm pinned-host
+tier per MoE layer), the runtime keeps an adaptive placement policy running behind the
+same OpenAI and Anthropic surfaces. It is transparent to requests: the same model id, the
+same endpoints, the same outputs.
+
+What it does, per layer of the 48 MoE layers:
+
+- Every completed request's per-expert activation counters are read and attributed to the
+  request's workload class. The class is a coarse signature of the kind of work - the two
+  most-populated vocabulary regions of the prompt plus a length bucket - so prompts of
+  the same kind (code, prose, math, the turns of one conversation) share a class, and a
+  domain shift re-keys it.
+- A repeat class prefetches the experts it previously used into the hot tier before its
+  prefill, promoting the most-exercised warm experts first. A class's first requests use
+  a higher swap budget (the burst) so the working set is pinned early; the steady state
+  costs zero swaps.
+- A periodic pass promotes the globally most-used warm experts and shields them, and the
+  union of all known classes' expert sets, from demotion. The usage ledger is halved
+  every `NINFER_TIER_AGE_EVERY` requests (default 64), so experts whose traffic faded
+  leave the ranking and the hot tier re-balances toward the current mix.
+
+All tier-path anomalies surface as per-request HTTP 4xx/5xx rejections with the reason in
+the message - never a silent wrong answer and never a process crash. Setting
+`NINFER_TIER_POLICY=0` disables the whole policy for isolation.
+
+Knobs (environment variables, all optional):
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `NINFER_TIER_POLICY` | on | `0` disables the policy entirely |
+| `NINFER_TIER_SWAPS_PER_LAYER` | 2 | steady promote/demote pairs per layer per pass |
+| `NINFER_TIER_BURST_REQUESTS` | 10 | a class's first requests use the burst budget |
+| `NINFER_TIER_BURST_BUDGET` | 8 | swaps per layer during a class's burst |
+| `NINFER_TIER_PIN_TOPK` | 0 | per-layer globally most-used experts to keep hot (0 = off) |
+| `NINFER_TIER_PIN_EVERY` | 8 | requests between global pin passes |
+| `NINFER_TIER_AGE_EVERY` | 64 | requests between usage-ledger halvings |
+
 ## OpenAI Responses Core
 
 NInfer implements the typed-Item and semantic-event core of the OpenAI

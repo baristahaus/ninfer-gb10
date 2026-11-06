@@ -717,6 +717,42 @@ Artifact 层拥有通用文件与驻留合同，模型实现拥有数学及状�
 Engine 发布政策，product/serving 拥有输入获取及协议翻译。每个语义闭合的 Op（包括 fused、
 fixed-shape 和 device-specialized 实现）都归 `src/ops`。
 
+## 11. Adaptive expert tiering
+
+When a Flash-Next artifact carries a tier plan, each MoE layer holds a hot device tier and
+a warm pinned-host tier plus three pieces of tier state: the always-armed per-expert
+activation counters, the residency table (bit 31 marks the warm tier, the low bits the
+compact rank), and the pinned warm mini-bank. The tier machinery lives in
+`src/runtime/engine/flash_next/` and `src/ops/sparse_moe/flash_next/`; it reorders expert
+placement only - a predictor may never change what is computed.
+
+The request-aware policy (`tier_policy.h`, hosted by the EngineCore) works per workload
+class: the class key is a coarse signature of the prompt's token distribution (the two
+most-populated vocabulary regions plus a length bucket), so prompts of the same kind share
+a class and a domain shift re-keys it. Per request:
+
+1. At admission, a cached class prefetches its previously used warm experts into the hot
+   tier (the burst budget covers a new class's first requests). Residency tables are read
+   with one batched device-to-host copy per pass - per-layer synchronization costs
+   measurably more.
+2. At terminal settlement, all 48 layers' activation counters are read and reset in one
+   batched enqueue and attributed to the class. The usage ledger halves every
+   `NINFER_TIER_AGE_EVERY` requests, so faded experts leave the ranking.
+3. On the pin interval, the globally most-used warm experts are promoted and protected -
+   the protect set is the union of the global top-K and every cached class's expert mask,
+   so one class's demotion never evicts another class's promoted experts.
+
+The swap primitive (`ops::swap_expert_tier`) is capacity-neutral: the promoted expert's
+pinned block lands in the demoted expert's device slot first, the demoted block overwrites
+the vacated warm slot, and the residency rewrite is stream-ordered after the copies. The
+caller-supplied-residency variant (`ops::swap_expert_tier_with_residency`) removes the
+per-swap device-to-host readback and synchronization when the caller already holds the
+residency table. The remaining per-swap cost is the block copy itself, at pinned-host to
+device bandwidth.
+
+Tier-state anomalies surface as per-request rejections with the reason in the message; the
+serving knobs are documented in the HTTP serving guide.
+
 相邻文档：
 
 - [资源调度与上下文缓存](resource-scheduling-and-context-cache.md)：resource vector、checkpoint

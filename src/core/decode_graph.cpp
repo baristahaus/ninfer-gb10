@@ -4,8 +4,12 @@
 #include "core/nvtx.h"
 
 #include <cstdio>
+#include <cstdlib>
 #include <stdexcept>
 #include <string>
+#include <string_view>
+#include <unordered_map>
+#include <vector>
 
 namespace ninfer {
 namespace {
@@ -71,6 +75,7 @@ void DecodeGraphDefinition::capture(cudaStream_t stream, const std::function<voi
     DecodeGraphCapture capture(stream);
     body();
     *this = capture.finish();
+    dump_nodes("captured");
 }
 
 DecodeGraphChild DecodeGraphDefinition::append_to(cudaStream_t stream) const {
@@ -113,6 +118,34 @@ DecodeGraphDefinition DecodeGraphCapture::finish() {
 bool DecodeGraphDefinition::ready() const noexcept { return graph_ != nullptr; }
 
 void DecodeGraphDefinition::reset() noexcept { destroy_graph(graph_); }
+
+void DecodeGraphDefinition::dump_nodes(const char* label) const {
+    const char* flag = std::getenv("NINFER_GRAPH_DUMP");
+    if (flag == nullptr || std::string_view{flag} != "1" || graph_ == nullptr) { return; }
+    std::size_t count = 0;
+    if (cudaGraphGetNodes(graph_, nullptr, &count) != cudaSuccess) { return; }
+    std::vector<cudaGraphNode_t> nodes(count);
+    if (cudaGraphGetNodes(graph_, nodes.data(), &count) != cudaSuccess) { return; }
+    std::fprintf(stderr, "[graphdump] %s nodes=%zu\n", label, count);
+    std::unordered_map<std::string, int> kernels;
+    for (const auto node : nodes) {
+        cudaGraphNodeType type;
+        cudaGraphNodeGetType(node, &type);
+        if (type != cudaGraphNodeTypeKernel) { continue; }
+        cudaKernelNodeParams params{};
+        if (cudaGraphKernelNodeGetParams(node, &params) != cudaSuccess) { continue; }
+        // params.func is the host stub pointer; cudaFuncGetName resolves it.
+        const char* name = nullptr;
+        if (cudaFuncGetName(&name, params.func) == cudaSuccess && name != nullptr) {
+            kernels[std::string{name}] += 1;
+        } else {
+            kernels["<unresolved>"] += 1;
+        }
+    }
+    for (const auto& [name, n] : kernels) {
+        std::fprintf(stderr, "[graphdump]   %s x%d\n", name.c_str(), n);
+    }
+}
 
 DecodeGraphExecutable::~DecodeGraphExecutable() { reset(); }
 

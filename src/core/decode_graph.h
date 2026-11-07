@@ -26,6 +26,9 @@ public:
     [[nodiscard]] DecodeGraphChild append_to(cudaStream_t capturing_stream) const;
     [[nodiscard]] bool ready() const noexcept;
     void reset() noexcept;
+    // NINFER_GRAPH_DUMP=1: print every node's type and kernel function name to stderr
+    // after a capture. Used to diff the tiered and untiered captured node sets.
+    void dump_nodes(const char* label) const;
 
 private:
     friend class DecodeGraphCapture;

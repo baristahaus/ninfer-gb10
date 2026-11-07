@@ -111,6 +111,7 @@ def test_result_record_parses_request_host_exposure() -> None:
         "timings_seconds": {
             "prepare": 0.1,
             "vision": 0.0,
+            "vision_stream": 0.0,
             "prefill": 0.2,
             "decode": 0.4,
             "total": 0.7,
@@ -129,7 +130,8 @@ def test_result_record_parses_request_host_exposure() -> None:
                 "session_call": 0.002,
                 "executor_poll": 0.003,
                 "engine_commit_output": 0.004,
-                "engine_maintenance": 0.005,
+                "engine_maintenance": 0.004,
+                "executor_flush": 0.001,
                 "total": 0.015,
             },
             "scheduler_yield_exposed_seconds": 0.3,

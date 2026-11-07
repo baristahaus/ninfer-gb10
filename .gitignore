@@ -77,3 +77,7 @@ tools/gb10/config.local.sh
 *.toml
 !/ninfer.example.toml
 runs/
+
+# CTest scratch and the beads gate lock are machine-local state.
+Testing/
+.beads.gate.lock

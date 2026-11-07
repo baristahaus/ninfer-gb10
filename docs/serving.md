@@ -637,6 +637,13 @@ Knobs (environment variables, all optional):
 | `NINFER_TIER_PIN_TOPK` | 0 | per-layer globally most-used experts to keep hot (0 = off) |
 | `NINFER_TIER_PIN_EVERY` | 8 | requests between global pin passes |
 | `NINFER_TIER_AGE_EVERY` | 64 | requests between usage-ledger halvings |
+| `NINFER_TIER_SPLIT` | 0.6 | cosine-distance divergence threshold marking a layer's counts atypical for the class (0 disables the split metric); atypical requests are measured and logged, not stored |
+
+Observation scope: the per-expert counters are global per bank, so a completion only
+attributes them when it is the only active request; with several requests in flight the
+readback is read-and-reset and discarded rather than credited to the wrong session.
+The tier exchange preserves every expert's weights exactly (per-plane staged copies
+pinned by `tests/ops/test_tier_swap.cpp`).
 
 ## OpenAI Responses Core
 

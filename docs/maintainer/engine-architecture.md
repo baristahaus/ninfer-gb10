@@ -767,11 +767,14 @@ They are recorded so the next change does not re-derive them.
   25-token turn hash differently no matter how the shorter is padded, because the longer
   turn's real tokens occupy the slots the shorter padded. Multi-turn turns are therefore
   distinct classes until a client-provided session id exists.
-- **Divergence splitting uses a fingerprint re-key, not a centroid rewrite.** The
-  classification must precede the prefill while the expert vector is only known at
-  terminal. A divergent request files its counts under a key derived from its own count
-  vector; an identical later request reproduces that key exactly. No merge logic, and the
-  LRU evicts stale fingerprints.
+- **Divergence splitting measures but does not store.** The classification must precede
+  the prefill while the expert vector is only known at terminal, and the original
+  fingerprint re-key cannot bridge that gap: a fingerprint entry is keyed by a completed
+  request's count vector, which a *submitting* request does not have yet, so
+  `tier_prefetch` — which only looks up the session key — could never hit it. The
+  entries were pure LRU pollution (up to 48 per atypical request against a 64-entry
+  cache, plus a centroid underflow on layer>0 entries). Removed in 17fb5db2: the split
+  stays as a per-request metric and log line; storage remains the coarse class only.
 - **The demote protect set is the union of all cached classes plus the global top-K.** A
   protect set limited to the current class let one class's prefetch demote another class's
   promoted experts (measured: 30 of 120 promoted experts later demoted; the union cut it

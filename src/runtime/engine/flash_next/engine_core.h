@@ -357,22 +357,6 @@ private:
         return parsed > 0.0 ? parsed : 0.0;
     }
 
-    // The fingerprint-derived class key for a divergent request: the class plus a hash of
-    // its own count vector. The next identical request reproduces the same key and hits
-    // the derived entry; the coarse class stays clean for everyone else.
-    [[nodiscard]] static std::string tier_fingerprint_key(std::string_view session,
-                                                          int layer,
-                                                          std::span<const std::uint32_t> counts) {
-        auto hash = std::uint64_t{0xcbf29ce484222325ULL};
-        for (const auto c : counts) {
-            hash ^= static_cast<std::uint64_t>(c);
-            hash *= 0x100000001b3ULL;
-        }
-        hash ^= static_cast<std::uint64_t>(layer) << 40;
-        hash *= 0x100000001b3ULL;
-        return std::string{session} + "#" + std::to_string(hash);
-    }
-
     // The burst ratchet: a class's first NINFER_TIER_BURST_REQUESTS requests use
     // NINFER_TIER_BURST_BUDGET swaps per layer instead of the steady budget, front-loading
     // the working-set promotion so the steady state arrives sooner. The total swap I/O is
@@ -397,6 +381,26 @@ private:
         if (!tier_policy_enabled()) { return; }
         const std::string_view session{request.tier_session};
         if (session.empty()) { return; }
+        // With more than one request active, the global counters mix every active
+        // request's experts (plus speculative traffic); attributing them to this
+        // session would credit the wrong class. Read-and-reset into a discard buffer
+        // so nothing misattributes and the next single-active completion starts clean.
+        std::size_t active = 0;
+        for (std::uint32_t lane = 0; lane < max_concurrency_; ++lane) {
+            active += slots_[lane] != nullptr ? 1 : 0;
+        }
+        if (active > 1) {
+            std::vector<std::uint32_t> discarded(
+                static_cast<std::size_t>(kTierPolicyExperts), 0);
+            for (int layer = 0; layer < tier_banks_; ++layer) {
+                const auto* bank = instance_.model->tier_gate_up_bank(layer);
+                if (bank == nullptr || bank->expert_activations == nullptr) { continue; }
+                ops::read_and_reset_expert_activations_into(
+                    *bank, discarded, device_.execution_view());
+            }
+            CUDA_CHECK(cudaStreamSynchronize(device_.execution_view().stream()));
+            return;
+        }
         const auto observe_start = std::chrono::steady_clock::now();
         // The batched readback: every bank's copy enqueues on the stream, then one
         // synchronization covers all of them - the 48 per-bank syncs here cost ~0.65ms.
@@ -421,15 +425,12 @@ private:
         for (std::size_t i = 0; i < enqueued_layers.size(); ++i) {
             const auto offset = i * static_cast<std::size_t>(kTierPolicyExperts);
             const auto layer_counts = std::span{all_counts}.subspan(offset);
-            // Exactly one session record per layer: the divergent path adds only the
-            // fingerprint record on top. The old form re-recorded non-divergent layers.
+            // Exactly one session record per layer. The divergence split marks atypical
+            // requests but stores nothing: the fingerprint entries were never prefetched
+            // (tier_prefetch only looks up the session key), so they only evicted real
+            // classes from the LRU.
             if (split > 0.0 &&
                 tier_policy_.observe(session, enqueued_layers[i], layer_counts, split)) {
-                // An atypical request: also file it under its fingerprint-derived class so
-                // the next identical request prefetches exactly this expert set.
-                tier_policy_.observe(tier_fingerprint_key(session, enqueued_layers[i],
-                                                          layer_counts),
-                                     enqueued_layers[i], layer_counts);
                 divergent_layers += 1;
             }
         }
@@ -519,10 +520,10 @@ private:
                                   .count();
         // Pass 2: the host-side selection and the swaps.
         for (const int layer : read_layers) {
-            const auto* mask = tier_policy_.cached_mask(session, layer);
+            const auto mask = tier_policy_.cached_mask(session, layer);
             const auto* bank = instance_.model->tier_gate_up_bank(layer);
             const auto* down = instance_.model->tier_down_bank(layer);
-            if (mask == nullptr || bank == nullptr || down == nullptr) { continue; }
+            if (mask.empty() || bank == nullptr || down == nullptr) { continue; }
             const auto& residency = residencies[static_cast<std::size_t>(layer)];
             const auto experts = residency.size();
             std::vector<std::uint8_t> hot(experts, 0);
@@ -530,7 +531,7 @@ private:
             for (std::size_t e = 0; e < experts; ++e) {
                 const bool is_warm = (residency[e] & 0x80000000u) != 0;
                 hot[e] = is_warm ? 0 : 1;
-                if (is_warm && (*mask)[e] != 0) { warm.push_back(static_cast<int>(e)); }
+                if (is_warm && mask[e] != 0) { warm.push_back(static_cast<int>(e)); }
             }
             if (warm.empty()) { continue; }
             // The burst budget makes the order matter: the class's most-exercised warm

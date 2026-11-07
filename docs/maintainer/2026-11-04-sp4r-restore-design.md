@@ -1,6 +1,11 @@
 # SP-4-R restore design: tiering after the family convergence
 
-Status: **design for requestor review — no code landed.** The workplan's premise
+Status: **executed.** The SP-4 tiered-restore lane landed and is tracked in the
+self-governing ledger (`/nfs/ninfer-gb10/sp4r-restore/LEDGER.md`, mirrored to
+`docs/maintainer/sp4r-ledger.md`); this document is the design record. The review
+of 2026-11-07 confirmed two critical defects in the first implementation (the
+interleaved-block tier swap and a policy self-deadlock); both are fixed and pinned
+by `tests/ops/test_tier_swap.cpp` (commit 17fb5db2). The workplan's premise
 ("re-apply the dropped wiring onto the current tree") does not survive contact
 with master `3d2de369`: the MoE execution was converged onto the shared family
 core and the tiered path did not survive it. This doc states what was verified,

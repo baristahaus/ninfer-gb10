@@ -35,7 +35,7 @@ against the FP64 oracle of §3.2's composition — are executed. The remaining d
 shared expert inside SparseMoe, the embedding and lm_head) and the prefill token route follow in
 later steps under this same contract. The 125B Flash-Next banks (512-way MoE) are
 a later step that adds shapes, not semantics; its execution planning lives in the dated campaign
-plan (docs/maintainer/2026-10-21-q38fn-exl3-campaign-plan.md).
+plan (docs/maintainer/2026-11-02-exl3-sc385-campaign-plan.md).
 
 Out of scope, and rejected at import: exllamav3's n-gram embedding codec (160-element tiles),
 quantized dimensions padded to a multiple of 128 (`trim_padded_out`), linear biases, the obsolete

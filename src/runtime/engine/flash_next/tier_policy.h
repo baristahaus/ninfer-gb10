@@ -128,12 +128,14 @@ public:
     }
 
     // The session's cached expert bitmask for one layer; empty when uncached.
-    [[nodiscard]] const std::vector<std::uint8_t>* cached_mask(std::string_view session,
-                                                               int layer) const {
+    // Returns a copy taken under the lock: a pointer into the map would dangle across
+    // any concurrent observe insertion (rehash) or LRU eviction while the caller reads.
+    [[nodiscard]] std::vector<std::uint8_t> cached_mask(std::string_view session,
+                                                        int layer) const {
         const std::lock_guard lock{mutex_};
         const auto found = cache_.find(std::string(session));
-        if (found == cache_.end() || layer >= layers_) { return nullptr; }
-        return &found->second.mask[static_cast<std::size_t>(layer)];
+        if (found == cache_.end() || layer >= layers_) { return {}; }
+        return found->second.mask[static_cast<std::size_t>(layer)];
     }
 
     // The `count` most-used experts of one layer, most-used first.

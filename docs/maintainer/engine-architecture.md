@@ -753,6 +753,45 @@ device bandwidth.
 Tier-state anomalies surface as per-request rejections with the reason in the message; the
 serving knobs are documented in the HTTP serving guide.
 
+### 11.1 Design decisions and rejected alternatives
+
+The choices below were settled by measurement or by a live failure, not by preference.
+They are recorded so the next change does not re-derive them.
+
+- **The class key is the two dominant vocabulary regions plus a length bucket.** A
+  presence-vector signature over the same regions was tried first and rejected by live
+  validation: short prompts scatter tokens across regions by birthday collision, so turn
+  two of a conversation flipped the class. The dominant-region form is stable across the
+  turns of one conversation and separates kinds.
+- **A sequential hash cannot recognize a prefix relationship.** A 15-token turn and a
+  25-token turn hash differently no matter how the shorter is padded, because the longer
+  turn's real tokens occupy the slots the shorter padded. Multi-turn turns are therefore
+  distinct classes until a client-provided session id exists.
+- **Divergence splitting uses a fingerprint re-key, not a centroid rewrite.** The
+  classification must precede the prefill while the expert vector is only known at
+  terminal. A divergent request files its counts under a key derived from its own count
+  vector; an identical later request reproduces that key exactly. No merge logic, and the
+  LRU evicts stale fingerprints.
+- **The demote protect set is the union of all cached classes plus the global top-K.** A
+  protect set limited to the current class let one class's prefetch demote another class's
+  promoted experts (measured: 30 of 120 promoted experts later demoted; the union cut it
+  to zero in the ordered timeline).
+- **Counter and residency readbacks are batched into one stream synchronization per
+  pass.** Per-layer synchronization measured ~0.65 ms and ~115 ms respectively for 48
+  layers; the batched forms measure ~0.4 ms and 3-6 ms. The same stall shape is documented
+  in SGLang's expert-distribution-recorder optimization.
+- **The swap op has a caller-supplied-residency variant because its per-call entry
+  readback synchronized the stream.** With the entries in hand from pass one, a 96-swap
+  pass drops from ~146 ms to the copy floor (~103 ms, 96 x 3.3 MB at pinned-to-device
+  bandwidth).
+- **Swap/compute overlap is deferred, not forgotten.** The wait must land at the MoE
+  kernels, which requires an execution-view ABI change plus program-side plumbing; the
+  benefit is confined to a class's ratchet phase. The burst knob covers the trade-off
+  until a serving SLO demands the rest.
+- **The policy mutex exists because the submit and worker threads race the policy.** The
+  submit thread prefetches while the worker attributes; an unsynchronized observe torn an
+  unordered_map rehash. Every public policy method takes the mutex.
+
 相邻文档：
 
 - [资源调度与上下文缓存](resource-scheduling-and-context-cache.md)：resource vector、checkpoint

@@ -9,6 +9,7 @@
 #include <array>
 #include <list>
 #include <cmath>
+#include <mutex>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -33,11 +34,13 @@ public:
     // more than the threshold (cosine distance): the request is atypical for the class
     // and the caller should also store it under a fingerprint-derived key.
     bool observe(std::string_view session, int layer, std::span<const std::uint32_t> counts) {
+        const std::lock_guard lock{mutex_};
         return observe(session, layer, counts, 0.0);
     }
 
     bool observe(std::string_view session, int layer, std::span<const std::uint32_t> counts,
                  double split_threshold) {
+        const std::lock_guard lock{mutex_};
         if (layer == 0) {
             stats_.requests += 1;
             if (cache_.find(std::string(session)) != cache_.end()) { stats_.cache_hits += 1; }
@@ -84,6 +87,7 @@ public:
     // the burst prefetch: the limited budget goes to the load-bearing experts first.
     [[nodiscard]] std::vector<int> class_top(std::string_view session, int layer,
                                              int count) const {
+        const std::lock_guard lock{mutex_};
         const auto found = cache_.find(std::string(session));
         std::vector<int> out;
         if (found == cache_.end() || layer >= layers_ || count <= 0) { return out; }
@@ -106,12 +110,14 @@ public:
 
     // True when the session's expert sets are cached (the repeat request).
     [[nodiscard]] bool cached(std::string_view session) const {
+        const std::lock_guard lock{mutex_};
         return cache_.find(std::string(session)) != cache_.end();
     }
 
     // The session's cached expert bitmask for one layer; empty when uncached.
     [[nodiscard]] const std::vector<std::uint8_t>* cached_mask(std::string_view session,
                                                                int layer) const {
+        const std::lock_guard lock{mutex_};
         const auto found = cache_.find(std::string(session));
         if (found == cache_.end() || layer >= layers_) { return nullptr; }
         return &found->second.mask[static_cast<std::size_t>(layer)];
@@ -119,6 +125,7 @@ public:
 
     // The `count` most-used experts of one layer, most-used first.
     [[nodiscard]] std::vector<int> top_experts(int layer, int count) const {
+        const std::lock_guard lock{mutex_};
         const auto base = static_cast<std::size_t>(layer) * static_cast<std::size_t>(experts_);
         std::vector<int> order(static_cast<std::size_t>(experts_));
         for (int e = 0; e < experts_; ++e) { order[static_cast<std::size_t>(e)] = e; }
@@ -137,6 +144,7 @@ public:
     // the global pin pass re-balances the hot tier toward the current traffic mix without
     // any explicit eviction logic. Call after the per-layer observe loop.
     void age_if_due(std::size_t current_requests, int interval) {
+        const std::lock_guard lock{mutex_};
         if (interval <= 0 || current_requests == 0) { return; }
         if (current_requests / static_cast<std::size_t>(interval) <= aged_periods_) { return; }
         aged_periods_ = current_requests / static_cast<std::size_t>(interval);
@@ -148,6 +156,7 @@ public:
     // The number of requests attributed to this class so far (0 when unknown). The
     // burst-budget decision uses it to front-load a new class's ratchet.
     [[nodiscard]] std::size_t class_requests(std::string_view session) const {
+        const std::lock_guard lock{mutex_};
         const auto found = cache_.find(std::string(session));
         return found == cache_.end() ? 0 : found->second.requests;
     }
@@ -155,6 +164,7 @@ public:
     // The union of every cached session's expert bitmask for one layer. A global demotion
     // pass must not evict experts any known session needs.
     [[nodiscard]] std::vector<std::uint8_t> all_sessions_mask(int layer) const {
+        const std::lock_guard lock{mutex_};
         std::vector<std::uint8_t> out;
         if (layer >= layers_) { return out; }
         out.assign(static_cast<std::size_t>(experts_), 0);
@@ -174,6 +184,7 @@ public:
     [[nodiscard]] std::vector<int> bottom_experts(int layer, int count,
                                                   const std::vector<std::uint8_t>& eligible,
                                                   const std::vector<std::uint8_t>& protect) const {
+        const std::lock_guard lock{mutex_};
         const auto base = static_cast<std::size_t>(layer) * static_cast<std::size_t>(experts_);
         std::vector<int> order(static_cast<std::size_t>(experts_));
         for (int e = 0; e < experts_; ++e) { order[static_cast<std::size_t>(e)] = e; }
@@ -203,7 +214,10 @@ public:
         std::size_t evictions = 0;
     };
 
-    [[nodiscard]] Stats stats() const noexcept { return stats_; }
+        [[nodiscard]] Stats stats() const {
+        const std::lock_guard lock{mutex_};
+        return stats_;
+    }
 
 private:
     struct SessionEntry {
@@ -243,6 +257,13 @@ private:
         entry.centroid.resize(static_cast<std::size_t>(layers_));
         return cache_.emplace(key, std::move(entry)).first->second;
     }
+
+    // The policy is shared between two threads: the submit thread runs the prefetch
+    // (tier_prefetch) while the worker thread runs the attribution
+    // (tier_observe_request). Every public method takes this mutex - an unsynchronized
+    // observe during a prefetch torn an unordered_map rehash and hung the submit thread
+    // in _Hashtable::find (the 5090 handover's M1).
+    mutable std::mutex mutex_;
 
     int layers_ = 0;
     int experts_ = 0;

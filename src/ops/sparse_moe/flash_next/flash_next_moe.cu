@@ -1545,11 +1545,10 @@ void swap_expert_tier_with_residency(const FlashNextExpertBank& bank, int promot
             "swap_expert_tier_with_residency: invalid bank or expert pair");
     }
     const bool nvfp4 = bank.qtype == QType::NVFP4;
-    // One expert's block: the row planes plus the trailing per-expert divisor float.
-    const std::size_t row_bytes = nvfp4 ? bank.columns / 2 + bank.columns / 16
-                                        : static_cast<std::size_t>(bank.columns) * 2;
-    const std::size_t block     = static_cast<std::size_t>(bank.rows) * row_bytes +
-                              (nvfp4 ? 4 : 0);
+    if (bank.tier_swap_staging == nullptr) {
+        throw std::invalid_argument(
+            "swap_expert_tier_with_residency: tiered bank has no swap staging buffer");
+    }
     cudaStream_t stream = execution.stream();
 
     if ((promote_entry & 0x80000000u) == 0) {
@@ -1563,18 +1562,57 @@ void swap_expert_tier_with_residency(const FlashNextExpertBank& bank, int promot
     const auto promote_rank = static_cast<std::size_t>(promote_entry & 0x7fffffffu);
     const auto demote_rank  = static_cast<std::size_t>(demote_entry & 0x7fffffffu);
 
-    // Promote first: the warm block into the demoted expert's device slot. The demote then
-    // overwrites the vacated warm slot with the demoted expert's device block.
+    // The mini-banks are planar: a code plane, then a high plane if the codec has one,
+    // then a scale plane, each holding every expert's rows at its compacted slot; NVFP4
+    // adds a trailing per-slot divisor float. The exchange stages the demoted expert's
+    // block in the bank's device scratch so no copy reads a slot it just wrote, and the
+    // three steps per plane are stream-ordered: demote out, promote in, demote down.
     auto* device_codes = const_cast<std::byte*>(static_cast<const std::byte*>(bank.codes));
     auto* warm_codes_bytes =
         const_cast<std::byte*>(static_cast<const std::byte*>(bank.warm_codes));
-    CUDA_CHECK(cudaMemcpyAsync(device_codes + demote_rank * block,
+    const auto code_block = static_cast<std::size_t>(bank.rows) *
+                            (nvfp4 ? static_cast<std::size_t>(bank.columns) / 2
+                                   : static_cast<std::size_t>(bank.columns) * 2);
+    CUDA_CHECK(cudaMemcpyAsync(bank.tier_swap_staging,
+                               device_codes + demote_rank * code_block, code_block,
+                               cudaMemcpyDeviceToDevice, stream));
+    CUDA_CHECK(cudaMemcpyAsync(device_codes + demote_rank * code_block,
                                static_cast<const std::byte*>(bank.warm_codes) +
-                                   promote_rank * block,
-                               block, cudaMemcpyHostToDevice, stream));
-    CUDA_CHECK(cudaMemcpyAsync(warm_codes_bytes + promote_rank * block,
-                               static_cast<const std::byte*>(bank.codes) + demote_rank * block,
-                               block, cudaMemcpyDeviceToHost, stream));
+                                   promote_rank * code_block,
+                               code_block, cudaMemcpyHostToDevice, stream));
+    CUDA_CHECK(cudaMemcpyAsync(warm_codes_bytes + promote_rank * code_block,
+                               bank.tier_swap_staging, code_block, cudaMemcpyDeviceToHost,
+                               stream));
+    if (nvfp4) {
+        // The scale plane, then the per-slot divisor float through the scratch's head.
+        auto* device_scales = const_cast<std::byte*>(static_cast<const std::byte*>(bank.scales));
+        auto* warm_scales_bytes =
+            const_cast<std::byte*>(static_cast<const std::byte*>(bank.warm_scales));
+        const auto scale_block = static_cast<std::size_t>(bank.rows) *
+                                 static_cast<std::size_t>(bank.columns) / 16;
+        CUDA_CHECK(cudaMemcpyAsync(bank.tier_swap_staging,
+                                   device_scales + demote_rank * scale_block, scale_block,
+                                   cudaMemcpyDeviceToDevice, stream));
+        CUDA_CHECK(cudaMemcpyAsync(device_scales + demote_rank * scale_block,
+                                   static_cast<const std::byte*>(bank.warm_scales) +
+                                       promote_rank * scale_block,
+                                   scale_block, cudaMemcpyHostToDevice, stream));
+        CUDA_CHECK(cudaMemcpyAsync(warm_scales_bytes + promote_rank * scale_block,
+                                   bank.tier_swap_staging, scale_block,
+                                   cudaMemcpyDeviceToHost, stream));
+        if (bank.weight_scale_divisors != nullptr &&
+            bank.warm_weight_scale_divisors != nullptr) {
+            auto* hot_div = const_cast<float*>(bank.weight_scale_divisors);
+            auto* warm_div = const_cast<float*>(bank.warm_weight_scale_divisors);
+            CUDA_CHECK(cudaMemcpyAsync(bank.tier_swap_staging, hot_div + demote_rank,
+                                       sizeof(float), cudaMemcpyDeviceToDevice, stream));
+            CUDA_CHECK(cudaMemcpyAsync(hot_div + demote_rank,
+                                       warm_div + promote_rank, sizeof(float),
+                                       cudaMemcpyHostToDevice, stream));
+            CUDA_CHECK(cudaMemcpyAsync(warm_div + promote_rank, bank.tier_swap_staging,
+                                       sizeof(float), cudaMemcpyDeviceToHost, stream));
+        }
+    }
 
     // The residency rewrite, stream-ordered after the copies: the promoted expert gains the
     // demoted expert's device rank; the demoted expert the promoted expert's warm rank.

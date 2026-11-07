@@ -421,16 +421,16 @@ private:
         for (std::size_t i = 0; i < enqueued_layers.size(); ++i) {
             const auto offset = i * static_cast<std::size_t>(kTierPolicyExperts);
             const auto layer_counts = std::span{all_counts}.subspan(offset);
-            if (split > 0.0 && tier_policy_.observe(session, enqueued_layers[i], layer_counts,
-                                                    split)) {
+            // Exactly one session record per layer: the divergent path adds only the
+            // fingerprint record on top. The old form re-recorded non-divergent layers.
+            if (split > 0.0 &&
+                tier_policy_.observe(session, enqueued_layers[i], layer_counts, split)) {
                 // An atypical request: also file it under its fingerprint-derived class so
                 // the next identical request prefetches exactly this expert set.
                 tier_policy_.observe(tier_fingerprint_key(session, enqueued_layers[i],
                                                           layer_counts),
                                      enqueued_layers[i], layer_counts);
                 divergent_layers += 1;
-            } else {
-                tier_policy_.observe(session, enqueued_layers[i], layer_counts);
             }
         }
         if (divergent_layers > 0) {
@@ -471,6 +471,9 @@ private:
                                 const std::vector<std::uint8_t>& hot,
                                 const std::vector<std::uint8_t>& protect, std::size_t count,
                                 const std::vector<std::uint32_t>& residency) {
+        // One lock for the whole layer: the residency snapshot in `residency` is only
+        // valid while no other swap pass is rewriting it.
+        const std::lock_guard lock{tier_swap_mutex_};
         auto demote = tier_policy_.bottom_experts(
             layer, static_cast<int>(std::min(promote.size(), count)), hot, protect);
         for (std::size_t i = 0; i < demote.size() && i < promote.size(); ++i) {
@@ -2798,6 +2801,10 @@ private:
     DeviceContext& device_;
     TierPolicy tier_policy_;
     int tier_banks_ = 0;
+    // SP-4: serializes every tier swap. The submit thread (prefetch) and the worker
+    // (pin pass) must never interleave promote/demote pairs - both read the residency
+    // before their copies land, and interleaved pairs would double-move one expert.
+    std::mutex tier_swap_mutex_;
     const std::uint32_t max_context_;
     const std::uint32_t max_concurrency_;
     const bool reports_token_logprobs_;

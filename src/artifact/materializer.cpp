@@ -265,6 +265,15 @@ const DeviceBuffer* MaterializedArtifact::tier_state(ObjectHandle handle) const 
     return tensor.tier_state ? &*tensor.tier_state : nullptr;
 }
 
+const DeviceBuffer* MaterializedArtifact::tier_swap_staging(ObjectHandle handle) const
+    noexcept {
+    if (handle.index >= object_storage_.size() || !object_storage_[handle.index]) {
+        return nullptr;
+    }
+    const auto& tensor = tensors_[object_storage_[handle.index]->index];
+    return tensor.tier_swap_staging ? &*tensor.tier_swap_staging : nullptr;
+}
+
 std::span<const std::byte> MaterializedArtifact::host_bytes(ObjectHandle handle) const {
     if (handle.index >= resources_.size()) { throw ArtifactError("object has no Host backing"); }
     const auto& bytes = resources_[handle.index];
@@ -560,6 +569,11 @@ MaterializedArtifact materialize(const Reader& reader, MaterializationPlan&& pla
                                    checked_mul(experts, 2 * sizeof(std::uint32_t),
                                                "tiered state bytes"));
         storage.tier_state->fill(0);
+        // The tier-exchange scratch: the demoted expert's block must survive the promote
+        // copy, so it stages here. The code plane's per-expert block is the largest plane.
+        const auto staging_bytes = static_cast<std::size_t>(
+            checked_mul(rows_per_expert, geometry.code_bytes_per_row, "tiered staging"));
+        storage.tier_swap_staging.emplace(plan.device, staging_bytes);
         {
             std::vector<std::uint32_t> residency(experts, 0);
             for (std::size_t slot = 0; slot < experts; ++slot) {

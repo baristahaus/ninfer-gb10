@@ -35,17 +35,30 @@ public:
     // and the caller should also store it under a fingerprint-derived key.
     bool observe(std::string_view session, int layer, std::span<const std::uint32_t> counts) {
         const std::lock_guard lock{mutex_};
-        return observe(session, layer, counts, 0.0);
+        return observe_unlocked(session, layer, counts, 0.0);
     }
 
     bool observe(std::string_view session, int layer, std::span<const std::uint32_t> counts,
                  double split_threshold) {
         const std::lock_guard lock{mutex_};
+        return observe_unlocked(session, layer, counts, split_threshold);
+    }
+
+private:
+    // Both public overloads hold mutex_; the body is shared here. Never call with the
+    // mutex free from a public path that already locked it.
+    bool observe_unlocked(std::string_view session, int layer,
+                          std::span<const std::uint32_t> counts, double split_threshold) {
         if (layer == 0) {
             stats_.requests += 1;
             if (cache_.find(std::string(session)) != cache_.end()) { stats_.cache_hits += 1; }
         }
         auto& entry = touch(session);
+        // Observations counted per record, not per request: fingerprint and layer>0
+        // entries never pass through layer 0, so entry.requests stays 0 there and the
+        // centroid denominator must not read it (the old seen = requests - 1 wrapped).
+        const auto seen = static_cast<double>(entry.observations);
+        entry.observations += 1;
         if (layer == 0) { entry.requests += 1; }
         const auto base = static_cast<std::size_t>(layer) * static_cast<std::size_t>(experts_);
         const auto count = static_cast<std::size_t>(experts_) < counts.size()
@@ -72,16 +85,16 @@ public:
                 divergent = (1.0 - cosine) > split_threshold;
             }
         }
-        const auto seen = static_cast<double>(entry.requests - 1);
         for (std::size_t e = 0; e < count; ++e) {
             usage_[base + e] += counts[e];
             usage[e] += counts[e];
-            centroid[e] = (centroid[e] * seen + static_cast<double>(counts[e])) /
-                          static_cast<double>(entry.requests);
+            centroid[e] = (centroid[e] * seen + static_cast<double>(counts[e])) / (seen + 1.0);
             if (counts[e] != 0) { mask[e] = 1; }
         }
         return divergent;
     }
+
+public:
 
     // The `count` experts of one layer most-exercised by this class, most first. Feeds
     // the burst prefetch: the limited budget goes to the load-bearing experts first.
@@ -231,6 +244,10 @@ private:
         std::vector<std::vector<double>> centroid;
         // How many requests have been attributed to this class (layer-0 observes).
         std::size_t requests = 0;
+        // How many records have landed in this entry's counters (every observe call).
+        // Layer>0 and fingerprint entries never pass layer 0, so this is the only
+        // sound centroid denominator for them.
+        std::size_t observations = 0;
     };
 
     SessionEntry& touch(std::string_view session) {

@@ -48,6 +48,7 @@ public:
     // SP-4 tiered banks: the [residency][counters] device state, or nullptr when the object
     // is not a tiered bank.
     [[nodiscard]] const DeviceBuffer* tier_state(ObjectHandle handle) const noexcept;
+    [[nodiscard]] const DeviceBuffer* tier_swap_staging(ObjectHandle handle) const noexcept;
     [[nodiscard]] std::span<const std::byte> host_bytes(ObjectHandle handle) const;
     [[nodiscard]] bool has_device(ObjectHandle handle) const noexcept;
     // Empty for an ordinary Host parent. Registration uses materialize's execution device.
@@ -72,6 +73,9 @@ private:
         // SP-4 tiered bank state: [residency u32 per expert][activation counters u32 per
         // expert]. The residency is the initial placement; the counters arm every round.
         std::optional<DeviceBuffer> tier_state;
+        // SP-4 tiered bank: device scratch for the tier exchange (the demoted expert's
+        // largest per-expert plane block during a swap).
+        std::optional<DeviceBuffer> tier_swap_staging;
     };
 
     HostBuffer host_storage_;

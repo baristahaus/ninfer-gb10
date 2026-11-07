@@ -35,6 +35,11 @@ struct FlashNextExpertBank {
     const void* warm_codes = nullptr;
     const void* warm_scales = nullptr;
     const float* warm_weight_scale_divisors = nullptr;
+    // SP-4 tiered banks: device scratch for the tier exchange. The swap stages the demoted
+    // expert's per-plane block here so the two copies never read a slot they just wrote.
+    // Owned by the materializer's tier state; sized to the largest per-expert plane block.
+    // Required for swap_expert_tier*; unused by the decode path.
+    void* tier_swap_staging = nullptr;
     std::uint32_t* expert_activations = nullptr;
     const std::uint32_t* expert_residency = nullptr;
     std::uint32_t tiered_hot_experts = 0;

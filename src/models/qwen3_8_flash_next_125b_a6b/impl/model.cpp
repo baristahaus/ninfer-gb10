@@ -138,6 +138,11 @@ ops::FlashNextExpertBank nvfp4_bank(const artifact::MaterializedArtifact& artifa
         bank.expert_residency           = state_base;
         // The counters are the state buffer's second half; the kernels atomically arm them.
         bank.expert_activations         = const_cast<std::uint32_t*>(state_base) + 512;
+        if (const auto* staging = artifact.tier_swap_staging(object); staging != nullptr) {
+            // The staging is mutable tier scratch; the accessor's const is the read-mostly
+            // view, matching the residency's interface const.
+            bank.tier_swap_staging = const_cast<void*>(staging->data());
+        }
         const auto warm_experts         = warm.geometry.shape[0] /
                                           static_cast<std::uint64_t>(rows);
         bank.tiered_hot_experts         = 512 - static_cast<std::uint32_t>(warm_experts);

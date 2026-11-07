@@ -4,6 +4,7 @@ ninfer_add_op_test(ninfer_flash_next_ple_test SOURCES ops/test_flash_next_ple.cp
 ninfer_add_op_test(ninfer_flash_next_ple_stage_test SOURCES ops/test_flash_next_ple_stage.cpp LIBRARIES ninfer_ops)
 ninfer_add_op_test(ninfer_flash_next_moe_test
   SOURCES ops/test_flash_next_moe.cpp ops/poison_device_state.cu LIBRARIES ninfer_ops)
+ninfer_add_op_test(ninfer_tier_swap_test SOURCES ops/test_tier_swap.cpp LIBRARIES ninfer_ops)
 ninfer_add_op_test(ninfer_flash_next_qsa_test SOURCES ops/test_flash_next_qsa.cpp LIBRARIES ninfer_ops)
 ninfer_add_op_test(ninfer_flash_next_gdn_test SOURCES ops/test_flash_next_gdn.cpp LIBRARIES ninfer_ops)
 # The complete Engine qualification binaries register with the Flash-Next engine route

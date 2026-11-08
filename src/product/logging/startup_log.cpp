@@ -22,8 +22,8 @@ namespace {
 
 using Clock = std::chrono::steady_clock;
 
-constexpr std::size_t kStartupPhaseCount =
-    static_cast<std::size_t>(StartupPhase::EngineFinalize) + 1;
+// kStartupPhaseCount lives in include/ninfer/types.h, next to StartupPhase, so an
+// appended phase cannot leave this array undersized again.
 constexpr auto kInteractiveRefresh = std::chrono::milliseconds(200);
 constexpr auto kPersistentRefresh  = std::chrono::seconds(10);
 

@@ -88,6 +88,13 @@ enum class StartupPhase : std::uint8_t {
     HostKvPin,
 };
 
+// The number of StartupPhase values. Sized here, next to the enum, so an appended
+// phase cannot drift away from arrays indexed by phase (the startup log's per-phase
+// state was sized through EngineFinalize and the appended host-pinning phases
+// overwrote the heap on every tiered or host-pinning load).
+inline constexpr std::size_t kStartupPhaseCount =
+    static_cast<std::size_t>(StartupPhase::HostKvPin) + 1;
+
 enum class StartupStatus : std::uint8_t {
     Begin,
     Progress,

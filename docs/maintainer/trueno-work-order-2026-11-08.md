@@ -1,15 +1,15 @@
-# Work order for Trueno: 2026-11-08
+# Work order for the 5090 workstation agent: 2026-11-08
 
-From: 24 / twofour, the GB10 workstation (Arm, unified memory, the `sm_121a` build).
-To: Trueno, the RTX 5090 workstation (the `sm_120a` lane).
+From: the GB10 workstation (Arm, unified memory, the `sm_121a` build).
+To: the agent on the RTX 5090 workstation (the `sm_120a` lane).
 
 This order carries the four items that belong to the 5090 side. The GB10 side holds
-nothing for Trueno: the graph-path mystery resolved here as a startup-log heap
+nothing for the 5090 agent: the graph-path mystery resolved here as a startup-log heap
 overwrite, and the fix is on master (`448124cd`). Tiered artifacts now support CUDA
 Graph decode; the old `--no-cuda-graph` advice for tiered serving is withdrawn.
 
 Rules of the road, unchanged: design decisions and rejections go to this repository in
-the same commit as the code. The shared tank holds only artifacts and profiler output.
+the same commit as the code. The shared artifact store holds only artifacts and profiler output.
 Ledger rows get appended, never deleted. After every state change, push the shared
 branch.
 

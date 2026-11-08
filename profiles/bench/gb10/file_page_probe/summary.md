@@ -1,6 +1,6 @@
 # File-backed page GPU-read probe — 2026-10-15T01:55:34Z
 
-scratch 512 MiB (page-cache-backed file); evictor /home/apollo11/models/qwen3_8_flash_next_v3_fork/qwen3_8_flash_next_125b_a6b_nvfp4.ninfer.part-0003 (125 GiB read); row = 2560 B
+scratch 512 MiB (page-cache-backed file); evictor $HOME/models/qwen3_8_flash_next_v3_fork/qwen3_8_flash_next_125b_a6b_nvfp4.ninfer.part-0003 (125 GiB read); row = 2560 B
 at a 4 KiB-aligned offset; row offsets deterministic (splitmix64, fixed seed).
 Decision gate: device-side PLE gather (plan step 6.3) — what does a GPU read of a
 file-backed page cost when resident vs. cold (NVMe page-in via the fault path)?
@@ -28,7 +28,7 @@ effective bandwidth: 168712.31 MB/s | per-row (amortized):     0.02 us
 sink sanity: 0x0
 
 ## phase: evict
-evictor /home/apollo11/models/qwen3_8_flash_next_v3_fork/qwen3_8_flash_next_125b_a6b_nvfp4.ninfer.part-0003: 128000 MiB read in   32.0 s (    4.19 GB/s, acc=1484129505) — scratch mapping should now be out of the page cache
+evictor $HOME/models/qwen3_8_flash_next_v3_fork/qwen3_8_flash_next_125b_a6b_nvfp4.ninfer.part-0003: 128000 MiB read in   32.0 s (    4.19 GB/s, acc=1484129505) — scratch mapping should now be out of the page cache
 
 ## phase: cold-serial
 phase cold-serial: 512 rows x 2560 B = 1280 KiB, 48 SMs

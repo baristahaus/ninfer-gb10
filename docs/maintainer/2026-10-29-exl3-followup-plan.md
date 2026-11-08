@@ -306,7 +306,7 @@ New work item:
 Ownership and lanes:
 
 - GB10 lane (this machine): N1; the D1 decision below; GB10 battery reruns as EXL3 fixes land.
-- 5090 lane (Trueno, mid-port — do not double-run): the `ninfer-gb10-6qd` P1 root-cause,
+- 5090 lane (the 5090 workstation, mid-port — do not double-run): the `ninfer-gb10-6qd` P1 root-cause,
   then M1, M3 (environment ready per D3), M2 after D1, M4/M5 per the original split.
 - Upstream: nothing to port for this package. The local `tools/convert/sources/exllamav3.py`
   reimplementation is the working oracle; Spark presets stay parked until a Spark cutover

@@ -2,7 +2,7 @@
 
 Status: active plan for the GB10 lane. Execution hardware: the 5090 box (serving,
 batteries, short-window development) and the GB10 (sensitivity measurement and, if
-windows require, the re-quantization compute). The pooled server on 172.30.30.16:8000
+windows require, the re-quantization compute). The pooled server on the shared LAN host, port 8000
 (NVFP4 MTP3, shared consumers) is never interrupted during development; every GPU job
 below that needs the 5090 lists its window.
 

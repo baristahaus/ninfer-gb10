@@ -627,3 +627,21 @@ Corrected remaining scope for a served DFlash2: (a) the conv kernel generalizati
 program_impl/request_plan_impl; (f) the acceptance run. Estimate: 4-6 focused sessions, of which
 (a) and (b) are independent, testable units that can land first. The binding-level work
 (stages 0/1/2B/2D-conversion) remains complete and verified.
+
+## D4 closure: the SP-7 measurement gates (2026-11-08, 5090 lane)
+
+D4 is closed. Both blocking milestones landed on the 5090 lane and are recorded here and in the
+strategy row "SP-7 gates (M2/M3) closed" (`docs/maintainer/2026-10-12-fork-strategy.md`):
+
+- **M2 = issue `ninfer-gb10-r5a`, CLOSED** — commits `dd2b0559` (the `--ignore-eos`
+  server-level benchmark knob per D1) and `ac3f92c1` (the batched decode-saturation record:
+  C=1/2/4/8 = 60.30/117.93/225.39/418.82 tok/s, near-linear 1.96×/3.74×/6.95×, per-row 87% of
+  solo at C=8, every wave at the output limit). Table: `docs/performance/qwen3.8-27b.md`.
+- **M3 = issue `ninfer-gb10-a42`, CLOSED** — commit `ddf98838`: one real 27B `down_proj`
+  (k2=4, mcg, the campaign's calibrated Hessian, nmse 0.1208) through the production writer
+  into the a16 test's argv mode; relative L2 0.00165 against the composed FP64 GEMM, inside
+  the 2/256 criterion. The same commit restored the converter's EXL3 writer path.
+
+Closure basis: the milestone commits and their recorded evidence are on `master` (verified
+2026-11-08 against `275ace07`); the shared-ledger issue states follow the same record on the
+GB10 side per the "gates recorded on both sides" cadence.

@@ -606,6 +606,12 @@ tier per MoE layer), the runtime keeps an adaptive placement policy running behi
 same OpenAI and Anthropic surfaces. It is transparent to requests: the same model id, the
 same endpoints, the same outputs.
 
+CUDA Graph decode is supported with tiered artifacts (validated with the tier policy and
+expert swaps active). Note the resident-set budget: the eager (`--no-cuda-graph`) path
+needs a larger device reservation than the captured path, so on an integrated-pool host
+the captured path fits a larger KV pool for the same artifact (measured: graphs on
+8192-token KV, eager refused above ~4096 with the 125B tiered artifact).
+
 What it does, per layer of the 48 MoE layers:
 
 - Every completed request's per-expert activation counters are read and attributed to the

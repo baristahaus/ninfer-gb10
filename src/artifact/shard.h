@@ -17,6 +17,7 @@
 #include "artifact/schema.h"
 
 #include <cstdint>
+#include <span>
 #include <vector>
 
 namespace ninfer::artifact {
@@ -54,7 +55,10 @@ struct ShardPlacement {
 // Throws std::invalid_argument for a width below 1 or a negative extent.
 [[nodiscard]] ShardPlacement split_evenly(ShardAxis axis, std::int64_t extent, int width);
 
-// Maps one rank's logical range through `binding`'s parts, producing that rank's stored parts.
+// Maps one rank's logical ranges through `binding`'s parts, producing that rank's stored parts.
+// Several ranges are how a segmented parameter is described: GDN's QKV projection is three
+// consecutive segments (Q 2048, K 2048, V 6144) that shard independently, so a rank owns one block
+// of each and the blocks are not contiguous in the parameter's coordinates.
 //
 // A Binding is the concatenation of its parts in the parameter's logical coordinates, so a rank
 // that owns a contiguous logical range owns, in each part it overlaps, the corresponding sub-range
@@ -66,6 +70,10 @@ struct ShardPlacement {
 // Throws std::invalid_argument when the placement does not describe `binding`: a rank index outside
 // the placement, a range outside the binding's element count, or a placement whose ranges are not in
 // the binding's coordinates.
+[[nodiscard]] Binding shard_binding_ranges(const Binding& binding,
+                                           std::span<const ShardRange> ranges);
+
+// The single-range form: one rank of a placement that does not segment the parameter.
 [[nodiscard]] Binding shard_binding(const Binding& binding, const ShardPlacement& placement,
                                     int rank);
 

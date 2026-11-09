@@ -14,6 +14,8 @@
 // head with its key head), and a contiguous block split preserves those groupings exactly when the
 // extent divides.
 
+#include "artifact/schema.h"
+
 #include <cstdint>
 #include <vector>
 
@@ -51,5 +53,20 @@ struct ShardPlacement {
 // parameter; PrimaryOnly gives rank 0 the whole parameter and every other rank an empty range.
 // Throws std::invalid_argument for a width below 1 or a negative extent.
 [[nodiscard]] ShardPlacement split_evenly(ShardAxis axis, std::int64_t extent, int width);
+
+// Maps one rank's logical range through `binding`'s parts, producing that rank's stored parts.
+//
+// A Binding is the concatenation of its parts in the parameter's logical coordinates, so a rank
+// that owns a contiguous logical range owns, in each part it overlaps, the corresponding sub-range
+// of that part's stored object. A rank whose range is empty gets an empty binding — that is what a
+// rank holding none of a PrimaryOnly parameter looks like. The result carries the same element
+// count as the rank's range and the same `whole_object` flag, cleared when the rank's range no
+// longer covers the whole parameter.
+//
+// Throws std::invalid_argument when the placement does not describe `binding`: a rank index outside
+// the placement, a range outside the binding's element count, or a placement whose ranges are not in
+// the binding's coordinates.
+[[nodiscard]] Binding shard_binding(const Binding& binding, const ShardPlacement& placement,
+                                    int rank);
 
 } // namespace ninfer::artifact

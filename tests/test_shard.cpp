@@ -10,7 +10,11 @@
 
 namespace {
 
+using ninfer::artifact::Binding;
+using ninfer::artifact::ObjectHandle;
+using ninfer::artifact::Part;
 using ninfer::artifact::ShardAxis;
+using ninfer::artifact::shard_binding;
 using ninfer::artifact::ShardPlacement;
 using ninfer::artifact::ShardRange;
 using ninfer::artifact::split_evenly;
@@ -97,12 +101,88 @@ int test_rejections() {
     return failures;
 }
 
+Binding single_part_binding(std::size_t object, std::uint64_t elements) {
+    Binding binding;
+    binding.elements = elements;
+    binding.parts.push_back(Part{ObjectHandle{object}, 0, elements});
+    return binding;
+}
+
+int test_shard_binding() {
+    int failures = 0;
+
+    // One stored object, split in half: each rank gets half of the same object.
+    const Binding whole = single_part_binding(7, 24);
+    const auto halves   = split_evenly(ShardAxis::Rows, 24, 2);
+    const Binding rank0 = shard_binding(whole, halves, 0);
+    const Binding rank1 = shard_binding(whole, halves, 1);
+    failures += check(rank0.parts.size() == 1 && rank0.parts[0].begin == 0 && rank0.parts[0].end == 12,
+                      "rank 0 owns the first half of the object");
+    failures += check(rank1.parts.size() == 1 && rank1.parts[0].begin == 12 && rank1.parts[0].end == 24,
+                      "rank 1 owns the second half of the object");
+    failures += check(rank0.parts[0].object == ObjectHandle{7}, "the object is unchanged");
+    failures += check(rank0.elements == 12 && rank1.elements == 12, "each rank's element count halves");
+    failures += check(!rank0.whole_object && !rank1.whole_object,
+                      "a half is not the whole object");
+
+    // Two stored parts: a rank's range can span both.
+    Binding two_parts;
+    two_parts.elements = 24;
+    two_parts.parts.push_back(Part{ObjectHandle{1}, 0, 12});
+    two_parts.parts.push_back(Part{ObjectHandle{2}, 0, 12});
+    // A range covering logical [8, 16) crosses the part boundary at 12.
+    const auto thirds = split_evenly(ShardAxis::Rows, 24, 3); // {0,8},{8,8},{16,8}
+    const Binding middle = shard_binding(two_parts, thirds, 1);
+    failures += check(middle.parts.size() == 2, "a range spanning two parts yields two slices");
+    failures += check(middle.parts[0].object == ObjectHandle{1} && middle.parts[0].begin == 8 &&
+                          middle.parts[0].end == 12,
+                      "the first slice is the tail of the first part");
+    failures += check(middle.parts[1].object == ObjectHandle{2} && middle.parts[1].begin == 0 &&
+                          middle.parts[1].end == 4,
+                      "the second slice is the head of the second part");
+    failures += check(middle.elements == 8, "the rank's element count is its range");
+
+    // Replicated: every rank gets the whole binding, flagged whole.
+    const auto replicated = split_evenly(ShardAxis::Replicated, 24, 2);
+    const Binding all      = shard_binding(whole, replicated, 1);
+    failures += check(all.parts.size() == 1 && all.parts[0].begin == 0 && all.parts[0].end == 24,
+                      "a replicated parameter is whole on every rank");
+    failures += check(all.whole_object, "a replicated parameter keeps the whole-object flag");
+
+    // PrimaryOnly: rank 1 holds nothing.
+    const auto primary = split_evenly(ShardAxis::PrimaryOnly, 24, 2);
+    const Binding none = shard_binding(whole, primary, 1);
+    failures += check(none.parts.empty() && none.elements == 0,
+                      "a rank that owns none of a primary-only parameter gets an empty binding");
+    const Binding first = shard_binding(whole, primary, 0);
+    failures += check(first.whole_object && first.elements == 24, "rank 0 owns the whole parameter");
+
+    // Rejections.
+    bool threw = false;
+    try {
+        (void)shard_binding(whole, halves, 2);
+    } catch (const std::invalid_argument&) {
+        threw = true;
+    }
+    failures += check(threw, "a rank outside the placement is rejected");
+
+    threw = false;
+    try {
+        (void)shard_binding(whole, split_evenly(ShardAxis::Rows, 48, 2), 1);
+    } catch (const std::invalid_argument&) {
+        threw = true;
+    }
+    failures += check(threw, "a range outside the binding is rejected");
+    return failures;
+}
+
 } // namespace
 
 int main() {
     int failures = 0;
     failures += test_even_splits();
     failures += test_rejections();
+    failures += test_shard_binding();
     if (failures == 0) { std::cout << "ok\n"; }
     return failures == 0 ? 0 : 1;
 }

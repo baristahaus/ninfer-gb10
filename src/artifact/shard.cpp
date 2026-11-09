@@ -55,4 +55,47 @@ ShardPlacement split_evenly(ShardAxis axis, std::int64_t extent, int width) {
     return placement;
 }
 
+
+Binding shard_binding(const Binding& binding, const ShardPlacement& placement, int rank) {
+    if (rank < 0 || static_cast<std::size_t>(rank) >= placement.ranges.size()) {
+        throw std::invalid_argument("sharding: rank outside the placement");
+    }
+    const ShardRange range = placement.ranges[static_cast<std::size_t>(rank)];
+    if (range.begin < 0 || range.extent < 0 ||
+        static_cast<std::uint64_t>(range.begin) + static_cast<std::uint64_t>(range.extent) >
+            binding.elements) {
+        throw std::invalid_argument("sharding: a rank's range lies outside the binding");
+    }
+
+    Binding result;
+    result.elements = static_cast<std::uint64_t>(range.extent);
+    result.whole_object =
+        range.begin == 0 && static_cast<std::uint64_t>(range.extent) == binding.elements;
+    if (range.extent == 0) { return result; }
+
+    // Walk the parts, tracking each one's logical offset, and cut the rank's range against them.
+    const std::uint64_t wanted_begin = static_cast<std::uint64_t>(range.begin);
+    const std::uint64_t wanted_end   = wanted_begin + static_cast<std::uint64_t>(range.extent);
+    std::uint64_t logical_begin      = 0;
+    for (const Part& part : binding.parts) {
+        const std::uint64_t part_elements = part.end - part.begin;
+        const std::uint64_t logical_end   = logical_begin + part_elements;
+        const std::uint64_t overlap_begin = wanted_begin > logical_begin ? wanted_begin : logical_begin;
+        const std::uint64_t overlap_end   = wanted_end < logical_end ? wanted_end : logical_end;
+        if (overlap_begin < overlap_end) {
+            Part sliced;
+            sliced.object = part.object;
+            sliced.begin  = part.begin + (overlap_begin - logical_begin);
+            sliced.end    = part.begin + (overlap_end - logical_begin);
+            result.parts.push_back(std::move(sliced));
+        }
+        logical_begin = logical_end;
+        if (logical_begin >= wanted_end) { break; }
+    }
+    if (result.parts.empty() && range.extent != 0) {
+        throw std::invalid_argument("sharding: the binding does not cover the rank's range");
+    }
+    return result;
+}
+
 } // namespace ninfer::artifact

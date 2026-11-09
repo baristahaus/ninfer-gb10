@@ -1,4 +1,5 @@
 #include "serve/anthropic_messages.h"
+#include "serve/security.h"
 #include "product/constraint_observation.h"
 
 #include "serve/generation_service.h"
@@ -6,11 +7,8 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
-#include <array>
 #include <cstdint>
-#include <cstdio>
 #include <iterator>
-#include <random>
 #include <stdexcept>
 #include <string_view>
 #include <utility>
@@ -22,12 +20,7 @@ using Json        = nlohmann::json;
 using OrderedJson = nlohmann::ordered_json;
 
 std::string random_identifier(const char* prefix) {
-    static thread_local std::mt19937_64 random{std::random_device{}()};
-    std::uniform_int_distribution<std::uint64_t> distribution;
-    std::array<char, 32> buffer{};
-    std::snprintf(buffer.data(), buffer.size(), "%016llx",
-                  static_cast<unsigned long long>(distribution(random)));
-    return std::string(prefix) + buffer.data();
+    return std::string(prefix) + secure_hex(8);
 }
 
 std::string event(const char* type, Json payload) {

@@ -1,4 +1,5 @@
 #include "serve/http_server.h"
+#include "serve/security.h"
 
 #include "serve/anthropic_messages.h"
 #include "serve/http_transport.h"
@@ -191,7 +192,7 @@ bool matches_bearer_credential(std::string_view authorization, std::string_view 
     }
     std::size_t end = authorization.size();
     while (end > position && is_whitespace(authorization[end - 1])) { --end; }
-    return authorization.substr(position, end - position) == api_key;
+    return secure_equals(authorization.substr(position, end - position), api_key);
 }
 
 HttpServer::HttpServer(product::ServeOptions options, std::shared_ptr<spdlog::logger> logger)
@@ -356,6 +357,24 @@ void HttpServer::register_routes() {
 
     server_.set_pre_routing_handler([this](const httplib::Request& req, httplib::Response& res) {
         ensure_http_request_id(req, res);
+        // A loopback-bound server answers only requests addressed to a loopback host and refuses a
+        // foreign browser origin. This stops DNS rebinding (a name that resolves to 127.0.0.1) and
+        // a page the user happens to have open reading the local server. It runs before the
+        // no-key early return, because the guard matters most when no key is set.
+        if (refuse_loopback_foreign_request(options_.host, req.get_header_value("Host"),
+                                            req.get_header_value("Origin"))) {
+            ApiError error;
+            error.status  = 403;
+            error.type    = "invalid_request_error";
+            error.code    = "forbidden_origin";
+            error.message = "the server accepts only requests addressed to a loopback host";
+            if (req.path.rfind("/v1/messages", 0) == 0) {
+                write_anthropic_error(res, error, res.get_header_value("request-id"));
+            } else {
+                write_openai_error(res, error);
+            }
+            return httplib::Server::HandlerResponse::Handled;
+        }
         if (options_.api_key.empty() || req.path == "/health" || req.method == "OPTIONS") {
             return httplib::Server::HandlerResponse::Unhandled;
         }
@@ -364,7 +383,8 @@ void HttpServer::register_routes() {
         // -> x-api-key, ANTHROPIC_AUTH_TOKEN -> Authorization: Bearer) both work.
         const bool bearer_ok =
             matches_bearer_credential(req.get_header_value("Authorization"), options_.api_key);
-        const bool x_api_key_ok = req.get_header_value("x-api-key") == options_.api_key;
+        const bool x_api_key_ok =
+            secure_equals(req.get_header_value("x-api-key"), options_.api_key);
         if (!bearer_ok && !x_api_key_ok) {
             ApiError error;
             error.status  = 401;

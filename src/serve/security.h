@@ -25,9 +25,12 @@ namespace ninfer::serve {
 // True when a server bound to `bind_host` must refuse this request: it listens only on loopback
 // and the request either is addressed to a foreign `Host` (DNS rebinding) or carries a browser
 // `Origin` that is not loopback (a page in the user's browser reading the local server).
-// Empty header values are treated as absent.
+// Empty header values are treated as absent. `cross_origin_enabled` is the operator's explicit
+// `--cors` opt-in: it waives the Origin check, because that is what the flag is for, but never the
+// Host check, because rebinding defence does not depend on who the caller is.
 [[nodiscard]] bool refuse_loopback_foreign_request(std::string_view bind_host,
                                                    std::string_view host_header,
-                                                   std::string_view origin_header) noexcept;
+                                                   std::string_view origin_header,
+                                                   bool cross_origin_enabled) noexcept;
 
 } // namespace ninfer::serve

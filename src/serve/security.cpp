@@ -102,11 +102,14 @@ bool is_loopback_host(std::string_view host) noexcept {
 }
 
 bool refuse_loopback_foreign_request(std::string_view bind_host, std::string_view host_header,
-                                     std::string_view origin_header) noexcept {
+                                     std::string_view origin_header,
+                                     bool cross_origin_enabled) noexcept {
     if (!is_loopback_name(host_without_port(bind_host))) { return false; }
     // DNS rebinding: the name resolves to loopback, so the browser sends the attacker's host.
+    // This applies whatever the CORS setting is; it is not an origin question.
     if (!host_header.empty() && !is_loopback_host(host_header)) { return true; }
-    if (origin_header.empty()) { return false; }
+    // An operator who passed --cors asked for browser origins, so the Origin check yields.
+    if (origin_header.empty() || cross_origin_enabled) { return false; }
     // Sandboxed documents and file:// pages send `Origin: null`.
     if (origin_header == "null") { return true; }
     const std::size_t scheme = origin_header.find("://");

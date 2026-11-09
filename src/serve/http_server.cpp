@@ -1,5 +1,6 @@
 #include "serve/http_server.h"
 #include "serve/security.h"
+#include "serve/cors.h"
 
 #include "serve/anthropic_messages.h"
 #include "serve/http_transport.h"
@@ -342,17 +343,15 @@ void HttpServer::register_routes() {
         return handle_unrendered_http_error(options_, request, response);
     });
     if (options_.enable_cors) {
-        server_.set_default_headers(
-            {{"Access-Control-Allow-Origin", "*"},
-             {"Access-Control-Expose-Headers", "x-request-id, request-id"},
-             {"Access-Control-Allow-Headers",
-              "Authorization, Content-Type, X-API-Key, anthropic-version, anthropic-beta, "
-              "anthropic-user-profile-id"},
-             {"Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS"}});
+        // One list of allowed request headers for every CORS path (serve/cors.h): the browser SDKs
+        // send x-stainless-*, openai-* and anthropic-dangerous-direct-browser-access, and a
+        // preflight fails if any of them is missing.
+        apply_cors_defaults(server_);
         // CORS preflight: browsers send OPTIONS with no credentials before the real
         // request; answer it without auth so the actual GET/POST can carry the key.
-        server_.Options(R"(.*)",
-                        [](const httplib::Request&, httplib::Response& res) { res.status = 204; });
+        server_.Options(R"(.*)", [](const httplib::Request& req, httplib::Response& res) {
+            answer_cors_preflight(req, res);
+        });
     }
 
     server_.set_pre_routing_handler([this](const httplib::Request& req, httplib::Response& res) {
@@ -362,7 +361,8 @@ void HttpServer::register_routes() {
         // a page the user happens to have open reading the local server. It runs before the
         // no-key early return, because the guard matters most when no key is set.
         if (refuse_loopback_foreign_request(options_.host, req.get_header_value("Host"),
-                                            req.get_header_value("Origin"))) {
+                                            req.get_header_value("Origin"),
+                                            options_.enable_cors)) {
             ApiError error;
             error.status  = 403;
             error.type    = "invalid_request_error";

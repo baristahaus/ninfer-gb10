@@ -80,37 +80,48 @@ int test_loopback_guard() {
         std::string_view bind;
         std::string_view host;
         std::string_view origin;
+        bool cors;
         bool refused;
         const char* why;
     };
     const Case cases[] = {
         // A server on a routable address is not guarded: the operator chose to expose it.
-        {"0.0.0.0", "example.com", "https://example.com", false, "routable bind is not guarded"},
-        {"", "example.com", "https://example.com", false, "empty bind is not guarded"},
+        {"0.0.0.0", "example.com", "https://example.com", false, false, "routable bind is not guarded"},
+        {"", "example.com", "https://example.com", false, false, "empty bind is not guarded"},
         // A loopback server with a loopback Host is the normal local client.
-        {"127.0.0.1", "127.0.0.1:3080", "", false, "loopback host header allowed"},
-        {"127.0.0.1", "localhost:3080", "", false, "localhost host header allowed"},
-        {"127.0.0.1", "[::1]:3080", "", false, "IPv6 loopback host header allowed"},
-        {"127.0.0.1", "", "", false, "a missing Host header is allowed"},
+        {"127.0.0.1", "127.0.0.1:3080", "", false, false, "loopback host header allowed"},
+        {"127.0.0.1", "localhost:3080", "", false, false, "localhost host header allowed"},
+        {"127.0.0.1", "[::1]:3080", "", false, false, "IPv6 loopback host header allowed"},
+        {"127.0.0.1", "", "", false, false, "a missing Host header is allowed"},
         // DNS rebinding: the browser sends the attacker's name to a loopback server.
-        {"127.0.0.1", "attacker.example:3080", "", true, "foreign host header refused"},
-        {"127.0.0.1", "127.0.0.1.attacker.example", "", true, "suffixed loopback name refused"},
-        // Cross-origin browser reads.
-        {"127.0.0.1", "127.0.0.1", "https://attacker.example", true, "foreign origin refused"},
-        {"127.0.0.1", "127.0.0.1", "null", true, "sandboxed origin refused"},
-        {"127.0.0.1", "127.0.0.1", "http://localhost:5173", false, "loopback origin allowed"},
-        {"127.0.0.1", "127.0.0.1", "http://127.0.0.1:5173", false, "IPv4 loopback origin allowed"},
-        {"127.0.0.1", "127.0.0.1", "http://[::1]:5173", false, "IPv6 loopback origin allowed"},
+        {"127.0.0.1", "attacker.example:3080", "", false, true, "foreign host header refused"},
+        {"127.0.0.1", "127.0.0.1.attacker.example", "", false, true, "suffixed loopback name refused"},
+        {"127.0.0.1", "127.0.0", "", false, true, "a truncated quad is not loopback"},
+        {"127.0.0.1", "127.0.0.1.1", "", false, true, "a five-part quad is not loopback"},
+        {"127.0.0.1", "127.999.0.1", "", false, true, "an out-of-range octet is not loopback"},
+        // Cross-origin browser reads, with --cors off.
+        {"127.0.0.1", "127.0.0.1", "https://attacker.example", false, true, "foreign origin refused"},
+        {"127.0.0.1", "127.0.0.1", "null", false, true, "sandboxed origin refused"},
+        {"127.0.0.1", "127.0.0.1", "http://localhost:5173", false, false, "loopback origin allowed"},
+        {"127.0.0.1", "127.0.0.1", "http://127.0.0.1:5173", false, false, "IPv4 loopback origin allowed"},
+        {"127.0.0.1", "127.0.0.1", "http://[::1]:5173", false, false, "IPv6 loopback origin allowed"},
         // A non-browser client sends no Origin; the Host check still applies.
-        {"127.0.0.1", "attacker.example", "", true, "foreign host without origin refused"},
+        {"127.0.0.1", "attacker.example", "", false, true, "foreign host without origin refused"},
+        // --cors is the operator's explicit opt-in to browser origins: the Origin check yields,
+        // the Host check does not, because rebinding defence does not depend on the caller.
+        {"127.0.0.1", "127.0.0.1", "https://app.example", true, false, "cors waives the origin check"},
+        {"127.0.0.1", "127.0.0.1", "null", true, false, "cors waives the sandboxed origin check"},
+        {"127.0.0.1", "attacker.example", "https://app.example", true, true, "cors does not waive rebinding"},
     };
     int failures = 0;
     for (const Case& c : cases) {
-        const bool refused = refuse_loopback_foreign_request(c.bind, c.host, c.origin);
+        const bool refused =
+            refuse_loopback_foreign_request(c.bind, c.host, c.origin, c.cors);
         failures += check(refused == c.refused,
                           std::string("loopback guard: ") + c.why +
                               " (bind=" + std::string(c.bind) + " host=" + std::string(c.host) +
-                              " origin=" + std::string(c.origin) + ")");
+                              " origin=" + std::string(c.origin) +
+                              " cors=" + (c.cors ? "on" : "off") + ")");
     }
     return failures;
 }

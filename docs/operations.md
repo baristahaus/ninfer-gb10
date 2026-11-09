@@ -103,6 +103,31 @@ Products:
 `NINFER_CUDA_SYNC` needs no action on GB10: the default resolves to `yield`
 on integrated devices, which is the measured-best choice there.
 
+### Environment variables
+
+The server and the engine read these from the process environment. None of them is a substitute for
+a command-line option; they exist for measurements, diagnostics, and deployment overrides that must
+not appear in a shared configuration file.
+
+| Variable | Effect |
+|---|---|
+| `NINFER_CUDA_SYNC` | `spin`, `blocking`, `yield` or `auto`; how a stream wait is implemented. Read before `DeviceContext` is constructed. |
+| `NINFER_VRAM_BUDGET_MIB` | positive integer MiB capping the device-memory budget. |
+| `NINFER_BUDGET_DRY_RUN` | print the resident-set budget and exit before any allocation. |
+| `NINFER_EXPERT_TAIL_SLOTS` | cap the expert tail slot count, for tail-limited measurements. |
+| `NINFER_TIER_POLICY` | `0` disables the adaptive expert tier policy entirely. |
+| `NINFER_TIER_SPLIT` | tier split override for tiered artifacts. |
+| `NINFER_MOE_ROUTE_STATS` | path; one kernel runs after routing and tallies tokens and distinct experts per call. |
+| `NINFER_GRAPH_DUMP` | `1` prints every CUDA graph node's type and kernel function name to stderr. |
+| `NINFER_MTP_DUMP` | directory target for the MTP dump sites. |
+| `NINFER_DFLASH2_BYPASS` | diagnostic: zero the DFlash2 selector's projected hidden so the edge score collapses to the unary head score and the selector takes the per-column head argmax. |
+| `NINFER_FLASH_NEXT_STATE_DIR` | directory for Flash-Next state dumps. |
+| `NINFER_FLASH_NEXT_STATE_FRONTIER` | execution-token count at which to capture the committed GDN convolution frontier. |
+| `NINFER_FLASH_NEXT_LOGITS_DIR` | directory for Flash-Next logits dumps. |
+
+`tools/check_docs.py` fails the build when a serve flag or an environment variable is read without a
+line here or in the serving reference.
+
 ## 4. Starting the server
 
 The canonical GB10 production profile (full model context, two lanes, FP8 KV,

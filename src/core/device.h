@@ -6,7 +6,10 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
+#include <span>
 #include <stdexcept>
+#include <vector>
 
 namespace ninfer {
 
@@ -98,6 +101,39 @@ private:
     cudaStream_t stream_          = nullptr;
     cudaStream_t transfer_stream_ = nullptr;
     cudaDeviceProp props_{};
+};
+
+// Validates a device-id list for an execution group before any device is opened: the list must be
+// non-empty, must not name a negative id, and must not name the same device twice. Capability
+// homogeneity needs the devices themselves, so ExecutionContext checks it after construction.
+void validate_execution_device_ids(std::span<const int> device_ids);
+
+// The set of devices one engine instance drives. Width 1 is the ordinary single-device engine; a
+// larger width is a tensor-parallel group, and the width is not capped at 2 because the models
+// divide on several axes and a caller may want a group the hardware supports. Every device in a
+// group must share one compute capability, because nothing downstream can reconcile two kernel
+// architectures. Rank 0 is the primary device: it owns scheduling, admission, sampling and request
+// egress; the other ranks own their shards of weights, KV and state.
+class ExecutionContext {
+public:
+    explicit ExecutionContext(std::vector<int> device_ids);
+
+    [[nodiscard]] int width() const noexcept { return static_cast<int>(devices_.size()); }
+    [[nodiscard]] bool parallel() const noexcept { return devices_.size() > 1; }
+
+    [[nodiscard]] DeviceContext& primary() noexcept { return *devices_.front(); }
+    [[nodiscard]] const DeviceContext& primary() const noexcept { return *devices_.front(); }
+
+    // The device of `rank`; throws std::out_of_range outside [0, width()).
+    [[nodiscard]] DeviceContext& device(int rank);
+    [[nodiscard]] const DeviceContext& device(int rank) const;
+
+    [[nodiscard]] int compute_capability() const noexcept {
+        return devices_.front()->compute_capability();
+    }
+
+private:
+    std::vector<std::unique_ptr<DeviceContext>> devices_;
 };
 
 // Allocation and transfer boundaries temporarily select their recorded device. Op launches

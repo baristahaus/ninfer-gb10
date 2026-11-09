@@ -833,6 +833,45 @@ int test_explicit_rejections() {
                       }) == "background_not_supported",
                       "background execution is rejected explicitly");
 
+    // Codex CLI sends include: ["reasoning.encrypted_content"] on every request. The Engine
+    // returns no encrypted reasoning, so the value is accepted and dropped; any other include
+    // value still has no available representation and is rejected.
+    value            = base;
+    value["include"] = Json::array({"reasoning.encrypted_content"});
+    bool codex_include_accepted = false;
+    try {
+        const OpenAIResponsesCreateRequest accepted =
+            parse_openai_responses_create_request(value, limits());
+        codex_include_accepted = accepted.prompt.input_turns.size() == 1 &&
+                                 accepted.prompt.input_turns[0].content[0].text == "hello";
+    } catch (const std::exception&) {
+        codex_include_accepted = false;
+    }
+    failures += check(codex_include_accepted,
+                      "reasoning.encrypted_content include is accepted and dropped");
+
+    value            = base;
+    value["include"] = Json::array({"message.output_text.logprobs"});
+    failures += check(api_code([&] {
+                          (void)parse_openai_responses_create_request(value, limits());
+                      }) == "include_not_supported",
+                      "an unrepresented include value is still rejected");
+
+    value            = base;
+    value["include"] =
+        Json::array({"reasoning.encrypted_content", "message.output_text.logprobs"});
+    failures += check(api_code([&] {
+                          (void)parse_openai_responses_create_request(value, limits());
+                      }) == "include_not_supported",
+                      "a mixed include array is rejected");
+
+    value            = base;
+    value["include"] = Json::array({7});
+    failures += check(api_code([&] {
+                          (void)parse_openai_responses_create_request(value, limits());
+                      }) == "include_not_supported",
+                      "a non-string include entry is rejected");
+
     value                 = base;
     value["conversation"] = "conv_1";
     failures += check(api_code([&] {

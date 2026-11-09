@@ -1,3 +1,19 @@
+ninfer_add_test(ninfer_peer_mailbox_test
+  SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_peer_mailbox.cpp"
+  LIBRARIES ninfer_ops)
+
+ninfer_add_test(ninfer_execution_context_cuda_test
+  SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_execution_context_cuda.cpp"
+  LIBRARIES ninfer_core)
+
+ninfer_add_test(ninfer_execution_context_test
+  SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_execution_context.cpp"
+  LIBRARIES ninfer_core)
+
+ninfer_add_test(ninfer_layout_test
+  SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_layout.cpp"
+  LIBRARIES ninfer_core)
+
 ninfer_add_test(ninfer_media_decode_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_media_decode.cpp"
   LIBRARIES ninfer_media_decode)
@@ -31,6 +47,14 @@ ninfer_add_test(ninfer_cli_options_test
 
 ninfer_add_test(ninfer_openai_schema_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_openai_schema.cpp"
+  LIBRARIES ninfer_serve)
+
+ninfer_add_test(ninfer_serve_security_test
+  SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_serve_security.cpp"
+  LIBRARIES ninfer_serve)
+
+ninfer_add_test(ninfer_cors_test
+  SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_cors.cpp"
   LIBRARIES ninfer_serve)
 
 ninfer_add_test(ninfer_openai_responses_test

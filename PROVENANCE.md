@@ -54,6 +54,7 @@ Full per-PR detail is in [HISTORY.md](HISTORY.md) §"Pull requests merged since 
 | TensorFold EXL3 kernels | [ashhart/TensorFold](https://github.com/ashhart/TensorFold) | Apache-2.0 from 0.6.0; MIT for code written before 0.6.0 | `src/ops/linear/exl3/tensorfold/` — two kernel files, adapted to this artifact ABI. See that directory's [NOTICE](src/ops/linear/exl3/tensorfold/NOTICE) |
 | ExLlamaV3 trellis decoder | ExLlamaV3 | MIT, Copyright (c) 2025 Turboderp | derivative inside `exl3_decode.cuh`, credited in the file header |
 | Qwen chat templates | the Qwen model releases | see `tools/chat_templates/LICENSE` | `tools/chat_templates/*.jinja` |
+| capy-flash pinned-host mailbox transport | [capy-flash](https://github.com/ValerioDolci/capy-flash) (formerly ninfer-tp2) | Apache-2.0 | `src/ops/kernel/peer_exchange.cuh`, `src/ops/kernel/peer_exchange_lane.cuh`, `src/ops/common/peer_mailbox.cu`, `include/ninfer/ops/peer_mailbox.h` ported unchanged except for this tree's `ExecutionContext` interface; `include/ninfer/ops/allreduce.h` and `src/ops/common/allreduce.cu` are a reduced adaptation of capy's all-reduce seam, keeping the mailbox transport and dropping the staged path (see the header for the measurement behind that) |
 
 ## 5. Vendored dependencies
 

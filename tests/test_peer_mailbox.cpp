@@ -10,6 +10,7 @@
 // Skipped when the machine has one device.
 
 #include "core/device.h"
+#include "ninfer/ops/allreduce.h"
 #include "ninfer/ops/peer_mailbox.h"
 
 #include <cuda_runtime.h>
@@ -18,6 +19,7 @@
 #include <cstdint>
 #include <iostream>
 #include <string>
+#include <span>
 #include <vector>
 
 namespace {
@@ -107,6 +109,50 @@ int test_exchange_sum() {
     return failures;
 }
 
+// The all-reduce seam: same arithmetic as the raw exchange, through the function a Program calls.
+int test_allreduce_sum() {
+    ExecutionContext context(std::vector<int>{0, 1});
+    PeerMailbox mailbox(context, kBytes);
+    int failures = 0;
+
+    // Reported rather than asserted: peer access depends on the driver and the board, and this
+    // transport does not need it.
+    std::cout << "peer access available: " << (ninfer::ops::peer_access_available(context) ? "yes" : "no")
+              << '\n';
+
+    void* payload[2] = {nullptr, nullptr};
+    const std::uint16_t fill[2] = {kBf16One, kBf16Two};
+    std::vector<std::uint16_t> host(kBytes / sizeof(std::uint16_t));
+    for (int rank = 0; rank < 2; ++rank) {
+        const CudaDeviceScope scope(Device::cuda(rank));
+        std::fill(host.begin(), host.end(), fill[rank]);
+        if (cudaMalloc(&payload[rank], kBytes) != cudaSuccess) {
+            return check(false, "allreduce payload allocation failed");
+        }
+        (void)cudaMemcpy(payload[rank], host.data(), kBytes, cudaMemcpyHostToDevice);
+    }
+
+    ninfer::ops::allreduce_sum(context, mailbox, std::span<void* const>(payload, 2), kBytes);
+    for (int rank = 0; rank < 2; ++rank) {
+        const CudaDeviceScope scope(Device::cuda(rank));
+        failures += check(cudaDeviceSynchronize() == cudaSuccess,
+                          "allreduce rank " + std::to_string(rank) + " synchronized");
+    }
+    failures += check(!mailbox.hang_reported(), "allreduce: no poller gave up");
+
+    for (int rank = 0; rank < 2; ++rank) {
+        const CudaDeviceScope scope(Device::cuda(rank));
+        std::fill(host.begin(), host.end(), 0);
+        (void)cudaMemcpy(host.data(), payload[rank], kBytes, cudaMemcpyDeviceToHost);
+        std::size_t wrong = 0;
+        for (const std::uint16_t value : host) { if (value != kBf16Three) { ++wrong; } }
+        failures += check(wrong == 0, "allreduce rank " + std::to_string(rank) +
+                                          " holds the elementwise sum");
+        (void)cudaFree(payload[rank]);
+    }
+    return failures;
+}
+
 } // namespace
 
 int main() {
@@ -118,6 +164,7 @@ int main() {
     int failures = 0;
     try {
         failures += test_exchange_sum();
+        failures += test_allreduce_sum();
     } catch (const std::exception& e) {
         std::cerr << "FAIL: threw: " << e.what() << '\n';
         return 1;

@@ -1,3 +1,7 @@
+ninfer_add_test(ninfer_execution_context_test
+  SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_execution_context.cpp"
+  LIBRARIES ninfer_core)
+
 ninfer_add_test(ninfer_layout_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_layout.cpp"
   LIBRARIES ninfer_core)

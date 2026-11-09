@@ -352,6 +352,46 @@ void CudaCompletionEvent::wait_external(cudaStream_t stream) const {
         throw std::runtime_error(cuda_error_message("cudaStreamWaitEvent external failed", status));
 }
 
+void validate_execution_device_ids(std::span<const int> device_ids) {
+    if (device_ids.empty()) {
+        throw std::invalid_argument("an execution context needs at least one device");
+    }
+    for (std::size_t index = 0; index < device_ids.size(); ++index) {
+        if (device_ids[index] < 0) {
+            throw std::invalid_argument("a device id must not be negative");
+        }
+        for (std::size_t earlier = 0; earlier < index; ++earlier) {
+            if (device_ids[earlier] == device_ids[index]) {
+                throw std::invalid_argument(
+                    "an execution context must not name the same device twice");
+            }
+        }
+    }
+}
+
+ExecutionContext::ExecutionContext(std::vector<int> device_ids) {
+    validate_execution_device_ids(device_ids);
+    devices_.reserve(device_ids.size());
+    for (const int device_id : device_ids) {
+        devices_.push_back(std::make_unique<DeviceContext>(device_id));
+    }
+    const int capability = devices_.front()->compute_capability();
+    for (const auto& device : devices_) {
+        if (device->compute_capability() != capability) {
+            throw std::invalid_argument(
+                "every device in an execution context must share one compute capability");
+        }
+    }
+}
+
+DeviceContext& ExecutionContext::device(int rank) {
+    return *devices_.at(static_cast<std::size_t>(rank));
+}
+
+const DeviceContext& ExecutionContext::device(int rank) const {
+    return *devices_.at(static_cast<std::size_t>(rank));
+}
+
 bool CudaCompletionEvent::ready() const {
     if (event_ == nullptr) { throw std::logic_error("CUDA completion event is empty"); }
     const cudaError_t status = cudaEventQuery(event_);

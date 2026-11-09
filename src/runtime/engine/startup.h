@@ -26,9 +26,10 @@ struct ConstructedModel {
     ActiveModel instance;
     LoadSummary load;
     ContextMachineCostModel context_cost;
-    // The Flash-Next route owns its DeviceContext here; the other routes build devices inside
-    // their Startup classes.
-    std::unique_ptr<DeviceContext> device;
+    // The Flash-Next route owns its device group here; the other routes build devices inside
+    // their Startup classes. Rank 0 is the execution device, so a width-1 group behaves exactly
+    // as a single DeviceContext did.
+    std::unique_ptr<ExecutionContext> execution;
 };
 
 [[nodiscard]] ConstructedModel construct_model(EngineOptions&);

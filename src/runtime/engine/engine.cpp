@@ -168,7 +168,7 @@ public:
         auto constructed  = runtime::construct_model(options);
         active            = std::move(constructed.instance);
         startup.load      = std::move(constructed.load);
-        flash_device      = std::move(constructed.device);
+        flash_execution   = std::move(constructed.execution);
         std::visit(
             [&](const auto& instance) {
                 using Instance = typename std::remove_cvref_t<decltype(instance)>::element_type;
@@ -187,10 +187,11 @@ public:
                 using Instance = typename std::remove_cvref_t<decltype(instance)>::element_type;
                 if constexpr (std::is_same_v<Instance, FlashInstance>) {
                     if (options.purpose == EnginePurpose::CausalScoring) {
-                        core = std::make_unique<FlashScoringCore>(*instance, *flash_device);
+                        core = std::make_unique<FlashScoringCore>(*instance, flash_execution->primary());
                     } else {
                         core = std::make_unique<FlashGenerationCore>(
-                            *instance, *flash_device, options, std::move(constructed.context_cost));
+                            *instance, flash_execution->primary(), options,
+                            std::move(constructed.context_cost));
                     }
                 } else if (options.purpose == EnginePurpose::CausalScoring) {
                     core = std::make_unique<runtime::CausalScoreCore<Instance>>(*instance);
@@ -204,11 +205,11 @@ public:
     }
 
     ~Impl() noexcept {
-        if (flash_device) { flash_device->bind_to_current_thread_noexcept(); }
+        if (flash_execution) { flash_execution->primary().bind_to_current_thread_noexcept(); }
         core.emplace<std::monostate>();
-        if (flash_device) {
+        if (flash_execution) {
             try {
-                flash_device->synchronize();
+                flash_execution->primary().synchronize();
             } catch (...) {}
         }
     }
@@ -223,7 +224,7 @@ public:
 #endif
 
     EngineOptions options;
-    std::unique_ptr<DeviceContext> flash_device;
+    std::unique_ptr<ExecutionContext> flash_execution;
     runtime::ActiveModel active;
     EngineDescription description;
     StartupReport startup;

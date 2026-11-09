@@ -151,12 +151,16 @@ ConstructedFlashNextModel construct_flash_next(EngineOptions& options, artifact:
                                                Clock::time_point start) {
     using Model = FlashNextInstance::ModelContract;
     StartupPhaseScope device_phase(options.startup_observer, StartupPhase::CudaInitialize);
-    auto device = std::make_unique<DeviceContext>(options.device);
+    const std::vector<int> group =
+        options.devices.empty() ? std::vector<int>{options.device} : options.devices;
+    auto execution = std::make_unique<ExecutionContext>(group);
+    // Rank 0 is the execution device; every existing use below goes through it unchanged.
+    DeviceContext& device = execution->primary();
     device_phase.complete();
-    wait_for_integrated_memory_release(*device);
+    wait_for_integrated_memory_release(device);
 
     if (options.prefill_chunk == 0) {
-        options.prefill_chunk = device->properties().integrated ? kIntegratedPrefillChunk
+        options.prefill_chunk = device.properties().integrated ? kIntegratedPrefillChunk
                                                                 : kDiscretePrefillChunk;
     }
     normalize_flash_next_cache_options(options);
@@ -173,19 +177,19 @@ ConstructedFlashNextModel construct_flash_next(EngineOptions& options, artifact:
     }
     artifact::Binder binder(reader);
     auto plan        = Model::plan_load(binder, options, Model::WeightsProfile::Nvfp4);
-    auto planner     = Model::make_sequence_planner(*device, options, Model::WeightsProfile::Nvfp4);
+    auto planner     = Model::make_sequence_planner(device, options, Model::WeightsProfile::Nvfp4);
     const auto curve = planner.capacity_curve();
 
     std::vector<artifact::PlacementRequest> requests;
     requests.reserve(plan.device_objects().size());
     for (const auto object : plan.device_objects()) {
-        requests.push_back({object, device->device(), artifact::HostAccess::CpuOnly});
+        requests.push_back({object, device.device(), artifact::HostAccess::CpuOnly});
     }
     // SP-4 tiered banks: the device budget = the obtainable bytes less the startup reserve
     // (state slots, workspaces, graph pools, KV headroom); the plain device objects and the
     // hot mini-banks consume first, and the remainder buys whole-expert cache tail slots.
     // NINFER_EXPERT_TAIL_SLOTS caps the tail for the tail-limited measurements.
-    const auto obtainable = obtainable_device_bytes(*device, options, true);
+    const auto obtainable = obtainable_device_bytes(device, options, true);
     constexpr std::uint64_t kTierStartupReserveBytes = 6ULL << 30;
     artifact::TierBudget tier_budget{
         .device_bytes = obtainable > kTierStartupReserveBytes
@@ -215,7 +219,7 @@ ConstructedFlashNextModel construct_flash_next(EngineOptions& options, artifact:
                          : "DOES_NOT_FIT");
         throw std::invalid_argument("budget dry run complete");
     }
-    if (device->properties().integrated &&
+    if (device.properties().integrated &&
         storage.device_capacity_bytes + tier_pinned + host_backing > obtainable) {
         throw std::invalid_argument(
             "Flash-Next resident set exceeds integrated-pool budget: need " +
@@ -230,7 +234,7 @@ ConstructedFlashNextModel construct_flash_next(EngineOptions& options, artifact:
             std::to_string(storage.device_capacity_bytes >> 20) + " MiB, obtainable " +
             std::to_string(obtainable >> 20) + " MiB");
     }
-    if (tier_pinned != 0 && device->properties().integrated &&
+    if (tier_pinned != 0 && device.properties().integrated &&
         options.kv_capacity.mode == KvCapacityMode::Automatic) {
         throw std::invalid_argument(
             "tiered loads on an integrated device require an explicit --kv-capacity; the "
@@ -246,7 +250,7 @@ ConstructedFlashNextModel construct_flash_next(EngineOptions& options, artifact:
 
     StartupPhaseScope materialize_phase(options.startup_observer, StartupPhase::WeightsMaterialize);
     auto backing =
-        artifact::materialize(reader, std::move(storage), device->transfer_view(),
+        artifact::materialize(reader, std::move(storage), device.transfer_view(),
                               &options.startup_observer);
     materialize_phase.complete();
     const auto stats = backing.stats();
@@ -254,7 +258,7 @@ ConstructedFlashNextModel construct_flash_next(EngineOptions& options, artifact:
     auto instance    = std::make_unique<FlashNextInstance>(std::move(model), options);
 
     StartupPhaseScope planning_phase(options.startup_observer, StartupPhase::TargetFinalize);
-    const auto budget = obtainable_device_bytes(*device, options, true);
+    const auto budget = obtainable_device_bytes(device, options, true);
     auto resolution   = resolve_kv_capacity(options.kv_capacity, curve, budget);
     auto sequence     = std::move(planner).finalize(resolution.main_page_groups);
     if (sequence.device_reservation_bytes() != resolution.runtime_reservation_bytes ||
@@ -265,18 +269,18 @@ ConstructedFlashNextModel construct_flash_next(EngineOptions& options, artifact:
     planning_phase.complete();
 
     StartupPhaseScope program_phase(options.startup_observer, StartupPhase::ProgramInitialize);
-    instance->program = Model::create_program(*instance->model, std::move(sequence), *device,
+    instance->program = Model::create_program(*instance->model, std::move(sequence), device,
                                               options.startup_observer);
-    device->synchronize();
+    device.synchronize();
     program_phase.complete();
 
     instance->kv_capacity_resolution.available_after_startup_bytes =
-        obtainable_device_bytes(*device, options, false);
+        obtainable_device_bytes(device, options, false);
 
     auto cost = resolve_context_machine_cost(
-        {.hardware_class = context_cost_hardware_class(device->properties().name,
-                                                       device->properties().major,
-                                                       device->properties().minor),
+        {.hardware_class = context_cost_hardware_class(device.properties().name,
+                                                       device.properties().major,
+                                                       device.properties().minor),
          .prefill_signature = "qwen3_8_flash_next_125b_a6b-nvfp4-v3-1"},
         options.context_cost.preset_path);
     LoadSummary summary;
@@ -297,7 +301,7 @@ ConstructedFlashNextModel construct_flash_next(EngineOptions& options, artifact:
     constructed.instance     = std::move(instance);
     constructed.load         = std::move(summary);
     constructed.context_cost = std::move(cost.model);
-    constructed.device       = std::move(device);
+    constructed.execution    = std::move(execution);
     return constructed;
 }
 

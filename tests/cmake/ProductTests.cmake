@@ -10,6 +10,10 @@ ninfer_add_test(ninfer_execution_context_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_execution_context.cpp"
   LIBRARIES ninfer_core)
 
+ninfer_add_test(ninfer_flash_next_shard_rules_test
+  SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_flash_next_shard_rules.cpp"
+  LIBRARIES ninfer_artifact ninfer_model_execution)
+
 ninfer_add_test(ninfer_shard_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_shard.cpp"
   LIBRARIES ninfer_artifact)

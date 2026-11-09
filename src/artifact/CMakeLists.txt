@@ -6,6 +6,7 @@ add_library(ninfer_artifact STATIC
   mapped_range.cpp
   backing.cpp
   binder.cpp
+  shard.cpp
   placement.cpp
   encoded_slice.cpp
   materializer.cpp

@@ -1,3 +1,7 @@
+ninfer_add_test(ninfer_layout_test
+  SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_layout.cpp"
+  LIBRARIES ninfer_core)
+
 ninfer_add_test(ninfer_media_decode_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_media_decode.cpp"
   LIBRARIES ninfer_media_decode)

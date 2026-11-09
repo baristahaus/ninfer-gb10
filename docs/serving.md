@@ -100,8 +100,9 @@ The Flash-Next lane has no request pause, preemption, or replay machinery (its O
 backoff is admission-level), so `preemptions_total`, `snapshot_restores_total`,
 `replay_restores_total`, `replayed_tokens_total`, `requests_paused`, and
 `requests_replaying` stay zero while a Flash-Next model is resident; they move only on a
-runtime whose lifecycle supports those paths. The endpoint remains unauthenticated alongside
-`/health` so monitoring tools poll without credentials.
+runtime whose lifecycle supports those paths. `/metrics` requires the same credential as every
+other route when `--api-key` is set; only `/health` and CORS preflight `OPTIONS` requests are
+exempt, so a monitoring tool polls `/metrics` with the key or not at all.
 
 [Output and tool constraints](#output-constraints) add counters that settle with each constrained
 request, including length-interrupted and cancelled ones; preparation failures and execution
@@ -1085,6 +1086,10 @@ The table lists executable defaults. The startup example selects a long-context 
 | `--spec mtp\|dflash\|dflash2` | speculative backend | off |
 | `--draft-tokens N` | MTP `1..5` (Qwen3.5), `1..3` (Flash-Next 125B-A6B); DFlash/DFlash2 `1..15` | unset |
 | `--lm-head-draft` | optimized proposal head | off |
+| `--proposal-head-rows N` | rows of the optimized proposal head; lower values trade draft quality for graph size | artifact default |
+| `--token-logprobs` | let Chat Completions answer `logprobs=true`; captures probability output inside each decode graph, so a server without it rejects that request instead of answering with placeholders | off |
+| `--mtp-capture FILE` | write the MTP round capture to `FILE` for offline analysis | unset |
+| `--chat-template FILE` | chat template to render prompts with, overriding the one the artifact carries | artifact template |
 | `--default-max-tokens N` | output limit when omitted by a request | `8192` |
 | `--default-thinking-budget N` | positive thinking cap inherited by thinking-enabled requests | unset |
 | `--vision` | enable media input and load Vision GPU allocations | off |

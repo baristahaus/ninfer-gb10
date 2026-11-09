@@ -115,8 +115,12 @@ Tensor WorkspaceLayoutBuilder::alloc(DType dtype, std::initializer_list<std::int
 
 MemorySpan WorkspaceLayoutBuilder::alloc_bytes(std::size_t bytes, std::size_t alignment) {
     if (bytes == 0) { return {}; }
-    cursor_ = align_up(cursor_, alignment, "workspace layout");
-    cursor_ = checked_add(cursor_, bytes, "workspace layout");
+    // Compute before committing. align_up and checked_add both reject an input by throwing, and a
+    // rejected allocation must leave the layout exactly as it was: otherwise a caller that catches
+    // the error and continues carries phantom alignment padding into every later allocation.
+    const std::size_t aligned = align_up(cursor_, alignment, "workspace layout");
+    const std::size_t end     = checked_add(aligned, bytes, "workspace layout");
+    cursor_                   = end;
     if (cursor_ > peak_) { peak_ = cursor_; }
     return MemorySpan{nullptr, bytes, Device{}};
 }

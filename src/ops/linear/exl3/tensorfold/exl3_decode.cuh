@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0 AND MIT
+// SPDX-FileCopyrightText: 2026 TensorFold contributors
+// SPDX-FileCopyrightText: 2025 Turboderp (ExLlamaV3 trellis decoder, MIT)
+//
 // After ExLlamaV3, MIT, Copyright (c) 2025 Turboderp; DeepSeek integration by @jayleaton.
 
 // EXL3 tiles: lane L decodes values 8L..8L+7 straight into its two mma B fragments; port of tensorfold's decode.cuh.

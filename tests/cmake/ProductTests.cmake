@@ -33,6 +33,10 @@ ninfer_add_test(ninfer_openai_schema_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_openai_schema.cpp"
   LIBRARIES ninfer_serve)
 
+ninfer_add_test(ninfer_serve_security_test
+  SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_serve_security.cpp"
+  LIBRARIES ninfer_serve)
+
 ninfer_add_test(ninfer_openai_responses_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_openai_responses.cpp"
   LIBRARIES ninfer_serve)

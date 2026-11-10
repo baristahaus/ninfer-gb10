@@ -163,7 +163,7 @@ struct ObservedTypes {
     using ExecutionTypes = q4::ExecutionTypes;
     // RankWorker reaches the group-scoped collective through Types; these fixtures never
     // run a sharded lane, so the family's own type is enough.
-    using ShardedGroup = q4::ShardedGroup;
+    using ShardedGroup = models::ShardedGroup;
 };
 
 q4::ScoreComplete finish_score(q4::Session& session, runtime::ExecutionTicket ticket) {

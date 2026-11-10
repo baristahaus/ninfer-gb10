@@ -36,6 +36,13 @@ Flash-Next 125B-A6B NVFP4 is available through [local conversion or v2 upgrade](
 - [Tools](../tools/README.md)
 - [Capability evaluation](../eval/README.md)
 
+## Project records
+
+| Document | Purpose |
+|---|---|
+| [Provenance](../PROVENANCE.md) | the single ledger of where the code came from: lineage, merged revisions, cherry-picks, vendored source and dependencies |
+| [History](../HISTORY.md) | the README of this fork as it stood on 2026-10-28, and the per-pull-request provenance of every cherry-picked change |
+
 ## Maintainer references
 
 The active references under [`maintainer/`](maintainer/) record current architecture, model,
@@ -62,7 +69,7 @@ other references own narrower contracts:
 | [ReplaySSM GDN](maintainer/replayssm-gdn.md) | raw transition records and faithful commitment of the verified state prefix |
 | [Op development](maintainer/op-development.md) | semantic boundaries, source ownership, numerical qualification and performance evidence |
 | [Operational logging](maintainer/logging.md) | log ownership, presentation, severity and data policy |
-| [Linear benchmark](maintainer/linear-benchmark.md) | pure Linear measurement, metrics and suites |
+| [Linear benchmark](maintainer/linear-tuning.md#6-pure-linear-timing) | pure Linear measurement, metrics and suites |
 | [Linear tuning and reports](maintainer/linear-tuning.md) | tuning ranges, priority points, dispatch tradeoffs and final performance report format |
 
 Model cards contain official artifact facts and source provenance. The

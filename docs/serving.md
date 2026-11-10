@@ -1078,7 +1078,7 @@ The table lists executable defaults. The startup example selects a long-context 
 | `--log-level trace\|debug\|info\|warning\|error\|critical\|off` | pretty stderr verbosity | `info` |
 | `--gpu-timing` | collect result/commit CUDA stream intervals at existing completion boundaries; `--no-gpu-timing` disables it | off |
 | `--device N` | CUDA device index | `0` |
-| `--devices N,N` | device group for tensor parallelism, rank 0 first (e.g. `0,1`); overrides `--device`. Empty is the single-device lane | unset |
+| `--devices N,N` | device group for tensor parallelism, rank 0 first (e.g. `0,1`); overrides `--device`. Empty is the single-device lane. The lane loads but **refuses to infer** until the sharded forward has a validated token-for-token comparison; `NINFER_TP2_UNVALIDATED=1` lifts the refusal for that comparison only (`docs/cli.md` §Two-GPU lane validation) | unset |
 | `--context-cost-presets FILE` | optional runtime context-cost preset registry | generic + compiled defaults |
 | `--host-cache-capacity SIZE\|default` | shared Host State/KV and in-flight capacity; `0B` disables backing | target/model default |
 | `--max-request-size SIZE` | body-size limit before JSON parsing | `384MiB` |

@@ -39,7 +39,11 @@ ParameterReference Binder::parameter(std::string_view name, Shape shape,
     if (found == reader_.directory().bindings.end()) {
         throw ArtifactError("missing logical parameter " + std::string(name));
     }
-    return binding(std::string(name), found->second, std::move(shape), exact_format);
+    auto out = binding(std::string(name), found->second, std::move(shape), exact_format);
+    // One hook for every parameter: a model that shards installs the transform, a single-device
+    // lane leaves it unset and this is a no-op.
+    if (shard_transform_) { out = shard_transform_(out); }
+    return out;
 }
 
 ParameterReference Binder::parameter(std::string_view name, Shape shape, Residency residency,

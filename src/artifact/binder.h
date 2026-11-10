@@ -3,6 +3,7 @@
 #include "artifact/placement.h"
 #include "artifact/reader.h"
 
+#include <functional>
 #include <optional>
 #include <span>
 #include <string>
@@ -37,7 +38,19 @@ struct HostValues {
 // determine parameter shapes or native operation support.
 class Binder {
 public:
+    // A shard transform the owner installs before binding: given a parameter's bound reference it
+    // returns that reference as one rank of an execution group sees it. The model owns the policy
+    // — which axis each parameter takes is a model fact — and the binder only applies it, so the
+    // generic layer stays free of model geometry. Unset means the single-device lane, where every
+    // parameter is whole.
+    using ShardTransform = std::function<ParameterReference(const ParameterReference&)>;
+
     explicit Binder(const Reader& reader);
+
+    void set_shard_transform(ShardTransform transform) { shard_transform_ = std::move(transform); }
+    [[nodiscard]] bool has_shard_transform() const noexcept {
+        return static_cast<bool>(shard_transform_);
+    }
 
     [[nodiscard]] ParameterReference parameter(std::string_view name, Shape shape,
                                                std::optional<QType> exact_format = {});
@@ -94,6 +107,7 @@ public:
 
 private:
     const Reader& reader_;
+    ShardTransform shard_transform_;
     std::vector<PreparedResource> resources_;
     std::vector<ObjectHandle> device_objects_;
     // SP-4 tiered banks: per-object tier metadata (the permutation and the hot count), plus

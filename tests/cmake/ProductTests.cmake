@@ -21,6 +21,9 @@ ninfer_add_test(ninfer_qwen3_5_shard_rules_test
 ninfer_add_test(ninfer_repacked_weights_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_repacked_weights.cpp"
   LIBRARIES ninfer_model_loading)
+ninfer_add_test(ninfer_consumer_geometry_test
+  SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_consumer_geometry.cpp"
+  LIBRARIES ninfer_core)
 
 ninfer_add_test(ninfer_shard_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_shard.cpp"

@@ -110,6 +110,17 @@ struct WeightView {
 // Coalesce adjacent logical regions without moving their bytes. Fails for a gather or
 // multiple parents; those remain explicit inputs for a consumer supporting that form.
 [[nodiscard]] WeightRegion contiguous_weight_region(const WeightView& view);
+
+// The geometry a consumer will see for `view`.
+//
+// A contiguous view is its parent's geometry, unchanged. A view whose parts are not contiguous in
+// one parent is a shard: its consumer sees the rank's own matrix, so the answer is the geometry of
+// `view.shape` in the parent's format and layout — which is exactly what the load-time repack
+// produces. Both the plan (which asks before any buffer exists) and the repack (which builds it)
+// call this, so the profile the plan describes and the buffer the repack makes cannot disagree.
+//
+// Throws std::invalid_argument when the view is empty or its parts span more than one parent.
+[[nodiscard]] WeightGeometry consumer_geometry(const WeightView& view);
 [[nodiscard]] bool is_complete_weight(const WeightView& view);
 [[nodiscard]] std::uint64_t weight_scale_offset(const WeightGeometry& geometry, std::uint64_t row,
                                                 std::uint64_t group);

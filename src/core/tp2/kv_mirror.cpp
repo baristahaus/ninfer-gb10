@@ -139,6 +139,23 @@ void MirroredKVPagePool::copy_page(DeviceKVPageHandle source, DeviceKVPageHandle
     });
 }
 
+void MirroredKVPagePool::zero_page_run(std::int32_t first, std::uint32_t count,
+                                       cudaStream_t stream) {
+    origin_.zero_page_run(first, count, stream);
+    if (count == 0) { return; }
+    // The same run at the same physical indices on rank 1, on rank 1's stream.
+    on_mirror_device(where_, [&] { mirror_.zero_page_run(first, count, where_.stream); });
+}
+
+void MirroredKVPagePool::copy_page_run(std::int32_t source_first, std::int32_t destination_first,
+                                       std::uint32_t count, cudaStream_t stream) {
+    origin_.copy_page_run(source_first, destination_first, count, stream);
+    if (count == 0 || source_first == destination_first) { return; }
+    on_mirror_device(where_, [&] {
+        mirror_.copy_page_run(source_first, destination_first, count, where_.stream);
+    });
+}
+
 void MirroredKVPagePool::copy_to_host(std::span<const DeviceKVPageHandle> source,
                                       HostKVAllocationView destination,
                                       cudaStream_t stream) const {
@@ -240,6 +257,20 @@ void MirroredKVExecutionTables::publish_repeated(KVExecutionRowHandle row, Devic
     std::vector<std::int32_t> indices(count, physical);
     on_mirror_device(where_, [&] {
         mirror_.publish_physical(mirror_row_handle, 0, indices, where_.stream);
+    });
+}
+
+void MirroredKVExecutionTables::publish_physical(std::int32_t row, std::uint32_t logical_begin,
+                                                std::span<const std::int32_t> indices,
+                                                cudaStream_t stream) {
+    const auto& origin_row = rows_.at(static_cast<std::size_t>(row));
+    if (!origin_row.has_value()) {
+        throw std::logic_error("Paged KV mirror publication on a row with no lease");
+    }
+    origin_.publish_physical(origin_row->handle(), logical_begin, indices, stream);
+    const KVExecutionRowHandle mirror_row_handle = require_mirror_handle(row);
+    on_mirror_device(where_, [&] {
+        mirror_.publish_physical(mirror_row_handle, logical_begin, indices, where_.stream);
     });
 }
 

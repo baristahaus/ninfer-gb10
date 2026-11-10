@@ -47,7 +47,7 @@ std::size_t host_context_capacity(std::optional<std::size_t> requested, std::siz
 }
 
 DevicePageStorage::DevicePageStorage(MemorySpan backing, const DeviceKVPagePoolLayout& layout)
-    : spec_(layout.spec) {
+    : spec_(layout.spec), backing_(backing) {
     if (backing.device.type() != DeviceType::CUDA) {
         throw std::invalid_argument("Device page storage requires CUDA backing");
     }
@@ -80,6 +80,30 @@ DevicePageStorage::DevicePageStorage(MemorySpan backing, const DeviceKVPagePoolL
     host_layout_ = plan_host_kv_page_layout(geometry());
     initialize_host_transfer_plan();
     validation_marks_.resize(capacity_pages(), 0);
+}
+
+void DevicePageStorage::attach_mirror(tp2::MirroredKVPagePool& mirror) {
+    if (mirror_ != nullptr) { throw std::logic_error("Device page storage already mirrored"); }
+    // The origin side is a view over this storage's own backing with this storage's own layout, so
+    // the wrapper replays exactly the planes this storage owns. It allocates nothing.
+    DeviceKVPagePoolLayout layout;
+    layout.spec = spec_;
+    layout.planes.reserve(planes_.size());
+    const auto* base = static_cast<const std::byte*>(backing_.data);
+    for (std::size_t index = 0; index < planes_.size(); ++index) {
+        const Tensor& plane = planes_[index];
+        const auto* start   = static_cast<const std::byte*>(plane.data);
+        DeviceKVPlaneLayout planned;
+        planned.geometry = spec_.geometry.planes[index];
+        planned.storage.region.offset =
+            static_cast<std::size_t>(start - base);
+        planned.storage.region.bytes = plane.bytes();
+        planned.storage.dtype        = plane.dtype;
+        planned.storage.shape        = {plane.ne[0], plane.ne[1], plane.ne[2], plane.ne[3]};
+        layout.planes.push_back(planned);
+    }
+    mirror_origin_ = std::make_unique<DeviceKVPagePool>(backing_, layout);
+    mirror_        = &mirror;
 }
 
 void DevicePageStorage::initialize_host_transfer_plan() {
@@ -229,6 +253,17 @@ void DevicePageStorage::zero_pages(std::span<const std::int32_t> pages,
     require_execution(device(), execution);
     validate_distinct_pages(pages);
     CudaDeviceScope scope(execution.device());
+    // Attached: the mirror replays this storage's own runs on rank 1 and issues the origin run on
+    // the same view pool, so this loop is replaced rather than duplicated.
+    if (mirror_ != nullptr) {
+        for (std::size_t begin = 0; begin < pages.size();) {
+            const auto end = run_end(pages, begin);
+            mirror_->zero_page_run(pages[begin], static_cast<std::uint32_t>(end - begin),
+                                   execution.stream());
+            begin = end;
+        }
+        return;
+    }
     for (std::size_t begin = 0; begin < pages.size();) {
         const auto end   = run_end(pages, begin);
         const auto first = pages[begin];
@@ -256,6 +291,10 @@ TransferWork DevicePageStorage::copy_page(std::int32_t source, std::int32_t dest
     if (source == destination) { return {}; }
     const auto work = device_copy_work(1);
     CudaDeviceScope scope(execution.device());
+    if (mirror_ != nullptr) {
+        mirror_->copy_page_run(source, destination, 1, execution.stream());
+        return work;
+    }
     for (const Tensor& plane : planes_) {
         auto* base = static_cast<std::byte*>(plane.data);
         if (geometry().device_plane_order == PagedKVPlaneOrder::PageMajor) {
@@ -394,6 +433,11 @@ ExecutionTableStorage::ExecutionTableStorage(MemorySpan backing,
         block_tables_.ne[3] != 1) {
         throw std::invalid_argument("Execution table layout has inconsistent geometry");
     }
+}
+
+void ExecutionTableStorage::attach_mirror(tp2::MirroredKVExecutionTables& mirror) {
+    if (mirror_ != nullptr) { throw std::logic_error("Execution table storage already mirrored"); }
+    mirror_ = &mirror;
 }
 
 Tensor ExecutionTableStorage::row(std::int32_t index) const {

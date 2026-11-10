@@ -187,6 +187,8 @@ int exercise_page_and_row_replay(ninfer::DeviceContext& rank0, ninfer::DeviceCon
     std::optional<ninfer::DeviceKVPageReservation> reservation = origin.reserve(2);
     if (!reservation.has_value()) { return fail("two-page reservation failed"); }
     std::vector<ninfer::DeviceKVPageLease> leases;
+    // materialize() refuses to grow the destination past its capacity, so the caller reserves it.
+    leases.reserve(2);
     origin.materialize(*reservation, 2, leases);
     std::vector<ninfer::DeviceKVPageHandle> handles;
     for (const auto& lease : leases) { handles.push_back(lease.handle()); }

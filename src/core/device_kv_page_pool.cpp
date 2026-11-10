@@ -4,6 +4,7 @@
 
 #include "core/device_kv_page_pool.h"
 #include "core/host_kv_arena.h"
+#include "core/paged_kv_geometry.h"
 
 #include "core/device.h"
 
@@ -154,8 +155,12 @@ DeviceKVPagePool::DeviceKVPagePool(MemorySpan backing, const DeviceKVPagePoolLay
             throw std::logic_error("Paged KV device plane layout does not match its geometry");
         }
         Tensor plane = planned.storage.bind(backing);
+        // The second extent is the plane's row count, not the page's token count: with four-token
+        // rows a 64-token page holds 16 rows. Comparing against kPagedKVPageSize here rejected
+        // every four-token-row pool that the geometry layer explicitly supports.
+        const std::int32_t rows_per_page = kv_plane_rows_per_page(spec_.geometry, expected);
         if (plane.dtype != expected.dtype || plane.ne[0] != expected.leading_extent ||
-            plane.ne[1] != kPagedKVPageSize) {
+            plane.ne[1] != rows_per_page) {
             throw std::logic_error("Paged KV device plane tensor is inconsistent");
         }
         if (spec_.geometry.device_plane_order == PagedKVPlaneOrder::PageMajor) {

@@ -27,6 +27,12 @@ int fail(const std::string& message) {
     return 1;
 }
 
+// The exact round both arms run, so a manual cross-machine run can hold the same contract.
+// Greedy is stated rather than relied on: temperature 0 with top_k 1 makes the choice
+// deterministic on any host, and a pinned output budget makes the comparison bounded and
+// independent of where either round stops.
+constexpr std::uint32_t kOutputTokens = 32;
+
 std::vector<ninfer::TokenId> run_round(const char* artifact, int width, int device,
                                        const std::vector<ninfer::TokenId>& prompt_tokens) {
     ninfer::EngineOptions options;
@@ -39,8 +45,12 @@ std::vector<ninfer::TokenId> run_round(const char* artifact, int width, int devi
         options.device = device;
     }
     ninfer::Engine engine(options);
+    ninfer::RequestOptions request;
+    request.execution.requested_output_tokens = kOutputTokens;
+    request.execution.sampling.temperature     = 0.0F;
+    request.execution.sampling.top_k           = 1;
     auto prompt = engine.prepare_tokens(prompt_tokens);
-    return engine.generate(std::move(prompt), {}).generated_token_ids;
+    return engine.generate(std::move(prompt), request).generated_token_ids;
 }
 
 } // namespace

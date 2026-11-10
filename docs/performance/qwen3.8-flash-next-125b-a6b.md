@@ -1,5 +1,75 @@
 # Qwen3.8 Flash-Next 125B-A6B performance
 
+## GB10 first end-to-end serving run — 2026-11-10
+
+**Run ID `G125B-GB10-1`.** The first serving run of this model on a GB10 node: the artifact loads,
+prefills, decodes, and queues. Single lane, no speculation, a 4,096-token request limit. These are
+first-run descriptive numbers from one process, not a saturation study.
+
+### Run record
+
+| item | value |
+|---|---|
+| date | 2026-11-10, 09:31–09:43 UTC |
+| artifact | `qwen3_8_flash_next_125b_a6b_nvfp4_fp8_mtp.ninfer`, multi-volume, 126,921,610,496 B, sha256 `3be54b07772d1876925755df84f81bacad3f6dbf1123c2110bb64ab004b833b2` |
+| weights identity | NVFP4 routed experts, FP8 projections, MTP companion; formats bf16, fp32, fp8_e4m3fn, fp8_e4m3fn_row_bf16, nvfp4 |
+| revision | `33e79d81` (`feat/tp2-program` tip), the node's canonical build. **Not current master**: the node had 26 GB free and no build tree could be created |
+| node | twofour (`aitopatom-0c82`), GB10, `aarch64`, 121 GiB unified, driver 580.178.04, CUDA 13.4.92 |
+| workload | one user turn per request, greedy-free default sampling (model defaults), 7 sequential requests plus 2 concurrent |
+| runtime settings | `--max-context 4096 --max-concurrency 1 --stats-interval 10s`; defaults elsewhere: `--kv-dtype bf16`, CUDA Graphs on, prefix reuse on, `--spec none`, prefill chunk resolved by the model, Host cache at the Spark default (1 GiB + 4 StateImages) |
+| resolved capacities | KV 4,096 tokens bf16, 1 active + 1 extra device state, Host KV 0 B |
+| load | 22.48 s; 73,711,275,570 B read of the 126.9 GB on disk; 68.6 GiB resident; 1,212 device objects |
+| node memory | 95 GB used / 17 GB free / 26 GB available at rest; 105 / 13 / 15 after a 3,810-token request |
+| evidence | JSONL `request_done` and `throughput` records from the run; values below are from those records, not from the protocol `timings` block (which reported zeros before the `4f22603b` fix) |
+
+### Measurements
+
+One warm process, sequential requests, `max_tokens` was the limiter unless noted.
+
+| prompt tokens | completion tokens | TTFT | prefill | decode | decode tok/s |
+|---:|---:|---:|---:|---:|---:|
+| 17 | 105 | 0.142 s | 0.139 s | 3.041 s | 34.5 |
+| 17 | 82 | 0.080 s | 0.076 s | 2.360 s | 34.7 |
+| 17 | 102 | 0.081 s | 0.077 s | 2.970 s | 34.3 |
+| 26 | 32 | 0.203 s | 0.199 s | 0.917 s | 34.9 |
+| 418 | 48 | 0.409 s | 0.405 s | 1.377 s | 34.9 |
+| 20 | 512 | 0.188 s | 0.185 s | 17.602 s | 29.1 |
+| 3,810 | 32 | 4.158 s | 4.146 s | 2.246 s | 14.2 |
+
+- **Prefill** 1,031 tok/s at 418 prompt tokens and 919 tok/s at 3,810.
+- **Decode** 34–35 tok/s on short answers, 29.1 tok/s sustained over 512 tokens, 14.2 tok/s with
+  3,810 tokens of context resident.
+- **Queueing** two simultaneous requests at `--max-concurrency 1` both completed (HTTP 200, 64
+  tokens each) in 2.03 s and 4.10 s: FIFO admission, no preemption and no failure.
+- **Stability** the process stayed up across the run; the only transport event was an HTTP 499 from
+  an aborted client of the operator, not a server fault.
+
+### What this does not establish
+
+- **No saturation curve.** One lane, one request at a time except the pair above.
+- **No speculative gain.** `--spec none`; the artifact carries MTP weights, so MTP3 is the obvious
+  next measurement and is not covered here.
+- **Text only.** This artifact has no Vision tower.
+- **Short context.** 4,096 tokens, not the model's full window; the largest prompt exercised was
+  3,810 tokens.
+- **No soak.** Ten requests, not a multi-hour run.
+- **One revision.** `33e79d81`, not current master; a master run needs the canonical checkout
+  updated on the node.
+- **No cross-engine comparison on this hardware.** The vLLM comparison above is on RTX PRO 6000.
+
+### Reproduction
+
+```
+ninfer-serve qwen3_8_flash_next_125b_a6b_nvfp4_fp8_mtp.ninfer \
+  --host 127.0.0.1 --port 8099 --max-context 4096 --max-concurrency 1 \
+  --request-log-jsonl req.jsonl --stats-interval 10s
+```
+
+Requests are ordinary `/v1/chat/completions` calls; the JSONL `request_done` records carry the
+phase timings used above. The run left no artifacts on the node: the server was stopped and its
+scratch directory removed.
+
+
 ## V3 migration qualification — 2026-09-23
 
 Matched loopback serving measurements on RTX PRO 6000 Blackwell compare the saved v2 binary with

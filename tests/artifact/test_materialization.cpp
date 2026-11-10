@@ -360,8 +360,11 @@ int main(int argc, char** argv) {
         }
         int count         = 0;
         const auto result = cudaGetDeviceCount(&count);
+        // A host linked against the toolkit's stub library reports cudaErrorStubLibrary, not
+        // cudaErrorNoDevice. That is exactly the GPU-less builder this test must skip on, so the
+        // stub case belongs here; without it the test aborts instead of skipping.
         if (result == cudaErrorNoDevice || result == cudaErrorInsufficientDriver ||
-            (result == cudaSuccess && count == 0)) {
+            result == cudaErrorStubLibrary || (result == cudaSuccess && count == 0)) {
             return 77;
         }
         CUDA_CHECK(result);

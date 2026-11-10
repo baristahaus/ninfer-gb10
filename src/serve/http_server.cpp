@@ -295,6 +295,8 @@ void HttpServer::run_stats_reporter() {
     using Clock                     = std::chrono::steady_clock;
     ninfer::EngineSnapshot previous = service_->snapshot();
     Clock::time_point previous_time = Clock::now();
+    // The first sample only sets the energy baseline; NVML reads stay on this thread.
+    if (gpu_telemetry_ != nullptr) { (void)gpu_telemetry_->sample(); }
     const auto interval = std::chrono::milliseconds(options_.launch.logging.stats_interval_ms);
     Clock::time_point next_deadline = previous_time + interval;
 
@@ -308,8 +310,10 @@ void HttpServer::run_stats_reporter() {
 
         const ninfer::EngineSnapshot current = service_->snapshot();
         const Clock::time_point now          = Clock::now();
-        const ThroughputReport report        = make_throughput_report(
+        ThroughputReport report              = make_throughput_report(
             previous, current, std::chrono::duration<double>(now - previous_time).count());
+        // Sampled every interval, written or not, so energy always covers exactly one interval.
+        if (gpu_telemetry_ != nullptr) { report.gpus = gpu_telemetry_->sample(); }
         if (report_has_activity(report)) { record_throughput(report); }
         previous      = current;
         previous_time = now;
@@ -322,6 +326,7 @@ void HttpServer::run_stats_reporter() {
     const Clock::time_point now          = Clock::now();
     ThroughputReport tail                = make_throughput_report(
         previous, current, std::chrono::duration<double>(now - previous_time).count());
+    if (gpu_telemetry_ != nullptr) { tail.gpus = gpu_telemetry_->sample(); }
     // The exact partial interval remains useful to measurement consumers. Pretty throughput is a
     // fixed-cadence operational record and deliberately has no irregular shutdown tail.
     tail.final_interval = true;
@@ -543,6 +548,15 @@ void HttpServer::attach(GenerationService& service) {
     service_         = &service;
     metrics_.configure(public_model_id_, service.engine_options(), service.description(),
                        service.startup_report(), service.snapshot());
+    if (request_jsonl_.enabled() && options_.launch.logging.stats_interval_ms != 0) {
+        // One identity per resident device. NVML is loaded at run time, so a host without the
+        // driver library records no samples instead of failing to start.
+        const int device = options_.launch.engine.device;
+        std::vector<GpuTelemetryDevice> identities;
+        identities.push_back(GpuTelemetryDevice{
+            .device = device, .uuid = query_server_log_environment(device).gpu_uuid});
+        gpu_telemetry_ = std::make_unique<GpuTelemetry>(std::move(identities));
+    }
     request_jsonl_.write_server_start(
         options_, service.engine_options(), service.sampling_defaults(), public_model_id_,
         service.description(), service.startup_report(), service.snapshot());

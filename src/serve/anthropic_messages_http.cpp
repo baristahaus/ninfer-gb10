@@ -68,6 +68,7 @@ void HttpServer::handle_messages(const httplib::Request& req, httplib::Response&
             request.generation,
             request.stream ? GenerationConsumerMode::Streaming : GenerationConsumerMode::Aggregate,
             {.constraint_timings = true,
+             .accepted_length_steps = service_->speculation_detail_steps(),
              .scheduling         = scheduling_observer(req_id, metadata.http_request_id),
              .first_token        = first_token_observer()},
             [&req] { return client_disconnected(req); });

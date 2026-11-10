@@ -1085,6 +1085,8 @@ The table lists executable defaults. The startup example selects a long-context 
 | `--media-live-capacity SIZE` | all live prepared BF16 media payloads | `2GiB` |
 | `--media-preprocess-threads N` | bounded media preprocessing workers; `0` selects at most 16 from host concurrency | `0` |
 | `--request-log-jsonl FILE` | append full-precision server/request records | disabled |
+| `--log-speculation-detail` | add `speculative.detail` to every `request_done` record: one character per committed decode step, the hexadecimal digit of the draft tokens that step accepted or `-` for a step that verified no draft, plus the draft window and a truncated flag. Requires `--request-log-jsonl` | off |
+| `--log-speculation-detail-max-steps N` | decode steps recorded per request; a shorter sequence than the request's decode steps marks the record truncated | `4096` |
 | `--ignore-eos` | suppress the model's end-of-sequence stop tokens for every request on the instance; explicit per-request stop strings still apply (benchmark knob) | off |
 | `--prefill-miss-dump DIR` | write a prefix-reuse miss dump under `DIR`; a request that recomputes at least `--prefill-miss-min-tokens` prompt tokens while sharing at least `--prefill-miss-min-match` of its prompt with one of the last 16 contexts writes both texts, their token ids and a `summary.json` with the divergence point, at most 64 dumps per process. The dumps contain conversation text verbatim | disabled |
 | `--prefill-miss-min-tokens N` | recomputed prompt tokens a dump requires | `10000` |

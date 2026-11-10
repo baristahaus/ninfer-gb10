@@ -43,6 +43,7 @@ void HttpServer::handle_chat_completions(const httplib::Request& req, httplib::R
     try {
         ninfer::GenerationObservationOptions observation{
             .constraint_timings = true,
+            .accepted_length_steps = service_->speculation_detail_steps(),
             .live_timings       = request.stream && request.timings_per_token,
             .prompt_progress    = request.stream && request.return_progress,
             .scheduling         = scheduling_observer(req_id, metadata.http_request_id),

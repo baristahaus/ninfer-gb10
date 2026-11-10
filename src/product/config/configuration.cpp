@@ -286,6 +286,11 @@ StartupConfigurationView view(const LaunchOptions& launch, EntryPoint entry, con
             break;
         case Field::PrefillMissMinMatch:
             value = server->prefill_miss_min_match;
+        case Field::LogSpeculationDetail:
+            value = server->log_speculation_detail;
+            break;
+        case Field::SpeculationDetailMaxSteps:
+            value = std::uint64_t{server->speculation_detail_max_steps};
             break;
         case Field::MaxRequestSize:
             value = std::uint64_t{server->max_request_bytes};

@@ -38,8 +38,12 @@ constexpr std::array<ParameterShard, 29> kParameterShards{{
     {"linear_attn.dt_bias", ShardAxis::Rows, {48}, 1},
     {"linear_attn.in_proj_a.weight", ShardAxis::Rows, {48}, 1},
     {"linear_attn.in_proj_b.weight", ShardAxis::Rows, {48}, 1},
-    // Columns by the 10240 Q|K|V convolution channels: 10240 = 80 head-slots of 128.
-    {"linear_attn.conv1d.weight", ShardAxis::Columns, {10240}, 1},
+    // Columns by the 10240 Q|K|V convolution channels, as THREE segments: the convolution is the
+    // same [4, 10240] tensor whose channels are Q|K|V (2048 | 2048 | 6144), which is exactly how the
+    // QKV projection's rows are segmented below. A single contiguous half would hand rank 0 the
+    // channels Q2048 + K2048 + V1024 while its projection produces Q1024 + K1024 + V3072 — a wrong
+    // convolution weight per rank, silently. Each segment must divide on its own.
+    {"linear_attn.conv1d.weight", ShardAxis::Columns, {2048, 2048, 6144}, 3},
     // Rows by the 80 Q|K|V head-slots: 16 Q, 16 K, 48 V. See the header's packing note.
     {"linear_attn.in_proj_qkv.weight", ShardAxis::Rows, {2048, 2048, 6144}, 3},
     // Rows by the 48 value heads: 6144 = 48 x 128.

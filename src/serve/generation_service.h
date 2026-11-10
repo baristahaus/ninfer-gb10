@@ -113,6 +113,11 @@ public:
 
     [[nodiscard]] bool is_available() const { return engine_->is_available(); }
 
+    // --log-speculation-detail: decode steps to record per request; 0 when the option is off.
+    [[nodiscard]] std::uint32_t speculation_detail_steps() const noexcept {
+        return options_.log_speculation_detail ? options_.speculation_detail_max_steps : 0;
+    }
+
     [[nodiscard]] ninfer::ModelSamplingDefaults sampling_defaults() const {
         return engine_->sampling_defaults();
     }

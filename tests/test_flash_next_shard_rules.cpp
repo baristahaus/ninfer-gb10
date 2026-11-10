@@ -231,6 +231,34 @@ int test_shard_transform_factory() {
     return failures;
 }
 
+int test_convolution_segmentation() {
+    int failures = 0;
+    // The convolution carries the same Q|K|V channel split as the QKV projection's rows, so it must
+    // be three segments. A single contiguous half gives rank 0 Q+K+1/4V against a projection that
+    // produces 1/2Q + 1/2K + 1/2V — silently wrong convolution weights.
+    const auto& shards = parameter_shards();
+    const auto* conv   = &shards.front();
+    bool found         = false;
+    for (const auto& shard : shards) {
+        if (shard.suffix == "linear_attn.conv1d.weight") { conv = &shard; found = true; }
+    }
+    failures += check(found, "the convolution is in the table");
+    if (!found) { return failures; }
+    failures += check(conv->segment_count == 3, "the convolution has three segments");
+    failures += check(total_extent(*conv) == 10240, "the convolution segments cover 10240 channels");
+    const auto rank0 = ranges_for(*conv, 2, 0);
+    const auto rank1 = ranges_for(*conv, 2, 1);
+    failures += check(rank0.size() == 3 && rank0[0] == ninfer::artifact::ShardRange{0, 1024} &&
+                          rank0[1] == ninfer::artifact::ShardRange{2048, 1024} &&
+                          rank0[2] == ninfer::artifact::ShardRange{4096, 3072},
+                      "rank 0 takes the first half of each convolution segment");
+    failures += check(rank1.size() == 3 && rank1[0] == ninfer::artifact::ShardRange{1024, 1024} &&
+                          rank1[1] == ninfer::artifact::ShardRange{3072, 1024} &&
+                          rank1[2] == ninfer::artifact::ShardRange{7168, 3072},
+                      "rank 1 takes the second half of each convolution segment");
+    return failures;
+}
+
 } // namespace
 
 int main() {
@@ -239,6 +267,7 @@ int main() {
     failures += test_width_three_is_partial();
     failures += test_qkv_segmentation();
     failures += test_shard_parameter();
+    failures += test_convolution_segmentation();
     failures += test_shard_transform_factory();
     if (failures == 0) {
         std::cout << "ok (" << parameter_shards().size() << " parameters)\n";

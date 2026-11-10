@@ -161,6 +161,17 @@ void EngineCore<Instance>::commit_pending(PendingBatch&& pending, ComputeFlight 
             counters.accepted_tokens - observed.accepted_tokens;
         cumulative_stats_.speculative_fallback_steps +=
             counters.fallback_steps - observed.fallback_steps;
+        // --log-speculation-detail: one entry per committed decode step, derived from the same
+        // deltas this loop already aggregates. A step that advanced rounds verified a draft and
+        // accepted that many tokens; a step that only advanced fallback_steps verified none.
+        if (request->observation.accepted_length_steps != 0 && counters.enabled && decode_round &&
+            observed.accepted_lengths.size() < request->observation.accepted_length_steps) {
+            observed.accepted_lengths.push_back(
+                counters.rounds != observed.rounds
+                    ? static_cast<std::uint8_t>(counters.accepted_tokens -
+                                                observed.accepted_tokens)
+                    : kSpeculativeFallbackStep);
+        }
         const std::size_t positions = counters.attempted_per_position.size();
         if (cumulative_stats_.speculative_attempted_per_position.size() < positions) {
             cumulative_stats_.speculative_attempted_per_position.resize(positions, 0);

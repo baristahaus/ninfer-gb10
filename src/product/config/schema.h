@@ -67,6 +67,8 @@ enum class Field {
     PrefillMissDump,
     PrefillMissMinTokens,
     PrefillMissMinMatch,
+    LogSpeculationDetail,
+    SpeculationDetailMaxSteps,
     Prompt,
     Messages,
     ReasoningEffort,

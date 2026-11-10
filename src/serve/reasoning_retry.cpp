@@ -28,6 +28,10 @@ const char* reasoning_retry_trigger_name(ReasoningRetryTrigger trigger) noexcept
     return "none";
 }
 
+bool reasoning_retry_eligible(bool enabled, const ninfer::PromptSummary& summary) noexcept {
+    return enabled && summary.starts_in_reasoning && !summary.has_media;
+}
+
 ReasoningRetryPlan plan_reasoning_retry(const ReasoningRetryInput& input,
                                         const ReasoningGuardTokens& tokens) {
     ReasoningRetryPlan plan;

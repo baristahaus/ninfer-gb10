@@ -286,6 +286,9 @@ StartupConfigurationView view(const LaunchOptions& launch, EntryPoint entry, con
             break;
         case Field::PrefillMissMinMatch:
             value = server->prefill_miss_min_match;
+        case Field::ReasoningCloseRetry:
+            value = server->reasoning_close_retry;
+            break;
         case Field::LogSpeculationDetail:
             value = server->log_speculation_detail;
             break;

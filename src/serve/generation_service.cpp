@@ -8,6 +8,7 @@
 #include <charconv>
 #include <chrono>
 #include <cstddef>
+#include <cstdio>
 #include <iterator>
 #include <mutex>
 #include <stdexcept>
@@ -259,6 +260,36 @@ void check_preparation_control(Clock::time_point deadline,
     }
 }
 
+// A continuation is the same reply: it must not re-publish a start, timing or tool event, and its
+// text deltas belong to the reply the client is already reading.
+class ContinuationSink final : public ninfer::OutputSink {
+public:
+    explicit ContinuationSink(const StreamSink& sink) : sink_(&sink) {}
+
+    void start(ninfer::GenerationStart) override {}
+    void progress(ninfer::PromptProgress) override {}
+    void timing(ninfer::GenerationTimingObservation) override {}
+
+    void publish(ninfer::OutputEvent event) override {
+        std::visit(
+            [&](const auto& value) {
+                using T = std::decay_t<decltype(value)>;
+                if constexpr (std::is_same_v<T, ninfer::OutputDelta>) {
+                    if (value.text.empty()) { return; }
+                    if (value.channel == ninfer::OutputChannel::Reasoning) {
+                        if (sink_->on_reasoning) { sink_->on_reasoning(value.text); }
+                    } else if (sink_->on_content) {
+                        sink_->on_content(value.text);
+                    }
+                }
+            },
+            event);
+    }
+
+private:
+    const StreamSink* sink_ = nullptr;
+};
+
 class ServiceOutputSink final : public ninfer::OutputSink {
 public:
     explicit ServiceOutputSink(const StreamSink& sink) : sink_(&sink) {}
@@ -343,6 +374,25 @@ GenerationService::GenerationService(product::ServeOptions options,
             [engine](std::span<const ninfer::TokenId> tokens) {
                 return engine->detokenize_text(tokens);
             });
+    }
+    if (options_.reasoning_close_retry) {
+        // The same derivation capy's frontend does: the canonical close and the thinking-closing
+        // marker, through the resident tokenizer.
+        reasoning_guard_tokens_.close_suffix = engine_->tokenize_text(kReasoningCloseSerialization);
+        reasoning_guard_tokens_.think_close  = engine_->tokenize_text(kReasoningThinkClose);
+        // A fragment tokenized on its own must detokenize back to the same text, or these ids do
+        // not mean what the planner assumes. Refuse the option rather than guess.
+        reasoning_retry_enabled_ =
+            !reasoning_guard_tokens_.close_suffix.empty() &&
+            !reasoning_guard_tokens_.think_close.empty() &&
+            engine_->detokenize_text(reasoning_guard_tokens_.close_suffix) ==
+                kReasoningCloseSerialization &&
+            engine_->detokenize_text(reasoning_guard_tokens_.think_close) == kReasoningThinkClose;
+        if (!reasoning_retry_enabled_) {
+            std::fprintf(stderr,
+                         "reasoning-close retry off: the tokenizer does not round-trip the "
+                         "canonical close suffix\n");
+        }
     }
 }
 
@@ -441,10 +491,13 @@ PreparedRequest GenerationService::prepare_impl(const GenerationRequest& request
             request_options.execution.thinking.budget.reset();
             prepared.thinking_budget.reset();
         }
-        if (prefill_miss_dump_ != nullptr) {
+        const bool retry_eligible =
+            reasoning_retry_eligible(reasoning_retry_enabled_, prompt.summary());
+        if (prefill_miss_dump_ != nullptr || retry_eligible) {
             const std::span<const ninfer::TokenId> prompt_ids = prompt.token_ids();
             prepared.prompt_token_ids.assign(prompt_ids.begin(), prompt_ids.end());
         }
+        if (retry_eligible) { prepared.continuation_options = request_options; }
         prepared.prompt_tokens           = static_cast<int>(prompt.summary().prompt_tokens);
         prepared.preparation             = prompt.preparation_stats();
         prepared.service_prepare_seconds = std::max(
@@ -546,8 +599,93 @@ GenerationOutcome GenerationService::run(PreparedRequest& prepared, const Stream
             static_cast<std::uint32_t>(outcome.stats.reused_prompt_tokens),
             outcome.finish_reason == ninfer::FinishReason::Cancelled ? "cancelled" : "finished");
     }
+    if (prepared.continuation_options) {
+        apply_reasoning_retry(prepared, outcome, sink, cancellation);
+    }
     prepared.prompt_token_ids = {};
     return outcome;
+}
+
+void GenerationService::apply_reasoning_retry(PreparedRequest& prepared,
+                                              GenerationOutcome& outcome, const StreamSink* sink,
+                                              const ninfer::CancellationView& cancellation) {
+    const ReasoningRetryPlan plan = plan_reasoning_retry(
+        ReasoningRetryInput{.starts_in_reasoning      = prepared.enable_thinking,
+                            .finish_reason            = outcome.finish_reason,
+                            .generated                = outcome.generated_token_ids,
+                            .content                  = outcome.text,
+                            .tool_calls               = outcome.tool_calls.size(),
+                            .thinking_control_applied = outcome.stats.thinking.applied,
+                            .requested_output_tokens =
+                                prepared.continuation_options->execution.requested_output_tokens},
+        reasoning_guard_tokens_);
+    if (plan.trigger == ReasoningRetryTrigger::None || cancellation.requested()) { return; }
+    ReasoningRetryOutcome& stats = outcome.reasoning_retry;
+    stats.trigger                = plan.trigger;
+    stats.kept_tokens            = plan.kept_tokens;
+    stats.injected_tokens        = plan.injected_tokens;
+
+    ninfer::RequestOptions options = std::move(*prepared.continuation_options);
+    prepared.continuation_options.reset();
+    if (plan.remaining_output_tokens) {
+        options.execution.requested_output_tokens = *plan.remaining_output_tokens;
+    }
+    // A fresh draw: the continuation of an EmptyAfterClose reply samples the same position again.
+    options.execution.sampling.seed = prepared.sampling.seed + 1U;
+    options.execution.thinking.budget.reset();
+
+    // The continuation prompt is this request's rendered prompt plus the reply so far; the prompt
+    // ids are already rendered, so the raw-token route reproduces it without re-rendering.
+    std::vector<ninfer::TokenId> tokens = prepared.prompt_token_ids;
+    tokens.insert(tokens.end(), plan.appended.begin(), plan.appended.end());
+
+    std::unique_ptr<ContinuationSink> continuation_sink;
+    if (sink != nullptr) { continuation_sink = std::make_unique<ContinuationSink>(*sink); }
+
+    ninfer::GenerationResult second;
+    try {
+        const auto deadline = Clock::now() + std::chrono::milliseconds(
+                                                options_.launch.engine.pending_timeout_ms);
+        ninfer::PreparedPrompt prompt = engine_->prepare_tokens(std::move(tokens));
+        ninfer::GenerationHandle generation = engine_->submit(
+            std::move(prompt), std::move(options),
+            sink != nullptr ? ninfer::OutputConsumerMode::Streaming
+                            : ninfer::OutputConsumerMode::Aggregate,
+            {}, deadline);
+        second = generation.wait(continuation_sink.get(), cancellation);
+    } catch (const std::exception& exception) {
+        // The first reply stands as it was.
+        stats.error = exception.what();
+        return;
+    }
+
+    stats.continuation_prompt     = second.prompt.prompt_tokens;
+    stats.continuation_completion = static_cast<std::uint32_t>(second.generated_token_ids.size());
+    outcome.text                = std::move(second.content);
+    outcome.reasoning += second.reasoning;
+    outcome.tool_calls          = std::move(second.tool_calls);
+    outcome.tool_call_parse     = second.tool_call_parse;
+    outcome.finish_reason       = second.finish_reason;
+    outcome.matched_stop_string = std::move(second.matched_stop_string);
+    outcome.reasoning_tokens += static_cast<int>(second.reasoning_tokens);
+    // The reply the client sees is the kept reply, the injected close and the continuation, so the
+    // token ids stay aligned with the completion count.
+    std::vector<ninfer::TokenId> combined = plan.appended;
+    combined.insert(combined.end(), second.generated_token_ids.begin(),
+                    second.generated_token_ids.end());
+    outcome.generated_token_ids = std::move(combined);
+    outcome.completion_tokens   = static_cast<int>(outcome.generated_token_ids.size());
+
+    RequestStats& stats_total = outcome.stats;
+    stats_total.timings.prefill_seconds += second.stats.timings.prefill_seconds;
+    stats_total.timings.decode_seconds += second.stats.timings.decode_seconds;
+    stats_total.timings.generation_wall_seconds += second.stats.timings.generation_wall_seconds;
+    stats_total.timings.total_seconds += second.stats.timings.total_seconds;
+    stats_total.reused_prompt_tokens += second.stats.reused_prompt_tokens;
+    stats_total.speculative.rounds += second.stats.speculative.rounds;
+    stats_total.speculative.drafted_tokens += second.stats.speculative.drafted_tokens;
+    stats_total.speculative.accepted_tokens += second.stats.speculative.accepted_tokens;
+    stats_total.speculative.fallback_steps += second.stats.speculative.fallback_steps;
 }
 
 void GenerationService::warmup() {

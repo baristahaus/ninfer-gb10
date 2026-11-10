@@ -1086,6 +1086,7 @@ The table lists executable defaults. The startup example selects a long-context 
 | `--media-live-capacity SIZE` | all live prepared BF16 media payloads | `2GiB` |
 | `--media-preprocess-threads N` | bounded media preprocessing workers; `0` selects at most 16 from host concurrency | `0` |
 | `--request-log-jsonl FILE` | append full-precision server/request records | disabled |
+| `--reasoning-close-retry` | when a reply ends while thinking is still open with blank content and no tool call, close the thinking with the canonical suffix and continue once from the reply so far; a reply that stops right after the close is resumed once with a fresh seed. A reply that does not end this way is unaffected. Off disables it, and it is off unless given | off |
 | `--log-speculation-detail` | add `speculative.detail` to every `request_done` record: one character per committed decode step, the hexadecimal digit of the draft tokens that step accepted or `-` for a step that verified no draft, plus the draft window and a truncated flag. Requires `--request-log-jsonl` | off |
 | `--log-speculation-detail-max-steps N` | decode steps recorded per request; a shorter sequence than the request's decode steps marks the record truncated | `4096` |
 | `--ignore-eos` | suppress the model's end-of-sequence stop tokens for every request on the instance; explicit per-request stop strings still apply (benchmark knob) | off |

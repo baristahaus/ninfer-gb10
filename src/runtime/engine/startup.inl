@@ -250,10 +250,25 @@ BuiltModel<typename Setup::Types> build_local_model(const artifact::Reader& read
         }
         return std::optional<typename Setup::ExecutionPlan>{};
     };
-    auto candidate = choose(budget.available(device_memory_snapshot(device.device())));
-    if (!candidate)
-        throw std::invalid_argument(
-            "Device budget cannot hold model weights and required execution resources");
+    const std::size_t budget_available = budget.available(device_memory_snapshot(device.device()));
+    auto candidate                     = choose(budget_available);
+    if (!candidate) {
+        // Say how much is needed and how much there is. "It does not fit" leaves the reader to guess
+        // whether the model is too large, the context too long or the headroom too generous; the two
+        // numbers make the next move obvious, and on the two-GPU lane the per-rank footprint is the
+        // number that matters.
+        std::string detail = "Device budget cannot hold model weights and required execution "
+                             "resources: " +
+                             std::to_string(budget_available) + " bytes available";
+        if (!choices.empty()) {
+            std::size_t smallest = choices.front().device_bytes;
+            for (const auto& choice : choices) {
+                if (choice.device_bytes < smallest) { smallest = choice.device_bytes; }
+            }
+            detail += ", the smallest placement needs " + std::to_string(smallest) + " bytes";
+        }
+        throw std::invalid_argument(detail);
+    }
     binding.complete();
     using Types = typename Setup::Types;
     // Declared before the instance so it is destroyed AFTER the Program that borrows it.

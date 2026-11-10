@@ -66,6 +66,27 @@ int main() {
     }
 
     const std::vector<ninfer::TokenId> prompt{9707, 11, 1879, 13, 5765, 374};
+
+    // Single-arm mode, for the lab this test cannot run in: nowhere has one host where the 27B fits
+    // at BOTH widths (hephaestus has 2x16 GB and width 1 needs 20.4 GB; twofour has 121 GiB unified
+    // but one device). `NINFER_TP2_ARM=1` runs only the reference and prints its tokens;
+    // `=2` runs only the sharded arm. The two lists are then compared across machines, which
+    // catches every defect in the model math, the sharding or the collective -- and cannot catch one
+    // that depends on host state, which is stated rather than hidden.
+    if (const char* arm = std::getenv("NINFER_TP2_ARM")) {
+        const int width = std::atoi(arm);
+        std::vector<ninfer::TokenId> tokens;
+        try {
+            tokens = run_round(artifact, width, 0, prompt);
+        } catch (const std::exception& error) {
+            return fail(std::string("width ") + arm + " round threw: " + error.what());
+        }
+        std::cout << "arm " << width << " tokens (" << tokens.size() << "):";
+        for (const auto token : tokens) std::cout << ' ' << token;
+        std::cout << '\n';
+        return 0;
+    }
+
     std::vector<ninfer::TokenId> single;
     try {
         single = run_round(artifact, 1, 0, prompt);

@@ -83,7 +83,11 @@ __launch_bounds__(256) __global__
         partial_l += static_cast<std::int64_t>(batch) * Geometry::QHeads * tokens * split_count;
     }
     const int active_splits = partition.active(window);
-    __shared__ float weights[256], warp_sums[8], scalars[2];
+    // Sized from the split cap the planner is allowed to produce, not from a literal, so the
+    // array and CausalKvPartition::kMaxSplits cannot drift apart. `active_splits` is
+    // partition.active(window), which is at most partition.capacity, which the launchers require
+    // to be at most kMaxSplits.
+    __shared__ float weights[CausalKvPartition::kMaxSplits], warp_sums[8], scalars[2];
     const float head_l = causal_merge_natural_statistics<Geometry>(
         partial_m, partial_l, q_head, token, tokens, active_splits, weights, warp_sums, scalars);
     const int d = d_start + tid;

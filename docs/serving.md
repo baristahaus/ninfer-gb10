@@ -1,14 +1,17 @@
 # HTTP serving
 
-`build/apps/ninfer-serve` loads one v3 `.ninfer` artifact and exposes OpenAI- and
+`build/rtx5090-release/apps/ninfer-serve` loads one v3 `.ninfer` artifact and exposes OpenAI- and
 Anthropic-compatible HTTP endpoints over one resident NInfer Engine.
+
+The commands use `build/rtx5090-release`, the RTX 5090 product preset. Substitute your own preset
+directory if you configured another target.
 
 ## Start the server
 
 See [CUDA synchronization](cli.md#cuda-synchronization) for the shared `NINFER_CUDA_SYNC` setting.
 
 ```bash
-./build/apps/ninfer-serve models/qwen3_8_27b_nvfp4.ninfer \
+./build/rtx5090-release/apps/ninfer-serve models/qwen3_8_27b_nvfp4.ninfer \
   --host 127.0.0.1 \
   --port 8080 \
   --max-context 240000 \
@@ -211,7 +214,7 @@ JSON mode and JSON Schema use the standard protocol fields:
 | Anthropic Messages | `output_config.format: {"type":"json_schema","schema":{...}}` |
 
 `json_object` requires an object root. Schema mode follows the supplied root type and enforces the
-[supported assertions](maintainer/constrained-decoding.md#42-json-and-schema-execution-contract),
+[supported assertions](maintainer/constrained-decoding.md),
 including when `strict` is omitted or false. Unsupported assertions return HTTP 400 before
 generation. OpenAI errors distinguish `invalid_json_schema`, `unsupported_json_schema` and
 `unsatisfiable_json_schema`; `param` identifies the request field followed by the schema JSON
@@ -251,7 +254,7 @@ repetition; `.` excludes line terminators, `\d`/`\w` use ASCII ranges, and `\s` 
 whitespace. Empty regex permits only empty content. Anchors are supported at the ends of top-level
 alternatives. Lookaround, backreferences, word boundaries, Unicode properties, flags and unknown
 escapes return HTTP 400. See the
-[language contract](maintainer/constrained-decoding.md#41-gbnf-regex-and-choice).
+[language contract](maintainer/constrained-decoding.md).
 Invalid choices and regexes use `invalid_choice` and `invalid_regex`, with the request field in
 `param`.
 
@@ -1137,7 +1140,7 @@ Backend pool and is consumed in physical page extents. `--no-prefix-reuse` selec
 mode and cannot be combined with any of the seven explicit context-cache capacity flags, including
 zero-valued flags.
 
-Run `./build/apps/ninfer-serve --help` for the exact option contract.
+Run `./build/rtx5090-release/apps/ninfer-serve --help` for the exact option contract.
 
 ### Shutdown
 

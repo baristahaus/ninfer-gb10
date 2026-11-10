@@ -244,7 +244,7 @@ reproduces the workload on the selected environment, not the historical score au
 The NVFP4 serving command was:
 
 ```bash
-build/apps/ninfer-serve out/qwen3_6_27b_nvfp4.ninfer \
+build/rtx5090-release/apps/ninfer-serve out/qwen3_6_27b_nvfp4.ninfer \
   --host 127.0.0.1 --port 18080 \
   --max-context 262144 --prefill-chunk 1024 --kv-dtype int8 \
   --spec mtp --draft-tokens 3 --proposal-head optimized

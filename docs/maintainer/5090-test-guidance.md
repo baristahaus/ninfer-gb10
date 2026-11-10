@@ -179,9 +179,9 @@ Both repros are registered in `tests/models/qwen3_5/tests.cmake` as
 run individually:
 
 ```bash
-cmake --build build -j                      # build everything, including the two repros
-NINFER_TEST_ARTIFACT=/path/to/27b.ninfer ./build/tests/ninfer_qwen3_5_repro_vision_reuse_divergence
-NINFER_TEST_ARTIFACT=/path/to/27b.ninfer ./build/tests/ninfer_qwen3_5_repro_host_restore_state
+cmake --build build/rtx5090-dev -j                      # build everything, including the two repros
+NINFER_TEST_ARTIFACT=/path/to/27b.ninfer ./build/rtx5090-dev/tests/ninfer_qwen3_5_repro_vision_reuse_divergence
+NINFER_TEST_ARTIFACT=/path/to/27b.ninfer ./build/rtx5090-dev/tests/ninfer_qwen3_5_repro_host_restore_state
 ```
 
 - Bug #7 repro (FIXED): exit 0 = identical token sequences on the vision and text controls.

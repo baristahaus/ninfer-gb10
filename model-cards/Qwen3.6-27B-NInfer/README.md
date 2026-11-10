@@ -113,7 +113,7 @@ hf download neroued/Qwen3.6-27B-NInfer \
   qwen3_6_27b.ninfer \
   --local-dir models
 
-./build/apps/ninfer models/qwen3_6_27b.ninfer \
+./build/rtx5090-release/apps/ninfer models/qwen3_6_27b.ninfer \
   --prompt "Explain prefill and decode in three sentences." \
   --max-context 32768 \
   --max-tokens 8192 \
@@ -128,7 +128,7 @@ For images, videos, and structured chat history, see the
 ## Start a local server
 
 ```bash
-./build/apps/ninfer-serve models/qwen3_6_27b.ninfer \
+./build/rtx5090-release/apps/ninfer-serve models/qwen3_6_27b.ninfer \
   --host 127.0.0.1 \
   --port 8080 \
   --max-context 240000 \

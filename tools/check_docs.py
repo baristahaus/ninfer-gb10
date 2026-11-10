@@ -1,17 +1,31 @@
 #!/usr/bin/env python3
-"""Documentation guard: what the code accepts must be in the user documentation.
+"""Documentation guard: what the code and the build system accept must be in the user documentation.
 
 Checks:
   - every `--flag` that `src/serve/serve_options.cpp` parses appears in an option table of
-    `docs/serving.md` (a table row naming it in backticks);
+    `docs/serving.md` (a table row naming it in backticks), and every serve flag named in those
+    tables is parsed by that file (a stale flag name fails);
   - every `NINFER_*` environment variable read with getenv() under `src/` is named somewhere under
-    `docs/`.
+    `docs/`;
+  - every `cmake --preset NAME` and `ctest --preset NAME` names a preset in `CMakePresets.json`
+    (or a user preset defined in the ignored `CMakeUserPresets.json`);
+  - every `build/<preset>/...` path names a configure preset, and a path under `build/apps/`,
+    `build/bench/`, `build/tests/` or `build/lib/` fails because the binary directory is
+    `build/<preset>/`;
+  - `cmake -S . -B build`, `cmake --build build` and `ctest --test-dir build` fail: the documented
+    flow configures a preset, so the binary directory always carries the preset name.
+
+Scope: the documentation a reader or an operator follows today. `HISTORY.md` is a verbatim record
+of an earlier README, the dated `docs/maintainer/2026-*.md` plans record commands as they were run,
+and `share/` documents commands for a different repository. Those are excluded, so their historical
+commands do not fail this guard.
 
 Usage: check_docs.py [repository root]. Exit 1 and list what is missing.
 
-Run it from CI or by hand; it is the guard against the class of drift where a flag or an environment
-variable ships without a line in the docs.
+Run it from CI or by hand; it is the guard against the class of drift where a flag, an environment
+variable, a preset name or a binary path ships without a matching line in the docs.
 """
+import json
 import re
 import sys
 from pathlib import Path
@@ -30,16 +44,35 @@ def source_files():
                 yield path
 
 
+def active_docs():
+    """The documentation files this guard enforces, excluding the records named in the docstring."""
+    yield root / "README.md"
+    for path in sorted((root / "docs").rglob("*.md")):
+        if not path.name.startswith("2026-"):
+            yield path
+    for name in ("bench/README.md", "bench/parity/README.md", "tests/README.md",
+                 "tools/README.md", "eval/README.md", "examples/cli/README.md"):
+        yield root / name
+    yield from sorted((root / "model-cards").glob("*/README.md"))
+
+
 missing = []
 
 # 1. Serve flags must be documented in a docs/serving.md option table.
 serving = read("docs/serving.md")
 table_rows = "\n".join(line for line in serving.splitlines() if line.startswith("|"))
-flags = sorted(set(re.findall(r'arg == "(--[a-z0-9-]+)"', read("src/serve/serve_options.cpp"))))
+parsed_flags = set(re.findall(r'arg == "(--[a-z0-9-]+)"', read("src/serve/serve_options.cpp")))
+flags = sorted(parsed_flags)
 missing += [
     f"serve flag {flag} is parsed but no docs/serving.md option table names it"
     for flag in flags
     if f"`{flag}`" not in table_rows and f"`{flag} " not in table_rows
+]
+documented_flags = sorted(set(re.findall(r"`(--[a-z0-9-]+)", table_rows)))
+missing += [
+    f"serve flag {flag} is named in docs/serving.md but no src/serve/serve_options.cpp arg parses it"
+    for flag in documented_flags
+    if flag not in parsed_flags
 ]
 
 # 2. Environment variables must be documented somewhere under docs/.
@@ -57,10 +90,44 @@ missing += [
     if name not in documented_text
 ]
 
+# 3. Preset names must match CMakePresets.json.
+presets = {preset["name"] for preset in json.loads(read("CMakePresets.json"))["configurePresets"]}
+# Defined in the ignored CMakeUserPresets.json and shown as an example in build-system.md.
+user_presets = {"local"}
+components = {"apps", "bench", "tests", "lib"}
+preset_name = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+
+for path in active_docs():
+    text = path.read_text(encoding="utf-8")
+    label = path.relative_to(root)
+    for name in re.findall(r"\b(?:cmake|ctest)\s+--preset\s+([A-Za-z0-9_.-]+)", text):
+        if name in presets or name in user_presets or "<" in name:
+            continue
+        missing.append(f"{label}: preset {name} is not in CMakePresets.json")
+    for first in re.findall(r"\bbuild/([A-Za-z0-9_<>.-]+)/", text):
+        if first in components:
+            missing.append(
+                f"{label}: build/{first}/ is stale; the binary directory is build/<preset>/{first}/"
+            )
+        elif first not in presets and "<" not in first and preset_name.match(first):
+            missing.append(f"{label}: build/{first}/ does not name a configure preset")
+    for pattern, entry in (
+        (r"cmake\s+-S\s+\.\s+-B\s+build(?![-\w/])", "cmake -S . -B build"),
+        (r"cmake\s+--build\s+build(?![-\w/])", "cmake --build build"),
+        (r"ctest\s+--test-dir\s+build(?![-\w/])", "ctest --test-dir build"),
+    ):
+        if re.search(pattern, text):
+            missing.append(
+                f"{label}: {entry} is stale; configure a preset and use build/<preset>/"
+            )
+
 if missing:
     print(f"{len(missing)} documentation gap(s):")
     for entry in missing:
         print(f"  {entry}")
     sys.exit(1)
 
-print(f"ok: {len(flags)} serve flags and {len(environment)} environment variables are documented")
+print(
+    f"ok: {len(flags)} serve flags, {len(environment)} environment variables, "
+    f"{len(presets)} presets, and the preset binary paths are documented"
+)

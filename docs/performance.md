@@ -30,6 +30,13 @@ Qwen3.8-Flash-Next is supported, but has no published result page in this campai
 The Qwen3.8-27B measurements above describe a different architecture and artifact.
 Flash Next's current execution scope is documented [here](maintainer/qwen4_exp-execution.md).
 
+## Cross-engine parity
+
+[Cross-engine parity](performance/cross-engine-parity.md) records a measured comparison of NInfer
+against capy-flash on one RTX 5090 with one shared 27B artifact. It covers decode and TTFT parity at
+tp 1 without speculation, and it states the conditions and the limits of that comparison. The
+harness is [`bench/parity/measure_parity.py`](../bench/parity/measure_parity.py).
+
 ## Reading the results
 
 | Question | Metric to use |
@@ -50,7 +57,7 @@ and [Qwen3.8 completion outcomes](performance/qwen3.8-27b.md#completion-outcomes
 - [Serving benchmark runners](../tools/bench/README.md#serving-corpus-benchmark): usage and local report files.
 - [Engine and Op benchmarks](../bench/README.md): their separate measurement scopes and commands.
 - [Capability evaluation](../eval/README.md): evaluation workflow; published scores live in the
-  [model cards](../model-cards/), with a [README summary](../README.md#evaluation).
+  [model cards](../model-cards/), with the [historical README summary](../HISTORY.md#evaluation).
 - [Perplexity](perplexity.md): offline causal-scoring measurement and comparison rules.
 
 Model pages are the detailed result authority. README and model-card performance tables are

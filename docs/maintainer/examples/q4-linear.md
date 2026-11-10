@@ -96,14 +96,14 @@ FP16 scale，以 FP64 矩阵乘法为 oracle，按既有 A16 标准检查公开�
 ## 复现
 
 ```bash
-cmake --build build -j --target ninfer_linear_bench
+cmake --build build/rtx5090-dev -j --target ninfer_linear_bench
 
-./build/bench/ninfer_linear_bench \
+./build/rtx5090-dev/bench/ninfer_linear_bench \
   --qtype q4 --policy a16 --n 6144 --k 5120 \
   --sweep 1:128:1 --execution graph --graph-calls 1 \
   --warmup 5 --repeat 30 --flush-mib 256 \
   --csv-out profiles/bench/q4_report_20260926/hot.csv
-./build/bench/ninfer_linear_bench \
+./build/rtx5090-dev/bench/ninfer_linear_bench \
   --qtype q4 --policy a16 --n 6144 --k 5120 \
   --sweep 512:1024:512 --execution graph --graph-calls 1 \
   --warmup 5 --repeat 30 --flush-mib 256 \

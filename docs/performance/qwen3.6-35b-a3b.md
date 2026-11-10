@@ -216,13 +216,13 @@ Campaign reports: `profiles/bench/qwen3_6_35b_a3b_retest_20260907_130244/`.
 Select an unused `NINFER_PERF_OUTPUT` directory for a new run.
 
 ```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j --target ninfer-serve
+cmake --preset rtx5090-dev
+cmake --build build/rtx5090-dev -j --target ninfer-serve
 
 NINFER_BENCH_PYTHON=/home/neroued/miniconda3/envs/py311/bin/python
 NINFER_PERF_OUTPUT=profiles/bench/qwen3_6_35b_a3b_performance
 NINFER_PERF_COMMON=(
-  --serve build/apps/ninfer-serve
+  --serve build/rtx5090-dev/apps/ninfer-serve
   --artifact qwen3_6_35b_a3b=out/qwen3_6_35b_a3b.ninfer
   --kv-capacity auto --prefill-chunk 1024 --device 0 --port 18080
 )

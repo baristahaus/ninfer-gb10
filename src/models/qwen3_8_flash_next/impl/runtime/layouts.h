@@ -89,6 +89,12 @@ struct SequencePlanningInputs {
     ContextCacheOptions context_cache;
     // Report a target-model log probability for every published generated token. Fixed at load.
     bool token_logprobs = false;
+    // The execution group this plan is for. `width` 1 and `rank` 0 are the single-device lane and
+    // are what every existing path gets, so a plan that never mentions the group plans exactly what
+    // it planned before the group existed. The persistent layouts are planned from the sharded
+    // specs when `width` > 1: `rank` selects which rank's geometry this plan describes.
+    int width = 1;
+    int rank  = 0;
 };
 
 } // namespace ninfer::models::qwen3_8_flash_next::detail::NINFER_QWEN38_FLASH_NEXT_RUNTIME_NS
@@ -113,6 +119,11 @@ struct SequencePlanImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT> {
     int device          = 0;
     ContextCacheOptions context_cache;
     bool token_logprobs = false;
+    // The execution group: `width` 1 is the single-device lane. `rank` is which rank's persistent
+    // geometry this plan carries; a Program plans rank 0's, and the peer rank's layouts are planned
+    // from a copy of this plan with `rank` set to its own index.
+    int width = 1;
+    int rank  = 0;
     NINFER_QWEN38_FLASH_NEXT_RUNTIME_NS::PersistentLayout persistent;
     NINFER_QWEN38_FLASH_NEXT_RUNTIME_NS::WorkspacePlan workspace;
     std::size_t graph_allowance_bytes    = 0;

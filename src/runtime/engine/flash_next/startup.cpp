@@ -299,8 +299,12 @@ ConstructedFlashNextModel construct_flash_next(EngineOptions& options, artifact:
     planning_phase.complete();
 
     StartupPhaseScope program_phase(options.startup_observer, StartupPhase::ProgramInitialize);
+    // The two-GPU lane hands the Program rank 1's device: the Program then builds rank 1's
+    // persistent storage from the sharded layouts and attaches the KV and StateImage mirrors.
+    // Null is the single-device lane, which builds neither.
+    DeviceContext* peer_device = execution->parallel() ? &execution->device(1) : nullptr;
     instance->program = Model::create_program(*instance->model, std::move(sequence), device,
-                                              options.startup_observer);
+                                              options.startup_observer, peer_device);
     device.synchronize();
     program_phase.complete();
 

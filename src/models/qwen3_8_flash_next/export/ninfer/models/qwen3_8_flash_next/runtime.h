@@ -998,7 +998,8 @@ private:
     template <class V>
     friend std::unique_ptr<Program<V>> create_program(const typename V::ModelView&,
                                                       typename V::WeightsProfile, SequencePlan<V>&&,
-                                                      DeviceContext&, const StartupObserver&);
+                                                      DeviceContext&, const StartupObserver&,
+                                                      DeviceContext*);
 };
 
 namespace detail {
@@ -1164,6 +1165,7 @@ template <class Variant>
 [[nodiscard]] std::unique_ptr<Program<Variant>>
 create_program(const typename Variant::ModelView& model,
                typename Variant::WeightsProfile weights_profile, SequencePlan<Variant>&& plan,
-               DeviceContext& device, const StartupObserver& startup_observer);
+               DeviceContext& device, const StartupObserver& startup_observer,
+               DeviceContext* peer_device = nullptr);
 
 } // namespace ninfer::models::qwen3_8_flash_next

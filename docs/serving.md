@@ -1187,7 +1187,7 @@ they do not infer request behavior from process-global counter deltas.
 | `request_rejected` | parsed request shape, requested reasoning effort, media-item count, `phase: "prepare"`, and the exact HTTP status/type/code/parameter/message for a synchronous preparation rejection |
 | `request_done` | finish reason, prompt/completion/cache/computed-prefill tokens, prefix reuse path, tool-call parse diagnostics, request-owned materialization cost/search diagnostics, thinking-budget application counters, unrounded request-stage seconds, per-request Engine Host exposure, and complete speculative-decoding counters |
 | `request_error` | the resolved request configuration and the generation, cancellation, or pre-outcome transport terminal message |
-| `throughput` | interval token/decode/context-cache pressure counter deltas, authoritative worker Host-work deltas, current scheduler/resource gauges, and decode-round batch statistics |
+| `throughput` | interval token/decode/context-cache pressure counter deltas, authoritative worker Host-work deltas, current scheduler/resource gauges, decode-round batch statistics, and per-device GPU telemetry |
 
 `requested_reasoning_effort` and `preserve_thinking` record the explicit options, or `null` when
 unspecified. `enable_thinking` records whether the response starts in thinking mode.
@@ -1272,6 +1272,16 @@ complete measurement analysis.
 Intervals with context materialization or retention activity are retained even when they contain no
 token execution; only fully idle intervals are omitted. Downstream measurement should prefer the
 raw counters and seconds over rounded stderr rates.
+
+The JSONL `throughput.gpus` array samples each resident device through the NVIDIA Management
+Library, which is loaded at run time: SM and memory clocks, board power, energy over the interval,
+GPU temperature, and the active clocks-event (throttle) reason bits as a name array. The array is
+`null` when the server cannot load `libnvidia-ml.so.1` or when the JSONL log is off; a field NVML
+could not read is `null` while its siblings are populated. `energy_joules` covers the interval since
+the previous sample, so the first sample of a process only sets the baseline and reports no energy.
+Sampling runs on the statistics thread and never on the request path; utilisation percentage and
+device memory occupancy are deliberately absent because the Engine already reports process memory
+and `/metrics` is the authority for it.
 
 ## Execution behavior
 

@@ -96,3 +96,11 @@ ninfer_add_test(ninfer_tool_streaming_test
 ninfer_add_test(ninfer_reasoning_retry_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_reasoning_retry.cpp"
   LIBRARIES ninfer_serve)
+
+ninfer_add_test(ninfer_gpu_telemetry_test
+  SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_gpu_telemetry.cpp"
+  LIBRARIES ninfer_serve)
+
+ninfer_add_test(ninfer_prefill_miss_dump_test
+  SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_prefill_miss_dump.cpp"
+  LIBRARIES ninfer_serve)

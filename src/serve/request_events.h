@@ -1,12 +1,14 @@
 #pragma once
 
 #include "serve/generation_service.h"
+#include "serve/gpu_telemetry.h"
 #include "serve/request.h"
 
 #include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace ninfer::serve {
 
@@ -103,6 +105,9 @@ struct ThroughputReport {
     std::uint64_t decode_row_rounds       = 0;
     ninfer::RuntimeStats previous;
     ninfer::RuntimeStats current;
+    // Per-device clocks, power, energy and temperature at the end of the interval; nullopt when
+    // the GPU telemetry library is unavailable or the JSONL log is off.
+    std::optional<std::vector<GpuTelemetrySample>> gpus;
     bool final_interval = false;
 };
 

@@ -92,3 +92,7 @@ ninfer_add_test(ninfer_http_transport_test
 ninfer_add_test(ninfer_tool_streaming_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_tool_streaming.cpp"
   LIBRARIES ninfer_serve ninfer_model_execution ninfer::json)
+
+ninfer_add_test(ninfer_reasoning_retry_test
+  SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_reasoning_retry.cpp"
+  LIBRARIES ninfer_serve)

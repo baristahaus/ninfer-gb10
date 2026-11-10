@@ -174,7 +174,20 @@ ConstructedModel construct_model(EngineOptions& options) {
     StartupPhaseScope inspect(options.startup_observer, StartupPhase::ArtifactInspect);
     artifact::Reader reader(options.artifact_path);
     inspect.complete();
-    switch (models::resolve_architecture(reader.directory())) {
+    const models::Architecture architecture = models::resolve_architecture(reader.directory());
+
+    // `EngineOptions::token_logprobs` says a request asking for probabilities against an engine
+    // loaded without the capability is *rejected* rather than answered with placeholders. Only the
+    // Flash-Next family implements the egress; the others silently returned empty score spans, which
+    // is the placeholder the contract forbids. Rejecting at load is the right place: the capability
+    // is fixed for the engine's lifetime, so a per-request check would only move the surprise later.
+    if (options.token_logprobs && architecture != models::Architecture::Qwen3_8FlashNext) {
+        throw std::invalid_argument(
+            "this architecture does not report token log-probabilities; load it without "
+            "token_logprobs or use a Flash-Next artifact");
+    }
+
+    switch (architecture) {
     case models::Architecture::Qwen4Exp: {
 #if NINFER_ENABLE_DISTRIBUTED
         if (options.deployment && options.deployment->ranks.size() > 1) {

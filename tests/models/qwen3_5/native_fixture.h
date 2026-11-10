@@ -13,6 +13,7 @@
 #include <thread>
 #include <functional>
 #include <memory>
+#include <vector>
 #include <utility>
 
 namespace ninfer::test::qwen3_5 {
@@ -107,28 +108,33 @@ public:
                       std::shared_ptr<const q35::execution::ModelProfile> profile,
                       const EngineOptions& options, std::uint32_t page_groups)
         : definition(std::move(definition)) {
-        auto device   = std::make_unique<DeviceContext>();
-        device_       = device.get();
+        // The worker borrows the device, so the fixture must own it and keep it alive for at least
+        // as long as the executor. Declared before `executor_` for that reason.
+        owned_device_ = std::make_unique<DeviceContext>();
+        DeviceContext& device = *owned_device_;
+        device_               = owned_device_.get();
         auto instance = std::make_unique<runtime::RankModelInstance<ObservedTypes>>(
             std::make_unique<SharedModel>(SharedModel{std::move(model)}), profile);
-        auto planner        = q35::make_sequence_planner(profile, *device, options);
+        auto planner        = q35::make_sequence_planner(profile, device, options);
         auto plan           = std::move(planner).finalize(page_groups);
         session_plan        = q35::plan_session(plan);
-        auto native_planner = q35::detail::make_sequence_planner_impl(profile, *device, options);
+        auto native_planner = q35::detail::make_sequence_planner_impl(profile, device, options);
         auto native_plan =
             q35::detail::finalize_sequence_plan_impl(std::move(native_planner), page_groups);
         instance->program =
-            std::make_unique<ObservedRank>(instance->parameters, *native_plan, *device);
+            std::make_unique<ObservedRank>(instance->parameters, *native_plan, device);
         observed_             = instance->program.get();
         const auto& resources = observed_->implementation.resources;
         session_plan.context.pools[0].transfer =
             resources.decoder.text_kv.pages().transfer_profile();
         if (const auto* backend = resources.backend_kv())
             session_plan.context.pools[1].transfer = backend->pages().transfer_profile();
-        auto worker = std::make_unique<runtime::RankWorker<ObservedTypes>>(std::move(device),
+        auto worker = std::make_unique<runtime::RankWorker<ObservedTypes>>(device,
                                                                            std::move(instance));
-        executor_   = std::make_unique<runtime::LocalExecutor<ObservedTypes>>(
-            std::move(worker), runtime::SessionEpoch{next_epoch_.fetch_add(1)});
+        std::vector<std::unique_ptr<runtime::RankWorker<ObservedTypes>>> workers;
+        workers.push_back(std::move(worker));
+        executor_ = std::make_unique<runtime::LocalExecutor<ObservedTypes>>(
+            std::move(workers), runtime::SessionEpoch{next_epoch_.fetch_add(1)});
     }
 
     [[nodiscard]] DeviceContext& device() noexcept { return *device_; }
@@ -146,6 +152,7 @@ public:
 
 private:
     inline static std::atomic<std::uint64_t> next_epoch_{1};
+    std::unique_ptr<DeviceContext> owned_device_;
     DeviceContext* device_  = nullptr;
     ObservedRank* observed_ = nullptr;
     std::unique_ptr<runtime::LocalExecutor<ObservedTypes>> executor_;

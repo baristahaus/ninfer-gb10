@@ -113,6 +113,25 @@ EngineOptions normalize_engine_options(EngineOptions options) {
     }
 
     ContextCacheOptions& cache      = options.context_cache;
+
+    // Tensor parallelism has no Host tier. A rank-1 KV replica is replayed on rank 1's stream, and
+    // the Program's host-tier spill and restore call the physical pool directly rather than the
+    // mirror funnel — so at width > 1 a host transfer would move rank 0's KV and leave rank 1's
+    // replica stale with no error at all. capy reaches the same conclusion by the same route: both
+    // Host tiers are zero at tp 2. Refusing the request is better than silently zeroing it, because
+    // the caller asked for memory the lane cannot keep coherent.
+    if (options.devices.size() > 1) {
+        const bool host_tier_requested =
+            cache.host_capacity_bytes.value_or(0) != 0 || cache.host_state_slots != 0 ||
+            cache.host_kv_capacity_bytes != 0;
+        if (host_tier_requested) {
+            throw std::invalid_argument(
+                "tensor parallelism has no Host KV or state tier: the rank-1 replica is replayed on "
+                "rank 1's stream and a host transfer would leave it stale. Clear the Host tier "
+                "options (--host-kv-mib, --host-state-slots, host context-cache capacity)");
+        }
+    }
+
     const std::uint32_t concurrency = options.max_concurrency;
     cache.extra_state_slots         = cache.extra_state_slots.value_or(concurrency);
     const std::uint64_t total_device_state_slots =

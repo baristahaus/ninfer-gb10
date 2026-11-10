@@ -1,14 +1,16 @@
 # NInfer CLI
 
-`build/apps/ninfer` runs one request against one v3 `.ninfer` artifact. Build NInfer and
+`build/rtx5090-release/apps/ninfer` runs one request against one v3 `.ninfer` artifact. Build NInfer and
 download an artifact using the [project README](../README.md) before following this guide.
 
-The examples use Qwen3.8-27B NVFP4 with FP8 KV storage.
+The examples use Qwen3.8-27B NVFP4 with FP8 KV storage. The commands use
+`build/rtx5090-release`, the RTX 5090 product preset. Substitute your own preset directory if you
+configured another target.
 
 ## Text input
 
 ```bash
-./build/apps/ninfer models/qwen3_8_27b_nvfp4.ninfer \
+./build/rtx5090-release/apps/ninfer models/qwen3_8_27b_nvfp4.ninfer \
   --prompt "Summarize the difference between prefill and decode." \
   --max-context 32768 \
   --max-new 8192 \
@@ -30,7 +32,7 @@ ANSI escapes. `--log-level debug` exposes every startup phase. Option and local 
 failures remain direct command diagnostics:
 
 ```bash
-./build/apps/ninfer models/qwen3_8_27b_nvfp4.ninfer \
+./build/rtx5090-release/apps/ninfer models/qwen3_8_27b_nvfp4.ninfer \
   --prompt "Return one sentence." \
   --max-context 4096 \
   --max-new 64 \
@@ -42,7 +44,7 @@ failures remain direct command diagnostics:
 Changes to the file take effect after restarting NInfer:
 
 ```bash
-./build/apps/ninfer models/qwen3_8_27b.ninfer \
+./build/rtx5090-release/apps/ninfer models/qwen3_8_27b.ninfer \
   --chat-template tools/chat_templates/qwen3_8.jinja --prompt "Hello"
 ```
 
@@ -50,7 +52,7 @@ Changes to the file take effect after restarting NInfer:
 
 ```bash
 printf 'root ::= "yes" | "no"\n' > answer.gbnf
-./build/apps/ninfer models/qwen3_8_27b_nvfp4.ninfer \
+./build/rtx5090-release/apps/ninfer models/qwen3_8_27b_nvfp4.ninfer \
   --prompt "Is 17 prime?" --no-thinking --grammar-file answer.gbnf --max-new 64
 ```
 
@@ -58,16 +60,16 @@ printf 'root ::= "yes" | "no"\n' > answer.gbnf
 `--regex PATTERN` constrains the complete answer to a regular expression:
 
 ```bash
-./build/apps/ninfer models/qwen3_8_27b_nvfp4.ninfer \
+./build/rtx5090-release/apps/ninfer models/qwen3_8_27b_nvfp4.ninfer \
   --prompt "Classify this review: the service was excellent." --no-thinking \
   --choice positive --choice neutral --choice negative
 
-./build/apps/ninfer models/qwen3_8_27b_nvfp4.ninfer \
+./build/rtx5090-release/apps/ninfer models/qwen3_8_27b_nvfp4.ninfer \
   --prompt "Return ticket TASK-0042." --no-thinking --regex '(BUG|TASK)-[0-9]{4}'
 ```
 
 Candidates preserve exact text; `--choice ''` explicitly permits empty content. `--regex ''`
-permits only empty content. See the [language contract](maintainer/constrained-decoding.md#41-gbnf-regex-and-choice)
+permits only empty content. See the [language contract](maintainer/constrained-decoding.md)
 for supported regex syntax.
 
 `--json-object` constrains the answer to a JSON object. `--json-schema-file FILE` applies a JSON
@@ -75,7 +77,7 @@ Schema. All output constraint options are mutually exclusive:
 
 ```bash
 printf '%s\n' '{"type":"object","properties":{"answer":{"type":"integer"}},"required":["answer"],"additionalProperties":false}' > answer.schema.json
-./build/apps/ninfer models/qwen3_8_27b_nvfp4.ninfer \
+./build/rtx5090-release/apps/ninfer models/qwen3_8_27b_nvfp4.ninfer \
   --prompt "Return the answer to 6 times 7 as JSON." --no-thinking \
   --json-schema-file answer.schema.json --max-new 64
 ```
@@ -87,7 +89,7 @@ the answer is either JSON or a tool-call sequence. GBNF, choice and regex requir
 Constraints reject custom stops and `--raw-output`. A Qwen3.8 Flash-Next artifact has no
 token-mask execution and rejects every constraint option. JSON uses compact separators and declared property order. Describe
 the desired content in the prompt; the schema is not added to it automatically. See the
-[supported schema subset](maintainer/constrained-decoding.md#42-json-and-schema-execution-contract).
+[supported schema subset](maintainer/constrained-decoding.md).
 
 Omitted thinking and effort options use the selected template's defaults. `--no-thinking` or
 `--reasoning-effort none` requests disabled thinking; other effort values cannot be combined with
@@ -114,7 +116,7 @@ For example, this allows at most 512 model-origin thinking tokens while retainin
 output capacity for the inserted suffix and the answer:
 
 ```bash
-./build/apps/ninfer models/qwen3_8_27b_nvfp4.ninfer \
+./build/rtx5090-release/apps/ninfer models/qwen3_8_27b_nvfp4.ninfer \
   --prompt "Explain speculative decoding, then give a concise conclusion." \
   --max-context 4096 \
   --max-new 1024 \
@@ -174,7 +176,7 @@ and an optional `tools` array.
 Run message files from the repository root when they contain repository-relative media paths:
 
 ```bash
-./build/apps/ninfer models/qwen3_8_27b_nvfp4.ninfer \
+./build/rtx5090-release/apps/ninfer models/qwen3_8_27b_nvfp4.ninfer \
   --messages examples/cli/messages/image_chart.json \
   --max-context 8192 \
   --max-new 128 \
@@ -215,7 +217,7 @@ rows (0, the default, uses the artifact's full head). N must be a multiple of 12
 only; it requires `--spec mtp --lm-head-draft`:
 
 ```bash
-./build/apps/ninfer models/qwen3_6_35b_a3b.ninfer \
+./build/rtx5090-release/apps/ninfer models/qwen3_6_35b_a3b.ninfer \
   --prompt "Write a short explanation of speculative decoding." \
   --max-context 16384 \
   --max-new 512 \
@@ -227,7 +229,7 @@ only; it requires `--spec mtp --lm-head-draft`:
 For DFlash:
 
 ```bash
-./build/apps/ninfer models/qwen3_6_35b_a3b.ninfer \
+./build/rtx5090-release/apps/ninfer models/qwen3_6_35b_a3b.ninfer \
   --prompt "Write a short explanation of speculative decoding." \
   --max-context 16384 --max-new 512 \
   --kv-dtype fp8 \
@@ -310,7 +312,7 @@ Repeat `--stop-token-id`, `--stop`, or `--reasoning-stop` to add stop conditions
 `--raw-output` to expose the frontend's raw output stream and `--print-token-ids` to include
 generated token IDs in diagnostics.
 
-Run `./build/apps/ninfer --help` for the exact option contract.
+Run `./build/rtx5090-release/apps/ninfer --help` for the exact option contract.
 
 ## CUDA synchronization
 
@@ -323,7 +325,7 @@ the decode performance cost depends on the host. `yield` yields the CPU while wa
 uses CUDA's scheduling heuristic, not an automatic performance benchmark.
 
 ```bash
-NINFER_CUDA_SYNC=blocking ./build/apps/ninfer models/qwen3_8_27b_nvfp4.ninfer --prompt "Hello"
+NINFER_CUDA_SYNC=blocking ./build/rtx5090-release/apps/ninfer models/qwen3_8_27b_nvfp4.ninfer --prompt "Hello"
 ```
 
 The Engine-ready log reports the selected mode. Empty or unrecognized values, or failure to apply

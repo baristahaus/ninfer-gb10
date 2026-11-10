@@ -246,7 +246,7 @@ fp8 KV, prompt 2048 + 512 generated tokens, three measured repetitions after one
 pre-port binary (`5090-test@3b885469`) and the SP-2 binary ran identical commands:
 
 ```bash
-./build/bench/ninfer_bench --weights <27b-v3-nvfp4>.ninfer --corpus bench/fixtures/bench_corpus.ids \
+./build/rtx5090-dev/bench/ninfer_bench --weights <27b-v3-nvfp4>.ninfer --corpus bench/fixtures/bench_corpus.ids \
   -pg 2048,512 -r 3 --kv-dtype fp8 --spec mtp --draft-tokens 3 --lm-head-draft [--json-object]
 ```
 
@@ -277,7 +277,7 @@ fp8 KV, prompt 2048 + 512 generated tokens, three measured repetitions after one
 pre-port binary (`5090-test@3b885469`) and the SP-2 binary ran identical commands:
 
 ```bash
-./build/bench/ninfer_bench --weights <27b-v3-nvfp4>.ninfer --corpus bench/fixtures/bench_corpus.ids \
+./build/rtx5090-dev/bench/ninfer_bench --weights <27b-v3-nvfp4>.ninfer --corpus bench/fixtures/bench_corpus.ids \
   -pg 2048,512 -r 3 --kv-dtype fp8 --spec mtp --draft-tokens 3 --lm-head-draft [--json-object]
 ```
 
@@ -415,7 +415,7 @@ for perf_profile in nvfp4 groupwise-int; do
     nvfp4) perf_artifact=out/qwen3_8_27b_nvfp4.ninfer ;;
     groupwise-int) perf_artifact=out/qwen3_8_27b.ninfer ;;
   esac
-  perf_common=(--serve build/apps/ninfer-serve
+  perf_common=(--serve build/rtx5090-dev/apps/ninfer-serve
     --artifact "qwen3_8_27b=$perf_artifact"
     --kv-dtype fp8 --sampling stochastic --port 18080)
 

@@ -82,23 +82,22 @@ tools/gb10/step0_build_test.sh   # exit 0 only if everything below is green
 Manual equivalent (the flags `step0` uses):
 
 ```bash
-cmake -S . -B build -G Ninja \
-  -DCMAKE_BUILD_TYPE=Release -DCMAKE_CUDA_ARCHITECTURES=121a \
-  -DBUILD_TESTING=ON -DNINFER_BUILD_BENCHMARKS=ON -DNINFER_PERFORMANCE_TRACE=OFF
-cmake --build build -j
+cmake --preset dgx-spark-dev
+cmake --build build/dgx-spark-dev -j
 ```
 
-`NINFER_PERFORMANCE_TRACE=OFF` is mandatory for any build you will time; the
-step scripts check the cache and refuse a traced build.
+`dgx-spark-dev` selects `sm_121a` and enables the tests and the benchmarks. It leaves
+`NINFER_PERFORMANCE_TRACE` off, which is mandatory for any build you will time; the step scripts
+check the cache and refuse a traced build.
 
 Products:
 
 | Binary | Purpose |
 |---|---|
-| `build/apps/ninfer-serve` | HTTP server (the fleet workhorse) |
-| `build/apps/ninfer` | one-shot CLI request (smoke tests) |
-| `build/apps/ninfer-perplexity` | fixed-corpus perplexity gate |
-| `build/bench/ninfer_bench` | benchmarks |
+| `build/dgx-spark-dev/apps/ninfer-serve` | HTTP server (the fleet workhorse) |
+| `build/dgx-spark-dev/apps/ninfer` | one-shot CLI request (smoke tests) |
+| `build/dgx-spark-dev/apps/ninfer-perplexity` | fixed-corpus perplexity gate |
+| `build/dgx-spark-dev/bench/ninfer_bench` | benchmarks |
 
 `NINFER_CUDA_SYNC` needs no action on GB10: the default resolves to `yield`
 on integrated devices, which is the measured-best choice there.
@@ -133,7 +132,7 @@ line here or in the serving reference.
 The canonical GB10 production profile (full model context, two lanes, FP8 KV,
 
 ```bash
-build/apps/ninfer-serve "$ART" \
+build/dgx-spark-dev/apps/ninfer-serve "$ART" \
   --host 127.0.0.1 --port 8000 \
   --max-context 262144 \
   --max-concurrency 2 \
@@ -351,11 +350,11 @@ kill "$OLD_PID"                   # SIGTERM, drain up to 30 s
 ```
 
 The old `build/` directory is the rollback: if the new server misbehaves,
-stop it and start the previous binary (kept as `build/apps/ninfer-serve.old`)
+stop it and start the previous binary (kept as `build/dgx-spark-dev/apps/ninfer-serve.old`)
 or re-checkout the previous commit and rebuild. Artifacts are immutable; an
 artifact change is its own operation: verify the five files and sizes (section
 2), point `ART` at the new directory, run the real-artifact test
-(`NINFER_QWEN38_FLASH_NEXT_WEIGHTS="$ART" ctest --test-dir build -R
+(`NINFER_QWEN38_FLASH_NEXT_WEIGHTS="$ART" ctest --test-dir build/dgx-spark-dev -R
 'ninfer_qwen3_8_flash_next_(real|load_plan|frontend|fault)_test'`), restart.
 
 ## 9. Fleet operations
@@ -381,9 +380,9 @@ set -e
 : "${PORT:=8000}"          # production port
 cd "$NINFER_ROOT"
 test -f "$ART"                                     # 1. artifact entry present
-test -x build/apps/ninfer-serve                    # 2. built
+test -x build/dgx-spark-dev/apps/ninfer-serve      # 2. built
 curl -sf "http://127.0.0.1:$PORT/health" >/dev/null \
-  || ( build/apps/ninfer-serve "$ART" --host 127.0.0.1 --port "$PORT" \
+  || ( build/dgx-spark-dev/apps/ninfer-serve "$ART" --host 127.0.0.1 --port "$PORT" \
         --max-context 262144 --max-concurrency 2 --kv-dtype fp8 \
         --spec mtp --draft-tokens 3 --lm-head-draft --vision --preserve-thinking \
         --request-log-jsonl "$LOG_DIR/requests.jsonl" \
@@ -431,7 +430,7 @@ build:
   verify: tools/gb10/step0_build_test.sh
   pass: {exit: 0, ctest: "100% out of 140", real_artifact_tests: "4/4"}
 serve:
-  binary: build/apps/ninfer-serve
+  binary: build/dgx-spark-dev/apps/ninfer-serve
   canonical_flags: [--max-context, "262144", --max-concurrency, "2", --kv-dtype, fp8,
                     --spec, mtp, --draft-tokens, "3", --lm-head-draft, --vision,
                     --preserve-thinking, --request-log-jsonl, "$LOG_DIR/requests.jsonl"]

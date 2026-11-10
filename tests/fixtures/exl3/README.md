@@ -62,8 +62,8 @@ With the fixture in place, in NInfer's maintainer environment:
 
 ```bash
 python3 -m pytest tests/convert/quantization/test_exl3.py -q
-cmake --build build -j --target ninfer_exl3_codec_test
-ctest --test-dir build -R ninfer_exl3_codec_test --output-on-failure
+cmake --build build/rtx5090-dev -j --target ninfer_exl3_codec_test
+ctest --test-dir build/rtx5090-dev -R ninfer_exl3_codec_test --output-on-failure
 ```
 
 Both oracles must reproduce every fixture tile and coverage linear bit-exactly. The composed

@@ -17,6 +17,7 @@ The default configuration is Release. Ninja links and archives share the single-
 
 | Cache option | Default | Scope |
 |---|---|---|
+| `NINFER_TARGET` | `rtx5090` | `rtx5090` or `dgx_spark`; selects the CUDA architecture and the required host processor |
 | `NINFER_BUILD_APPS` | ON | CLI, HTTP server and perplexity evaluator |
 | `BUILD_TESTING` | OFF | C++ tests and registered Python interoperability tests |
 | `NINFER_BUILD_BENCHMARKS` | OFF | Op, model, Engine and context-cost benchmarks |
@@ -33,14 +34,17 @@ is exercised by compilation and tests. The libcurl 7.85 minimum has a concrete A
 media acquisition uses `CURLOPT_PROTOCOLS_STR` and `CURLOPT_REDIR_PROTOCOLS_STR`, introduced in
 [that release](https://curl.se/libcurl/c/CURLOPT_PROTOCOLS_STR.html).
 
-The checked-in `CMakePresets.json` provides:
+The checked-in `CMakePresets.json` provides three configure presets for each target:
 
-- `release`: Release product binaries, tests and benchmarks disabled;
-- `dev`: Release products, tests and benchmarks enabled;
-- matching build presets and a `dev` test preset with failure output enabled.
+- `<target>-release`: Release product binaries, tests and benchmarks disabled;
+- `<target>-dev`: Release products, tests and benchmarks enabled;
+- `<target>-ops`: Core, Artifact and Ops development only, with apps and the Engine disabled.
 
-Both configure presets use `build/`. Switching between them explicitly resets all three build
-options; it does not create independent build trees. Build with `cmake --build build -j`.
+Each preset has a matching build preset, and `<target>-dev` also has a test preset with failure
+output enabled. `<target>` is `rtx5090` or `dgx-spark`, matching `NINFER_TARGET`. Each configure
+preset uses `build/<preset>/` as its binary directory, so the products of `rtx5090-dev` are under
+`build/rtx5090-dev/apps/`. Switching between presets explicitly resets all three build options; it
+does not create independent build trees. Build with `cmake --build build/<preset> -j`.
 For a separate configuration, override the binary directory with `-B build-<name>` and use that
 directory in subsequent build/test commands.
 
@@ -53,7 +57,7 @@ placeholder with the interpreter from the selected environment:
   "configurePresets": [
     {
       "name": "local",
-      "inherits": "dev",
+      "inherits": "rtx5090-dev",
       "cacheVariables": {
         "Python3_EXECUTABLE": "/path/to/python3"
       }
@@ -133,7 +137,7 @@ or justify combining shape translation units or enabling unity builds.
 
 `apps/CMakeLists.txt` explicitly defines the three product executables. Tests and benchmarks
 include their domain registrations without creating new CMake subdirectories, preserving
-`build/tests/`, `build/bench/` and CTest working directories. The helpers are local to those
+`build/<preset>/tests/`, `build/<preset>/bench/` and CTest working directories. The helpers are local to those
 consumers. Tests explicitly name their linked libraries; public-header and pure-host checks keep
 their isolated include/link requirements.
 

@@ -11,6 +11,7 @@ run the CLI or HTTP server.
 | [HTTP serving](serving.md) | OpenAI Responses/Chat Completions, Anthropic Messages, state, streaming, token counting, authentication, and tool calls |
 | [Performance](performance.md) | RTX 5090 / RTX PRO 6000 / GB10 measurement coverage, per-model serving results, methodology, and publication rules |
 | [Weight conversion](weight-conversion.md) | official recipes, custom formats and sources, conversion methods, optional components and artifact output |
+| [Cross-engine parity](performance/cross-engine-parity.md) | one artifact on two engines on one box: the measured decode and TTFT parity, with its conditions and limits |
 | [Perplexity](perplexity.md) | fixed-corpus and custom-text causal perplexity, comparison rules, progress, and reports |
 | [CLI examples](../examples/cli/) | committed text, multimodal, thinking, long-decode, and long-context inputs |
 | [Operations (GB10 fleet)](operations.md) | running the engine on GB10 nodes: node model, build, serve, monitoring, failure response, upgrades |

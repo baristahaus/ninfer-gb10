@@ -78,7 +78,7 @@ driver's loop is at fault.
 
 ```
 NINFER_TEST_ARTIFACT=out/qwen3_8_27b_exl3.ninfer \
-  ./build/tests/ninfer_qwen3_5_native_transactions_test none
+  ./build/rtx5090-dev/tests/ninfer_qwen3_5_native_transactions_test none
 ```
 
 Fails after ~3.5 minutes (earlier stages + 2-minute settle deadline). Requires the RTX

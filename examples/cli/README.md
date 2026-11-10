@@ -14,7 +14,7 @@ also live beside them when they deliberately have no frozen output oracle.
 Commands below start at the repository root. Media paths inside JSON are relative to each messages file:
 
 ```bash
-CLI=./build/apps/ninfer
+CLI=./build/rtx5090-release/apps/ninfer
 MODEL=models/qwen3_6_27b.ninfer
 
 $CLI "$MODEL" \

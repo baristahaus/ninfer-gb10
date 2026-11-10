@@ -101,7 +101,8 @@ std::vector<artifact::MatrixSlice> matrix_slices(const artifact::Reader& reader,
                                           ": shard slices do not cover the rank's columns");
         }
     } else if (destination_row != n) {
-        throw artifact::ArtifactError(reference.name + ": shard slices do not cover the rank's rows");
+        throw artifact::ArtifactError(reference.name +
+                                      ": shard slices do not cover the rank's rows");
     }
     return slices;
 }

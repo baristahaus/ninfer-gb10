@@ -202,6 +202,61 @@ StateImageDeviceLayout plan_state_image_device_pool(LayoutBuilder& builder,
     return out;
 }
 
+StateImageSpec shard_state_image_spec(const StateImageSpec& spec, int width, int rank) {
+    if (width < 1) { throw std::invalid_argument("StateImage shard width must be positive"); }
+    // Width 1 is the single-device lane: the spec is returned unchanged, so that lane is untouched
+    // by construction and no caller needs to special-case it.
+    if (width == 1) { return spec; }
+    if (rank < 0 || rank >= width) {
+        throw std::invalid_argument("StateImage shard rank " + std::to_string(rank) +
+                                    " outside width " + std::to_string(width));
+    }
+    const LinearAttentionStatePoolSpec& linear = spec.linear;
+    if (linear.value_heads <= 0 || linear.conv_channels <= 0 || linear.value_head_dim <= 0) {
+        throw std::invalid_argument(
+            "StateImage shard requires positive GDN head and channel extents");
+    }
+    if (linear.value_heads % width != 0) {
+        throw std::invalid_argument("StateImage shard needs " +
+                                    std::to_string(linear.value_heads) +
+                                    " value heads to divide by width " + std::to_string(width));
+    }
+    // conv_channels = 2 * key_dim + value_dim, so both segments are recoverable from the spec. Each
+    // must divide on its own: the placement table splits conv1d columns per Q|K|V segment, and a
+    // sum that divides is not enough (10240 divides by 5 while its 2048-wide key segment does not).
+    const std::int64_t value_dim =
+        static_cast<std::int64_t>(linear.value_heads) * linear.value_head_dim;
+    const std::int64_t conv_channels = linear.conv_channels;
+    if (conv_channels <= value_dim || (conv_channels - value_dim) % 2 != 0) {
+        throw std::invalid_argument(
+            "StateImage shard requires conv_channels = 2 * key_dim + value_dim");
+    }
+    const std::int64_t key_dim = (conv_channels - value_dim) / 2;
+    if (key_dim % width != 0 || value_dim % width != 0) {
+        throw std::invalid_argument(
+            "StateImage shard needs the GDN key (" + std::to_string(key_dim) + ") and value (" +
+            std::to_string(value_dim) + ") dims to divide by width " + std::to_string(width));
+    }
+    StateImageSpec sharded = spec;
+    // The three sharded fields; everything else stays whole on every rank (see the header for why).
+    sharded.linear.value_heads   = linear.value_heads / width;
+    sharded.linear.conv_channels = static_cast<std::int32_t>(conv_channels / width);
+    if (sharded.dflash_local) {
+        if (sharded.dflash_local->kv_heads <= 0) {
+            throw std::invalid_argument(
+                "StateImage shard requires a positive DFlash KV head count");
+        }
+        if (sharded.dflash_local->kv_heads % width != 0) {
+            throw std::invalid_argument("StateImage shard needs " +
+                                        std::to_string(sharded.dflash_local->kv_heads) +
+                                        " DFlash KV heads to divide by width " +
+                                        std::to_string(width));
+        }
+        sharded.dflash_local->kv_heads /= width;
+    }
+    return sharded;
+}
+
 TransferWork state_image_transfer_work(const StateImageHostLayout& layout) {
     std::size_t payload = checked_add(layout.linear_conv.bytes, layout.linear_recurrent.bytes,
                                       "StateImage transfer payload overflow");

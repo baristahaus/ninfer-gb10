@@ -72,6 +72,47 @@ struct StateImageDeviceLayout {
 [[nodiscard]] StateImageDeviceLayout plan_state_image_device_pool(LayoutBuilder& builder,
                                                                   const StateImageSpec& spec);
 
+// One rank's StateImage geometry at tensor-parallel `width`: the spec the rank's own StateImage
+// pool is planned from, so a rank-1 pool exists to attach a mirror to. Built from the same model
+// configuration as the decoder geometry (`shard_decoder_state_spec`), and the two are meant to be
+// produced together when a Program is planned per rank.
+//
+// Three fields shard, all of them head- or channel-axis extents that the tp2 placement table
+// splits. The placement table is the authority; the table below names it
+// (`src/models/qwen3_8_flash_next_125b_a6b/impl/shard_rules.cpp:37-49`).
+//
+// | field | 125B | at width 2 | why |
+// |---|---|---|---|
+// | `linear.value_heads` | 48 | **24** | the GDN recurrent state is one matrix per value head: `{key_head_dim, value_head_dim, value_heads}`. The placement table splits `in_proj_z` rows, `in_proj_a`/`in_proj_b` rows, `A_log` and `dt_bias` by the 48 value heads, and `out_proj` columns by the 6144 value dims. |
+// | `linear.conv_channels` | 10240 | **5120** | the GDN convolution state is `{conv_channels, conv_width}` and `conv_channels = 2 * key_dim + value_dim` (`config.h:29-31`). `conv1d.weight` is split by columns over those 10240 Q\|K\|V channels, so a rank's conv state covers its own channel slice. |
+// | `dflash_local.kv_heads` | per drafter | **/ width** | the drafter's local cyclic KV is per KV head, exactly like the text KV cache. `DFlashConfig::kv_heads` must divide by the width for the same reason `DecoderStateSpec::kv_heads` must. |
+//
+// Everything else is deliberately whole on every rank:
+//   * `linear.layers` and `dflash_local.layers`: both ranks carry every layer; the shard is inside
+//     a layer, never across layers.
+//   * `linear.slot_count` and `dflash_local.capacity`: the rank-1 mirror addresses slots by index,
+//     so equal slot capacity is part of its contract, not a per-rank choice.
+//   * `linear.conv_width` (the convolution window), `linear.value_head_dim`, `linear.key_head_dim`,
+//     `dflash_local.head_dim`: per-head or per-window extents, not per-rank ones.
+//   * `linear.conv_dtype`: both ranks use the same state codec.
+//   * `hidden`, `mtp_hidden`: activation vectors of the residual stream. Every rank's next layer
+//     consumes the whole width, so these stay whole; the output head is split by vocabulary rows,
+//     not by hidden columns.
+//   * `ple`: the per-layer embedding state is an additive embedding of `channels = 4 * hidden`,
+//     consumed by a projection whose input must be whole on both ranks.
+//
+// A **primary-only drafter** (`NINFER_TP_DRAFTER=primary`: rank 0 holds the drafter's rings, rank 1
+// none) is a different decision: it omits `dflash_local` from rank 1's spec entirely, which no
+// per-field shard can express. This function does not make that choice; it shards the component
+// when the spec has one, and a mirror's component-inventory check refuses a pair where one side
+// omits it.
+//
+// Width 1 returns `spec` unchanged, field for field, so the single-device lane is untouched by
+// construction. Throws std::invalid_argument for a width below 1, a rank outside `[0, width)`, a
+// non-positive `value_heads`/`conv_channels`, a `conv_channels` that is not `2 * key_dim +
+// value_dim` for the spec's own value dims, or an extent that does not divide by the width.
+[[nodiscard]] StateImageSpec shard_state_image_spec(const StateImageSpec& spec, int width, int rank);
+
 struct HostStateImageView {
     std::byte* data                    = nullptr;
     const StateImageHostLayout* layout = nullptr;

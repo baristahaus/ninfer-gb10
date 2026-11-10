@@ -12,6 +12,18 @@
 
 namespace {
 
+// A test that needs a component or a model class the artifact does not carry must skip, not fail:
+// the artifact is a local prerequisite, and its contents are not a defect of the engine.
+bool artifact_has_component(const char* artifact, const char* name) {
+    ninfer::artifact::Reader reader(artifact);
+    return reader.directory().components.count(name) != 0;
+}
+
+bool artifact_is_moe(const char* artifact) {
+    ninfer::artifact::Reader reader(artifact);
+    return reader.directory().component("text").config.contains("num_experts");
+}
+
 ninfer::ProposalHead artifact_proposal_head(const char* artifact) {
     ninfer::artifact::Reader reader(artifact);
     return reader.directory().component("text").proposal ? ninfer::ProposalHead::Optimized
@@ -334,6 +346,10 @@ int main(int argc, char** argv) {
         const char* artifact = std::getenv("NINFER_TEST_ARTIFACT");
         if (artifact == nullptr || *artifact == '\0') {
             std::cout << "skip: NINFER_TEST_ARTIFACT is not set\n";
+            return 77;
+        }
+        if (!artifact_is_moe(artifact)) {
+            std::cout << "skip: this artifact is a dense model, not the MoE class this test needs\n";
             return 77;
         }
 

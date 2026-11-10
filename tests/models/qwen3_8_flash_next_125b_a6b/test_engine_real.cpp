@@ -1,6 +1,7 @@
 #include "artifact/reader.h"
 
 #include "ninfer/engine.h"
+#include "core/device.h"
 
 #include <cstdint>
 #include <cstdlib>
@@ -105,9 +106,17 @@ const std::vector<ninfer::TokenId>& canonical_output() {
     // generation (4c2fc2f9) and this port, which agree token-for-token through 24 outputs. The
     // golden follows the test's own re-record protocol; the step 7 perplexity gate remains the
     // semantic quality check.
-    static const std::vector<ninfer::TokenId> golden{
+    //
+    // The golden is per lane: sm_120a resolves that same documented near-tie to 5435, and the GB10
+    // (sm_121a) resolves it to 27891 with a different continuation from index 2 on. Recorded
+    // 2026-11-10 on twofour against the fp8_mtp artifact; each chain is authoritative for its own
+    // compute capability only, and a new lane records its own.
+    static const std::vector<ninfer::TokenId> golden_sm120a{
         29108, 4009, 5435, 660, 7736, 314, 279, 9155, 19142, 11, 694, 22602};
-    return golden;
+    static const std::vector<ninfer::TokenId> golden_sm121a{
+        29108, 4009, 27891, 8964, 579, 16078, 321, 1100, 9872, 303, 660, 17425};
+    static const int capability = ninfer::DeviceContext(0).compute_capability();
+    return capability == 121 ? golden_sm121a : golden_sm120a;
 }
 
 // The QAD recipe's MTP verify golden: the 27891/5435 near-tie resolves to 5435 under the

@@ -2389,7 +2389,7 @@ SpeculativeBackend selected_backend(std::string_view name) {
 int main(int argc, char** argv) {
     const char* artifact = std::getenv("NINFER_TEST_ARTIFACT");
     if (!artifact || !*artifact) {
-        std::cerr << "SKIP: set NINFER_TEST_ARTIFACT to an explicit .ninfer artifact\n";
+        std::cerr << "SKIP: set NINFER_TEST_ARTIFACT to an explicit .ninfer artifact; it is unset or names a file the loader rejected\n";
         return 77;
     }
     if (ninfer::test::skip_without_host_tier("test_native_transactions")) { return 77; }

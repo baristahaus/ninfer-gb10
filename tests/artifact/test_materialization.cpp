@@ -365,7 +365,7 @@ int main(int argc, char** argv) {
         // stub case belongs here; without it the test aborts instead of skipping.
         if (result == cudaErrorNoDevice || result == cudaErrorInsufficientDriver ||
             result == cudaErrorStubLibrary || (result == cudaSuccess && count == 0)) {
-            std::cerr << "SKIP: no usable CUDA device; the materialization GPU cases did not run\n";
+            std::cerr << "SKIP: no usable CUDA device; the materialization GPU cases did not run; supply one with CUDA_VISIBLE_DEVICES (sm_121a on GB10, sm_120a on RTX 5090)\n";
             return 77;
         }
         CUDA_CHECK(result);

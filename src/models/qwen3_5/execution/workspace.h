@@ -87,6 +87,8 @@ struct GdnExtents {
     std::int32_t value_heads = 0;
     std::int32_t key_width   = 0;
     std::int32_t value_width = 0;
+    // Q | K | V, the convolution's channel axis. It is the input projection's row count.
+    [[nodiscard]] std::int32_t conv_channels() const { return 2 * key_width + value_width; }
     // The residual width is NOT sharded: every rank holds the whole hidden vector, so this is the
     // model's hidden size at every width. Sizing the control workspace's `hidden` from the value
     // width instead made it 3072 at width 2 where the control op expects 5120.
@@ -148,8 +150,8 @@ GdnProjectionRoots gdn_projection(Allocator& allocator, const TextConfig& config
 }
 
 template <class Allocator>
-Tensor gdn_prefill_conv(Allocator& allocator, const TextConfig& config, std::int32_t tokens) {
-    return matrix(allocator, DType::BF16, dimension(config.gdn->conv_channels()), tokens);
+Tensor gdn_prefill_conv(Allocator& allocator, GdnExtents extents, std::int32_t tokens) {
+    return matrix(allocator, DType::BF16, dimension(extents.conv_channels()), tokens);
 }
 
 template <class Allocator>
@@ -161,6 +163,14 @@ template <class Allocator>
 Tensor gdn_normalized_output(Allocator& allocator, GdnExtents extents, std::int32_t tokens) {
     return matrix(allocator, DType::BF16, dimension(extents.value_width), tokens);
 }
+
+// The config-wide forms: planning sizes the arena for the largest shape any rank can hold.
+template <class Allocator>
+Tensor gdn_prefill_conv(Allocator& allocator, const TextConfig& config, std::int32_t tokens) {
+    return matrix(allocator, DType::BF16, dimension(config.gdn->conv_channels()), tokens);
+}
+
+
 
 // The config-wide forms: planning sizes the arena for the largest shape any rank can hold, so it uses
 // the model's own extents. Correctness never calls these.

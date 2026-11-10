@@ -422,7 +422,7 @@ int main(int argc, char** argv) {
             const auto status = cudaGetDeviceCount(&count);
             if (status == cudaErrorNoDevice || status == cudaErrorInsufficientDriver ||
                 (status == cudaSuccess && !count))
-                std::cerr << "SKIP: no usable CUDA device; the test did not run\n";
+                std::cerr << "SKIP: no usable CUDA device; the test did not run; supply one with CUDA_VISIBLE_DEVICES (sm_121a on GB10, sm_120a on RTX 5090)\n";
                 return 77;
             CUDA_CHECK(status);
         }

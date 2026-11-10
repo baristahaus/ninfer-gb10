@@ -187,7 +187,7 @@ q4::ScoreComplete finish_score(q4::Session& session, runtime::ExecutionTicket ti
 int main() {
     const char* path = std::getenv("NINFER_QWEN4_EXP_TEST_ARTIFACT");
     if (!path || !*path) {
-        std::cerr << "SKIP: NINFER_QWEN4_EXP_TEST_ARTIFACT is not set; the score-state test did not run\n";
+        std::cerr << "SKIP: NINFER_QWEN4_EXP_TEST_ARTIFACT is not set; the score-state test did not run. Set it to the Qwen4-exp .ninfer file\n";
         return 77;
     }
     try {

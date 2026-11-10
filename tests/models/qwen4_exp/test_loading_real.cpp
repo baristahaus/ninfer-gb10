@@ -218,7 +218,7 @@ void ple_window(q4::Resources& resources, const q4::ModelShard& model, DeviceCon
 
 int main(int argc, char** argv) {
     if (argc < 2) {
-        std::cerr << "SKIP: the test needs an explicit --artifact argument; CTest supplies none\n";
+        std::cerr << "SKIP: the test needs an explicit artifact; CTest supplies none. Set NINFER_TEST_ARTIFACT to a .ninfer file, or pass --artifact <file>.ninfer\n";
         return 77;
     }
     try {

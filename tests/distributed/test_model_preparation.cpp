@@ -172,7 +172,7 @@ void bind_requests(q4::Session& session, models::qwen::Frontend& frontend) {
 
 int main(int argc, char** argv) {
     if (argc != 3) {
-        std::cerr << "SKIP: the test needs its deployment file and artifact arguments; CTest supplies none\n";
+        std::cerr << "SKIP: the test needs its deployment file and artifact arguments; CTest supplies none. Pass --deployment <file> and --artifact <file>.ninfer, or set NINFER_TEST_ARTIFACT\n";
         return 77;
     }
     try {

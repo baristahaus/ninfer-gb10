@@ -10,7 +10,7 @@
 int main() {
     const char* path = std::getenv("NINFER_QWEN38_FLASH_NEXT_WEIGHTS");
     if (path == nullptr || *path == '\0') {
-        std::cerr << "SKIP: NINFER_QWEN38_FLASH_NEXT_WEIGHTS is not set; the load-plan test did not run\n";
+        std::cerr << "SKIP: NINFER_QWEN38_FLASH_NEXT_WEIGHTS is not set; the load-plan test did not run. Set it to the 125B .ninfer file\n";
         return 77;
     }
     try {

@@ -109,7 +109,7 @@ int main() {
     int count                   = 0;
     const cudaError_t count_err = cudaGetDeviceCount(&count);
     if (cuda_unavailable(count_err)) {
-        std::cerr << "SKIP: no usable CUDA device; the owner cases did not run\n";
+        std::cerr << "SKIP: no usable CUDA device; the owner cases did not run; supply one with CUDA_VISIBLE_DEVICES (sm_121a on GB10, sm_120a on RTX 5090)\n";
         return failures == 0 ? 77 : 1;
     }
     if (count_err != cudaSuccess) {
@@ -117,7 +117,7 @@ int main() {
         return 1;
     }
     if (count < 2) {
-        std::cerr << "SKIP: the two-Program collective needs two devices\n";
+        std::cerr << "SKIP: the two-Program collective needs two devices. Set CUDA_VISIBLE_DEVICES to two devices, for example 0,1\n";
         return failures == 0 ? 77 : 1;
     }
 

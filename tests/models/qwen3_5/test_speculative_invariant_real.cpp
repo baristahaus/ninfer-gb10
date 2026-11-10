@@ -84,7 +84,7 @@ void compare(const EngineRun& reference, const EngineRun& speculative, const cha
 int main() {
     const char* artifact = std::getenv("NINFER_TEST_ARTIFACT");
     if (!artifact || !*artifact) {
-        std::cerr << "SKIP: NINFER_TEST_ARTIFACT is not set; the real-engine test did not run\n";
+        std::cerr << "SKIP: NINFER_TEST_ARTIFACT is not set; the real-engine test did not run. Set it to a .ninfer file\n";
         return 77;
     }
     try {

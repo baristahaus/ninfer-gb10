@@ -9,7 +9,7 @@
 int main() {
     const char* artifact = std::getenv("NINFER_TEST_ARTIFACT");
     if (artifact == nullptr || *artifact == '\0') {
-        std::cerr << "SKIP: NINFER_TEST_ARTIFACT is not set\n";
+        std::cerr << "SKIP: NINFER_TEST_ARTIFACT is not set; set it to a .ninfer file\n";
         return 77;
     }
 

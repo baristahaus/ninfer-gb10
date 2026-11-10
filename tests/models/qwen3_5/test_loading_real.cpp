@@ -280,7 +280,7 @@ int main(int argc, char** argv) {
             }
         }
         if (path.empty()) {
-            std::cerr << "SKIP: supply an explicit --artifact\n";
+            std::cerr << "SKIP: supply an explicit artifact: set NINFER_TEST_ARTIFACT to a .ninfer file, or pass --artifact <file>.ninfer\n";
             return 77;
         }
         std::unique_ptr<DeviceContext> device;

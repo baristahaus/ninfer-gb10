@@ -134,7 +134,7 @@ void check_prepared_views(const flash::Frontend& frontend) {
 int main() {
     const char* path = std::getenv("NINFER_QWEN38_FLASH_NEXT_WEIGHTS");
     if (!path || !*path) {
-        std::cerr << "SKIP: NINFER_QWEN38_FLASH_NEXT_WEIGHTS is not set; the frontend test did not run\n";
+        std::cerr << "SKIP: NINFER_QWEN38_FLASH_NEXT_WEIGHTS is not set; the frontend test did not run. Set it to the 125B .ninfer file\n";
         return 77;
     }
     try {

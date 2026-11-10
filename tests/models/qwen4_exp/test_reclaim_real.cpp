@@ -222,7 +222,7 @@ void reclaim(q4::detail::SessionImpl& p, Executor& executor) {
 int main() {
     const char* path = std::getenv("NINFER_QWEN4_EXP_TEST_ARTIFACT");
     if (!path || !*path) {
-        std::cerr << "SKIP: NINFER_QWEN4_EXP_TEST_ARTIFACT is not set; the reclaim test did not run\n";
+        std::cerr << "SKIP: NINFER_QWEN4_EXP_TEST_ARTIFACT is not set; the reclaim test did not run. Set it to the Qwen4-exp .ninfer file\n";
         return 77;
     }
     try {

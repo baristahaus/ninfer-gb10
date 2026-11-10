@@ -85,7 +85,7 @@ int run_mxfp8_a16() {
 
 int main() {
     if (!cuda_available()) {
-        std::cerr << "SKIP: no usable CUDA device; the test did not run\n";
+        std::cerr << "SKIP: no usable CUDA device; the test did not run; supply one with CUDA_VISIBLE_DEVICES (sm_121a on GB10, sm_120a on RTX 5090)\n";
         return 77;
     }
     const int failures = run_mxfp8_a16();

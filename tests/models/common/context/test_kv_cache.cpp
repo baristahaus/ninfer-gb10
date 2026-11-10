@@ -648,7 +648,7 @@ int main() {
     int device_count              = 0;
     const cudaError_t count_error = cudaGetDeviceCount(&device_count);
     if (cuda_unavailable(count_error) || (count_error == cudaSuccess && device_count == 0)) {
-        std::cerr << "SKIP: no usable CUDA device\n";
+        std::cerr << "SKIP: no usable CUDA device; supply one with CUDA_VISIBLE_DEVICES (sm_121a on GB10, sm_120a on RTX 5090)\n";
         return 77;
     }
     if (count_error != cudaSuccess) {

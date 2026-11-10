@@ -383,14 +383,14 @@ int main() {
     try {
         const char* artifact = std::getenv("NINFER_TEST_ARTIFACT");
         if (artifact == nullptr || *artifact == '\0') {
-            std::cerr << "SKIP: NINFER_TEST_ARTIFACT is not set; the real-engine test did not run\n";
+            std::cerr << "SKIP: NINFER_TEST_ARTIFACT is not set; the real-engine test did not run. Set it to a .ninfer file\n";
             return 77;
         }
 
         {
             ninfer::artifact::Reader reader(artifact);
             if (!reader.directory().components.contains("dflash")) {
-                std::cerr << "SKIP: this artifact lacks the dflash component; the test did not run\n";
+                std::cerr << "SKIP: this artifact lacks the dflash component; the test did not run. Supply a .ninfer artifact that carries one via NINFER_TEST_ARTIFACT\n";
                 return 77;
             }
         }

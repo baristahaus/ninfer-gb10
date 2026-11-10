@@ -227,7 +227,7 @@ int main() {
 #else
     const char* artifact = std::getenv("NINFER_QWEN38_FLASH_NEXT_WEIGHTS");
     if (artifact == nullptr || *artifact == '\0') {
-        std::cerr << "SKIP: NINFER_QWEN38_FLASH_NEXT_WEIGHTS is not set; the 125B fault-injection test did not run\n";
+        std::cerr << "SKIP: NINFER_QWEN38_FLASH_NEXT_WEIGHTS is not set; the 125B fault-injection test did not run. Set it to the 125B .ninfer file\n";
         return 77;
     }
     try {

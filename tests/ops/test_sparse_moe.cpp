@@ -1331,7 +1331,7 @@ private:
 
 int main() {
     if (cuda_unavailable()) {
-        std::cerr << "SKIP: no usable CUDA device\n";
+        std::cerr << "SKIP: no usable CUDA device; supply one with CUDA_VISIBLE_DEVICES (sm_121a on GB10, sm_120a on RTX 5090)\n";
         return 77;
     }
 

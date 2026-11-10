@@ -139,7 +139,7 @@ int main() {
     namespace q35        = ninfer::models::qwen3_5;
     const char* artifact = std::getenv("NINFER_TEST_ARTIFACT");
     if (!artifact || !*artifact) {
-        std::cerr << "SKIP: NINFER_TEST_ARTIFACT is not set; the Vision workspace test did not run\n";
+        std::cerr << "SKIP: NINFER_TEST_ARTIFACT is not set; the Vision workspace test did not run. Set it to a .ninfer file that carries a vision component\n";
         return 77;
     }
     try {

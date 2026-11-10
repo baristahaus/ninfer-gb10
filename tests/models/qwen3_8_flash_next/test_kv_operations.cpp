@@ -217,14 +217,14 @@ int main() {
     int count                   = 0;
     const cudaError_t count_err = cudaGetDeviceCount(&count);
     if (cuda_unavailable(count_err)) {
-        std::cerr << "SKIP: no usable CUDA device; the runtime dispatch cases did not run\n";
+        std::cerr << "SKIP: no usable CUDA device; the runtime dispatch cases did not run; supply one with CUDA_VISIBLE_DEVICES (sm_121a on GB10, sm_120a on RTX 5090)\n";
         return failures == 0 ? 77 : 1;
     }
     if (count_err != cudaSuccess) {
         return fail(std::string("cudaGetDeviceCount failed: ") + cudaGetErrorString(count_err));
     }
     if (count == 0) {
-        std::cerr << "SKIP: no CUDA devices\n";
+        std::cerr << "SKIP: no CUDA devices; supply one with CUDA_VISIBLE_DEVICES (sm_121a on GB10, sm_120a on RTX 5090)\n";
         return failures == 0 ? 77 : 1;
     }
 

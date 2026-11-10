@@ -1,5 +1,6 @@
 #include "core/tensor.h"
 
+#include <string>
 #include <array>
 #include <limits>
 #include <stdexcept>
@@ -124,7 +125,9 @@ Tensor Tensor::view(std::initializer_list<std::int32_t> shape) const {
 
     const auto normalized = normalize_shape(shape);
     if (shape_numel(normalized) != numel()) {
-        throw std::invalid_argument("view element count mismatch");
+        throw std::invalid_argument("view element count mismatch: tensor has " +
+                                    std::to_string(numel()) + " elements, view asks for " +
+                                    std::to_string(shape_numel(normalized)));
     }
 
     Tensor result = metadata(dtype, shape);

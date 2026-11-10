@@ -35,6 +35,12 @@ The benchmark slices exact token counts from `bench/fixtures/bench_corpus.ids`, 
 `Engine::prepare_tokens()`, then calls `Engine::generate()` once for each repetition. It does not
 have a private prefill/decode loop and does not call model implementation interfaces.
 
+`ninfer_bench --proposal-head-rows N` truncates the optimized proposal head to its first N
+frequency-ranked rows (0, the default, uses the artifact's full head). N must be a multiple of 128
+of at least 1024. It trades draft quality for a cheaper draft pass and is supported for Flash-Next
+MTP only; it requires `--spec mtp --lm-head-draft`. The engine takes the row count at startup,
+because CUDA graphs bake it in.
+
 The matrix contains three independently measured test kinds:
 
 - `pp{P}` prepares `P` tokens and requests one output token. This is the smallest request that runs

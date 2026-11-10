@@ -13,10 +13,10 @@ configured another target.
 ./build/rtx5090-release/apps/ninfer models/qwen3_8_27b_nvfp4.ninfer \
   --prompt "Summarize the difference between prefill and decode." \
   --max-context 32768 \
-  --max-new 8192 \
+  --max-tokens 8192 \
   --kv-dtype fp8 \
   --spec mtp --draft-tokens 3 \
-  --lm-head-draft
+  --proposal-head optimized
 ```
 
 Exactly one of `--prompt` and `--messages` is required. The CLI normally omits `--kv-capacity`, so
@@ -35,7 +35,7 @@ failures remain direct command diagnostics:
 ./build/rtx5090-release/apps/ninfer models/qwen3_8_27b_nvfp4.ninfer \
   --prompt "Return one sentence." \
   --max-context 4096 \
-  --max-new 64 \
+  --max-tokens 64 \
   --kv-dtype fp8 \
   > answer.txt 2> run.log
 ```
@@ -53,7 +53,7 @@ Changes to the file take effect after restarting NInfer:
 ```bash
 printf 'root ::= "yes" | "no"\n' > answer.gbnf
 ./build/rtx5090-release/apps/ninfer models/qwen3_8_27b_nvfp4.ninfer \
-  --prompt "Is 17 prime?" --no-thinking --grammar-file answer.gbnf --max-new 64
+  --prompt "Is 17 prime?" --no-thinking --grammar-file answer.gbnf --max-tokens 64
 ```
 
 `--choice TEXT` selects a literal candidate; repeat the flag to supply the candidate set.
@@ -79,7 +79,7 @@ Schema. All output constraint options are mutually exclusive:
 printf '%s\n' '{"type":"object","properties":{"answer":{"type":"integer"}},"required":["answer"],"additionalProperties":false}' > answer.schema.json
 ./build/rtx5090-release/apps/ninfer models/qwen3_8_27b_nvfp4.ninfer \
   --prompt "Return the answer to 6 times 7 as JSON." --no-thinking \
-  --json-schema-file answer.schema.json --max-new 64
+  --json-schema-file answer.schema.json --max-tokens 64
 ```
 
 GBNF supports recursive rules, Unicode character classes and repetition. All constraint modes work with
@@ -93,7 +93,7 @@ the desired content in the prompt; the schema is not added to it automatically. 
 
 Omitted thinking and effort options use the selected template's defaults. `--no-thinking` or
 `--reasoning-effort none` requests disabled thinking; other effort values cannot be combined with
-`--no-thinking`. The template interprets the selected effort. `--greedy` selects exact argmax
+`--no-thinking`. The template interprets the selected effort. `--temperature 0` selects exact argmax
 decoding independently.
 
 `--thinking-budget N` places a positive upper bound on accepted model-origin tokens while the
@@ -105,7 +105,7 @@ close, stop condition, cancellation, or total output/context limit at the bounda
 and suppresses this insertion. The option cannot be combined with `--no-thinking`, but it can be
 combined with `--reasoning-effort`.
 
-`--max-new` counts every committed generated token, including internally inserted control tokens.
+`--max-tokens` counts every committed generated token, including internally inserted control tokens.
 When the effective output capacity extends beyond the thinking budget, it must have room for the
 complete tokenizer-derived control suffix plus one post-close model token; an undersized request is
 rejected rather than truncating the suffix. Normal output sends the inserted guidance to stderr as
@@ -119,11 +119,11 @@ output capacity for the inserted suffix and the answer:
 ./build/rtx5090-release/apps/ninfer models/qwen3_8_27b_nvfp4.ninfer \
   --prompt "Explain speculative decoding, then give a concise conclusion." \
   --max-context 4096 \
-  --max-new 1024 \
+  --max-tokens 1024 \
   --thinking-budget 512 \
   --kv-dtype fp8 \
   --spec mtp --draft-tokens 3 \
-  --lm-head-draft
+  --proposal-head optimized
 ```
 
 ## Startup memory profile
@@ -179,11 +179,11 @@ Run message files from the repository root when they contain repository-relative
 ./build/rtx5090-release/apps/ninfer models/qwen3_8_27b_nvfp4.ninfer \
   --messages examples/cli/messages/image_chart.json \
   --max-context 8192 \
-  --max-new 128 \
+  --max-tokens 128 \
   --kv-dtype fp8 \
   --vision \
   --spec mtp --draft-tokens 3 \
-  --lm-head-draft
+  --proposal-head optimized
 ```
 
 Supported roles are `system`, `developer`, `user`, `assistant`, and `tool`.
@@ -210,20 +210,16 @@ long-decode, and long-context inputs.
 Speculative decoding is disabled by default. Select MTP with one to five draft positions, or the
 35B-A3B DFlash or Qwen3.8-27B DFlash2 backend with one to fifteen. Both masked-draft backends
 may be combined with `--vision`.
-`--lm-head-draft` selects the optimized proposal head and requires a selected backend.
-`--proposal-head-rows N` truncates the optimized proposal head to its first N frequency-ranked
-rows (0, the default, uses the artifact's full head). N must be a multiple of 128 of at least
-1024. This trades draft quality for a cheaper draft pass and is supported for Flash-Next MTP
-only; it requires `--spec mtp --lm-head-draft`:
+`--proposal-head optimized` selects the optimized proposal head and requires a selected backend.
 
 ```bash
 ./build/rtx5090-release/apps/ninfer models/qwen3_6_35b_a3b.ninfer \
   --prompt "Write a short explanation of speculative decoding." \
   --max-context 16384 \
-  --max-new 512 \
+  --max-tokens 512 \
   --kv-dtype fp8 \
   --spec mtp --draft-tokens 3 \
-  --lm-head-draft
+  --proposal-head optimized
 ```
 
 For DFlash:
@@ -231,13 +227,13 @@ For DFlash:
 ```bash
 ./build/rtx5090-release/apps/ninfer models/qwen3_6_35b_a3b.ninfer \
   --prompt "Write a short explanation of speculative decoding." \
-  --max-context 16384 --max-new 512 \
+  --max-context 16384 --max-tokens 512 \
   --kv-dtype fp8 \
-  --spec dflash --draft-tokens 7 --lm-head-draft
+  --spec dflash --draft-tokens 7 --proposal-head optimized
 ```
 
 For Qwen3.8-27B artifacts containing the DFlash2 companion weights, select
-`--spec dflash2 --draft-tokens 7`, optionally with `--lm-head-draft` and `--vision`.
+`--spec dflash2 --draft-tokens 7`, optionally with `--proposal-head optimized` and `--vision`.
 DFlash2 accepts every draft count from 1 through 15; seven is the checkpoint recommendation.
 Both `groupwise-int` and `nvfp4` artifacts use the same Engine route, including CUDA Graph,
 concurrent requests, sampling penalties, and prefix reuse. An artifact without the companion
@@ -249,20 +245,6 @@ use MTP with three draft tokens and DFlash with seven draft tokens (block length
 the optimized proposal head. DFlash accepts one to fifteen draft tokens; seven forms the measured
 block length eight, while fifteen uses the maximum supported block length sixteen.
 
-`--mtp-capture FILE` records every batched MTP decode round to a binary file for offline analysis
-(Flash-Next MTP only; requires `--spec mtp`). Each record holds one row's proposal ids, the
-verified committed tokens, the accept count, and the KV position, taken from data that is already
-host-resident at the round boundary, so capture adds no device work. Combined with
-`--token-logprobs`, each record also carries the target distribution's top-20 alternatives for
-every verify column, including rejected-draft positions — the near-miss signal an accept
-predictor trains on. `tools/mtp_capture_summary.py`
-summarizes a capture: acceptance by draft position and by context position, extent distribution,
-and — with `--artifact` and `--rows N` — how many rejected drafts fall outside the first N rows of
-the optimized proposal head, which is the signal that sizes `--proposal-head-rows`. A disk write
-failure stops capture and drops later records rather than stopping inference.
-`tools/gb10/tune_proposal_rows.sh` wraps the full loop: one full-head bench pass with capture,
-then the acceptance-loss table over candidate prefix sizes to pick `--proposal-head-rows`.
-
 ## Common options
 
 The table lists executable defaults. The examples above select FP8 KV and MTP3.
@@ -272,20 +254,19 @@ The table lists executable defaults. The examples above select FP8 KV and MTP3.
 | `--max-context N` | per-sequence logical context ceiling | `2048` |
 | `--kv-capacity N\|auto` | explicit shared Main Text KV capacity, or maximize it from remaining GPU memory; omitted means `--max-context` | `2048` |
 | `--prefill-chunk N` | text-prefill chunk, in multiples of 128 | device default: `4096` on an integrated GPU (GB10), `1024` on a discrete one |
-| `--max-new N` | requested output-token limit | `128` |
+| `--max-tokens N` | requested output-token limit | `128` |
 | `--device N` | CUDA device index | `0` |
 | `--kv-dtype bf16\|int8\|fp8\|nvfp4\|k8v4` | KV-cache storage | `bf16` |
 | `--spec mtp\|dflash\|dflash2` | speculative backend | off |
 | `--draft-tokens N` | MTP `1..5` (Qwen3.5), `1..3` (Flash-Next 125B-A6B); DFlash/DFlash2 `1..15` | unset |
-| `--lm-head-draft` | optimized proposal head | off |
+| `--proposal-head full\|optimized` | proposal head representation | `full` |
 | `--vision` | enable image/video input and load Vision GPU allocations | off |
 | `--no-cuda-graph` | disable CUDA Graph decode | graphs on |
 | `--chat-template FILE` | use a local Jinja template | artifact template |
 | `--no-thinking` | disable thinking | template default |
 | `--thinking-budget N` | positive model-origin thinking-token cap; omitted means unlimited | unset |
 | `--reasoning-effort none\|minimal\|low\|medium\|high\|xhigh\|max` | pass an effort value to the selected template | template default |
-| `--greedy` | exact argmax decoding | off |
-| `--temperature F` | sampling temperature override | registered model/mode default |
+| `--temperature F` | sampling temperature override; `0` selects greedy | registered model/mode default |
 | `--top-p F` | nucleus-threshold override | registered model/mode default |
 | `--top-k N` | top-k-threshold override (`0..20`; zero selects the top-20 cap) | registered model/mode default |
 | `--min-p F` | min-p-threshold override | registered model/mode default |

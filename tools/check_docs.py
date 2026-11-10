@@ -6,6 +6,8 @@ Checks:
     appears in an option table of `docs/serving.md` (a table row naming it in backticks), and every
     serve flag named in those
     tables is parsed by that file (a stale flag name fails);
+  - every `--flag` named in `docs/cli.md` is declared for the cli or common scope, so the guide
+    cannot advertise a flag the CLI parser rejects;
   - every `NINFER_*` environment variable read with getenv() under `src/` is named somewhere under
     `docs/`;
   - every `cmake --preset NAME` and `ctest --preset NAME` names a preset in `CMakePresets.json`
@@ -68,12 +70,20 @@ table_rows = "\n".join(line for line in serving.splitlines() if line.startswith(
 # `{Field::X, "key", "--flag", "--negation", "ARG", "Help.", Scope::Y}`, and a Scope::Cli entry is a
 # client flag that belongs to docs/cli.md, not to the serving surface.
 schema_source = read("src/product/config/schema.cpp")
-parsed_flags = set()
+serve_scope = set()
+cli_scope = set()
 for match in re.finditer(r"\{Field::\w+,(.*?)\}", schema_source, re.S):
     body = match.group(1)
-    if "Scope::Cli" in body:
-        continue
-    parsed_flags.update(re.findall(r'"(--[a-z0-9-]+)"', body))
+    names = set(re.findall(r'"(--[a-z0-9-]+)"', body))
+    if "Scope::Serve" in body:
+        serve_scope.update(names)
+    elif "Scope::Cli" in body:
+        cli_scope.update(names)
+    else:
+        # Scope::Common applies to both entry points.
+        serve_scope.update(names)
+        cli_scope.update(names)
+parsed_flags = serve_scope
 flags = sorted(parsed_flags)
 
 # Both directions are strict: a serve flag must be documented, and a documented serve flag must be
@@ -95,6 +105,16 @@ missing += [
     f"declare it for the serve scope"
     for flag in documented_flags
     if flag not in parsed_flags
+]
+
+# The CLI parser owns a few process options outside the schema; they are part of its surface too.
+cli_surface = cli_scope | {"--config", "--help", "--json-object", "--clear-stops"}
+cli_documented = sorted(set(re.findall(r"`(--[a-z0-9-]+)", read("docs/cli.md"))))
+missing += [
+    f"CLI flag {flag} is named in docs/cli.md but src/product/config/schema.cpp does not declare "
+    f"it for the cli or common scope"
+    for flag in cli_documented
+    if flag not in cli_surface
 ]
 
 # 2. Environment variables must be documented somewhere under docs/.
@@ -150,6 +170,7 @@ if missing:
     sys.exit(1)
 
 print(
-    f"ok: {len(flags)} serve flags, {len(environment)} environment variables, "
-    f"{len(presets)} presets, and the preset binary paths are documented"
+    f"ok: {len(flags)} serve flags, {len(cli_surface)} cli flags, "
+    f"{len(environment)} environment variables, {len(presets)} presets, "
+    f"and the preset binary paths are documented"
 )

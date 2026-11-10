@@ -20,26 +20,27 @@ struct RankModelInstance {
 };
 
 // The device object remains at the same address from startup through shutdown. Programs may
-// borrow its streams, and every allocation owner is destroyed before the device.
+// borrow its streams, and every allocation owner is destroyed before the device. The worker
+// borrows the device rather than owning it: on the two-GPU lane the group owns every device, and
+// the worker is one rank's user of it.
 template <class Types>
 class RankWorker {
 public:
     using Protocol = typename Types::ExecutionTypes;
 
-    RankWorker(std::unique_ptr<DeviceContext> device,
-               std::unique_ptr<RankModelInstance<Types>> instance)
-        : device_(std::move(device)), instance_(std::move(instance)) {}
+    RankWorker(DeviceContext& device, std::unique_ptr<RankModelInstance<Types>> instance)
+        : device_(device), instance_(std::move(instance)) {}
 
     ~RankWorker() {
-        device_->bind_to_current_thread_noexcept();
+        device_.bind_to_current_thread_noexcept();
         instance_.reset();
     }
 
-    void bind_to_current_thread() { device_->bind_to_current_thread(); }
+    void bind_to_current_thread() { device_.bind_to_current_thread(); }
 
-    [[nodiscard]] Device device() const noexcept { return device_->device(); }
+    [[nodiscard]] Device device() const noexcept { return device_.device(); }
 
-    [[nodiscard]] const char* device_name() const noexcept { return device_->properties().name; }
+    [[nodiscard]] const char* device_name() const noexcept { return device_.properties().name; }
 
     [[nodiscard]] typename Types::RankProgram& program() noexcept { return *instance_->program; }
 
@@ -48,7 +49,7 @@ public:
     }
 
 private:
-    std::unique_ptr<DeviceContext> device_;
+    DeviceContext& device_;
     std::unique_ptr<RankModelInstance<Types>> instance_;
 };
 

@@ -201,8 +201,12 @@ void TextRun::gdn(const BlockParameters& block, std::uint32_t compact_layer) {
     const auto tokens    = residual_.ne[1];
     const auto width     = inputs_.ids.ne[0];
     const auto batch     = inputs_.ids.ne[1];
-    const auto qh        = dimension(gdn.linear_num_key_heads);
-    const auto vh        = dimension(gdn.linear_num_value_heads);
+    // The rank's heads, not the config's. Every use below is a view or a recurrent kernel geometry, and
+    // at width 2 the rank holds half the heads while the config still describes the whole model -- so a
+    // view sized from the config asks for twice the elements the tensor has.
+    const auto extents_ = gdn_extents(p);
+    const auto vh        = extents_.value_heads;
+    const auto qh        = extents_.key_width / dimension(gdn.linear_key_head_dim);
     const auto dk        = dimension(gdn.linear_key_head_dim);
     const auto dv        = dimension(gdn.linear_value_head_dim);
     const auto scale     = static_cast<float>(1.0 / std::sqrt(double(gdn.linear_key_head_dim)));
@@ -211,14 +215,13 @@ void TextRun::gdn(const BlockParameters& block, std::uint32_t compact_layer) {
 
     // The rank's own extents, not the config's: at width 2 the ops validate against the rank's
     // sharded heads and widths, so a workspace sized from the model description is rejected.
-    const auto extents = gdn_extents(p);
-    const auto control = workspace::gdn_control(work, extents, tokens);
+    const auto control = workspace::gdn_control(work, extents_, tokens);
     Tensor h           = control.hidden;
     Tensor g           = control.g;
     Tensor beta        = control.beta;
     gdn_norm_control(residual_, block.input_norm, cfg.rms_norm_eps, p, h, g, beta, work, cuda);
 
-    const auto projection = workspace::gdn_projection(work, extents, tokens);
+    const auto projection = workspace::gdn_projection(work, extents_, tokens);
     Tensor z              = projection.output_gate.view({dv, vh, tokens});
     Tensor qc             = projection.query;
     Tensor kc             = projection.key;

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "models/common/repacked.h"
+
 #include "models/qwen4_exp/definition.h"
 #include "models/qwen4_exp/ple/disk/table.h"
 #include "models/qwen4_exp/parallel/plan.h"
@@ -52,13 +54,15 @@ private:
                                                          const StartupObserver*);
     ModelShard(std::shared_ptr<const ModelDefinition>, artifact::MaterializedArtifact,
                std::vector<BoundWeight>, std::vector<ExpertBankSource>,
-               std::shared_ptr<const ple::disk::Table>);
+               std::shared_ptr<const ple::disk::Table>, RepackedWeights);
 
     std::shared_ptr<const ModelDefinition> definition_;
     artifact::MaterializedArtifact backing_;
     PleTable ple_;
     std::vector<BoundWeight> bound_;
     std::vector<ExpertBankSource> banks_;
+    // Column-sharded weights gathered into one contiguous parent each; empty at width 1.
+    RepackedWeights repacked_;
     RankPlan rank_;
     std::vector<WeightParent> local_parents_;
     std::vector<moe::ResidentExpertBank> local_banks_;

@@ -124,16 +124,19 @@ void RankProgramImpl::install_residencies(const ContextWork& work) {
 }
 
 void RankProgramImpl::start(runtime::ExecutionRequest<ExecutionTypes>&& request) {
-    // The lane loads but cannot infer yet. The sharded helpers exist but nothing in the layer loop
-    // calls them, so a round at width 2 would project each rank's sharded weights through the
-    // unsharded path and produce plausible-looking wrong numbers. Refusing here rather than at
-    // construction is deliberate: the load milestone -- both ranks materialized, both Programs
-    // built, every mirror attached -- has to be reachable to be testable, and this is the point
-    // where a round would actually happen.
+    // The lane loads but has never produced a validated round at width 2. Both ranks now take the
+    // sharded call sites -- the three column-parallel projections branch on the collective, and
+    // both Programs are handed the same ShardedGroup -- but no two-GPU round has been compared
+    // against a single-GPU one, and every defect this lane has found produced numbers that looked
+    // plausible.
+    // So the refusal stands until the tokens match, and it names that reason rather than claiming
+    // the loop is unwired.
     if (peer_text_kv != nullptr) {
         throw std::logic_error(
-            "the sharded forward is not wired yet: this lane loads but cannot infer. The layer "
-            "loop still calls the unsharded projections, so a round would produce wrong numbers");
+            "the sharded forward has no validated round yet: this lane loads but cannot infer. A "
+            "width-2 round has never been compared token for token against a width-1 round, and "
+            "a sharded projection that is subtly wrong produces plausible numbers rather than an "
+            "error. Remove this refusal only with that comparison passing");
     }
     if (request.ticket.frame.kind == runtime::FrameKind::Context) {
         if (context_operation) throw std::logic_error("Qwen3.5 context frame is occupied");

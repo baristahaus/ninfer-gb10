@@ -54,6 +54,11 @@ public:
     // layout the storage was constructed with, so the wrapper replays exactly the bytes this
     // storage owns. Unattached (the default, and the only state a family with no peer ever reaches)
     // every mutation takes the original path unchanged.
+    // The mirror's origin side: a `DeviceKVPagePool` view over this storage's own planes, built on
+    // first use. The wiring builds the mirror from it (`MirroredKVPagePool(origin_view, rank1,
+    // target)`) and then attaches the mirror here; this storage cannot build the mirror itself
+    // because the mirror needs rank 1's pool, which it does not own.
+    [[nodiscard]] DeviceKVPagePool& mirror_origin();
     void attach_mirror(tp2::MirroredKVPagePool& mirror);
     [[nodiscard]] bool mirrored() const noexcept { return mirror_ != nullptr; }
 

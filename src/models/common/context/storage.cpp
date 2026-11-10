@@ -82,10 +82,10 @@ DevicePageStorage::DevicePageStorage(MemorySpan backing, const DeviceKVPagePoolL
     validation_marks_.resize(capacity_pages(), 0);
 }
 
-void DevicePageStorage::attach_mirror(tp2::MirroredKVPagePool& mirror) {
-    if (mirror_ != nullptr) { throw std::logic_error("Device page storage already mirrored"); }
-    // The origin side is a view over this storage's own backing with this storage's own layout, so
-    // the wrapper replays exactly the planes this storage owns. It allocates nothing.
+DeviceKVPagePool& DevicePageStorage::mirror_origin() {
+    if (mirror_origin_ != nullptr) { return *mirror_origin_; }
+    // A view over this storage's own backing with this storage's own layout, so the mirror replays
+    // exactly the planes this storage owns. It allocates nothing.
     DeviceKVPagePoolLayout layout;
     layout.spec = spec_;
     layout.planes.reserve(planes_.size());
@@ -103,7 +103,15 @@ void DevicePageStorage::attach_mirror(tp2::MirroredKVPagePool& mirror) {
         layout.planes.push_back(planned);
     }
     mirror_origin_ = std::make_unique<DeviceKVPagePool>(backing_, layout);
-    mirror_        = &mirror;
+    return *mirror_origin_;
+}
+
+void DevicePageStorage::attach_mirror(tp2::MirroredKVPagePool& mirror) {
+    if (mirror_ != nullptr) { throw std::logic_error("Device page storage already mirrored"); }
+    if (mirror_origin_ == nullptr || &mirror.origin_pool() != mirror_origin_.get()) {
+        throw std::logic_error("Device page storage mirror was built over another origin view");
+    }
+    mirror_ = &mirror;
 }
 
 void DevicePageStorage::initialize_host_transfer_plan() {

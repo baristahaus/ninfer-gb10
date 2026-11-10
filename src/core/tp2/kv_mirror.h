@@ -133,6 +133,12 @@ public:
     void publish_physical(std::int32_t row, std::uint32_t logical_begin,
                           std::span<const std::int32_t> indices, cudaStream_t stream = nullptr);
 
+    // Rank 1's lease alone, for an owner that already keeps rank 0's row in its own bookkeeping
+    // (the Qwen3.5 HistoryDirectory) rather than in the origin pool. Mirror-first is preserved: a
+    // refusal leaves both sides unchanged. Paired with `release_mirror`.
+    void acquire_mirror(std::int32_t row);
+    void release_mirror(std::int32_t row) noexcept;
+
     // Rank 1's lease of `row`; the caller reads rank 1's row view through the mirror pool.
     [[nodiscard]] const KVExecutionRowLease& mirror_row(std::int32_t row) const;
 

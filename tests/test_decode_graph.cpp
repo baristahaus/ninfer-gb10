@@ -165,14 +165,22 @@ int probe_update_results(ninfer::DeviceContext& device) {
         const int code        = static_cast<int>(info.result);
         std::cout << "update to mutation " << target << ": " << cudaGetErrorName(err)
                   << ", result " << code << '\n';
-        // A result that is not success is a recoverable refusal, not an error.
-        if (err == cudaSuccess && info.result != cudaGraphExecUpdateSuccess) { ++recoverable; }
+        // A refusal is reported as cudaErrorGraphExecUpdateFailure *with* a non-success result —
+        // that is precisely the recoverable case the caller must handle by re-instantiating.
+        // Requiring `err == cudaSuccess` here, as the first version did, meant a refusal could never
+        // be counted: the driver refused mutation 2 with result 2 (TopologyChanged) and the probe
+        // still reported that nothing had been refused, which is the opposite of its own output.
+        if (err == cudaErrorGraphExecUpdateFailure) {
+            ++recoverable;
+        } else {
+            CUDA_CHECK(err);
+            if (info.result != cudaGraphExecUpdateSuccess) { ++recoverable; }
+        }
         CUDA_CHECK(cudaGraphExecDestroy(exec));
     }
     for (auto& graph : graphs) { CUDA_CHECK(cudaGraphDestroy(graph)); }
     if (recoverable == 0) {
-        std::cerr << "this driver applied every mutation in place; the recoverable path was not "
-                     "exercised\n";
+        std::cerr << "this driver refused no mutation in place; the recoverable path was not exercised\n";
         return -1;
     }
     return 0;

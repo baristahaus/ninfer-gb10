@@ -465,6 +465,28 @@ void DeviceKVPagePool::release_reservation(std::uint32_t pages) noexcept {
     reserved_pages_ -= pages;
 }
 
+void DeviceKVPagePool::zero_page_run(std::int32_t first, std::uint32_t count,
+                                     cudaStream_t stream) const {
+    if (count == 0) { return; }
+    const std::uint32_t capacity = capacity_pages();
+    if (first < 0 || count > capacity ||
+        static_cast<std::uint32_t>(first) > capacity - count) {
+        throw std::out_of_range("Paged KV zero run is outside the pool");
+    }
+    for (const Tensor& plane : planes_) {
+        auto* base = static_cast<unsigned char*>(plane.data);
+        if (spec_.geometry.device_plane_order == PagedKVPlaneOrder::PageMajor) {
+            CUDA_CHECK(cudaMemsetAsync(base + static_cast<std::int64_t>(first) * plane.nb[3], 0,
+                                       static_cast<std::size_t>(count) * plane.nb[3], stream));
+        } else {
+            CUDA_CHECK(cudaMemset2DAsync(base + static_cast<std::int64_t>(first) * plane.nb[2],
+                                         plane.nb[3], 0,
+                                         static_cast<std::size_t>(count) * plane.nb[2],
+                                         static_cast<std::size_t>(plane.ne[3]), stream));
+        }
+    }
+}
+
 void DeviceKVPagePool::zero_pages(std::span<const DeviceKVPageHandle> pages,
                                   cudaStream_t stream) const {
     validate_distinct_pages(pages, "Paged KV zero destination contains duplicate pages");
@@ -472,21 +494,35 @@ void DeviceKVPagePool::zero_pages(std::span<const DeviceKVPageHandle> pages,
     while (begin < pages.size()) {
         std::size_t end = begin + 1;
         while (end < pages.size() && pages[end].index_ == pages[end - 1].index_ + 1) { ++end; }
-        const std::int32_t first = pages[begin].index_;
-        const std::int32_t count = static_cast<std::int32_t>(end - begin);
-        for (const Tensor& plane : planes_) {
-            auto* base = static_cast<unsigned char*>(plane.data);
-            if (spec_.geometry.device_plane_order == PagedKVPlaneOrder::PageMajor) {
-                CUDA_CHECK(cudaMemsetAsync(base + static_cast<std::int64_t>(first) * plane.nb[3], 0,
-                                           static_cast<std::size_t>(count) * plane.nb[3], stream));
-            } else {
-                CUDA_CHECK(cudaMemset2DAsync(base + static_cast<std::int64_t>(first) * plane.nb[2],
-                                             plane.nb[3], 0,
-                                             static_cast<std::size_t>(count) * plane.nb[2],
-                                             static_cast<std::size_t>(plane.ne[3]), stream));
-            }
-        }
+        zero_page_run(pages[begin].index_, static_cast<std::uint32_t>(end - begin), stream);
         begin = end;
+    }
+}
+
+void DeviceKVPagePool::copy_page_run(std::int32_t source_first, std::int32_t destination_first,
+                                     std::uint32_t count, cudaStream_t stream) const {
+    if (count == 0 || source_first == destination_first) { return; }
+    const std::uint32_t capacity = capacity_pages();
+    if (source_first < 0 || destination_first < 0 || count > capacity ||
+        static_cast<std::uint32_t>(source_first) > capacity - count ||
+        static_cast<std::uint32_t>(destination_first) > capacity - count) {
+        throw std::out_of_range("Paged KV copy run is outside the pool");
+    }
+    // The two ranges are disjoint or identical: the caller's runs never partially overlap.
+    for (const Tensor& plane : planes_) {
+        auto* base = static_cast<unsigned char*>(plane.data);
+        if (spec_.geometry.device_plane_order == PagedKVPlaneOrder::PageMajor) {
+            CUDA_CHECK(cudaMemcpyAsync(
+                base + static_cast<std::int64_t>(destination_first) * plane.nb[3],
+                base + static_cast<std::int64_t>(source_first) * plane.nb[3],
+                static_cast<std::size_t>(count) * plane.nb[3], cudaMemcpyDeviceToDevice, stream));
+        } else {
+            CUDA_CHECK(cudaMemcpy2DAsync(
+                base + static_cast<std::int64_t>(destination_first) * plane.nb[2], plane.nb[3],
+                base + static_cast<std::int64_t>(source_first) * plane.nb[2], plane.nb[3],
+                static_cast<std::size_t>(count) * plane.nb[2],
+                static_cast<std::size_t>(plane.ne[3]), cudaMemcpyDeviceToDevice, stream));
+        }
     }
 }
 
@@ -495,21 +531,11 @@ void DeviceKVPagePool::copy_page(DeviceKVPageHandle source, DeviceKVPageHandle d
     const std::int32_t source_index      = physical_index(source);
     const std::int32_t destination_index = physical_index(destination);
     if (source_index == destination_index) { return; }
-    for (const Tensor& plane : planes_) {
-        auto* base = static_cast<unsigned char*>(plane.data);
-        if (spec_.geometry.device_plane_order == PagedKVPlaneOrder::PageMajor) {
-            CUDA_CHECK(
-                cudaMemcpyAsync(base + static_cast<std::int64_t>(destination_index) * plane.nb[3],
-                                base + static_cast<std::int64_t>(source_index) * plane.nb[3],
-                                plane.nb[3], cudaMemcpyDeviceToDevice, stream));
-        } else {
-            CUDA_CHECK(cudaMemcpy2DAsync(
-                base + static_cast<std::int64_t>(destination_index) * plane.nb[2], plane.nb[3],
-                base + static_cast<std::int64_t>(source_index) * plane.nb[2], plane.nb[3],
-                plane.nb[2], static_cast<std::size_t>(plane.ne[3]), cudaMemcpyDeviceToDevice,
-                stream));
-        }
-    }
+    copy_page_run(source_index, destination_index, 1, stream);
+}
+
+std::int32_t DeviceKVPagePool::physical_page(DeviceKVPageHandle handle) const {
+    return physical_index(handle);
 }
 
 void DeviceKVPagePool::copy_to_host(std::span<const DeviceKVPageHandle> source,
@@ -769,6 +795,21 @@ void KVExecutionTablePool::publish_indices(KVExecutionRowHandle row_handle,
     auto* destination      = static_cast<std::int32_t*>(destination_row.data) + logical_begin;
     CUDA_CHECK(cudaMemcpyAsync(destination, indices.data(), indices.size_bytes(),
                                cudaMemcpyHostToDevice, stream));
+}
+
+void KVExecutionTablePool::publish_physical(KVExecutionRowHandle row_handle,
+                                            std::uint32_t logical_begin,
+                                            std::span<const std::int32_t> indices,
+                                            cudaStream_t stream) {
+    if (!valid_handle(row_handle) || logical_begin > logical_page_capacity() ||
+        indices.size() > logical_page_capacity() - logical_begin) {
+        throw std::invalid_argument("Paged KV physical publication is outside its execution row");
+    }
+    publish_indices(row_handle, logical_begin, indices, stream);
+}
+
+bool KVExecutionTablePool::any_row_bound() const noexcept {
+    return std::find(row_in_use_.begin(), row_in_use_.end(), true) != row_in_use_.end();
 }
 
 Tensor KVExecutionTablePool::row(KVExecutionRowHandle handle) const {

@@ -10,7 +10,15 @@
 //   * rank 1 never allocates and never acquires on its own: rank 0's pool owns every page and row
 //     decision, and rank 1's replica is addressed by the same physical indices;
 //   * a replica is index-identical, not byte-identical: at tp 2 rank 1 carries its own KV-head
-//     shard, so only page counts and per-page plane geometry must agree;
+//     shard, so the two pools agree on page capacity, plane count, page order and the *address* of
+//     a page, and may differ in how many heads a page holds. Which tensor fact is the page address
+//     depends on the plane order, and `require_matching_kv_mirror` compares exactly that one:
+//       PageMajor `[leading, page tokens, heads, physical pages]` — compares `nb[3]`, the page
+//       stride; the head extent `ne[2]` and the head stride `nb[2]` follow the shard.
+//       HeadMajor `[leading, page tokens, physical pages, heads]` — compares `nb[3]`, the row
+//       stride, and `ne[0]`, the leading extent; the head extent `ne[3]` and the page stride
+//       `nb[2]` follow the shard. Comparing `ne[3]` here would refuse the sharded rank-1 pool this
+//       contract exists to allow.
 //   * every replay runs on rank 1's stream. Both ranks issue the same sequence in the same order,
 //     which is the whole ordering argument: no cross-stream synchronization is involved;
 //   * Host transfers are rejected while a mirror is attached, because tp 2 has no Host KV or state
@@ -44,8 +52,9 @@ struct MirrorTarget {
 };
 
 // Validates that `mirror` can replay `origin`'s physical page mutations: equal page capacity,
-// equal plane count and equal per-page plane geometry. Total plane bytes may differ, because rank 1
-// carries its own KV-head shard. Throws std::invalid_argument.
+// equal plane count, page order and page-token count, and an equal page *address* per plane (which
+// tensor field that is depends on the plane order; see the contract above). Total plane bytes may
+// differ, because rank 1 carries its own KV-head shard. Throws std::invalid_argument.
 void require_matching_kv_mirror(const DeviceKVPagePool& origin, const DeviceKVPagePool& mirror);
 
 // Validates that `mirror` can replay `origin`'s slot mutations: equal image stride, slot count and

@@ -127,6 +127,88 @@ int exercise_state_image_contract() {
     return failures;
 }
 
+// --- host-only: KV page-pool geometry contract ---------------------------------------------
+
+// A KV page pool over pageable host memory. The pool's constructor and the geometry contract read
+// tensor metadata only, so a host-backed pair can prove the contract on a machine with no GPU —
+// which is the only way to cover the case this contract exists for, a head-sharded rank 1.
+struct HostPool {
+    std::unique_ptr<void, void (*)(void*)> data{nullptr, &std::free};
+    ninfer::DeviceKVPagePoolLayout layout;
+    std::unique_ptr<ninfer::DeviceKVPagePool> pool;
+};
+
+HostPool make_host_pool(std::uint32_t pages, std::int32_t heads, std::int32_t leading,
+                        ninfer::PagedKVPlaneOrder order) {
+    const ninfer::KVPageGeometry geometry{
+        .page_tokens        = static_cast<std::uint32_t>(ninfer::kPagedKVPageSize),
+        .device_plane_order = order,
+        .planes             = {{.dtype           = ninfer::DType::I8,
+                                .leading_extent  = leading,
+                                .head_extent     = heads,
+                                .alignment       = 256,
+                                .tokens_per_row  = 1}}};
+    ninfer::LayoutBuilder builder;
+    HostPool pool;
+    pool.layout = ninfer::plan_device_kv_page_pool(
+        builder, {.page_group_count = pages, .geometry = geometry});
+    const std::size_t bytes = builder.finish(256);
+    void* memory            = std::aligned_alloc(256, (bytes + 255) / 256 * 256);
+    if (memory == nullptr) { throw std::bad_alloc(); }
+    pool.data.reset(memory);
+    pool.pool = std::make_unique<ninfer::DeviceKVPagePool>(
+        ninfer::MemorySpan{memory, bytes, ninfer::Device::cpu()}, pool.layout);
+    return pool;
+}
+
+int exercise_kv_geometry_contract() {
+    int failures = 0;
+
+    // HeadMajor is the Flash-Next plane order: [leading, page tokens, physical pages, heads].
+    // Rank 1 carries its own KV-head shard, so its plane holds half the heads and its page stride halves
+    // with them. The contract must accept that pair — comparing the head extent here would refuse
+    // exactly the mirror a tp 2 load needs.
+    {
+        HostPool origin = make_host_pool(4, 2, 1, ninfer::PagedKVPlaneOrder::HeadMajor);
+        HostPool shard  = make_host_pool(4, 1, 1, ninfer::PagedKVPlaneOrder::HeadMajor);
+        HostPool same   = make_host_pool(4, 2, 1, ninfer::PagedKVPlaneOrder::HeadMajor);
+        HostPool wider  = make_host_pool(8, 2, 1, ninfer::PagedKVPlaneOrder::HeadMajor);
+        HostPool lead   = make_host_pool(4, 2, 2, ninfer::PagedKVPlaneOrder::HeadMajor);
+
+        failures += expect_ok(
+            [&] { ninfer::tp2::require_matching_kv_mirror(*origin.pool, *shard.pool); },
+            "head-major mirror with half the heads (the tp 2 shard)");
+        failures += expect_ok(
+            [&] { ninfer::tp2::require_matching_kv_mirror(*origin.pool, *same.pool); },
+            "head-major mirror with the same heads");
+        failures += expect_throws<std::invalid_argument>(
+            [&] { ninfer::tp2::require_matching_kv_mirror(*origin.pool, *origin.pool); },
+            "head-major mirror of itself");
+        failures += expect_throws<std::invalid_argument>(
+            [&] { ninfer::tp2::require_matching_kv_mirror(*origin.pool, *wider.pool); },
+            "head-major mirror with another page capacity");
+        failures += expect_throws<std::invalid_argument>(
+            [&] { ninfer::tp2::require_matching_kv_mirror(*origin.pool, *lead.pool); },
+            "head-major mirror with another leading extent");
+    }
+
+    // PageMajor is the other order: [leading, page tokens, heads, physical pages]. A page there is
+    // one contiguous run of every head, so its stride is the page stride and the shard cannot be a
+    // head count in the same plane; identical pools must still be accepted.
+    {
+        HostPool origin = make_host_pool(4, 2, 1, ninfer::PagedKVPlaneOrder::PageMajor);
+        HostPool same   = make_host_pool(4, 2, 1, ninfer::PagedKVPlaneOrder::PageMajor);
+        HostPool lead   = make_host_pool(4, 2, 2, ninfer::PagedKVPlaneOrder::PageMajor);
+        failures += expect_ok(
+            [&] { ninfer::tp2::require_matching_kv_mirror(*origin.pool, *same.pool); },
+            "page-major mirror with the same geometry");
+        failures += expect_throws<std::invalid_argument>(
+            [&] { ninfer::tp2::require_matching_kv_mirror(*origin.pool, *lead.pool); },
+            "page-major mirror with another page stride");
+    }
+    return failures;
+}
+
 // --- two devices: the replay path ---------------------------------------------------------
 
 struct PlannedPools {
@@ -309,6 +391,7 @@ int exercise_state_image_replay(ninfer::DeviceContext& rank0, ninfer::DeviceCont
 
 int main() {
     int failures = exercise_state_image_contract();
+    failures += exercise_kv_geometry_contract();
 
     int count                   = 0;
     const cudaError_t count_err = cudaGetDeviceCount(&count);

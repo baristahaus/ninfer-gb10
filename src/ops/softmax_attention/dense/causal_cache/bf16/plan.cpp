@@ -12,12 +12,15 @@ constexpr int kGroupedPrefillMaxWidth = 256;
 Bf16KvCausalPlan select_bf16_kv_causal_plan(int heads, int width, int batch,
                                             CausalAttentionExecutionEnvelope envelope,
                                             int multiprocessor_count) {
-    if (multiprocessor_count <= 0 || (heads != 24 && heads != 16) || width < 1 || batch < 1 ||
+    // The KV head count comes from the same table the launch dispatch uses, so a head count a plan
+    // accepts can never be dispatched to a different instance's geometry.
+    int kv_heads = 0;
+    if (multiprocessor_count <= 0 || !causal_kv_heads(heads, &kv_heads) || width < 1 || batch < 1 ||
         batch > 8 || (batch > 1 && width > 16) || envelope.min_visible_keys == 0 ||
         envelope.min_visible_keys > envelope.max_visible_keys ||
         envelope.max_visible_keys > kCausalAttentionMaximumVisibleKeys)
         throw std::invalid_argument("BF16 attention: invalid plan inputs");
-    const int kv_heads = heads == 24 ? 4 : 2, group = heads / kv_heads;
+    const int group = heads / kv_heads;
     const auto ceil_div = [](int a, int b) { return (a + b - 1) / b; };
     const int visible   = envelope.max_visible_keys;
     if (width > kGroupedPrefillMaxWidth) {

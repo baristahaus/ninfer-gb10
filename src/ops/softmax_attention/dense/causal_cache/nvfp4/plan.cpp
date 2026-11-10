@@ -20,7 +20,10 @@ constexpr int kGroupedPrefillMaxWidth = 192;
 Nvfp4KvCausalPlan select_nvfp4_kv_causal_plan(int heads, int width, int batch,
                                               CausalAttentionExecutionEnvelope envelope,
                                               int multiprocessor_count) {
-    if (multiprocessor_count <= 0 || (heads != 24 && heads != 16) || width < 1 || batch < 1 ||
+    // The KV head count comes from the same table the launch dispatch uses, so a head count a plan
+    // accepts can never be dispatched to a different instance's geometry.
+    int kv_heads = 0;
+    if (multiprocessor_count <= 0 || !causal_kv_heads(heads, &kv_heads) || width < 1 || batch < 1 ||
         batch > 8 || (batch > 1 && width > 16) || envelope.min_visible_keys == 0 ||
         envelope.min_visible_keys > envelope.max_visible_keys ||
         envelope.max_visible_keys > kCausalAttentionMaximumVisibleKeys)
@@ -31,11 +34,13 @@ Nvfp4KvCausalPlan select_nvfp4_kv_causal_plan(int heads, int width, int batch,
                                                                      : Nvfp4KvFamily::Tiled;
     const int tiles =
         family == Nvfp4KvFamily::ParallelGrouped ? (width + grouped_limit - 1) / grouped_limit : 1;
-    const int independent_tiles = batch * (heads == 24 ? 4 : 2) * tiles;
+    const int independent_tiles = batch * kv_heads * tiles;
     const int query_tile        = family == Nvfp4KvFamily::ParallelGrouped && width <= 16
                                       ? (width + 1) / 2
                                       : std::min(width, grouped_limit);
-    const int row_tiles         = (query_tile * (heads == 24 ? 6 : 8) + 15) / 16;
+    // Keyed on the group size (query heads per KV head), not the head count: 24/4 and 12/2 both
+    // group 6, and 16/2 groups 8. A head-count ternary here would mis-tune 12/2.
+    const int row_tiles         = (query_tile * (heads / kv_heads) + 15) / 16;
     const std::int64_t sms      = multiprocessor_count;
     const auto budget =
         row_tiles <= 2 || causal_query_tiles_underfill_sms(independent_tiles, multiprocessor_count)

@@ -66,6 +66,11 @@ Selection select_rope(const RopeArguments& a, int multiprocessors) {
                 return select_r64<24, 4>(axes, tokens, multiprocessors);
             if (first_heads == 16 && second_heads == 2)
                 return select_r64<16, 2>(axes, tokens, multiprocessors);
+            // The 27B's per-rank shape at tensor-parallel width 2: 24 query and 4 KV heads split
+            // evenly. Without this case the fixed r64 instance is skipped and the call falls to
+            // the generic kernel, which is correct but slower.
+            if (first_heads == 12 && second_heads == 2)
+                return select_r64<12, 2>(axes, tokens, multiprocessors);
         } else {
             switch (first_heads) {
             case 24:
@@ -74,6 +79,8 @@ Selection select_rope(const RopeArguments& a, int multiprocessors) {
                 return select_r64<4, 0>(axes, tokens, multiprocessors);
             case 16:
                 return select_r64<16, 0>(axes, tokens, multiprocessors);
+            case 12:
+                return select_r64<12, 0>(axes, tokens, multiprocessors);
             case 2:
                 return select_r64<2, 0>(axes, tokens, multiprocessors);
             }

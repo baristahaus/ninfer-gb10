@@ -66,7 +66,10 @@ std::size_t tiled_workspace_bytes(int heads, int min_width, int max_width, int v
 Fp8KvCausalPlan select_fp8_kv_causal_plan(int heads, int width, int batch,
                                           CausalAttentionExecutionEnvelope envelope,
                                           int multiprocessor_count) {
-    if (multiprocessor_count <= 0 || (heads != 24 && heads != 16) || width < 1 || batch < 1 ||
+    // The KV head count comes from the same table the launch dispatch uses, so a head count a plan
+    // accepts can never be dispatched to a different instance's geometry.
+    int kv_heads = 0;
+    if (multiprocessor_count <= 0 || !causal_kv_heads(heads, &kv_heads) || width < 1 || batch < 1 ||
         batch > 8 || (batch > 1 && width > 16) || envelope.min_visible_keys == 0 ||
         envelope.min_visible_keys > envelope.max_visible_keys ||
         envelope.max_visible_keys > kCausalAttentionMaximumVisibleKeys)
@@ -85,7 +88,7 @@ Fp8KvCausalPlan select_fp8_kv_causal_plan(int heads, int width, int batch,
             select_tiled_partition(heads, width, envelope.max_visible_keys, multiprocessor_count)};
     const int tiles =
         family == Fp8KvFamily::ParallelGrouped ? (width + grouped_limit - 1) / grouped_limit : 1;
-    const int independent_tiles = batch * (heads == 24 ? 4 : 2) * tiles;
+    const int independent_tiles = batch * kv_heads * tiles;
     // Decode budgets two CTAs per SM; wider queries start with one and double the
     // budget if complete query-tile groups would leave over 10% of the SMs idle.
     const std::int64_t sms = multiprocessor_count;

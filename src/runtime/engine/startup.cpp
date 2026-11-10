@@ -27,6 +27,34 @@ void validate_options(const EngineOptions& options) {
     if (options.max_context == 0) {
         throw std::invalid_argument("Engine max_context must be nonzero");
     }
+    // A device group is a tensor-parallel request, not a preference: an architecture without a
+    // group route would silently run on rank 0's device alone and the caller would have no way to
+    // tell. Rejecting here is the difference between "the lane is not implemented for this model"
+    // and "it ran, slowly, on one card".
+    for (const int device : options.devices) {
+        if (device < 0) {
+            throw std::invalid_argument("Engine device ordinals must not be negative");
+        }
+    }
+    if (options.devices.size() > 1) {
+        const artifact::Reader probe(options.artifact_path);
+        switch (models::resolve_architecture(probe.directory())) {
+        case models::Architecture::Qwen3_8FlashNext:
+            break;
+        case models::Architecture::Qwen3_5:
+        case models::Architecture::Qwen3_5Moe:
+            throw std::invalid_argument(
+                "tensor parallelism is not implemented for this architecture yet; pass a single "
+                "device with --device");
+        case models::Architecture::Qwen4Exp:
+#if NINFER_ENABLE_DISTRIBUTED
+            break;
+#else
+            throw std::invalid_argument(
+                "tensor parallelism for this architecture needs NINFER_ENABLE_DISTRIBUTED");
+#endif
+        }
+    }
     switch (options.kv_capacity.mode) {
     case KvCapacityMode::Explicit:
         if (options.kv_capacity.explicit_tokens == 0) {

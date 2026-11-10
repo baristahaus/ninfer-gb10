@@ -93,6 +93,24 @@ workspace::GdnExtents gdn_extents(const GdnParameters& parameters) {
     return out;
 }
 
+workspace::GdnExtents gdn_extents(const GdnProfile& profile) {
+    workspace::GdnExtents out;
+    // The control profile is the a|b pair: a fused parent carries two rows per head, a paired one
+    // carries one. `describe_profile` makes the same distinction; this mirrors it from the profile
+    // alone because the planning layer runs before any weight tensor exists.
+    const auto& control = profile.control.first;
+    out.value_heads     = profile.control.second ? control.n : control.n / 2;
+    const std::int32_t qkv_rows =
+        profile.role_profiles ? (*profile.role_profiles)[0].n : profile.projection_rows[0];
+    out.value_width =
+        profile.role_profiles ? (*profile.role_profiles)[1].n : profile.projection_rows[1];
+    out.key_width = (qkv_rows - out.value_width) / 2;
+    if (out.value_heads <= 0 || out.key_width <= 0 || out.value_width <= 0) {
+        throw std::invalid_argument("gdn extents are not positive");
+    }
+    return out;
+}
+
 void gdn_norm_control(const Tensor& residual, const Tensor& norm, float epsilon,
                       const GdnParameters& parameters, Tensor& hidden, Tensor& g, Tensor& beta,
                       MemoryArena& workspace, CudaExecutionView execution) {

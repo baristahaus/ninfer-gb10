@@ -35,6 +35,11 @@ namespace ninfer::models::qwen3_5::execution {
 // ever disagreed with the ops.
 [[nodiscard]] workspace::GdnExtents gdn_extents(const GdnParameters& parameters);
 
+// The same extents from the profile, for the planning layer, which builds the per-rank state and
+// workspace specs before any weight tensor exists. Both forms read the rank's own geometry: the
+// profile carries the sharded shapes because it is described from the sharded bindings.
+[[nodiscard]] workspace::GdnExtents gdn_extents(const GdnProfile& profile);
+
 void gdn_projection(const Tensor& hidden, const GdnParameters& parameters, Tensor& qkv, Tensor& z,
                     MemoryArena& workspace, CudaExecutionView execution);
 void gdn_norm_control(const Tensor& residual, const Tensor& norm, float epsilon,

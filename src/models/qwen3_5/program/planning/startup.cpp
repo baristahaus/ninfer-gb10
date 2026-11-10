@@ -68,9 +68,42 @@ std::uint32_t page_count(std::uint32_t capacity) {
     return 1U + (capacity - 1U) / static_cast<std::uint32_t>(kPagedKVPageSize);
 }
 
+namespace {
+
+// The GDN extents this rank holds, from the first linear-attention layer's profile. The state pool
+// and the replay records are per-rank storage whose shapes the ops validate, so they cannot take
+// the model's numbers: at width 2 the convolution channels are 5120, not 10240, and the value heads
+// are 24, not 48.
+// The KV head count this rank holds. The KV cache is per-rank storage shaped by it, and at width 2
+// the key and value projections carry 2 heads, not the model's 4.
+std::uint32_t rank_kv_heads(const execution::TextProfile& profile, std::uint32_t head_dim) {
+    for (const auto& block : profile.layers) {
+        if (const auto* attention = std::get_if<execution::AttentionProfile>(&block.mixer)) {
+            const std::int32_t rows = attention->role_profiles
+                                          ? (*attention->role_profiles)[1].n
+                                          : attention->projection_rows[1];
+            if (head_dim == 0 || rows <= 0) { break; }
+            return static_cast<std::uint32_t>(rows) / head_dim;
+        }
+    }
+    return 0;
+}
+
+execution::workspace::GdnExtents rank_gdn_extents(const execution::TextProfile& profile) {
+    for (const auto& block : profile.layers) {
+        if (const auto* gdn = std::get_if<execution::GdnProfile>(&block.mixer)) {
+            return execution::gdn_extents(*gdn);
+        }
+    }
+    return {};
+}
+
+} // namespace
+
 ResourceLayout persistent_layout(const SequencePlanImpl& plan) {
     const auto& profile = *plan.profile;
     const auto& config  = profile.config.text;
+    const auto gdn_rank = rank_gdn_extents(profile.text);
     if (!plan.context_cache.extra_state_slots)
         throw std::logic_error("Qwen3.5 context cache options are not normalized");
     ResourceSpec spec;
@@ -78,7 +111,8 @@ ResourceLayout persistent_layout(const SequencePlanImpl& plan) {
         .full_attention_layers     = config.full_attention_layers,
         .mtp_layers                = 1,
         .capacity                  = plan.capacity,
-        .kv_heads                  = dimension(config.attention->num_key_value_heads),
+        .kv_heads                  = rank_kv_heads(profile.text,
+                                                   dimension(config.attention->head_dim)),
         .attention_head_dim        = dimension(config.attention->head_dim),
         .kv_storage                = plan.kv_storage,
         .enable_mtp                = plan.features.mtp(),
@@ -93,9 +127,10 @@ ResourceLayout persistent_layout(const SequencePlanImpl& plan) {
         .linear =
             {
                 .layers        = config.linear_attention_layers,
-                .conv_channels = config.gdn ? dimension(config.gdn->conv_channels()) : 0,
+                .conv_channels = config.gdn ? static_cast<std::uint32_t>(gdn_rank.conv_channels())
+                                            : 0,
                 .conv_width    = config.gdn ? dimension(config.gdn->linear_conv_kernel_dim - 1) : 0,
-                .value_heads   = config.gdn ? dimension(config.gdn->linear_num_value_heads) : 0,
+                .value_heads   = config.gdn ? static_cast<std::uint32_t>(gdn_rank.value_heads) : 0,
                 .value_head_dim = config.gdn ? dimension(config.gdn->linear_value_head_dim) : 0,
                 .key_head_dim   = config.gdn ? dimension(config.gdn->linear_key_head_dim) : 0,
                 .conv_dtype     = DType::BF16,
@@ -107,9 +142,12 @@ ResourceLayout persistent_layout(const SequencePlanImpl& plan) {
             .layers          = dimension(config.linear_attention_layers),
             .record_capacity = static_cast<std::int32_t>(plan.max_concurrency),
             .width           = static_cast<std::int32_t>(plan.draft_window + 1),
-            .conv_channels   = config.gdn ? dimension(config.gdn->conv_channels()) : 0,
-            .qk_heads        = config.gdn ? dimension(config.gdn->linear_num_key_heads) : 0,
-            .value_heads     = config.gdn ? dimension(config.gdn->linear_num_value_heads) : 0,
+            .conv_channels = config.gdn ? static_cast<std::uint32_t>(gdn_rank.conv_channels()) : 0,
+            .qk_heads      = config.gdn
+                                 ? static_cast<std::uint32_t>(gdn_rank.key_width /
+                                                             config.gdn->linear_key_head_dim)
+                                 : 0,
+            .value_heads   = config.gdn ? static_cast<std::uint32_t>(gdn_rank.value_heads) : 0,
             .key_dim         = config.gdn ? dimension(config.gdn->linear_key_head_dim) : 0,
             .value_dim       = config.gdn ? dimension(config.gdn->linear_value_head_dim) : 0,
         };

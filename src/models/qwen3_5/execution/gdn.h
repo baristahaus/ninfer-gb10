@@ -29,9 +29,9 @@ namespace ninfer::models::qwen3_5::execution {
                                                      std::int32_t last_width);
 // The GDN extents this rank holds, read from the prepared weights rather than the config. The
 // control weights are the a|b pair, so their first parent's rows are the rank's value heads; the
-// input projection's rows are Q|K|V (2 key widths plus one value width) and its z rows are the value
-// width. At width 1 these equal the config's numbers, which is why only the sharded lane ever
-// disagreed with the ops.
+// input projection's rows are Q|K|V (2 key widths plus one value width) and its z rows are the
+// value width. At width 1 these equal the config's numbers, which is why only the sharded lane
+// ever disagreed with the ops.
 [[nodiscard]] workspace::GdnExtents gdn_extents(const GdnParameters& parameters);
 
 void gdn_projection(const Tensor& hidden, const GdnParameters& parameters, Tensor& qkv, Tensor& z,

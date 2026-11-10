@@ -70,7 +70,11 @@ void validate_linear_semantics(const Tensor& x, const Weight& w, const Tensor& o
         throw std::invalid_argument("linear: weight n/k must be positive");
     }
     if (x.ne[0] != w.k || out.ne[0] != w.n || out.ne[1] != x.ne[1]) {
-        throw std::invalid_argument("linear: expected [K,T] x [N,K] -> [N,T]");
+        throw std::invalid_argument(
+            "linear: expected [K,T] x [N,K] -> [N,T]; got x [" + std::to_string(x.ne[0]) + "," +
+            std::to_string(x.ne[1]) + "], weight [" + std::to_string(w.n) + "," +
+            std::to_string(w.k) + "], out [" + std::to_string(out.ne[0]) + "," +
+            std::to_string(out.ne[1]) + "]");
     }
     if (!x.is_contiguous() || !out.is_contiguous()) {
         throw std::invalid_argument("linear: x/out must be contiguous");

@@ -71,6 +71,11 @@ ninfer_add_test(ninfer_spill_kv_store_test
   LIBRARIES ninfer_core)
 set_tests_properties(ninfer_spill_kv_store_test PROPERTIES TIMEOUT 30)
 
+ninfer_add_test(ninfer_disk_kv_cache_test
+  SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_disk_kv_cache.cpp"
+  LIBRARIES ninfer_core)
+set_tests_properties(ninfer_disk_kv_cache_test PROPERTIES TIMEOUT 300)
+
 ninfer_add_test(ninfer_state_store_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_state_store.cpp"
   LIBRARIES ninfer_core)

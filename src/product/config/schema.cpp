@@ -23,6 +23,10 @@ constexpr FieldSpec kFields[] = {
      "Shared Main KV capacity; context follows --max-context."},
     {Field::PrefillChunk, "engine.prefill_chunk", "--prefill-chunk", "", "N|default",
      "Positive multiple of 128; default is resolved by the model."},
+    {Field::PrefillDecodeShare, "engine.prefill_decode_share", "--prefill-decode-share", "",
+     "PCT", "Decode time owed to running requests per prefill chunk, in percent (0..1000)."},
+    {Field::LongPrefillWait, "engine.long_prefill_wait", "--long-prefill-wait-ms", "", "N",
+     "How long a decode-ready request waits behind a long prefill before it is served."},
     {Field::RopeYarnFactor, "engine.rope_yarn_factor", "--rope-yarn-factor", "", "F|default",
      "Opt-in YaRN NTK-by-parts RoPE scaling; >1 extends the addressable context to the native "
      "window times this factor. Default 0 disables it."},
@@ -40,6 +44,15 @@ constexpr FieldSpec kFields[] = {
      "Cross-request history reuse; also accepts =default."},
     {Field::ExtraStateSlots, "context_cache.extra_state_slots", "--extra-state-slots", "",
      "N|default", "Extra complete StateImages beyond active lanes."},
+    {Field::HostStateSlots, "context_cache.host_state_slots", "--host-state-slots", "", "N",
+     "Pinned Host StateImage capacity; 0 disables the Host state tier."},
+    {Field::HostKvMib, "context_cache.host_kv_mib", "--host-kv-mib", "", "N",
+     "Pinned Host Main/Backend KV capacity in MiB; 0 disables the Host KV arena."},
+    {Field::MaxPrivateContinuations, "context_cache.max_private_continuations",
+     "--max-private-continuations", "", "N",
+     "Private continuation descriptor capacity; at least --max-concurrency."},
+    {Field::MaxSharedPrefixes, "context_cache.max_shared_prefixes", "--max-shared-prefixes", "",
+     "N", "Engine-wide shared stable-prefix descriptor capacity."},
     {Field::MaxLongAnchors, "context_cache.max_long_anchors_per_continuation",
      "--max-long-anchors-per-continuation", "", "N",
      "Retained long-anchor checkpoints per continuation; default 2."},
@@ -70,6 +83,10 @@ constexpr FieldSpec kFields[] = {
      "Thinking override; also accepts =model."},
     {Field::PreserveThinking, "generation.preserve_thinking", "--preserve-thinking",
      "--no-preserve-thinking", "", "Retain closed-turn reasoning; also accepts =model."},
+    {Field::TokenLogprobs, "generation.token_logprobs", "--token-logprobs",
+     "--no-token-logprobs", "",
+     "Report per-token log-probabilities of sampled tokens; requests that ask for them are "
+     "rejected otherwise."},
     {Field::ThinkingBudget, "generation.thinking_budget", "--thinking-budget", "", "N|none",
      "Model-origin thinking token budget."},
     {Field::Temperature, "generation.sampling.temperature", "--temperature", "", "F|model",
@@ -284,6 +301,10 @@ FieldValue parse_field_value(Field field, const RawValue& value, bool command_li
     switch (field) {
     case Field::PrefixReuse:
     case Field::ExtraStateSlots:
+    case Field::HostStateSlots:
+    case Field::HostKvMib:
+    case Field::MaxPrivateContinuations:
+    case Field::MaxSharedPrefixes:
     case Field::MaxLongAnchors:
     case Field::TurnAnchors:
     case Field::HostCapacity:
@@ -312,6 +333,7 @@ FieldValue parse_field_value(Field field, const RawValue& value, bool command_li
     switch (field) {
     case Field::Vision:
     case Field::GpuTiming:
+    case Field::TokenLogprobs:
     case Field::CudaGraph:
     case Field::PrefixReuse:
     case Field::Thinking:
@@ -334,7 +356,14 @@ FieldValue parse_field_value(Field field, const RawValue& value, bool command_li
     case Field::DraftTokens:
     case Field::MaxLongAnchors:
     case Field::TurnAnchors:
+    case Field::HostStateSlots:
+    case Field::HostKvMib:
+    case Field::MaxPrivateContinuations:
+    case Field::MaxSharedPrefixes:
+    case Field::LongPrefillWait:
         return integer(value, command_line, 0, kU32Max);
+    case Field::PrefillDecodeShare:
+        return integer(value, command_line, 0, 1000);
     case Field::MaxConcurrency:
         return integer(value, command_line, 1, kMaximumConcurrency);
     case Field::ServerPort:

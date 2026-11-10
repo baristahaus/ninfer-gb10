@@ -18,11 +18,11 @@ See [CUDA synchronization](cli.md#cuda-synchronization) for the shared `NINFER_C
   --kv-capacity 240000 \
   --max-concurrency 2 \
   --kv-dtype fp8 \
-  --device-state-slots 2 \
+  --extra-state-slots 2 \
   --host-state-slots 8 \
   --host-kv-mib 8192 \
   --spec mtp --draft-tokens 3 \
-  --lm-head-draft \
+  --proposal-head optimized \
   --preserve-thinking
 ```
 
@@ -35,9 +35,9 @@ plus a global pool of two Device-resident checkpoints. Eight pinned Host State s
 pinned Host KV retain inactive continuations under Device pressure. Active request capacity is two.
 
 Other artifacts use the same command shape with their own path. For 35B-A3B DFlash, replace the MTP
-selection with `--spec dflash --draft-tokens 7 --lm-head-draft`. Qwen3.8-27B
+selection with `--spec dflash --draft-tokens 7 --proposal-head optimized`. Qwen3.8-27B
 artifacts with DFlash2 companion weights also support `--spec dflash2 --draft-tokens 7`, with
-`--lm-head-draft` optional. DFlash2 accepts draft counts 1..15 and supports the same sampling,
+`--proposal-head optimized` optional. DFlash2 accepts draft counts 1..15 and supports the same sampling,
 concurrency, prefix reuse, and image/video request surfaces. It may remain combined with
 `--vision`.
 
@@ -49,7 +49,7 @@ Vision is disabled by default: its weights and Vision-specific unified-workspace
 allocated, and media requests and token-count requests fail with HTTP 400 `vision_disabled`. Add
 `--vision` when the server must accept image or video input. Speculative residency is likewise
 frozen by `--spec mtp|dflash|dflash2` and `--draft-tokens`; omitting `--spec` loads no speculative backend.
-`--lm-head-draft` additionally loads the optimized proposal head. DFlash on 35B-A3B and DFlash2 on Qwen3.8-27B can be combined
+`--proposal-head optimized` loads the truncated proposal head instead of the full one. DFlash on 35B-A3B and DFlash2 on Qwen3.8-27B can be combined
 with `--vision`; each accelerates generated-text decode after multimodal prefill, while Vision encode
 and prefill remain outside speculative acceleration. A later request cannot enable a capability
 omitted at startup. The artifact need only contain the Text backbone and the optional components
@@ -441,12 +441,12 @@ Anthropic Messages. Values duplicated in typed request fields must agree. Null s
 mean unspecified; other null values remain `none`. Messages, tools, generation mode and tokenizer
 special tokens cannot be overridden through kwargs.
 
-`--default-thinking-budget N` sets a positive default thinking-token cap for requests that start
+`--thinking-budget N` sets a positive default thinking-token cap for requests that start
 in thinking mode. Non-thinking requests receive no cap. It may coexist with `--no-thinking`
 because requests can explicitly enable thinking. Anthropic
 `thinking:{"type":"enabled","budget_tokens":N}` overrides this default for that request.
 
-Add `--default-thinking-budget 512` to the startup command to cap model-origin thinking at 512
+Add `--thinking-budget 512` to the startup command to cap model-origin thinking at 512
 tokens for every thinking-enabled request.
 
 At the cap boundary, Engine first honors a natural `</think>`, stop condition, cancellation, or
@@ -566,8 +566,8 @@ through aggregate source-byte, decoded-pixel, raw-patch, Vision-token, and live-
 Media cache misses run as independent decode → resize → BF16-pack tasks on a bounded host worker
 pool. Prepared payloads are keyed by SHA-256 of the acquired bytes plus modality, so repeated media
 in later requests reuses the exact immutable BF16 patch input; concurrent identical misses use one
-single-flight build. `--media-cache-mib` bounds LRU-retained payloads, while
-`--media-live-mib` bounds every cache-, request-, or runtime-referenced payload. Cache eviction does
+single-flight build. `--media-cache-capacity` bounds LRU-retained payloads, while
+`--media-live-capacity` bounds every cache-, request-, or runtime-referenced payload. Cache eviction does
 not invalidate a request reference, and live bytes are returned only when the final reference is
 released. A request-level preparation gate derived from the live limit prevents concurrent partial
 builds from deadlocking the memory account.
@@ -575,7 +575,7 @@ builds from deadlocking the memory account.
 An expanded prompt beyond `--max-context` returns HTTP 400 `context_length_exceeded`, including
 the prepared token count and configured context ceiling. A media preprocessing resource rejection
 returns HTTP 400 `media_budget_exceeded`. HTTP 413 `request_too_large` is reserved for a raw request
-body that exceeds `--max-request-mib` before JSON parsing; it is not used for model-context or media
+body that exceeds `--max-request-size` before JSON parsing; it is not used for model-context or media
 resource errors.
 
 ## OpenAI prompt caching
@@ -703,7 +703,7 @@ wire response contains typed `output` Items.
 | `input` | string or typed Item array; it may be omitted or empty only when `previous_response_id` already supplies a user query |
 | `instructions` | optional string, inserted before the reconstructed conversation for this request only |
 | `previous_response_id` | optional ID of a retained local Response |
-| `max_output_tokens` | non-negative integer; omission executes with `--default-max-tokens` but remains `null` in the Response object |
+| `max_output_tokens` | non-negative integer; omission executes with `--max-tokens` but remains `null` in the Response object |
 | `stream` | boolean; `true` selects Responses SSE rather than a JSON body |
 | `store` | boolean, default `true`; controls local retrieval and continuation state |
 | `temperature` | finite number in `[0,2]` |
@@ -966,7 +966,7 @@ positional: a string-form System value, a later array block, or an inline System
 same text remains ordinary prompt content. A `cache_control` marker attached to the consumed block
 is consumed with it rather than moved to adjacent content.
 
-`max_tokens` is optional for local clients and otherwise uses `--default-max-tokens`; a positive
+`max_tokens` is optional for local clients and otherwise uses `--max-tokens`; a positive
 value is the complete output budget. `max_tokens:0` is rejected because NInfer does not expose a
 completed zero-output cache-prewarm lifecycle. `temperature`, `top_p`, `top_k`, and
 `stop_sequences` enter Engine execution. A matched custom stop is returned as
@@ -1069,44 +1069,44 @@ The table lists executable defaults. The startup example selects a long-context 
 | `--kv-capacity N\|auto` | explicit shared Main Text KV capacity, or maximize it from remaining GPU memory; omitted means `--max-context` | `8192` |
 | `--max-concurrency N` | maximum admitted requests; valid range `1..8` | `1` |
 | `--max-pending-requests N` | additional requests allowed to wait for admission | `16` |
-| `--pending-timeout-ms N` | maximum preparation-plus-admission wait | `30000` |
+| `--pending-timeout DURATION` | maximum preparation-plus-admission wait | `30s` |
 | `--prefill-chunk N` | text-prefill chunk, a multiple of 128 | device default: `4096` on an integrated GPU (GB10), `1024` on a discrete one |
-| `--long-prefill-wait-ms N` | how long a request whose prefill needs more than one chunk waits for running requests to finish before it is admitted anyway; `0` admits it at once; must be shorter than `--pending-timeout-ms` | `20000` |
+| `--long-prefill-wait-ms N` | how long a request whose prefill needs more than one chunk waits for running requests to finish before it is admitted anyway; `0` admits it at once; must be shorter than `--pending-timeout` | `20000` |
 | `--prefill-decode-share PCT` | decode time owed to running requests per unit of prefill time, in percent: after each prefill chunk, decode rounds run until they have taken this share of the chunk's time, and at least one round. A prefill beside decode then takes about `1 + PCT/100` times as long; `0` gives one decode round per chunk; at most `1000` | `50` |
 | `--rope-yarn-factor F` | opt-in YaRN NTK-by-parts RoPE scaling for the Text geometry, in `[0,4]`; above `1` the addressable context ceiling becomes the model's native window times `F`, and the low rotary frequencies are compressed into the range the checkpoint saw while the high ones are kept. `0` and `1` both disable it. Vision and the DFlash drafter are unaffected, and a draft backend keeps its own native position capacity | `0` (off) |
-| `--log-stats-interval-ms N` | aggregate throughput report interval; `0` disables it | `5000` |
-| `--shutdown-timeout-seconds N` | how long admitted requests may finish after SIGINT/SIGTERM before they are cancelled; `0` cancels at once | `30` |
+| `--stats-interval DURATION` | aggregate throughput report interval; `0ms` disables it | `5s` |
 | `--log-level trace\|debug\|info\|warning\|error\|critical\|off` | pretty stderr verbosity | `info` |
+| `--gpu-timing` | collect result/commit CUDA stream intervals at existing completion boundaries; `--no-gpu-timing` disables it | off |
 | `--device N` | CUDA device index | `0` |
 | `--context-cost-presets FILE` | optional runtime context-cost preset registry | generic + compiled defaults |
-| `--max-request-mib N` | body-size limit before JSON parsing | `384` |
-| `--media-cache-mib N` | LRU-retained prepared BF16 media payloads; `0` disables retention | `1024` |
-| `--media-live-mib N` | all live prepared BF16 media payloads | `2048` |
+| `--host-cache-capacity SIZE\|default` | shared Host State/KV and in-flight capacity; `0B` disables backing | target/model default |
+| `--max-request-size SIZE` | body-size limit before JSON parsing | `384MiB` |
+| `--media-cache-capacity SIZE` | LRU-retained prepared BF16 media payloads; `0B` disables retention | `1GiB` |
+| `--media-live-capacity SIZE` | all live prepared BF16 media payloads | `2GiB` |
 | `--media-preprocess-threads N` | bounded media preprocessing workers; `0` selects at most 16 from host concurrency | `0` |
 | `--request-log-jsonl FILE` | append full-precision server/request records | disabled |
+| `--ignore-eos` | suppress the model's end-of-sequence stop tokens for every request on the instance; explicit per-request stop strings still apply (benchmark knob) | off |
 | `--response-store-max-records N` | maximum locally retained Responses objects | `1024` |
-| `--response-store-max-mib N` | total local Response envelope/Item/context budget | `256` |
+| `--response-store-max-size SIZE` | total local Response envelope/Item/context budget | `256MiB` |
 | `--kv-dtype bf16\|int8\|fp8\|nvfp4\|k8v4` | KV-cache storage | `bf16` |
 | `--spec mtp\|dflash\|dflash2` | speculative backend | off |
 | `--draft-tokens N` | MTP `1..5` (Qwen3.5), `1..3` (Flash-Next 125B-A6B); DFlash/DFlash2 `1..15` | unset |
-| `--lm-head-draft` | optimized proposal head | off |
-| `--proposal-head-rows N` | rows of the optimized proposal head; lower values trade draft quality for graph size | artifact default |
-| `--token-logprobs` | let Chat Completions answer `logprobs=true`; captures probability output inside each decode graph, so a server without it rejects that request instead of answering with placeholders | off |
-| `--mtp-capture FILE` | write the MTP round capture to `FILE` for offline analysis | unset |
+| `--proposal-head full\|optimized` | proposal-head representation; `optimized` needs `--spec mtp` | `full` |
 | `--chat-template FILE` | chat template to render prompts with, overriding the one the artifact carries | artifact template |
-| `--default-max-tokens N` | output limit when omitted by a request | `8192` |
-| `--default-thinking-budget N` | positive thinking cap inherited by thinking-enabled requests | unset |
+| `--max-tokens N\|default` | output limit when omitted by a request; `default` restores `8192` | `8192` |
+| `--thinking-budget N\|none` | positive thinking cap inherited by thinking-enabled requests | unset |
+| `--token-logprobs` | let Chat Completions answer `logprobs=true`; captures probability output inside each decode graph, so a server without it rejects that request instead of answering with placeholders | off |
 | `--vision` | enable media input and load Vision GPU allocations | off |
-| `--no-cuda-graph` | disable CUDA Graph decode | graphs on |
-| `--no-prefix-reuse` | disable compatible-prefix caching | prefix reuse on |
-| `--device-state-slots N` | extra Device checkpoint StateImages beyond the active-lane guarantee | `max-concurrency` |
+| `--cuda-graph` | CUDA Graph decode; `--no-cuda-graph` disables it | graphs on |
+| `--prefix-reuse` | compatible-prefix caching; `--no-prefix-reuse` disables it | prefix reuse on |
+| `--extra-state-slots N\|default` | extra Device checkpoint StateImages beyond the active-lane guarantee | `max-concurrency` |
 | `--host-state-slots N` | pinned Host StateImage capacity | `8` |
 | `--host-kv-mib N` | shared pinned Host Main/Backend KV byte capacity in MiB | `8192` |
 | `--max-private-continuations N` | private continuation descriptor capacity | `2 * max-concurrency` |
 | `--max-shared-prefixes N` | Engine-wide shared stable-prefix descriptor capacity | `max(max-concurrency, 4)` |
 | `--max-long-anchors-per-continuation N` | private long-anchor limit per continuation | `2` |
 | `--turn-anchors N` | private long anchors the server adds at the last `N` message boundaries, so a cancelled or edited turn resumes from its branch point instead of re-prefilling the conversation; capped by the long-anchor limit and by the four explicit-marker slots the protocol's `cache_control` breakpoints already use (capy-flash defaults this to `1`; this fork keeps it off so existing behaviour is unchanged) | `0` |
-| `--no-thinking` | disable thinking by default | thinking on |
+| `--thinking` | thinking by default; `--no-thinking` disables it | thinking on |
 | `--preserve-thinking` | preserve closed-turn assistant reasoning by default | off |
 | `--cors` | permissive browser CORS headers | off |
 | `--temperature F` | process-level temperature override | unset |
@@ -1116,7 +1116,6 @@ The table lists executable defaults. The startup example selects a long-context 
 | `--presence-penalty F` | process-level presence-penalty override | unset |
 | `--frequency-penalty F` | process-level frequency-penalty override | unset |
 | `--seed N` | fixed seed when a request omits one | fresh random seed per request |
-| `--greedy` | force exact argmax for all requests | off |
 
 Context-cost coefficients resolve once at startup from generic defaults, matching compiled values,
 and optional transfer or prefill entries from `--context-cost-presets FILE`. Prefill entries match
@@ -1132,9 +1131,9 @@ Qwen3.6-27B and Qwen3.8-27B use `1.0/0.95/20/0/0` for
 temperature/top-p/top-k/min-p/presence penalty in thinking mode and `0.7/0.80/20/0/1.5` in
 non-thinking mode. Qwen3.6-35B-A3B differs only in its thinking presence penalty, which is `1.5`.
 Frequency penalty is `0` for all registered presets. Process flags override registered values,
-request fields override process flags, and `--greedy` finally forces temperature `0`.
+request fields override process flags, and a temperature of `0` finally selects exact argmax.
 
-For `C=--max-concurrency` and `H=--device-state-slots`, total Device StateImage capacity is `C+H`:
+For `C=--max-concurrency` and `H=--extra-state-slots`, total Device StateImage capacity is `C+H`:
 `C` slots guarantee active requests and `H` is a global checkpoint pool. Host State and Host KV are
 independent startup-fixed pinned-memory capacities; Host KV is shared by Main and the selected
 Backend pool and is consumed in physical page extents. `--no-prefix-reuse` selects root-only Engine
@@ -1145,16 +1144,10 @@ Run `./build/rtx5090-release/apps/ninfer-serve --help` for the exact option cont
 
 ### Shutdown
 
-SIGINT or SIGTERM starts a drain:
-1. Every new POST is answered HTTP 503 with error code `service_unavailable` ("server is shutting
-   down") in the endpoint's error shape, with `Connection: close`. `GET /health` reports
-   `draining`. GET endpoints still answer.
-2. Requests already admitted run to completion for up to `--shutdown-timeout-seconds`.
-3. Requests still running then, or at once after a second signal, are cancelled at their next
-   Engine round and fail with the same 503 error; a stream ends with that error event.
-4. The HTTP server stops, the Engine releases its device memory, and the process exits 0.
-
-A third signal exits immediately with status 130.
+SIGINT or SIGTERM closes the listening socket: a new connection is refused rather than answered, and
+there is no drain status endpoint and no shutdown timeout. Requests already being served run to
+completion, then the HTTP server stops, the Engine releases its device memory, and the process
+exits 0.
 
 On an integrated device (GB10), device memory is host memory. At startup the Engine waits, up to
 60 s, for available host memory to stop rising, so a server restarted right after another one
@@ -1300,12 +1293,12 @@ cancelled, the next boundary rebuilds the batch without an empty row.
 request lifetime capacity is `max_concurrency + max_pending_requests`, including requests still in
 CPU/media preparation and completed model results whose response has not yet been released. A full
 capacity returns HTTP 429 with code `server_overloaded`. The absolute
-`--pending-timeout-ms` deadline starts before preparation, covers media acquisition and Engine FIFO
+`--pending-timeout` deadline starts before preparation, covers media acquisition and Engine FIFO
 waiting, and returns HTTP 503 with code `request_queue_timeout` if admission does not occur in time.
 There is no admission ETA or unbounded overflow queue.
 
 Input memory is bounded by the outstanding-request count and the per-request
-`--max-request-mib` limit. Media requests additionally share one preparation permit, so a waiting
+`--max-request-size` limit. Media requests additionally share one preparation permit, so a waiting
 media request retains the same cancellation and timeout deadline. Model output is bounded by the
 same finite request count and each request's effective output-token limit; output callbacks and
 network serialization run outside the GPU executor and do not delay formation of the next batch.

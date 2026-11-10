@@ -219,9 +219,9 @@ A test that needs an **artifact** skips with exit 77 when its entry is absent fr
 ## How to refresh
 
 ```bash
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DNINFER_TARGET=rtx5090 -DBUILD_TESTING=ON
-cmake --build build -j                      # or only the targets you changed
-ctest --test-dir build --output-junit build/junit.xml   # on a machine with the artifact cache
+cmake --preset rtx5090-dev
+cmake --build build/rtx5090-dev -j          # or only the targets you changed
+ctest --preset rtx5090-dev --output-junit build/rtx5090-dev/junit.xml   # with the artifact cache
 tools/test_inventory.py --measurements measurements.json
 ```
 

@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <iterator>
+#include <limits>
 #include <random>
 #include <sstream>
 #include <stdexcept>
@@ -420,6 +421,30 @@ ParsedOptions parse(int argc, char** argv, EntryPoint entry,
         case Field::ExtraStateSlots:
             engine.context_cache.extra_state_slots = u32();
             break;
+        case Field::HostStateSlots:
+            engine.context_cache.host_state_slots = u32();
+            break;
+        case Field::HostKvMib: {
+            // The flag is a MiB count; the option is bytes.
+            const std::uint64_t mib = u64();
+            if (mib > std::numeric_limits<std::size_t>::max() >> 20U) {
+                throw std::invalid_argument("--host-kv-mib is out of range");
+            }
+            engine.context_cache.host_kv_capacity_bytes = static_cast<std::size_t>(mib << 20U);
+            break;
+        }
+        case Field::MaxPrivateContinuations:
+            engine.context_cache.max_private_continuations = u32();
+            break;
+        case Field::MaxSharedPrefixes:
+            engine.context_cache.max_shared_prefixes = u32();
+            break;
+        case Field::PrefillDecodeShare:
+            engine.prefill_decode_share_percent = u32();
+            break;
+        case Field::LongPrefillWait:
+            engine.long_prefill_wait_ms = u32();
+            break;
         case Field::MaxLongAnchors:
             engine.context_cache.max_long_anchors_per_continuation = u32();
             break;
@@ -456,6 +481,9 @@ ParsedOptions parse(int argc, char** argv, EntryPoint entry,
             break;
         case Field::Thinking:
             generation.enable_thinking = boolean();
+            break;
+        case Field::TokenLogprobs:
+            engine.token_logprobs = boolean();
             break;
         case Field::PreserveThinking:
             generation.preserve_thinking = boolean();

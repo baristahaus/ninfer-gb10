@@ -13,9 +13,12 @@ namespace ninfer::test {
 // target's own and correct refusal.
 inline bool skip_without_host_tier(const char* test) {
 #if NINFER_SHARED_PHYSICAL_MEMORY
-    std::cout << "skip: " << test
+    // A permanent target limitation, not a missing artifact: this configuration will never have a
+    // separate Host tier, so the message says the test will not run on this target.
+    std::cerr << "SKIP: " << test
               << " exercises a Host context tier, which this target does not have"
-                 " (NINFER_SHARED_PHYSICAL_MEMORY: one pool shared by CPU and GPU)\n";
+                 " (NINFER_SHARED_PHYSICAL_MEMORY: one pool shared by CPU and GPU); "
+                 "the test will not run on this target\n";
     return true;
 #else
     (void)test;

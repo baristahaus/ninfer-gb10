@@ -43,11 +43,14 @@ class Gaps:
 
 
 def test_sources(root: Path):
+    """Test translation units and the headers they share: a skip helper in a header is a skip site
+    too, and one of them hid seven skips from this guard until it was scanned."""
     tests = root / "tests"
     if not tests.is_dir():
         return
-    for path in sorted(tests.rglob("*.cpp")):
-        yield path
+    for suffix in ("*.cpp", "*.h"):
+        for path in sorted(tests.rglob(suffix)):
+            yield path
 
 
 def check_skip_has_message(root: Path, gaps: Gaps) -> int:

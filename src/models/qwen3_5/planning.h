@@ -22,6 +22,11 @@ namespace ninfer::models::moe {
 struct Plan;
 }
 
+namespace ninfer::models::qwen3_5::execution {
+// The group-scoped resources of a two-GPU lane; defined in execution/sharded.h.
+struct ShardedGroup;
+}
+
 namespace ninfer::models::qwen3_5 {
 
 using ContextResources    = runtime::ContextResources<2>;
@@ -92,7 +97,8 @@ private:
     friend SessionPlan plan_session(const SequencePlan&);
     friend std::unique_ptr<RankProgram> create_rank_program(const execution::Parameters&,
                                                             SequencePlan&&, DeviceContext&,
-                                                            const StartupObserver&);
+                                                            const StartupObserver&,
+                                                            const execution::ShardedGroup*);
 };
 
 class SequencePlanner {
@@ -122,8 +128,12 @@ private:
                                                     std::shared_ptr<const moe::Plan> = {});
 [[nodiscard]] SequencePlanner make_sequence_planner(const execution::Parameters&, DeviceContext&,
                                                     const EngineOptions&);
-[[nodiscard]] std::unique_ptr<RankProgram> create_rank_program(const execution::Parameters&,
-                                                               SequencePlan&&, DeviceContext&,
-                                                               const StartupObserver&);
+// `sharded` is the group-scoped resource bundle of a two-GPU lane — the one mailbox and the one
+// partial pair the whole group shares. Null on the single-device lane. A Program at width > 1
+// refuses to run without it rather than creating its own: a mailbox per Program would never
+// rendezvous and a partial pair per Program would diverge silently.
+[[nodiscard]] std::unique_ptr<RankProgram> create_rank_program(
+    const execution::Parameters&, SequencePlan&&, DeviceContext&, const StartupObserver&,
+    const execution::ShardedGroup* sharded = nullptr);
 
 } // namespace ninfer::models::qwen3_5

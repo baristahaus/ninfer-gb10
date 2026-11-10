@@ -53,9 +53,12 @@ private:
 
 [[nodiscard]] qwen::Frontend create_frontend(const ModelDefinition&, const EngineOptions&);
 
+// The group resources are accepted for the shared call site and unused: qwen4_exp has no
+// two-GPU lane.
 [[nodiscard]] std::unique_ptr<RankProgram> create_rank_program(const execution::Parameters&,
                                                                ExecutionPlan&&, DeviceContext&,
-                                                               const StartupObserver&);
+                                                               const StartupObserver&,
+                                                               const ShardedGroup* = nullptr);
 [[nodiscard]] std::string prefill_signature(const ModelDefinition&, const moe::Plan*,
                                             std::uint32_t chunk);
 

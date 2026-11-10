@@ -138,6 +138,14 @@ public:
     // site, for both ranks together.
     [[nodiscard]] int take_capture_slot(std::size_t bytes = 0) noexcept;
 
+    // The slot the `index`-th exchange of a deterministic sequence uses in the set that carries
+    // `bytes`: `index % slots`, the same alternation take_capture_slot() produces. It advances no
+    // counter, so each rank can compute it independently and land on the SAME slot — which is what
+    // the per-rank reduce form needs, where each rank's Program takes its own slot instead of one
+    // owner taking both. Do not mix the two forms on one mailbox: take_capture_slot()'s shared
+    // counter and a deterministic index would disagree about which slot is next.
+    [[nodiscard]] int slot_for(std::size_t index, std::size_t bytes = 0) const noexcept;
+
     // Enqueues rank `rank`'s half of the summing exchange of `bytes` (a multiple of 16, at most
     // max_bytes()) at the 16-byte aligned `data`, resident on that rank's device, onto `stream`,
     // in the set that carries `bytes`. The caller issues both ranks' halves for one slot taken by

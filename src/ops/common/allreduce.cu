@@ -9,6 +9,7 @@
 #include <cuda_runtime.h>
 
 #include <stdexcept>
+#include <string>
 
 namespace ninfer::ops {
 namespace {
@@ -61,33 +62,66 @@ bool enable_peer_access(const ExecutionContext& ec) {
     return enable(first, second) && enable(second, first);
 }
 
-void allreduce_sum(const ExecutionContext& ec, PeerMailbox& mailbox,
-                   std::span<void* const> data, std::size_t bytes) {
+namespace {
+
+// The validation both forms share. `name` is the caller's name for its own error messages.
+void validate_reduce(const ExecutionContext& ec, const PeerMailbox& mailbox,
+                     std::span<void* const> data, std::size_t bytes, const char* name) {
     if (ec.width() != 2) {
-        throw std::invalid_argument("allreduce_sum: requires an ExecutionContext of width 2");
+        throw std::invalid_argument(std::string(name) +
+                                    ": requires an ExecutionContext of width 2");
     }
     if (data.size() != 2) {
-        throw std::invalid_argument("allreduce_sum: requires one payload per rank");
+        throw std::invalid_argument(std::string(name) + ": requires one payload per rank");
     }
     if (data[0] == nullptr || data[1] == nullptr) {
-        throw std::invalid_argument("allreduce_sum: a payload must not be null");
+        throw std::invalid_argument(std::string(name) + ": a payload must not be null");
     }
     if (bytes == 0 || bytes % 16 != 0) {
-        throw std::invalid_argument("allreduce_sum: bytes must be whole 16-byte vectors");
+        throw std::invalid_argument(std::string(name) + ": bytes must be whole 16-byte vectors");
     }
     if (bytes > mailbox.max_bytes()) {
-        throw std::invalid_argument("allreduce_sum: payload exceeds the mailbox's largest slot");
+        throw std::invalid_argument(std::string(name) +
+                                    ": payload exceeds the mailbox's largest slot");
     }
+}
 
+// One rank's exchange, on that rank's own stream, in a slot the caller has already taken. This is
+// the single primitive both public forms are built from.
+void enqueue_exchange(const ExecutionContext& ec, PeerMailbox& mailbox, int rank, int slot,
+                      std::span<void* const> data, std::size_t bytes) {
+    const int device = ec.device(rank).device().index();
+    (void)with_device(device, [&] {
+        mailbox.enqueue_exchange_sum(rank, slot, data[rank], bytes, ec.device(rank).stream());
+        return 0;
+    });
+}
+
+} // namespace
+
+void allreduce_sum(const ExecutionContext& ec, PeerMailbox& mailbox,
+                   std::span<void* const> data, std::size_t bytes) {
+    validate_reduce(ec, mailbox, data, bytes, "allreduce_sum");
+    // The single-owner form: one slot, both ranks' exchanges. Unchanged behaviour.
     const int slot = mailbox.take_capture_slot(bytes);
     for (int rank = 0; rank < 2; ++rank) {
-        const int device = ec.device(rank).device().index();
-        (void)with_device(device, [&] {
-            mailbox.enqueue_exchange_sum(rank, slot, data[rank], bytes,
-                                         ec.device(rank).stream());
-            return 0;
-        });
+        enqueue_exchange(ec, mailbox, rank, slot, data, bytes);
     }
+}
+
+void allreduce_sum_rank(const ExecutionContext& ec, PeerMailbox& mailbox, int rank, int slot,
+                        std::span<void* const> data, std::size_t bytes) {
+    validate_reduce(ec, mailbox, data, bytes, "allreduce_sum_rank");
+    if (rank < 0 || rank >= 2) {
+        throw std::invalid_argument("allreduce_sum_rank: rank outside [0,2)");
+    }
+    if (slot < 0) {
+        throw std::invalid_argument("allreduce_sum_rank: slot outside the mailbox");
+    }
+    // The per-rank form: this rank's own exchange, in the slot the caller chose so that both ranks
+    // agree on it. The caller owns `rank`'s stream, so enqueueing this after its projection is what
+    // orders the two. `enqueue_exchange_sum` bounds-checks the slot.
+    enqueue_exchange(ec, mailbox, rank, slot, data, bytes);
 }
 
 } // namespace ninfer::ops

@@ -105,7 +105,8 @@ prepare_program(const Setup& setup, RankModelInstance<typename Setup::Types>& in
             StartupPhaseScope phase(options.startup_observer, StartupPhase::ProgramInitialize);
             auto control_plan = plan_session(startup.sequence);
             instance.program = create_rank_program(instance.parameters, std::move(startup.sequence),
-                                                   device, options.startup_observer);
+                                                   device, options.startup_observer,
+                                                   instance.sharded);
             auto transfers   = instance.program->context_transfer_profiles();
             if (transfers.size() != control_plan.context.pools.size()) {
                 throw std::logic_error("rank context pools differ from the session plan");
@@ -275,6 +276,9 @@ BuiltModel<typename Setup::Types> build_local_model(const artifact::Reader& read
             summary.max_rank_staging_bytes =
                 std::max(summary.max_rank_staging_bytes, stats.peak_staging_bytes);
             instance = std::make_unique<RankModelInstance<Types>>(std::move(model), setup.profile);
+            // The group outlives the instance (BuiltModel declares it first). The two-GPU lane's
+            // shared mailbox and partial pair are owned by the executor that builds both ranks and
+            // are installed here; null until then, which the Program refuses at width > 1.
             calibrated = initialize_program(setup, *instance, prepared_session, memory, device,
                                             options, budget, std::move(*candidate));
         } catch (const DeviceAllocationError&) {

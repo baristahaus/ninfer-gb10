@@ -10,6 +10,7 @@ struct RuntimeTypes {
     using ModelDefinition   = qwen3_5::ModelDefinition;
     using ModelShard        = qwen3_5::ModelShard;
     using Parameters        = execution::Parameters;
+    using ShardedGroup      = execution::ShardedGroup;
     using Profile           = execution::ModelProfile;
     using Frontend          = qwen::Frontend;
     using PreparedPrompt    = qwen::PreparedPrompt;

@@ -4,9 +4,11 @@
 #include "core/linear_attention_state.h"
 #include "models/common/moe/schedule.h"
 #include "models/qwen3_5/execution/parameters.h"
+#include "models/qwen3_5/execution/sharded.h"
 #include "models/qwen3_5/state/decoder_state.h"
 #include "ninfer/ops/softmax_attention.h"
 
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <span>
@@ -21,6 +23,14 @@ struct TextExecutionView {
     const PagedKVCache& cache;
     LinearAttentionStateView& states;
     moe::Schedule* moe = nullptr;
+    // The two-GPU collective, or null at width 1. Non-null switches the three column-parallel
+    // projections (attention output, GDN output, dense MLP) to the sharded helpers, which reduce
+    // this rank's exchange on this rank's own stream.
+    const ShardedCollective* collective = nullptr;
+    // Full-width BF16 [hidden, capacity] partials, one per rank's device. BOTH PROGRAMS PASS THE
+    // SAME PAIR, because the combine reads and writes both buffers. Empty until the two-Program lane
+    // supplies it; the sharded helpers reject an empty pair loudly rather than reading nulls.
+    std::array<Tensor, 2> partials{};
 };
 
 // Contiguous ids/cache_positions I32 [W,B], RoPE positions I32 [W*B] or [W*B,3],
@@ -90,6 +100,17 @@ public:
     void mixer(std::uint32_t layer);
     void post_mixer(std::uint32_t layer, const moe::GpuCall* call = nullptr);
     void capture_features(std::uint32_t layer);
+
+    // The full-width partials narrowed to this call's token count, one per rank's device. The pair
+    // is the Program's; the helpers require exactly [rows, tokens].
+    [[nodiscard]] std::array<Tensor, 2> column_partials(std::int32_t tokens) const {
+        if (view_.partials[0].data == nullptr || view_.partials[1].data == nullptr) {
+            throw std::logic_error(
+                "sharded forward: the two-Program lane needs the shared partial pair installed "
+                "before the first forward; both Programs must pass the same buffers");
+        }
+        return {view_.partials[0].slice(1, 0, tokens), view_.partials[1].slice(1, 0, tokens)};
+    }
     void finish();
     void set_attention_envelope(ops::CausalAttentionExecutionEnvelope envelope) noexcept;
 

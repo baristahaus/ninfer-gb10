@@ -69,8 +69,8 @@ configure time, or point `NINFER_TEST_ARTIFACT_CACHE` at a directory and re-run 
 ```bash
 tools/fetch_test_artifacts.py --list                    # see what is missing
 tools/fetch_test_artifacts.py --fetch qwen3_8_27b_groupwise --link
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DNINFER_TARGET=rtx5090 -DBUILD_TESTING=ON
-ctest --test-dir build -L real
+cmake --preset <target>-dev -DCMAKE_BUILD_TYPE=Release -DNINFER_TARGET=rtx5090 -DBUILD_TESTING=ON
+ctest --test-dir build/<preset> -L real
 ```
 
 `--link` hard-links a local source instead of copying it, which matters for a 70 GiB artifact.

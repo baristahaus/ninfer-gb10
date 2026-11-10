@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <iostream>
 #include <stdexcept>
+#include <string>
 
 namespace {
 
@@ -16,6 +17,30 @@ int expect_invalid(Fn&& fn, const char* label) {
     try {
         fn();
     } catch (const std::invalid_argument&) { return 0; }
+    std::cerr << label << " did not throw std::invalid_argument\n";
+    return 1;
+}
+
+// A refusal that names its quantities is a tool; one that does not is a wall. These assertions pin
+// the diagnostic text so a message that stops reporting its numbers is a test failure rather than a
+// debugging session.
+template <typename Fn>
+int expect_invalid_naming(Fn&& fn, const char* label,
+                          std::initializer_list<const char*> fragments) {
+    try {
+        fn();
+    } catch (const std::invalid_argument& error) {
+        const std::string what = error.what();
+        int failures           = 0;
+        for (const char* fragment : fragments) {
+            if (what.find(fragment) == std::string::npos) {
+                ++failures;
+                std::cerr << label << " message does not name '" << fragment << "': " << what
+                          << '\n';
+            }
+        }
+        return failures;
+    }
     std::cerr << label << " did not throw std::invalid_argument\n";
     return 1;
 }
@@ -86,6 +111,10 @@ int main() {
         std::cerr << "viewed expected contiguous\n";
     }
     failures += expect_invalid([&] { (void)t.view({5, 5}); }, "mismatched view");
+    // The mismatch must name both counts: the tensor's element count and the view's. A message that
+    // says only "mismatch" makes the caller re-derive both.
+    failures += expect_invalid_naming([&] { (void)t.view({5, 5}); }, "mismatched view message",
+                                      {"24", "25"});
 
     ninfer::Tensor sliced = t.slice(1, 1, 2);
     if (sliced.data != base + 4) {
@@ -121,6 +150,8 @@ int main() {
     failures += expect_i64(reshaped.numel(), 24, "reshaped.numel");
 
     failures += expect_invalid([&] { (void)sliced.reshape({4, 4}); }, "non-contiguous reshape");
+    failures += expect_invalid_naming([&] { (void)sliced.reshape({4, 4}); },
+                                      "non-contiguous reshape message", {"contiguous"});
     failures += expect_invalid(
         [&] { (void)ninfer::Tensor(base, ninfer::Device::cpu(), ninfer::DType::BF16, {2, 0}); },
         "zero dimension");

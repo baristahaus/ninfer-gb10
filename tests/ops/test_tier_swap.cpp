@@ -139,6 +139,15 @@ int run() {
     // Promote expert 3 (warm slot 1) over expert 2 (hot slot 1).
     ops::swap_expert_tier(bank, 3, 2, execution);
 
+    // The op enqueues its copies on the execution stream and returns. The readbacks below do not
+    // order against that stream — one is a default-stream blocking copy and the other is a bare
+    // memcpy of pinned host memory — so without this wait the comparison can run while the copies
+    // are still in flight. That made this test fail roughly one run in six.
+    if (cudaStreamSynchronize(execution.stream()) != cudaSuccess) {
+        std::cerr << "tier swap oracle: execution stream did not drain\n";
+        return 1;
+    }
+
     auto hot_got = fixture.hot_expect;
     fixture.hot.copy_to_host(hot_got.data(), hot_got.size(), 0);
     std::vector<std::uint8_t> warm_got(fixture.warm_expect.size());

@@ -56,9 +56,15 @@ std::unique_ptr<ModelShard> materialize_model(ResolvedLoadPlan&& plan, DeviceCon
             {definition->parameter({i}), description.uses, description.source_objects});
     }
     auto bound = resolve_weights(std::move(pending), backing, plan.devices_);
+    // A column-sharded weight is many small ranges in its parent, which no consumer can take; the
+    // gather turns each into one contiguous parent. The condition is structural (non-contiguous
+    // parts in one parent), so width 1 never enters it and needs no guard.
+    RepackedWeights repacked;
+    repacked.gather(bound);
     auto banks = moe::bind_banks(definition->expert_banks(), backing, plan.bank_devices_);
     return std::unique_ptr<ModelShard>(new ModelShard(std::move(definition), std::move(backing),
-                                                      std::move(bound), std::move(banks)));
+                                                      std::move(bound), std::move(banks),
+                                                      std::move(repacked)));
 }
 
 } // namespace ninfer::models::qwen3_5

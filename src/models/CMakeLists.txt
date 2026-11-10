@@ -2,6 +2,7 @@
 add_library(ninfer_model_loading STATIC
   registry.cpp
   common/bindings.cpp
+  common/repacked.cpp
   common/parallel.cpp
   common/weights.cpp
   common/moe/weights.cpp

@@ -74,7 +74,8 @@ std::unique_ptr<ModelShard> materialize_model(ResolvedLoadPlan&& plan, DeviceCon
                                                     device.transfer_view(), observer);
     if (plan.selection_) {
         auto out =
-            std::unique_ptr<ModelShard>(new ModelShard(definition, std::move(backing), {}, {}, {}));
+            std::unique_ptr<ModelShard>(
+                new ModelShard(definition, std::move(backing), {}, {}, {}, RepackedWeights{}));
         out->rank_ = std::move(plan.rank_);
         out->local_parents_.reserve(parent_count);
         for (std::size_t i = 0; i < parent_count; ++i)
@@ -117,10 +118,13 @@ std::unique_ptr<ModelShard> materialize_model(ResolvedLoadPlan&& plan, DeviceCon
             {definition->parameter({i}), description.uses, description.source_objects});
     }
     auto bound = resolve_weights(std::move(pending), backing, plan.devices_);
+    RepackedWeights repacked;
+    repacked.gather(bound);
     auto banks = moe::bind_banks(definition->expert_banks(), backing, plan.bank_devices_);
     auto out = std::unique_ptr<ModelShard>(new ModelShard(std::move(definition), std::move(backing),
                                                           std::move(bound), std::move(banks),
-                                                          std::move(plan.ple_)));
+                                                          std::move(plan.ple_),
+                                                          std::move(repacked)));
     out->rank_ = std::move(plan.rank_);
     return out;
 }

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "models/common/repacked.h"
 #include "models/qwen3_5/definition.h"
 
 namespace ninfer::models::qwen3_5 {
@@ -33,12 +34,15 @@ private:
     friend std::unique_ptr<ModelShard> materialize_model(ResolvedLoadPlan&&, DeviceContext&,
                                                          const StartupObserver*);
     ModelShard(std::shared_ptr<const ModelDefinition>, artifact::MaterializedArtifact,
-               std::vector<BoundWeight>, std::vector<ExpertBankSource>);
+               std::vector<BoundWeight>, std::vector<ExpertBankSource>, RepackedWeights);
 
     std::shared_ptr<const ModelDefinition> definition_;
     artifact::MaterializedArtifact backing_;
     std::vector<BoundWeight> bound_;
     std::vector<ExpertBankSource> banks_;
+    // Column-sharded weights gathered into one contiguous parent each, so their consumers see the
+    // single-region form. Empty on the single-device lane.
+    RepackedWeights repacked_;
 };
 
 } // namespace ninfer::models::qwen3_5

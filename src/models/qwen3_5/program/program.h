@@ -42,6 +42,8 @@ private:
     friend std::unique_ptr<RankProgram> create_rank_program(const execution::Parameters&,
                                                             SequencePlan&&, DeviceContext&,
                                                             const StartupObserver&);
+    friend void attach_rank_mirrors(RankProgram&, RankProgram&, DeviceContext&,
+                                    PreparedSession*);
 };
 
 } // namespace ninfer::models::qwen3_5

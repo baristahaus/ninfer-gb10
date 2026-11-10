@@ -44,6 +44,7 @@ struct SequencePlannerImpl;
 } // namespace detail
 
 class SequencePlanner;
+class PreparedSession;
 class RankProgram;
 
 enum class TextPhase { Prefill, Verify };
@@ -93,6 +94,8 @@ private:
     friend std::unique_ptr<RankProgram> create_rank_program(const execution::Parameters&,
                                                             SequencePlan&&, DeviceContext&,
                                                             const StartupObserver&);
+    friend void attach_rank_mirrors(RankProgram&, RankProgram&, DeviceContext&,
+                                    PreparedSession*);
 };
 
 class SequencePlanner {
@@ -125,5 +128,13 @@ private:
 [[nodiscard]] std::unique_ptr<RankProgram> create_rank_program(const execution::Parameters&,
                                                                SequencePlan&&, DeviceContext&,
                                                                const StartupObserver&);
+
+// tp 2: attach `peer`'s KV page pool and execution tables to `origin`'s, so every physical mutation
+// rank 0 issues is replayed on rank 1's stream. Called once, after both Programs exist and before
+// either has run a round. Throws std::invalid_argument when the two ranks' KV capacity differs,
+// because the mirror addresses rank 0's pages by index and unequal capacity is a configuration
+// error rather than something to paper over.
+void attach_rank_mirrors(RankProgram& origin, RankProgram& peer, DeviceContext& peer_device,
+                         PreparedSession* session = nullptr);
 
 } // namespace ninfer::models::qwen3_5

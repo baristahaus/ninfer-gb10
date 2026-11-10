@@ -4,6 +4,7 @@
 
 #include "ninfer/ops/kv_cache_append.h"
 
+#include "core/tp2/kv_mirror.h"
 #include "models/common/context/transfer.h"
 #include "models/common/qwen/vision/prefill.h"
 #include "models/qwen3_5/program/program.h"
@@ -158,6 +159,12 @@ public:
     const WorkspaceSpec workspace_plan;
     Resources resources;
     std::unique_ptr<context::ContextStorage> storage;
+    // tp 2: rank 1's mirrors, owned here so they outlive every mutation they replay. Null on the
+    // single-device lane. Their presence is also the sharded-lane flag the round entry refuses on:
+    // the sharded forward is not wired, so a round would project sharded weights through the
+    // unsharded path and produce wrong numbers.
+    std::unique_ptr<tp2::MirroredKVPagePool> peer_text_kv;
+    std::unique_ptr<tp2::MirroredKVExecutionTables> peer_text_kv_tables;
     std::unique_ptr<context::ContextMigration> compute_actions;
     std::unique_ptr<context::ContextMigration> context_actions;
     std::unique_ptr<ContextOperation> context_operation;

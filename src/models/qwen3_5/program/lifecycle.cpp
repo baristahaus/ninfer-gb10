@@ -1,4 +1,5 @@
 #include "models/qwen3_5/program/internal.h"
+#include "models/qwen3_5/session/session.h"
 #include "models/qwen3_5/execution/text.h"
 
 #include <algorithm>
@@ -91,6 +92,17 @@ void RankProgramImpl::install_residencies(const ContextWork& work) {
 }
 
 void RankProgramImpl::start(runtime::ExecutionRequest<ExecutionTypes>&& request) {
+    // The lane loads but cannot infer yet. The sharded helpers exist but nothing in the layer loop
+    // calls them, so a round at width 2 would project each rank's sharded weights through the
+    // unsharded path and produce plausible-looking wrong numbers. Refusing here rather than at
+    // construction is deliberate: the load milestone -- both ranks materialized, both Programs
+    // built, every mirror attached -- has to be reachable to be testable, and this is the point
+    // where a round would actually happen.
+    if (peer_text_kv != nullptr) {
+        throw std::logic_error(
+            "the sharded forward is not wired yet: this lane loads but cannot infer. The layer "
+            "loop still calls the unsharded projections, so a round would produce wrong numbers");
+    }
     if (request.ticket.frame.kind == runtime::FrameKind::Context) {
         if (context_operation) throw std::logic_error("Qwen3.5 context frame is occupied");
         context_operation =
@@ -180,4 +192,41 @@ void RankProgramImpl::drain() {
     if (failure) std::rethrow_exception(failure);
 }
 
+
 } // namespace ninfer::models::qwen3_5::detail
+
+namespace ninfer::models::qwen3_5 {
+
+void attach_rank_mirrors(RankProgram& origin, RankProgram& peer, DeviceContext& peer_device,
+                         PreparedSession* session) {
+    if (&origin == &peer) {
+        throw std::invalid_argument("rank mirror attaches a Program to itself");
+    }
+    // The route to the pools is the ContextStorage each Program owns: pool 0 is the text KV.
+    auto& origin_pages  = *origin.impl_->storage->pool(0).pages;
+    auto& origin_tables = *origin.impl_->storage->pool(0).tables;
+    auto& peer_pages    = *peer.impl_->storage->pool(0).pages;
+    auto& peer_tables   = *peer.impl_->storage->pool(0).tables;
+    if (origin_pages.capacity_pages() != peer_pages.capacity_pages()) {
+        throw std::invalid_argument(
+            "tensor-parallel ranks resolved different KV capacities (" +
+            std::to_string(origin_pages.capacity_pages()) + " vs " +
+            std::to_string(peer_pages.capacity_pages()) +
+            " pages): the rank-1 mirror addresses rank 0's pages by index, so both ranks must "
+            "resolve the same capacity. The box is asymmetric or the options differ per rank");
+    }
+    const tp2::MirrorTarget where{.device          = &peer_device,
+                                  .stream          = peer_device.stream(),
+                                  .transfer_stream = peer_device.transfer_stream()};
+    origin.impl_->peer_text_kv = std::make_unique<tp2::MirroredKVPagePool>(
+        origin_pages.mirror_origin(), peer_pages.mirror_origin(), where);
+    origin.impl_->peer_text_kv_tables = std::make_unique<tp2::MirroredKVExecutionTables>(
+        *origin.impl_->peer_text_kv, origin_tables.table_origin(), peer_tables.table_origin());
+    origin_pages.attach_mirror(*origin.impl_->peer_text_kv);
+    origin_tables.attach_mirror(*origin.impl_->peer_text_kv_tables);
+    // The row leases live on the control side, so the same mirror is attached to the session's
+    // directory. Both attaches happen here, before either Program has run a round.
+    if (session != nullptr) { session->attach_kv_mirror(*origin.impl_->peer_text_kv_tables); }
+}
+
+} // namespace ninfer::models::qwen3_5

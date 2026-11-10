@@ -342,15 +342,54 @@ BuiltModel<typename Setup::Types> build_local_model(const artifact::Reader& read
     }
     // The executor drives every rank of the group in rank order. Rank 0 is always present, so a
     // width-1 group is the one-element case of the same loop and takes exactly the path it took
-    // before the loop existed. A rank above 0 needs its own RankProgram, which is the step that
-    // follows; until then a width above 1 fails loudly here instead of running on one card.
-    if (execution->width() > 1) {
-        throw std::invalid_argument(
-            "the peer rank's Program is not built yet; tensor parallelism needs it before it can "
-            "run");
-    }
+    // before the loop existed.
     std::vector<std::unique_ptr<RankWorker<Types>>> workers;
+    std::unique_ptr<RankWorker<Types>> peer_worker;
+    if (execution->width() > 1) {
+        if constexpr (requires(Setup& s, DeviceContext& d, const StartupObserver& o) {
+                          s.materialize(d, models::WeightPlacement::Resident, o, 1);
+                      }) {
+            // Rank 1's Program, planned from rank 1's own device. Its capacity must equal rank 0's
+            // because the mirror addresses rank 0's pages by index; a mismatch is refused rather
+            // than papered over, so an asymmetric box says so.
+            if (peers.size() != 1) {
+                throw std::invalid_argument("a two-rank lane needs exactly one peer instance");
+            }
+            auto& peer_device = execution->device(1);
+            const auto peer_available =
+                budget.available(device_memory_snapshot(peer_device.device()));
+            auto peer_plan = setup.plan(peer_device, options, choices[selected].placement,
+                                        peer_available);
+            if (!peer_plan) {
+                throw std::invalid_argument(
+                    "rank 1 cannot hold the model weights and required execution resources");
+            }
+            if (peer_plan->capacity.resolved_tokens !=
+                calibrated->startup.capacity.resolved_tokens) {
+                throw std::invalid_argument(
+                    "tensor-parallel ranks resolved different KV capacities (" +
+                    std::to_string(calibrated->startup.capacity.resolved_tokens) + " vs " +
+                    std::to_string(peer_plan->capacity.resolved_tokens) +
+                    " tokens): the rank-1 mirror addresses rank 0's pages by index, so both ranks "
+                    "must resolve the same capacity. The box is asymmetric or the options differ "
+                    "per rank");
+            }
+            peers.front()->program = create_rank_program(
+                peers.front()->parameters, std::move(peer_plan->sequence), peer_device,
+                options.startup_observer);
+            // Both Programs exist and neither has run a round: the mirror contract's window.
+            attach_rank_mirrors(*instance->program, *peers.front()->program, peer_device,
+                                &*prepared_session);
+            peer_worker =
+                std::make_unique<RankWorker<Types>>(peer_device, std::move(peers.front()));
+        } else {
+            throw std::invalid_argument("this model's local route has no per-rank Program");
+        }
+    }
+    // Rank 0 first: the executor's authority, its frame pool and the returned event all come from
+    // `workers_.front()`, and the peers follow in rank order.
     workers.push_back(std::make_unique<RankWorker<Types>>(device, std::move(instance)));
+    if (peer_worker) { workers.push_back(std::move(peer_worker)); }
     auto executor =
         std::make_unique<LocalExecutor<Types>>(std::move(workers), next_session_epoch());
     auto inference = std::make_unique<InferenceInstance<Types>>(

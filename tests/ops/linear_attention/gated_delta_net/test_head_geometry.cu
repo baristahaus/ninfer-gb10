@@ -12,6 +12,7 @@
 // Compiled as a .cu because it reads `HeadMap` out of a CUDA kernel header; it calls only host
 // functions and allocates nothing on a device, so it runs without one.
 
+#include "core/platform.h" // NINFER_TARGET_RTX5090 / NINFER_TARGET_SPARK
 #include "ops/linear_attention/gated_delta_net/control/operands.h"
 #include "ops/linear_attention/gated_delta_net/kernels/transition.cuh"
 #include "ops/linear_attention/gated_delta_net/operands.h"
@@ -54,8 +55,36 @@ void check_head_counts() {
 }
 
 // ------------------------------------------------------------------ the route selector
-// The route is chosen on the token count alone; the head counts are not read at all.
-void check_route_ignores_head_counts() {
+// THE ROUTE IS TARGET-DEPENDENT, and only one target ignores the head counts:
+//
+//   rtx5090     select_recurrence_route(int /*qk_heads*/, int /*value_heads*/, int tokens)
+//               -> tokens < 16 ? Recurrent : Chunked
+//   dgx_spark   chunked_first = (qk_heads == 8 && value_heads == 24) ? 11 : 16
+//               -> tokens < chunked_first ? Recurrent : Chunked
+//
+// So on the Spark target the tp2 geometry (8/24) crosses to the chunked route at 11 tokens while
+// the single-device geometry (16/48) crosses at 16, and for tokens 11..15 the two DO take different
+// routes — deliberately, as a tuning choice for exactly the shape this lane exists to serve.
+//
+// The earlier version of this test asserted "identical at every token count", which is true only on
+// rtx5090 and would fail by design on dgx_spark. That is an assumption the code never promised on
+// both targets, so the claim is narrowed here: the outer bound is asserted everywhere, and the
+// exact identity only where the selector promises it.
+void check_route_selector() {
+    bool bounded = true;
+    for (int tokens = 1; tokens <= 4096; ++tokens) {
+        const bool single_recurrent =
+            select_recurrence_route(kSingleQk, kSingleValue, tokens) == RecurrenceRoute::Recurrent;
+        const bool rank_recurrent =
+            select_recurrence_route(kRankQk, kRankValue, tokens) == RecurrenceRoute::Recurrent;
+        // Both geometries agree below the earliest crossover either target uses (11) and above the
+        // latest (16). Only the interval between them is target-specific.
+        if (tokens < 11 && (!single_recurrent || !rank_recurrent)) { bounded = false; }
+        if (tokens >= 16 && (single_recurrent || rank_recurrent)) { bounded = false; }
+    }
+    check(bounded, "both geometries are recurrent below 11 tokens and chunked from 16 up");
+
+#if NINFER_TARGET_RTX5090
     bool same = true;
     for (int tokens = 1; tokens <= 4096; ++tokens) {
         if (select_recurrence_route(kSingleQk, kSingleValue, tokens) !=
@@ -64,14 +93,16 @@ void check_route_ignores_head_counts() {
             break;
         }
     }
-    check(same, "the recurrence route is identical for 16/48 and 8/24 at every token count");
-    std::printf("  route at 1 token: %s, at 64 tokens: %s\n",
-                select_recurrence_route(kRankQk, kRankValue, 1) == RecurrenceRoute::Recurrent
-                    ? "Recurrent"
-                    : "Chunked",
-                select_recurrence_route(kRankQk, kRankValue, 64) == RecurrenceRoute::Recurrent
-                    ? "Recurrent"
-                    : "Chunked");
+    check(same, "on rtx5090 the route is identical for 16/48 and 8/24 at every token count");
+    std::printf("  rtx5090 crossover: both at 16 tokens\n");
+#else
+    // Spark moves 8/24 to 11 tokens. Assert the difference rather than pretending it is absent.
+    const bool rank_earlier =
+        select_recurrence_route(kRankQk, kRankValue, 11) == RecurrenceRoute::Chunked &&
+        select_recurrence_route(kSingleQk, kSingleValue, 11) == RecurrenceRoute::Recurrent;
+    check(rank_earlier, "on dgx_spark the 8/24 geometry crosses to chunked at 11 tokens, 16/48 at 16");
+    std::printf("  dgx_spark crossover: 8/24 at 11 tokens, 16/48 at 16 tokens\n");
+#endif
 }
 
 // ------------------------------------------------------------------ the head map
@@ -128,13 +159,13 @@ void check_packed_path_is_absolute() {
           "the packed path's stride is head-count-derived, so 8/24 needs a distinct instance");
 }
 
-// ------------------------------------------------------------------ the ACTUAL remaining gate
-// The recurrence is head-count agnostic, so the gate that still blocks a tp2 rank is one layer up,
-// in the GDN CONTROL projections (a_projection / b_projection, one row per value head). Their
-// profile check requires the ABSOLUTE row count, and at width 2 each rank's is 24, not 48. This is
-// the opposite of the recurrence: there is no derived ratio to key on, because the row count IS the
-// head count. Recorded here so the next round starts from the real blocker.
-void check_control_is_absolute() {
+// ------------------------------------------------------------------ the control profile gate
+// The recurrence is head-count agnostic on rtx5090, so the gate that blocked a tp2 rank was one
+// layer up, in the GDN CONTROL projections (a_projection / b_projection, one row per value head).
+// Their profile check required the ABSOLUTE row count, and at width 2 each rank's is 24, not 48.
+// That gate is now open: the 24-row profile is accepted and the projection serves it through the
+// padded 16-head M tile.
+void check_control_profile_gate() {
     using ninfer::ops::LinearProfile;
     using ninfer::ops::ProjectionProfile;
     using ninfer::ops::detail::gdn_control::describe_profile;
@@ -153,15 +184,28 @@ void check_control_is_absolute() {
     } catch (const std::invalid_argument&) { single_ok = false; }
     check(single_ok && heads == 48, "the 48-row control profile is accepted on one device");
 
-    // A tp2 rank's half: 24 rows each. The paired branch requires 48, so this throws.
-    bool rank_refused = false;
+    // A tp2 rank's half: 24 rows each. This WAS the remaining gate; the padding change that serves
+    // 24 heads through two 16-head M tiles made the profile acceptable, so this group now asserts
+    // the acceptance rather than the refusal. It went stale silently once — the merge that added
+    // the route and the merge that added this assertion disagreed, and only a suite run caught it.
+    bool rank_ok = false;
+    std::int32_t rank_heads = 0;
     try {
-        (void)describe_profile(profile(24));
-    } catch (const std::invalid_argument&) { rank_refused = true; }
-    std::printf("  control profile at 24 rows: %s\n",
-                rank_refused ? "REFUSED (the remaining gate)" : "accepted");
-    check(rank_refused,
-          "a tp2 rank's 24-row control profile is refused — this, not the recurrence, is the gate");
+        rank_heads = describe_profile(profile(24)).heads;
+        rank_ok    = true;
+    } catch (const std::invalid_argument&) { rank_ok = false; }
+    std::printf("  control profile at 24 rows: %s (heads %d)\n", rank_ok ? "accepted" : "REFUSED",
+                rank_heads);
+    check(rank_ok && rank_heads == 24,
+          "a tp2 rank's 24-row control profile is accepted, heads 24");
+
+    // The guard that made this group worth having survives: a row count with no geometry is still
+    // refused, so acceptance cannot be added ahead of a route.
+    bool unrouted_refused = false;
+    try {
+        (void)describe_profile(profile(16)); // 16 rows at 5120: no registered geometry
+    } catch (const std::invalid_argument&) { unrouted_refused = true; }
+    check(unrouted_refused, "a control profile with no registered geometry is still refused");
 }
 
 } // namespace
@@ -169,11 +213,11 @@ void check_control_is_absolute() {
 int main() {
     std::printf("GDN recurrent path head geometry (host)\n");
     check_head_counts();
-    check_route_ignores_head_counts();
+    check_route_selector();
     check_head_map();
     check_workspace_is_parametric();
     check_packed_path_is_absolute();
-    check_control_is_absolute();
+    check_control_profile_gate();
     std::printf("%s (%d failure%s)\n", failures ? "FAILED" : "ALL PASS", failures,
                 failures == 1 ? "" : "s");
     return failures ? 1 : 0;

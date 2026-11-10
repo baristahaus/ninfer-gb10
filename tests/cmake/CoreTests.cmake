@@ -117,3 +117,17 @@ set_tests_properties(ninfer_expert_cache_test PROPERTIES TIMEOUT 60)
 ninfer_test_interpose(ninfer_expert_cache_test
   cudaEventRecord cudaMemcpyAsync cudaMemcpyBatchAsync cudaStreamSynchronize cudaStreamWaitEvent
   cudaFree cudaFreeHost)
+
+# The documentation and source guard is a host-only script over the checked-in tree. It runs with
+# the suite so a stale flag, path, preset or unregistered source fails a normal test run.
+if(Python3_EXECUTABLE)
+  add_test(NAME ninfer_docs_guard_test
+    COMMAND ${Python3_EXECUTABLE} -B ${PROJECT_SOURCE_DIR}/tools/check_docs.py
+            ${PROJECT_SOURCE_DIR})
+  set_tests_properties(ninfer_docs_guard_test PROPERTIES LABELS "host")
+
+  # The guard's own teeth: it plants one defect of each class in a temporary tree.
+  add_test(NAME ninfer_docs_guard_self_test
+    COMMAND ${Python3_EXECUTABLE} -B ${PROJECT_SOURCE_DIR}/tools/check_docs.py --self-test)
+  set_tests_properties(ninfer_docs_guard_self_test PROPERTIES LABELS "host")
+endif()

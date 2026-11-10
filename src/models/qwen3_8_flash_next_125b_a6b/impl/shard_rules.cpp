@@ -131,11 +131,29 @@ artifact::ParameterReference shard_parameter(const artifact::ParameterReference&
     if (shard == nullptr) { return reference; } // Replicated: not in the table.
 
     const auto ranges = ranges_for(*shard, width, rank);
-    if (static_cast<std::uint64_t>(total_extent(*shard)) != reference.binding.elements) {
-        throw std::invalid_argument(
-            "sharding: " + std::string(reference.name) + " binds " +
-            std::to_string(reference.binding.elements) + " elements but the table declares " +
-            std::to_string(total_extent(*shard)));
+    // The table declares the extent along the sharded axis, which is a row or column count for a
+    // split and the whole element count for a placement that does not split. `binding.elements` is
+    // always the TOTAL element count, so comparing it against a row count is a unit mismatch: for
+    // text/output_head the binding is 248320 * 5120 elements against a declared 248320 rows. The
+    // synthetic tests never caught it because they set `elements` to the extent by hand.
+    {
+        const std::uint64_t declared = static_cast<std::uint64_t>(total_extent(*shard));
+        std::uint64_t bound          = reference.binding.elements;
+        if (shard->axis == artifact::ShardAxis::Rows ||
+            shard->axis == artifact::ShardAxis::Columns) {
+            const std::size_t axis_index = shard->axis == artifact::ShardAxis::Rows ? 0 : 1;
+            if (reference.shape.size() <= axis_index) {
+                throw std::invalid_argument("sharding: " + std::string(reference.name) +
+                                            " has no axis to shard");
+            }
+            bound = reference.shape[axis_index];
+        }
+        if (declared != bound) {
+            throw std::invalid_argument("sharding: " + std::string(reference.name) + " binds " +
+                                        std::to_string(bound) +
+                                        " along its sharded axis but the table declares " +
+                                        std::to_string(declared));
+        }
     }
 
     artifact::ParameterReference sharded = reference;

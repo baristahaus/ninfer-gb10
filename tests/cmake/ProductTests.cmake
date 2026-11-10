@@ -14,6 +14,10 @@ ninfer_add_test(ninfer_flash_next_shard_rules_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_flash_next_shard_rules.cpp"
   LIBRARIES ninfer_artifact ninfer_model_execution)
 
+ninfer_add_test(ninfer_qwen3_5_shard_rules_test
+  SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_qwen3_5_shard_rules.cpp"
+  LIBRARIES ninfer_artifact ninfer_model_loading)
+
 ninfer_add_test(ninfer_shard_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_shard.cpp"
   LIBRARIES ninfer_artifact)

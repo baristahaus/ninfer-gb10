@@ -31,8 +31,11 @@ int fail(const std::string& message) {
     return 1;
 }
 
+// A host with no driver, or one linked against the toolkit's stub, has no device to run on. The
+// stub case matters: it is how a GPU-less CI builder links at all, so it must skip rather than fail.
 bool cuda_unavailable(cudaError_t err) {
-    return err == cudaErrorNoDevice || err == cudaErrorInsufficientDriver;
+    return err == cudaErrorNoDevice || err == cudaErrorInsufficientDriver ||
+           err == cudaErrorStubLibrary;
 }
 
 template <typename Exception, typename Fn>

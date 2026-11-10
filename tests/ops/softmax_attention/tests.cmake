@@ -15,3 +15,9 @@ ninfer_add_op_test(ninfer_softmax_attention_test
   FORMATS bf16 int8 fp8 nvfp4 k8v4)
 
 include("${CMAKE_CURRENT_LIST_DIR}/qsa/tests.cmake")
+
+# Host-only: the causal decode key-span bound at both visible-keys ceilings. Calls the real plan
+# selectors, so it pins the planning arithmetic rather than re-deriving it.
+ninfer_add_op_test(ninfer_causal_key_span_test
+  SOURCES "${CMAKE_CURRENT_LIST_DIR}/test_causal_key_span.cpp"
+  LIBRARIES ninfer_ops)

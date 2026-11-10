@@ -7,6 +7,7 @@
 #include "ops/softmax_attention/kernels/causal/bf16/grouped_mma.cuh"
 #include "ops/softmax_attention/kernels/causal/bf16/tiled_mma.cuh"
 #include "ops/softmax_attention/kernels/causal/bf16/merge.cuh"
+#include "ops/softmax_attention/kernels/causal/partition.h"
 #include <stdexcept>
 
 namespace ninfer::ops::detail {
@@ -59,6 +60,11 @@ template <class G, class S, bool MultiBatch, bool Masked, bool Writable>
 void launch_bf16_kv_merge(const CausalAttentionOperands& p, Bf16KvCacheView<Writable> cache,
                           Bf16KvPartition partition, CausalPartialView partials,
                           cudaStream_t stream) {
+    // The merge holds one weight per split in a Schedule::kThreads-wide shared array, so the
+    // planner's split cap has to fit the block. Pinned here because the two constants live apart
+    // and a raised cap would otherwise only surface as an out-of-bounds shared read.
+    static_assert(CausalKvPartition::kMaxSplits <= S::kThreads,
+                  "the merge reduction block must cover every split the planner can produce");
     if (partition.capacity > S::kThreads)
         throw std::invalid_argument("BF16 merge capacity exceeds the reduction block");
     const dim3 grid(G::QHeads, common::div_up(G::kHeadDim, S::kDChunk), p.width * p.batch);

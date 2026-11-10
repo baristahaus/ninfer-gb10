@@ -59,19 +59,17 @@
       "notes": "Ground truth of the EXL3 contract, generated once by tests/fixtures/exl3/generate_fixture.py and committed. The test already falls back to the committed path when the variable is unset, so this entry is documentation plus a digest."
     },
     {
-      "name": "qwen3_8_27b_groupwise",
+      "name": "qwen3_8_27b_v3_plain",
       "env": "NINFER_TEST_ARTIFACT",
-      "file": "qwen3_8_27b_groupwise.ninfer",
-      "bytes": 1024,
-      "sha256": "8164d746f8e97b86ce90bff3c2ef395dae98cfacd42e98cc3c3247a164d2b898",
+      "file": "qwen3_8_27b_v3-plain.ninfer",
+      "bytes": 21492938224,
+      "sha256": "231ae09a158ab5fc5aade8dc3eaf4e6a977e6d5faf6bbf1fc97cd574be7c5f4d",
       "source": {
         "kind": "file",
-        "path": "out/qwen3_8_27b_groupwise.ninfer",
-        "hint": "the maintainer's groupwise-int 27B product artifact"
+        "path": "/nfs/ninfer-gb10/qwen3_8_27b_v3_plain/qwen3_8_27b_v3-plain.ninfer"
       },
       "default": true,
       "tests": [
-        "ninfer_qwen3_5_loading_real_test",
         "ninfer_qwen3_5_native_transactions_test",
         "ninfer_qwen3_5_mtp_history_real_test",
         "ninfer_qwen3_5_prefix_real_test",
@@ -80,70 +78,31 @@
         "ninfer_qwen3_5_grammar_real_test",
         "ninfer_qwen3_5_tools_real_test",
         "ninfer_qwen3_5_score_real_test",
-        "ninfer_qwen3_5_vision_workspace_test"
-      ],
-      "notes": "Default for NINFER_TEST_ARTIFACT. Must carry the Vision component and the MTP head: vision_workspace and mtp_history need them."
-    },
-    {
-      "name": "qwen3_8_27b_nvfp4",
-      "env": "NINFER_TEST_ARTIFACT",
-      "file": "qwen3_8_27b_nvfp4.ninfer",
-      "bytes": null,
-      "sha256": null,
-      "source": {
-        "kind": "file",
-        "path": "out/qwen3_8_27b_nvfp4.ninfer",
-        "hint": "the nvfp4 27B artifact; same test set as the groupwise one"
-      },
-      "tests": [],
-      "notes": "Alternative to the default for the same NINFER_TEST_ARTIFACT tests; not a second default because one cache entry serves the variable."
-    },
-    {
-      "name": "qwen3_6_35b_a3b",
-      "env": "NINFER_TEST_ARTIFACT",
-      "file": "qwen3_6_35b_a3b.ninfer",
-      "bytes": null,
-      "sha256": null,
-      "source": {
-        "kind": "file",
-        "path": "out/qwen3_6_35b_a3b.ninfer",
-        "hint": "the 35B-A3B MoE artifact with the DFlash v1 companion"
-      },
-      "tests": [
+        "ninfer_qwen3_5_vision_workspace_test",
+        "ninfer_qwen3_5_dflash2_real_test",
+        "ninfer_qwen3_5_speculative_invariant_real_test",
+        "ninfer_qwen3_5_dflash_prefill_real_test",
         "ninfer_qwen3_5_moe_real_test",
         "ninfer_qwen3_5_moe_offload_real_test",
         "ninfer_qwen3_5_dflash_real_test"
       ],
-      "notes": "The MoE and DFlash v1 tests need a 35B-A3B artifact, not a 27B one. Set NINFER_TEST_ARTIFACT to this entry's cache path to run them."
+      "notes": "Dense 27B v3 artifact. ninfer_qwen3_5_loading_real_test is argv-driven (--artifact PATH) and never runs under CTest, so it is not a consumer here. The MoE, DFlash v1 and DFlash2 tests need companions this artifact does not carry; they skip when a required component is absent.",
+      "volumes": [
+        {
+          "name": "qwen3_8_27b_v3-plain.ninfer",
+          "bytes": 21492938224
+        }
+      ]
     },
     {
-      "name": "qwen3_8_27b_dflash2",
-      "env": "NINFER_TEST_ARTIFACT",
-      "file": "qwen3_8_27b_dflash2.ninfer",
-      "bytes": null,
-      "sha256": null,
-      "source": {
-        "kind": "file",
-        "path": "out/qwen3_8_27b_dflash2.ninfer",
-        "hint": "27B with MTP and the DFlash2 K=7 companion"
-      },
-      "tests": [
-        "ninfer_qwen3_5_dflash2_real_test",
-        "ninfer_qwen3_5_dflash_prefill_real_test",
-        "ninfer_qwen3_5_speculative_invariant_real_test"
-      ],
-      "notes": "speculative_invariant_real exercises MTP and DFlash2 on the same artifact; dflash2_real and dflash_prefill_real need the DFlash2 companion."
-    },
-    {
-      "name": "qwen3_8_flash_next_125b_a6b",
+      "name": "qwen3_8_flash_next_125b_a6b_fp8_mtp",
       "env": "NINFER_QWEN38_FLASH_NEXT_WEIGHTS",
-      "file": "qwen3_8_flash_next_125b_a6b.ninfer",
-      "bytes": null,
-      "sha256": null,
+      "file": "qwen3_8_flash_next_125b_a6b_nvfp4_fp8_mtp.ninfer",
+      "bytes": 126921610496,
+      "sha256": "3be54b07772d1876925755df84f81bacad3f6dbf1123c2110bb64ab004b833b2",
       "source": {
         "kind": "file",
-        "path": "out/qwen3_8_flash_next_125b_a6b_nvfp4_fp8_mtp.ninfer",
-        "hint": "the ~70 GiB Flash-Next artifact; needs the GB10 lane or a host-RAM tiered 5090 run"
+        "path": "/nfs/ninfer-gb10/qwen3_8_flash_next_125b_a6b_fp8_mtp/qwen3_8_flash_next_125b_a6b_nvfp4_fp8_mtp.ninfer"
       },
       "default": true,
       "tests": [
@@ -152,7 +111,25 @@
         "ninfer_qwen3_8_flash_next_frontend_test",
         "ninfer_qwen3_8_flash_next_125b_a6b_load_plan_test"
       ],
-      "notes": "Does not fit a 32 GiB 5090 as one device; the 5090 lane skips these by design."
+      "notes": "Multi-volume: the entry file names the .part-NNNNN continuations, so the cache holds the whole set.",
+      "volumes": [
+        {
+          "name": "qwen3_8_flash_next_125b_a6b_nvfp4_fp8_mtp.ninfer",
+          "bytes": 32000000000
+        },
+        {
+          "name": "qwen3_8_flash_next_125b_a6b_nvfp4_fp8_mtp.ninfer.part-0001",
+          "bytes": 32000000000
+        },
+        {
+          "name": "qwen3_8_flash_next_125b_a6b_nvfp4_fp8_mtp.ninfer.part-0002",
+          "bytes": 32000000000
+        },
+        {
+          "name": "qwen3_8_flash_next_125b_a6b_nvfp4_fp8_mtp.ninfer.part-0003",
+          "bytes": 30921610496
+        }
+      ]
     },
     {
       "name": "qwen3_8_flash_next_125b_a6b_dflash2",
@@ -162,13 +139,48 @@
       "sha256": null,
       "source": {
         "kind": "file",
-        "path": "out/qwen3_8_flash_next_125b_a6b_dflash2.ninfer",
-        "hint": "the Flash-Next DFlash2 companion artifact"
+        "path": "",
+        "hint": "no matching artifact in /nfs/ninfer-gb10 as of 2026-11-10"
       },
       "tests": [
         "ninfer_qwen3_8_flash_next_125b_a6b_load_plan_test"
       ],
-      "notes": "load_plan reads both weight variables; it skips unless both are present."
+      "notes": "No artifact found on /nfs: load_plan reads both weight variables and skips without them."
+    },
+    {
+      "name": "qwen3_6_35b_a3b",
+      "env": "NINFER_TEST_ARTIFACT",
+      "file": "qwen3_6_35b_a3b.ninfer",
+      "bytes": null,
+      "sha256": null,
+      "source": {
+        "kind": "file",
+        "path": "",
+        "hint": "no matching artifact in /nfs/ninfer-gb10 as of 2026-11-10"
+      },
+      "tests": [
+        "ninfer_qwen3_5_moe_real_test",
+        "ninfer_qwen3_5_moe_offload_real_test",
+        "ninfer_qwen3_5_dflash_real_test"
+      ],
+      "notes": "No 35B-A3B artifact on /nfs. The MoE and DFlash v1 tests need this model, not the 27B; with the 27B in the cache they skip on the missing component."
+    },
+    {
+      "name": "qwen3_8_27b_dflash2",
+      "env": "NINFER_TEST_ARTIFACT",
+      "file": "qwen3_8_27b_dflash2.ninfer",
+      "bytes": null,
+      "sha256": null,
+      "source": {
+        "kind": "file",
+        "path": "",
+        "hint": "no matching artifact in /nfs/ninfer-gb10 as of 2026-11-10"
+      },
+      "tests": [
+        "ninfer_qwen3_5_dflash2_real_test",
+        "ninfer_qwen3_5_dflash_prefill_real_test"
+      ],
+      "notes": "No DFlash2-companion 27B artifact on /nfs; those two tests skip when the artifact lacks the DFlash2 component."
     },
     {
       "name": "qwen4_exp_banks",
@@ -178,14 +190,14 @@
       "sha256": null,
       "source": {
         "kind": "file",
-        "path": "out/qwen4_exp_banks.ninfer",
-        "hint": "the Qwen4-exp bank/state test artifact"
+        "path": "",
+        "hint": "no matching artifact in /nfs/ninfer-gb10 as of 2026-11-10"
       },
       "tests": [
         "ninfer_qwen4_exp_reclaim_real_test",
         "ninfer_qwen4_exp_score_state_real_test"
       ],
-      "notes": "Both tests need a GPU and the artifact."
+      "notes": "No Qwen4-exp artifact on /nfs; both tests stay skipped."
     }
   ]
 }

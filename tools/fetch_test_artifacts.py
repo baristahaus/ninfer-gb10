@@ -88,13 +88,68 @@ def digest(path: Path) -> tuple[int, str]:
     return size, sha.hexdigest()
 
 
+def volumes_for(entry_path_: Path) -> list[Path]:
+    """The entry file plus its `.part-NNNNN` continuations, entry first, parts by name.
+
+    A `.ninfer` artifact may be split across volumes; the entry file names the parts and they must
+    sit beside it with the same names. An artifact is only usable as a complete set.
+    """
+    if not entry_path_.is_file():
+        return []
+    parts = sorted(
+        path
+        for path in entry_path_.parent.iterdir()
+        if path.name.startswith(entry_path_.name + ".part-")
+    )
+    return [entry_path_] + parts
+
+
+def digest_set(paths: list[Path]) -> tuple[int, str]:
+    """Total bytes and one sha256 over the concatenated volumes in order."""
+    size = 0
+    sha = hashlib.sha256()
+    for path in paths:
+        with path.open("rb") as handle:
+            while block := handle.read(CHUNK):
+                size += len(block)
+                sha.update(block)
+    return size, sha.hexdigest()
+
+
+def place(source: Path, destination: Path, link: bool) -> None:
+    """Copy, hard-link or symlink one volume into the cache.
+
+    A cross-filesystem hard link fails, so --link falls back to a symlink: the cache then costs no
+    space and the artifact stays where the maintainer keeps it.
+    """
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.exists() or destination.is_symlink():
+        destination.unlink()
+    if link:
+        try:
+            os.link(source, destination)
+            return
+        except OSError:
+            destination.symlink_to(source.resolve())
+            return
+    partial = destination.with_name(destination.name + ".partial")
+    if partial.exists() or partial.is_symlink():
+        partial.unlink()
+    shutil.copyfile(source, partial)
+    partial.replace(destination)
+
+
 def describe(entry: dict, path: Path) -> str:
     pinned = entry.get("sha256") is not None
-    if not path.exists():
+    volumes = volumes_for(path)
+    if not volumes:
         return "absent"
+    expected = len(entry.get("volumes") or [path])
+    if len(volumes) != expected:
+        return f"MISSING VOLUMES ({len(volumes)} of {expected} present)"
     if not pinned:
         return "present (unpinned)"
-    size, sha = digest(path)
+    size, sha = digest_set(volumes)
     if entry.get("bytes") is not None and size != entry["bytes"]:
         return f"MISMATCH bytes {size} != {entry['bytes']}"
     if sha != entry["sha256"]:
@@ -130,18 +185,15 @@ def fetch_file(entry: dict, cache: Path, link: bool) -> Path:
     source = entry["source"]
     raw = os.path.expanduser(os.path.expandvars(source["path"]))
     origin = Path(raw) if os.path.isabs(raw) else ROOT / raw
-    if not origin.exists():
+    volumes = volumes_for(origin)
+    if not volumes:
         fail(f"{entry['name']}: source {origin} does not exist")
     destination = cache / entry["file"]
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    partial = destination.with_name(destination.name + ".partial")
-    if partial.exists():
-        partial.unlink()
-    if link:
-        os.link(origin, partial)
-    else:
-        shutil.copyfile(origin, partial)
-    partial.replace(destination)
+    for index, volume in enumerate(volumes):
+        target = destination if index == 0 else destination.with_name(
+            destination.name + volume.name[len(origin.name):]
+        )
+        place(volume, target, link)
     return destination
 
 
@@ -204,23 +256,37 @@ def command_fetch(data: dict, cache: Path, names: list[str], link: bool) -> int:
     return status
 
 
-def command_pin(data: dict, cache: Path, name: str, origin: str, manifest_path: Path) -> int:
+def command_pin(data: dict, cache: Path, name: str, origin: str, manifest_path: Path,
+                link: bool) -> int:
     by_name = {e["name"]: e for e in data["artifacts"]}
     if name not in by_name:
         fail(f"unknown artifact {name!r}")
     entry = by_name[name]
     source = Path(os.path.expanduser(origin))
-    if not source.is_file():
-        fail(f"--from must name a file: {source}")
+    volumes = volumes_for(source)
+    if not volumes:
+        fail(f"--from must name the artifact's entry file: {source}")
     cache.mkdir(parents=True, exist_ok=True)
     destination = cache / entry["file"]
-    if source.resolve() != destination.resolve():
-        shutil.copyfile(source, destination)
-    size, sha = digest(destination)
+    for index, volume in enumerate(volumes):
+        target = destination if index == 0 else destination.with_name(
+            destination.name + volume.name[len(source.name):]
+        )
+        if volume.resolve() != target.resolve():
+            place(volume, target, link)
+    cached = [destination] + [
+        destination.with_name(destination.name + volume.name[len(source.name):])
+        for volume in volumes[1:]
+    ]
+    size, sha = digest_set(cached)
     entry["bytes"] = size
     entry["sha256"] = sha
+    entry["volumes"] = [
+        {"name": volume.name, "bytes": volume.stat().st_size} for volume in volumes
+    ]
+    entry["source"] = {"kind": "file", "path": str(source)}
     manifest_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-    print(f"{name}: pinned bytes={size} sha256={sha}")
+    print(f"{name}: pinned {len(volumes)} volume(s) bytes={size} sha256={sha}")
     print(f"{name}: cached at {destination}")
     return 0
 
@@ -243,7 +309,8 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--check", action="store_true", help="verify every cached entry")
     parser.add_argument("--fetch", nargs="+", metavar="NAME", default=None, help="artifacts to fetch")
     parser.add_argument("--all", action="store_true", help="fetch every entry")
-    parser.add_argument("--link", action="store_true", help="hard-link local sources instead of copying")
+    parser.add_argument("--link", action="store_true",
+                        help="link local sources instead of copying (hard link, else symlink)")
     parser.add_argument("--pin", metavar="NAME", default=None, help="record bytes+sha256 for an artifact")
     parser.add_argument("--from", dest="origin", metavar="PATH", default=None, help="with --pin: the artifact")
     parser.add_argument("--print-env", action="store_true", help="print shell exports for cached entries")
@@ -256,7 +323,7 @@ def main(argv: list[str]) -> int:
     if args.pin:
         if not args.origin:
             fail("--pin needs --from PATH")
-        return command_pin(data, cache, args.pin, args.origin, manifest_path)
+        return command_pin(data, cache, args.pin, args.origin, manifest_path, args.link)
     if args.fetch or args.all:
         names = args.fetch or ["all"]
         return command_fetch(data, cache, names, args.link)

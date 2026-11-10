@@ -414,6 +414,12 @@ ParsedOptions parse(int argc, char** argv, EntryPoint entry,
         case Field::ExtraStateSlots:
             engine.context_cache.extra_state_slots = u32();
             break;
+        case Field::MaxLongAnchors:
+            engine.context_cache.max_long_anchors_per_continuation = u32();
+            break;
+        case Field::TurnAnchors:
+            engine.context_cache.turn_anchors = u32();
+            break;
         case Field::HostCapacity:
             engine.context_cache.host_capacity_bytes = u64();
             break;

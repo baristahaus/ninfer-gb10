@@ -1101,6 +1101,7 @@ The table lists executable defaults. The startup example selects a long-context 
 | `--max-private-continuations N` | private continuation descriptor capacity | `2 * max-concurrency` |
 | `--max-shared-prefixes N` | Engine-wide shared stable-prefix descriptor capacity | `max(max-concurrency, 4)` |
 | `--max-long-anchors-per-continuation N` | private long-anchor limit per continuation | `2` |
+| `--turn-anchors N` | private long anchors the server adds at the last `N` message boundaries, so a cancelled or edited turn resumes from its branch point instead of re-prefilling the conversation; capped by the long-anchor limit and by the four explicit-marker slots the protocol's `cache_control` breakpoints already use (capy-flash defaults this to `1`; this fork keeps it off so existing behaviour is unchanged) | `0` |
 | `--no-thinking` | disable thinking by default | thinking on |
 | `--preserve-thinking` | preserve closed-turn assistant reasoning by default | off |
 | `--cors` | permissive browser CORS headers | off |

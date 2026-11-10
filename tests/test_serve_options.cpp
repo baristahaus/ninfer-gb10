@@ -84,6 +84,37 @@ void test_resources_and_units() {
     }
 }
 
+void test_anchor_options() {
+    // --turn-anchors: off by default (the pre-change behaviour), a count when given, and
+    // `default` restores off. The bound --max-long-anchors-per-continuation is the sibling knob.
+    const auto defaults = parse({"ninfer-serve", "model.ninfer"});
+    require(defaults.launch.engine.context_cache.turn_anchors == 0,
+            "turn anchors are on by default");
+    require(!defaults.launch.engine.context_cache.max_long_anchors_per_continuation,
+            "the long-anchor bound is set before model preparation");
+
+    const auto configured = parse({"ninfer-serve", "model.ninfer", "--turn-anchors", "3",
+                                   "--max-long-anchors-per-continuation", "4"});
+    require(configured.launch.engine.context_cache.turn_anchors == 3,
+            "--turn-anchors did not reach the engine options");
+    require(configured.launch.engine.context_cache.max_long_anchors_per_continuation == 4,
+            "--max-long-anchors-per-continuation did not reach the engine options");
+
+    const auto zero = parse({"ninfer-serve", "model.ninfer", "--turn-anchors", "0"});
+    require(zero.launch.engine.context_cache.turn_anchors == 0, "--turn-anchors 0 is not off");
+
+    const auto unset = parse({"ninfer-serve", "model.ninfer", "--turn-anchors", "default"});
+    require(unset.launch.engine.context_cache.turn_anchors == 0,
+            "--turn-anchors default is not off");
+
+    rejects([] { (void)parse({"ninfer-serve", "model.ninfer", "--turn-anchors", "-1"}); });
+    rejects([] { (void)parse({"ninfer-serve", "model.ninfer", "--turn-anchors"}); });
+    rejects([] {
+        (void)parse({"ninfer-serve", "model.ninfer", "--max-long-anchors-per-continuation",
+                     "-1"});
+    });
+}
+
 void test_request_defaults() {
     const auto options =
         parse({"ninfer-serve", "model.ninfer", "--temperature", "0", "--top-p", "0.9", "--seed",
@@ -141,6 +172,7 @@ void test_provenance() {
 int main() {
     try {
         test_resources_and_units();
+        test_anchor_options();
         test_request_defaults();
         test_provenance();
         std::cout << "ok\n";

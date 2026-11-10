@@ -2,6 +2,7 @@
 
 #include "product/media_acquire/acquire.h"
 #include "serve/translate.h"
+#include "serve/turn_anchors.h"
 
 #include <algorithm>
 #include <charconv>
@@ -413,6 +414,9 @@ PreparedRequest GenerationService::prepare_impl(const GenerationRequest& request
         input.context_cache.allow_engine_automatic_shared_prefixes =
             input.context_cache.allow_engine_automatic_shared_prefixes &&
             protocol_allows_engine_automatic;
+        // Turn anchors go after the protocol markers: the protocol's cache_control breakpoints own
+        // the explicit-marker budget, and the anchors are the ones dropped when it is full.
+        add_turn_anchor_markers(input, options_.launch.engine.context_cache.turn_anchors);
         prepared.acquisition_seconds =
             std::chrono::duration<double>(Clock::now() - acquisition_started).count();
         check_preparation_control(prepared.lifetime->deadline, is_cancelled);

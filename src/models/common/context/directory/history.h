@@ -270,12 +270,15 @@ private:
     [[nodiscard]] RowLease acquire_row(std::int32_t index);
     void release_row(TableRow row) noexcept;
 
+public:
     // tp 2: replay every row acquire and release on rank 1 through the KV mirror. The directory
     // keeps rank 0's row in its own bookkeeping, so it takes rank 1's lease alone
     // (`acquire_mirror`/`release_mirror`) rather than the wrapper's paired acquire. Unattached is
     // the default, so a family with no peer -- and width 1 -- is unchanged.
     void attach_mirror(tp2::MirroredKVExecutionTables& mirror);
     [[nodiscard]] bool mirrored() const noexcept { return mirror_ != nullptr; }
+
+private:
     [[nodiscard]] HistoryOwner fork_history(const HistoryPrefix& source, std::uint32_t frontier);
     [[nodiscard]] std::uint64_t writer(HistoryId history) const noexcept;
     void add_prefix(HistoryId history, std::uint32_t frontier);

@@ -6,6 +6,7 @@
 #include "models/common/qwen/frontend/prepared_prompt.h"
 #include "models/qwen3_5/definition.h"
 #include "models/qwen3_5/planning.h"
+#include "core/tp2/kv_mirror.h"
 #include "models/qwen3_5/work.h"
 #include "runtime/executor/executor.h"
 
@@ -42,6 +43,14 @@ public:
 
 private:
     explicit PreparedSession(std::unique_ptr<detail::SessionImpl>);
+
+public:
+    // tp 2: replay every execution-row acquire and release on rank 1 through the KV mirror. The
+    // directory owns rank 0's row bookkeeping, so the attach is explicit here rather than a
+    // SessionImpl accessor; the single-device lane never calls it.
+    void attach_kv_mirror(tp2::MirroredKVExecutionTables& mirror);
+
+private:
     std::unique_ptr<detail::SessionImpl> impl_;
     friend class Session;
     friend PreparedSession prepare_session(std::shared_ptr<const ModelDefinition>, SessionPlan);

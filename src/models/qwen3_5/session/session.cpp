@@ -5,6 +5,11 @@
 
 namespace ninfer::models::qwen3_5 {
 
+void PreparedSession::attach_kv_mirror(tp2::MirroredKVExecutionTables& mirror) {
+    if (!impl_) { throw std::logic_error("prepared session is empty"); }
+    impl_->directory.pool(0).histories().attach_mirror(mirror);
+}
+
 RequestBasePlan::RequestBasePlan(std::shared_ptr<detail::RequestBasePlanImpl> impl) noexcept
     : impl_(std::move(impl)) {}
 

@@ -2,6 +2,7 @@
 
 #include "models/qwen3_5/execution/parameters.h"
 #include "core/device.h"
+#include "models/qwen3_5/execution/workspace.h"
 
 namespace ninfer::models::qwen3_5::execution {
 

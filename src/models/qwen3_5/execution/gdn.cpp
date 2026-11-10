@@ -73,8 +73,8 @@ workspace::GdnExtents gdn_extents(const GdnParameters& parameters) {
     out.value_heads = ops::projection_profile(parameters.control).first.n;
     std::int32_t qkv_rows = 0;
     if (parameters.role_rows) {
-        qkv_rows          = ops::projection_profile(parameters.role_rows->at(0).weight).first.n;
-        out.value_width   = ops::projection_profile(parameters.role_rows->at(1).weight).first.n;
+        qkv_rows          = ops::projection_profile(parameters.role_rows->at(0)).first.n;
+        out.value_width   = ops::projection_profile(parameters.role_rows->at(1)).first.n;
     } else {
         const auto profile = ops::projection_profile(parameters.projection);
         qkv_rows           = profile.first.n;

@@ -81,8 +81,12 @@ def check_skip_is_not_success(root: Path, gaps: Gaps) -> int:
                 gaps.add("skip stream",
                          f"{path.relative_to(root)}:{index + 1}: the skip message goes to stdout; "
                          f"use std::cerr so it lands in LastTest.log")
-            # Walk forward to the end of the enclosing block and reject a plain `return 0`.
-            for following in lines[index + 1:index + 8]:
+            # Walk forward to the end of the enclosing block and reject a plain `return 0`. The
+            # remainder of the message's own line counts: a one-line skip helper
+            # (`{ std::cerr << "SKIP: x"; return 0; }`) is a real shape, and scanning only the
+            # following lines missed it.
+            remainder = line.split("SKIP:", 1)[1]
+            for following in [remainder, *lines[index + 1:index + 8]]:
                 if "return 0" in following:
                     gaps.add("skip counted as pass",
                              f"{path.relative_to(root)}:{index + 1}: the skip message is followed by "
@@ -166,6 +170,7 @@ SELF_TEST_CASES = [
     ('int main() {\n    std::cout << "SKIP: no device\\n";\n    return 77;\n}\n', "skip stream"),
     ('int main() {\n    std::cerr << "SKIP: no device\\n";\n    return 0;\n}\n',
      "skip counted as pass"),
+    ('void f() { std::cerr << "SKIP: one-line skip"; return 0; }\n', "skip counted as pass"),
 ]
 GOOD = ('int main() {\n    std::cerr << "SKIP: no device\\n";\n    return 77;\n}\n')
 

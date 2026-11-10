@@ -137,7 +137,7 @@ build/dgx-spark-dev/apps/ninfer-serve "$ART" \
   --max-context 262144 \
   --max-concurrency 2 \
   --kv-dtype fp8 \
-  --spec mtp --draft-tokens 3 --lm-head-draft \
+  --spec mtp --draft-tokens 3 --proposal-head optimized \
   --vision \
   --preserve-thinking \
   --request-log-jsonl "$LOG_DIR/requests.jsonl" \
@@ -169,13 +169,12 @@ Operational flag subset (defaults in the right column; the full table is in
 | `--rope-yarn-factor F` | opt-in YaRN NTK-by-parts RoPE scaling; `F>1` raises the ceiling above to the native window times `F` (`F` in `[0,4]`, so at most 1,048,576). Costs quality past the native window unless the checkpoint was tuned for it, and is refused together with a draft backend whose own position capacity is smaller | `0` (off) |
 | `--max-concurrency N` | concurrent requests, `1..8`, startup-fixed | 1 → **2** |
 | `--max-pending-requests N` | requests allowed to wait for admission | 16 |
-| `--pending-timeout-ms N` | max prepare-plus-admission wait | 30000 |
+| `--pending-timeout DURATION` | max preparation-plus-admission wait; `30s` or `30000ms` | `30s` |
 | `--prefill-chunk N` | prefill chunk (multiple of 128) | device default **4096** on GB10; do not override |
-| `--long-prefill-wait-ms N` | a multi-chunk prefill waits this long for running requests before admitting anyway; must be below `--pending-timeout-ms` | 20000 |
+| `--long-prefill-wait-ms N` | a multi-chunk prefill waits this long for running requests before admitting anyway; must be below `--pending-timeout` | 20000 |
 | `--prefill-decode-share PCT` | decode time owed to running requests per prefill chunk | 50 |
 | `--kv-dtype` | KV storage | bf16 → **fp8** |
-| `--spec mtp --draft-tokens N --lm-head-draft` | MTP speculation (Flash-Next cap K=3) | off → **mtp, 3** |
-| `--shutdown-timeout-seconds N` | admitted requests may finish this long after SIGTERM before being cancelled | 30 |
+| `--spec mtp --draft-tokens N --proposal-head optimized` | MTP speculation (Flash-Next cap K=3) | off → **mtp, 3** |
 | `--request-log-jsonl FILE` | full-precision JSON-lines request log | disabled → **on** |
 | `--api-key KEY` | required bearer / `x-api-key`; `/health` stays open | unset |
 | `--vision` | media input (extra weights and workspace) | off → **on** |
@@ -220,7 +219,7 @@ tail -f "$LOG_DIR/requests.jsonl"
 
 - The server log (`$LOG_DIR/server.log`, stderr) carries startup milestones,
   per-request errors, and an aggregate throughput line every 5 s
-  (`--log-stats-interval-ms`).
+  (`--stats-interval`).
 - Each per-request log record carries `context_cache` (admission counters,
   blocked categories `no_feasible_plan`, `no_free_lane`,
   `unsettled_state_fork`, `context_transaction`, KV transfers), the
@@ -385,7 +384,7 @@ test -x build/dgx-spark-dev/apps/ninfer-serve      # 2. built
 curl -sf "http://127.0.0.1:$PORT/health" >/dev/null \
   || ( build/dgx-spark-dev/apps/ninfer-serve "$ART" --host 127.0.0.1 --port "$PORT" \
         --max-context 262144 --max-concurrency 2 --kv-dtype fp8 \
-        --spec mtp --draft-tokens 3 --lm-head-draft --vision --preserve-thinking \
+        --spec mtp --draft-tokens 3 --proposal-head optimized --vision --preserve-thinking \
         --request-log-jsonl "$LOG_DIR/requests.jsonl" \
         >"$LOG_DIR/server.log" 2>&1 & echo $! >"$LOG_DIR/serve.pid" ; \
        for i in $(seq 1 12); do sleep 5; curl -sf "http://127.0.0.1:$PORT/health" >/dev/null && break; done )
@@ -433,7 +432,7 @@ build:
 serve:
   binary: build/dgx-spark-dev/apps/ninfer-serve
   canonical_flags: [--max-context, "262144", --max-concurrency, "2", --kv-dtype, fp8,
-                    --spec, mtp, --draft-tokens, "3", --lm-head-draft, --vision,
+                    --spec, mtp, --draft-tokens, "3", --proposal-head optimized, --vision,
                     --preserve-thinking, --request-log-jsonl, "$LOG_DIR/requests.jsonl"]
   health: {url: "http://127.0.0.1:$PORT/health", ok: 200}
   model: {alias: qwen3.8-flash-next-125b-a6b, max_model_len: 262144}

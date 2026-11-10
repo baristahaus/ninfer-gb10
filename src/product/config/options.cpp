@@ -689,7 +689,7 @@ std::string startup_usage_text(std::string_view executable, EntryPoint entry) {
         out << "  --clear-stops\n\nAnswer content uses stdout; reasoning and "
                "diagnostics use stderr.\n";
     out << "\nCapacities: bytes or B/KiB/MiB/GiB; durations: milliseconds or ms/s.\n"
-        << "Boolean options also accept --flag=true|false.\n"
+        << "Boolean options also accept a =true|false suffix, for example --cuda-graph=false.\n"
         << "Default prefill chunk: Qwen4Exp/CPU expert offload 4096, otherwise 1024.\n"
         << "Context cache defaults: CLI 0 extra slots / 0B Host; serve one extra slot per lane,\n"
         << "RTX 5090 Host 8GiB + 8 StateImages, Spark Host 1GiB + 4 StateImages.\n"

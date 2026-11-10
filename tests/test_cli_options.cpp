@@ -1,10 +1,14 @@
 #include "product/config/options.h"
+#include "product/config/schema.h"
 #include "product/logging/configuration.h"
 
+#include <cctype>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <map>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -36,6 +40,71 @@ std::string rejection(Function&& function) {
         function();
     } catch (const std::invalid_argument& error) { return error.what(); }
     throw std::runtime_error("invalid configuration was accepted");
+}
+
+// The flags the help text names. A flag is a `--` token made of lowercase letters, digits and
+// hyphens; `--flag=true` contributes `--flag`.
+std::set<std::string> help_flags(const std::string& help) {
+    std::set<std::string> flags;
+    for (std::size_t at = help.find("--"); at != std::string::npos; at = help.find("--", at + 2)) {
+        std::size_t end = at + 2;
+        while (end < help.size() &&
+               (std::isalnum(static_cast<unsigned char>(help[end])) || help[end] == '-'))
+            ++end;
+        if (end > at + 2) flags.insert(help.substr(at, end - at));
+    }
+    return flags;
+}
+
+// The flags the schema-driven parser accepts for one entry point: every schema field that applies,
+// plus the parser's own process options. A negative flag (`--no-vision`) takes no value; a paired
+// positive flag takes none either; every other field with an argument takes a value.
+std::map<std::string, bool> parser_flags(ninfer::product::EntryPoint entry) {
+    std::map<std::string, bool> flags{{"--config", true}, {"--help", false}};
+    if (entry == ninfer::product::EntryPoint::Cli) {
+        flags["--json-object"] = false;
+        flags["--clear-stops"] = false;
+    }
+    for (const auto& spec : ninfer::product::config_detail::fields()) {
+        if (!ninfer::product::config_detail::applies_to(spec, entry)) continue;
+        if (!spec.flag.empty())
+            flags[std::string(spec.flag)] = spec.negative_flag.empty() && !spec.argument.empty();
+        if (!spec.negative_flag.empty()) flags[std::string(spec.negative_flag)] = false;
+    }
+    return flags;
+}
+
+void test_help_matches_parser() {
+    using ninfer::product::EntryPoint;
+    for (const auto entry : {EntryPoint::Cli, EntryPoint::Serve}) {
+        const std::string name = entry == EntryPoint::Cli ? "ninfer" : "ninfer-serve";
+        const auto help        = ninfer::product::startup_usage_text(name, entry);
+        const auto documented  = help_flags(help);
+        const auto accepted    = parser_flags(entry);
+        for (const auto& [flag, takes_value] : accepted) {
+            require(documented.count(flag) != 0,
+                    ("a flag the parser accepts is missing from the help text: " + flag).c_str());
+            std::vector<std::string> args{name, "model.ninfer"};
+            if (entry == EntryPoint::Cli) {
+                args.emplace_back("--prompt");
+                args.emplace_back("x");
+            }
+            args.push_back(flag);
+            if (takes_value) args.push_back(flag == "--config" ? "does-not-exist.toml" : "1");
+            try {
+                if (entry == EntryPoint::Cli)
+                    parse(args);
+                else
+                    serve(args);
+            } catch (const std::invalid_argument& error) {
+                require(std::string(error.what()).find("unknown argument") == std::string::npos,
+                        "the parser rejects a flag its own help text lists");
+            }
+        }
+        for (const auto& flag : documented)
+            require(accepted.count(flag) != 0,
+                    ("the help text names a flag the parser does not accept: " + flag).c_str());
+    }
 }
 
 struct Files {
@@ -316,6 +385,7 @@ device = 0
 int main() {
     try {
         Files files;
+        test_help_matches_parser();
         test_arguments();
         test_file_merge(files);
         test_file_errors_and_example(files);

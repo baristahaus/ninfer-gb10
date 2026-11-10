@@ -58,7 +58,7 @@ times are descriptive and excluded from the fixed-output speedup gate.
 The acceptance rule is at least 2% lower paired completion time with a paired-bootstrap 95%
 interval above zero, no single-request slowdown above 2%, and no mean TTFT/ITL regression above
 5%. The intervals describe repeated fixed fixtures, not a population of arbitrary prompts.
-The [paired serving tools](../../tools/bench/README.md#flash-next-paired-serving-and-numerical-diagnostics)
+The [paired serving tools](../../tools/bench/compare_flash_next_serving.py)
 retain completion time, TTFT, mean ITL, stream gaps, actual token counts, and response content.
 Earlier runs that inadvertently reused prefixes, lacked a complete warm wave, or flattened
 reasoning history are excluded from qualification comparisons.
@@ -73,7 +73,7 @@ Mean end-to-end completion time in seconds (five measured waves, lower is better
 | 64K pair | 20.288 | 18.844 | 18.202 | 16.949 | 14.674 |
 | Mixed 8K/64K | 14.193 | 12.471 | 12.041 | 12.405 | 10.040 |
 
-The existing `--spec mtp --draft-tokens 3 --lm-head-draft` profile passes the five cold-workload
+The existing `--spec mtp --draft-tokens 3 --proposal-head optimized` profile passes the five cold-workload
 acceptance gates against the full proposal head. Completion time falls 7.24% for 8K pairs
 (95% interval 6.98–7.50%), 3.41% for 64K pairs (2.90–3.87%), and 3.44% for mixed requests
 (3.41–3.49%). Single requests improve 8.75% at 8K and 5.78% at 64K; mean TTFT and ITL also
@@ -237,7 +237,7 @@ artifact has an older proposal-head inventory and is not the artifact used here.
 
 Commands use `ninfer_bench --corpus bench/fixtures/qwen3_8_flash_next_context.ids
 -pg '8192,512;65536,512' --max-ctx 73728 --prefill-chunk 8192 --kv-dtype bf16
---warmup 1 -r 5`, with `--mtp-draft-tokens 0` or `--mtp-draft-tokens 3 --lm-head-draft`.
+--warmup 1 -r 5`, with `--mtp-draft-tokens 0` or `--mtp-draft-tokens 3 --proposal-head optimized`.
 Each request therefore has 513 total outputs, including 512 decode outputs. This is a fresh
 NInfer tuning baseline, not an exact reproduction of the preceding vLLM comparison.
 
@@ -256,9 +256,8 @@ Full-model diagnostic traces at 8,192 prompt tokens and 32 decode outputs use Ns
 21.9% MoE, 21.7% QSA and 20.8% HyperConnection. With MTP3, decode GPU work is 34.2% MoE,
 23.1% GDN, 16.8% HyperConnection and 15.5% QSA. These trace shares support attribution only;
 the throughput baseline above comes from unprofiled execution. Local JSON reports are under
-`profiles/bench/flash_next_performance/baseline/`; the
-[capture/report workflow](../../tools/bench/README.md#flash-next-gpu-work-and-roofline-estimates)
-defines the cost-model limitations. The real Text/Vision/MTP/prefix integration test passed.
+`profiles/bench/flash_next_performance/baseline/`. The roofline measurements are in the
+[GB10 field report](../../docs/gb10-field-report.md). The real Text/Vision/MTP/prefix integration test passed.
 
 ### Flash-Next KV profile tradeoff
 
@@ -321,7 +320,7 @@ live under `profiles/bench/gb10/`.
 - **Serving settings:**
   - `--kv-dtype fp8`: decode speed is identical to BF16 KV; FP8 KV halves the KV footprint and
     gives up 7–9% prefill.
-  - `--spec mtp --draft-tokens 3 --lm-head-draft`: 1–3 is the package's limit, and K=3 is the
+  - `--spec mtp --draft-tokens 3 --proposal-head optimized`: 1–3 is the package's limit, and K=3 is the
     best or within 1% of the best on every measured class.
   - `--host-kv-mib 0`: a Host tier on unified memory is a copy in the same pool. TEB score and
     prefix hits are identical with and without it.

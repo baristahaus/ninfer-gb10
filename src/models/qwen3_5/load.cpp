@@ -24,13 +24,33 @@ namespace {
 std::vector<artifact::MatrixSlice> matrix_slices(const artifact::Reader& reader,
                                                  const artifact::ParameterReference& reference) {
     std::vector<artifact::MatrixSlice> slices;
-    const auto k = reference.shape.back();
+    // A 1-D parameter has one column and `shape[0]` rows; a matrix has `shape[1]` columns and
+    // `shape[0]` rows. Reading `shape.back()` as the column count would make a 1-D parameter look
+    // like a single row of `shape[0]` columns, so the coverage check below would compare one row
+    // against the whole extent.
+    const auto k = reference.shape.size() > 1 ? reference.shape.back() : 1;
     const auto n = weight_element_count(reference.shape) / k;
-    std::uint64_t destination_row = 0;
+    std::uint64_t destination_row    = 0;
+    std::uint64_t destination_column = 0;
+    bool saw_column_slice            = false;
     for (const auto& part : reference.binding.parts) {
         const auto extent = part.end - part.begin;
         if (extent == 0) { continue; }
         const auto parent = reader.geometry(part.object).shape;
+        if (parent.size() == 1) {
+            // A 1-D parameter is a single row of `shape[0]` columns as far as the slicer is
+            // concerned (`slice_tensor` derives its row count as `elements / columns`), so a
+            // sharded range is a COLUMN slice of that one row, and the destination accumulates in
+            // destination columns rather than rows. Reading it as `extent` rows would claim more
+            // rows than the parent has.
+            slices.push_back({part.object, 0, part.begin, 1, extent, 0, destination_column});
+            destination_column += extent;
+            // The rank's own extent is the coverage this form needs; `n` already equals it for a
+            // 1-D parameter, and its destination column is an accumulated offset rather than a
+            // column of a matrix, so it is not the check the matrix path makes.
+            destination_row = n;
+            continue;
+        }
         if (parent.size() != 2) {
             throw artifact::ArtifactError(reference.name + ": a sharded weight must be a matrix");
         }
@@ -42,11 +62,21 @@ std::vector<artifact::MatrixSlice> matrix_slices(const artifact::Reader& reader,
             slices.push_back({part.object, row, column, rows, columns, destination_row, 0});
             destination_row += rows;
         } else {
-            slices.push_back({part.object, row, column, 1, extent, destination_row, 0});
-            ++destination_row;
+            // A column slice of one row. The destination row is the source row, because a column
+            // shard does not move rows; the destination COLUMN accumulates across the segments.
+            // Parts are segment-major (segment 0's rows, then segment 1's), so the offset carries
+            // over from one segment to the next and is advanced after the segment's last row --
+            // resetting it at each segment's first row would discard the previous segment's share.
+            saw_column_slice = true;
+            slices.push_back({part.object, row, column, 1, extent, row, destination_column});
+            if (row + 1 == n) { destination_column += extent; }
+            destination_row = n;
         }
     }
-    if (destination_row != n) {
+    // A row-block shard never touches destination columns, so the column check applies only when
+    // the shard actually sliced columns; applying it unconditionally would refuse every row shard.
+    const auto columns_of_rank = reference.shape.size() > 1 ? reference.shape[1] : 1;
+    if (destination_row != n || (saw_column_slice && destination_column != columns_of_rank)) {
         throw artifact::ArtifactError(reference.name + ": shard slices do not cover its own rows");
     }
     return slices;

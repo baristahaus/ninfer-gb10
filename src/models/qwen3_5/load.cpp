@@ -184,8 +184,24 @@ std::unique_ptr<ModelShard> materialize_model(ResolvedLoadPlan&& plan, DeviceCon
     // A column-sharded weight is many small ranges in its parent, which no consumer can take; the
     // gather turns each into one contiguous parent. The condition is structural (non-contiguous
     // parts in one parent), so width 1 never enters it and needs no guard.
+    // The fused consumers, in the same order the profile enumeration uses: the GDN q|k|v role is
+    // one matrix (query then key then value) and z is a role of its own, so only q|k|v is a group.
+    // At width 1 every member already binds one region of the fused object, so the gather sees a
+    // contiguous view and does nothing.
+    std::vector<FusedGroup> fused;
+    const auto add_gdn = [&](const GdnWeights& gdn) {
+        fused.push_back({{gdn.query, gdn.key, gdn.value}});
+    };
+    for (const auto& layer : definition->weights().text.layers) {
+        if (const auto* gdn = std::get_if<GdnWeights>(&layer.mixer)) { add_gdn(*gdn); }
+    }
+    if (definition->weights().mtp) {
+        if (const auto* gdn = std::get_if<GdnWeights>(&definition->weights().mtp->layer.mixer)) {
+            add_gdn(*gdn);
+        }
+    }
     RepackedWeights repacked;
-    repacked.gather(bound);
+    repacked.gather(bound, fused);
     auto banks = moe::bind_banks(definition->expert_banks(), backing, plan.bank_devices_);
     return std::unique_ptr<ModelShard>(new ModelShard(std::move(definition), std::move(backing),
                                                       std::move(bound), std::move(banks),

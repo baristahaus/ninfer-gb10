@@ -89,6 +89,11 @@ ninfer_add_test(ninfer_gdn_replay_records_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_gdn_replay_records.cpp"
   LIBRARIES ninfer_core)
 
+ninfer_add_test(ninfer_gdn_replay_shard_test
+  SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_gdn_replay_shard.cpp"
+  LIBRARIES ninfer_core)
+set_tests_properties(ninfer_gdn_replay_shard_test PROPERTIES TIMEOUT 30)
+
 set_tests_properties(
   ninfer_device_test
   ninfer_decode_graph_test

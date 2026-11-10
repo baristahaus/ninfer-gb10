@@ -11,6 +11,8 @@
 
 #include "ninfer/engine.h"
 
+#include <cuda_runtime.h>
+
 #include <cstdlib>
 #include <iostream>
 #include <string>
@@ -31,9 +33,20 @@ bool mentions_refusal(const std::exception& error) {
 } // namespace
 
 int main() {
-    const char* artifact = std::getenv("NINFER_TEST_ARTIFACT");
-    if (artifact == nullptr || *artifact == '\0') {
-        std::cout << "SKIP: NINFER_TEST_ARTIFACT is not set\n";
+    const char* artifact   = std::getenv("NINFER_TEST_ARTIFACT");
+    const bool have_artifact = artifact != nullptr && *artifact != '\0';
+    // Both prerequisites are checked before either is reported. Checking only the artifact first
+    // told a one-device host that the artifact was missing, which sent a reader after the wrong
+    // cause; the device count is the binding constraint on a single-GPU node.
+    int devices                 = 0;
+    const cudaError_t count_err = cudaGetDeviceCount(&devices);
+    const bool have_two_devices = count_err == cudaSuccess && devices >= 2;
+    if (!have_artifact || !have_two_devices) {
+        std::cout << "SKIP: the two-GPU refusal case needs two CUDA devices and a 27B artifact"
+                  << " (devices: "
+                  << (count_err == cudaSuccess ? std::to_string(devices)
+                                               : std::string("unavailable"))
+                  << ", NINFER_TEST_ARTIFACT: " << (have_artifact ? "set" : "not set") << ")\n";
         return 77;
     }
     const std::vector<ninfer::TokenId> tokens{9707, 11, 1879, 13, 5765, 374};

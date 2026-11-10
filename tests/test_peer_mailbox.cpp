@@ -204,8 +204,10 @@ int test_allreduce_sum_rank() {
 int main() {
     const int devices = device_count();
     if (devices < 2) {
+        // This test exercises only the two-device transport, so with fewer devices it skips
+        // entirely: exit 77 so ctest reports a skip rather than a pass.
         std::cout << "skipped: the mailbox transport needs two devices\n";
-        return 0;
+        return 77;
     }
     int failures = 0;
     try {

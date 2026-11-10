@@ -240,6 +240,9 @@ struct SnapshotStamp {
 struct RankSnapshot {
     std::string hardware;
     std::uint32_t rank = 0, node = 0;
+    // The CUDA device this rank runs on. A group may be asymmetric, so the rank index does not
+    // identify the device and the report must not assume it does.
+    int device = 0;
     SnapshotStamp stamp;
     std::uint64_t received_ns = 0;
     RankMemoryUsage memory;

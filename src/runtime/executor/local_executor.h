@@ -27,6 +27,7 @@ public:
         this->observations_.resize(workers_.size());
         for (std::size_t rank = 0; rank < workers_.size(); ++rank) {
             this->observations_[rank].hardware = workers_[rank]->device_name();
+            this->observations_[rank].device   = workers_[rank]->device().index();
         }
         sample_resources(true);
     }

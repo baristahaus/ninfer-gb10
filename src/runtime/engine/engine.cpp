@@ -270,13 +270,19 @@ private:
                     for (const auto& pool : instance->session->kv_pools())
                         description.kv_pools.push_back(
                             {pool.id.index, std::string(pool.label), 0, pool.device_page_groups});
-                    for (const auto& rank : instance->executor->observations()) {
-                        int device = options.device;
+                    // The observations arrive in rank order, so the loop index IS the rank. Using
+                    // the observation's own `rank` field labelled every rank as 0, because a
+                    // RankWorker does not carry its index -- the executor's order is the authority.
+                    const auto observations = instance->executor->observations();
+                    for (std::size_t rank_index = 0; rank_index < observations.size(); ++rank_index) {
+                        const auto& rank = observations[rank_index];
+                        int device       = options.device;
                         if (options.deployment)
                             for (const auto& configured : options.deployment->ranks)
-                                if (configured.rank == rank.rank) device = configured.device;
+                                if (configured.rank == static_cast<int>(rank_index))
+                                    device = configured.device;
                         description.ranks.push_back(
-                            {rank.rank, rank.node, device, rank.hardware,
+                            {static_cast<int>(rank_index), rank.node, device, rank.hardware,
                              rank.physical_memory && rank.physical_memory->shared_physical_memory});
                     }
                 }

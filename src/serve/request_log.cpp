@@ -721,6 +721,19 @@ std::string format_request_done_json(const std::string& server_instance_id, std:
           std::count_if(outcome.tool_calls.begin(), outcome.tool_calls.end(),
                         [](const auto& call) { return call.status == ToolCallStatus::Complete; })},
          {"tool_call_parse", tool_call_parse_json(outcome.tool_call_parse)},
+         {"reasoning_retry",
+          outcome.reasoning_retry.trigger == ReasoningRetryTrigger::None
+              ? Json(nullptr)
+              : Json{{"trigger", reasoning_retry_trigger_name(outcome.reasoning_retry.trigger)},
+                     {"kept_tokens", outcome.reasoning_retry.kept_tokens},
+                     {"injected_tokens", outcome.reasoning_retry.injected_tokens},
+                     {"continuation_prompt_tokens",
+                      outcome.reasoning_retry.continuation_prompt},
+                     {"continuation_completion_tokens",
+                      outcome.reasoning_retry.continuation_completion},
+                     {"error", outcome.reasoning_retry.error.empty()
+                                   ? Json(nullptr)
+                                   : Json(outcome.reasoning_retry.error)}}},
          {"prefill_miss",
           outcome.prefill_miss
               ? Json{{"directory", outcome.prefill_miss->directory},

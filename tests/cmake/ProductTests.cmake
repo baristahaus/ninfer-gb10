@@ -125,3 +125,7 @@ ninfer_add_test(ninfer_prefill_miss_dump_test
 ninfer_add_test(ninfer_speculation_detail_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_speculation_detail.cpp"
   LIBRARIES ninfer_serve)
+
+ninfer_add_test(ninfer_reasoning_retry_wire_test
+  SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_reasoning_retry_wire.cpp"
+  LIBRARIES ninfer_serve)

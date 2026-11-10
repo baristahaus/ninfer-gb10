@@ -543,6 +543,9 @@ ParsedOptions parse(int argc, char** argv, EntryPoint entry,
         case Field::PrefillMissMinMatch:
             parsed.serve.prefill_miss_min_match = real64();
             break;
+        case Field::ReasoningCloseRetry:
+            parsed.serve.reasoning_close_retry = boolean();
+            break;
         case Field::LogSpeculationDetail:
             parsed.serve.log_speculation_detail = boolean();
             break;

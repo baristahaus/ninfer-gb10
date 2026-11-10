@@ -34,6 +34,12 @@
 
 namespace ninfer::serve {
 
+// The canonical close the Qwen frontends render, and the thinking-closing marker the model emits.
+// Keep in step with kCanonicalReasoningCloseSerialization in
+// src/models/common/qwen/frontend/chat_template.h (model-side, not visible to serve).
+inline constexpr std::string_view kReasoningCloseSerialization = "\n</think>\n\n";
+inline constexpr std::string_view kReasoningThinkClose        = "</think>";
+
 enum class ReasoningRetryTrigger : std::uint8_t {
     None,
     StopInReasoning, // terminal token while thinking was open (no "</think>" in the reply)
@@ -75,5 +81,11 @@ struct ReasoningRetryPlan {
 
 [[nodiscard]] ReasoningRetryPlan plan_reasoning_retry(const ReasoningRetryInput& input,
                                                       const ReasoningGuardTokens& tokens);
+
+// True when the service should keep this request's continuation material: the option is on, the
+// prompt starts in thinking, and it carries no media. A request that fails this is never retried,
+// so the whole path stays off when the option is off.
+[[nodiscard]] bool reasoning_retry_eligible(bool enabled,
+                                            const ninfer::PromptSummary& summary) noexcept;
 
 } // namespace ninfer::serve

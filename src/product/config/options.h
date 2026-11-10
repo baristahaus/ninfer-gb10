@@ -106,6 +106,10 @@ struct ServeOptions {
     // --log-speculation-detail: record per-step accepted draft lengths on every request_done
     // record. Requires the JSONL request log. The step bound keeps one long answer's record small;
     // a shorter array than the request's decode steps marks the sequence truncated.
+    // --reasoning-close-retry: when a reply ends while thinking is still open with blank content
+    // and no tool call, close the thinking with the canonical suffix and continue once. Off by
+    // default; a request that does not end this way is unaffected.
+    bool reasoning_close_retry = false;
     bool log_speculation_detail                = false;
     std::uint32_t speculation_detail_max_steps = 4096;
     std::size_t max_request_bytes          = kDefaultMaxRequestBytes;

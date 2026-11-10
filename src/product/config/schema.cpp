@@ -135,6 +135,9 @@ constexpr FieldSpec kFields[] = {
      "N", "Recomputed prompt tokens a dump requires (10000).", Scope::Serve},
     {Field::PrefillMissMinMatch, "server.prefill_miss.min_match", "--prefill-miss-min-match", "", "F",
      "Share of the prompt that must match a recent context, in [0,1] (0.5).", Scope::Serve},
+    {Field::ReasoningCloseRetry, "server.reasoning_close_retry", "--reasoning-close-retry",
+     "--no-reasoning-close-retry", "",
+     "Close a reply that stopped while thinking was open and continue it once.", Scope::Serve},
     {Field::LogSpeculationDetail, "logging.speculation_detail", "--log-speculation-detail",
      "--no-log-speculation-detail", "",
      "Record per-step accepted draft lengths on request_done; needs --request-log-jsonl.",
@@ -354,6 +357,7 @@ FieldValue parse_field_value(Field field, const RawValue& value, bool command_li
     case Field::PreserveThinking:
     case Field::Cors:
     case Field::IgnoreEos:
+    case Field::ReasoningCloseRetry:
     case Field::LogSpeculationDetail:
     case Field::RawOutput:
     case Field::PrintTokenIds:

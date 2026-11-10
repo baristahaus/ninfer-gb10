@@ -33,6 +33,10 @@ constexpr FieldSpec kFields[] = {
     {Field::RopeYarnFactor, "engine.rope_yarn_factor", "--rope-yarn-factor", "", "F|default",
      "Opt-in YaRN NTK-by-parts RoPE scaling; >1 extends the addressable context to the native "
      "window times this factor. Default 0 disables it."},
+    {Field::RopeOriginalMaxPosition, "engine.rope_original_max_position",
+     "--rope-original-max-position", "", "N",
+     "The window the checkpoint's RoPE was trained on, for the YaRN ramp; 0 uses the artifact's "
+     "native window. Requires --rope-yarn-factor above 1 and does not raise the ceiling."},
     {Field::CudaGraph, "engine.cuda_graph", "--cuda-graph", "--no-cuda-graph", "",
      "Enable CUDA Graph execution."},
     {Field::GpuTiming, "observability.gpu_timing", "--gpu-timing", "--no-gpu-timing", "",
@@ -450,6 +454,10 @@ FieldValue parse_field_value(Field field, const RawValue& value, bool command_li
     case Field::RopeYarnFactor:
         // 0 and 1 both mean off; 4 is the supported maximum (native window x 4).
         return real(value, command_line, 0, 4);
+    case Field::RopeOriginalMaxPosition:
+        // Zero means "the artifact's native window", so an explicit zero is refused: it would be
+        // indistinguishable from unset and the caller would not learn that the flag did nothing.
+        return integer(value, command_line, 1, kU32Max);
     case Field::Temperature:
         return real(value, command_line, 0, 2);
     case Field::TopP:

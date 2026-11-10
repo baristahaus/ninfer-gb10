@@ -410,6 +410,12 @@ ParsedOptions parse(int argc, char** argv, EntryPoint entry,
                 throw std::invalid_argument("rope_yarn_factor must be in [0,4]; 0 and 1 disable YaRN");
             }
             break;
+        case Field::RopeOriginalMaxPosition:
+            engine.rope_original_max_position = u32();
+            if (engine.rope_original_max_position == 0) {
+                throw std::invalid_argument("rope_original_max_position must be positive");
+            }
+            break;
         case Field::GpuTiming:
             engine.observability.gpu_timing = boolean();
             break;
@@ -642,6 +648,21 @@ ParsedOptions parse(int argc, char** argv, EntryPoint entry,
              : assignment(merged, Field::ProposalHead) ? Field::ProposalHead
                                                        : Field::SpecBackend,
              error.what());
+    }
+    // The YaRN window is the ramp's "original" length, so it is meaningless without a factor to
+    // scale it and it bounds the context the ramp can serve. Both halves are refused here rather
+    // than at engine start, where the message would name the plan instead of the flag.
+    if (engine.rope_original_max_position != 0) {
+        if (!(engine.rope_yarn_factor > 1.0F)) {
+            fail(Field::RopeOriginalMaxPosition,
+                 "has no effect without engine.rope_yarn_factor above 1");
+        }
+        const double ramp_window = static_cast<double>(engine.rope_original_max_position) *
+                                   static_cast<double>(engine.rope_yarn_factor);
+        if (static_cast<double>(engine.max_context) > ramp_window) {
+            fail(Field::RopeOriginalMaxPosition,
+                 "times engine.rope_yarn_factor is below engine.max_context");
+        }
     }
     if (entry == EntryPoint::Cli) {
         if (parsed.cli.prompt.empty() && parsed.cli.messages_path.empty())

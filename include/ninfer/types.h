@@ -272,6 +272,11 @@ struct EngineOptions {
     // YaRN table and raises the addressable context to the model's native window times this
     // factor. Vision and the DFlash drafter are not affected.
     float rope_yarn_factor = 0.0F;
+    // The window the checkpoint's RoPE was trained on, used to build the YaRN ramp. Zero uses the
+    // artifact's own max_position_embeddings, which is the pre-flag behaviour. It changes only the
+    // NTK-by-parts ramp, not the addressable ceiling: the ceiling stays the native window times
+    // the factor, as in capy-flash.
+    std::uint32_t rope_original_max_position = 0;
     MoeOptions moe;
     KvCacheStorage kv_cache = KvCacheStorage::BFloat16;
     SpeculativeOptions speculative;

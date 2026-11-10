@@ -128,6 +128,46 @@ struct Files {
     }
 };
 
+void test_yarn_window() {
+    // Unset: the YaRN path is untouched, so the flag changes nothing.
+    const auto off = parse({"ninfer", "model.ninfer", "--prompt", "x"});
+    require(off.launch.engine.rope_yarn_factor == 0.0F &&
+                off.launch.engine.rope_original_max_position == 0,
+            "the YaRN window flag changed the default");
+    // Set with a factor above 1, it reaches the engine options.
+    const auto on = parse({"ninfer", "model.ninfer", "--prompt", "x", "--rope-yarn-factor", "2",
+                           "--rope-original-max-position", "32768", "--max-context", "65536"});
+    require(on.launch.engine.rope_original_max_position == 32768,
+            "the YaRN window was not applied");
+    // Zero is not a window; the converter refuses it before any cross-field check runs.
+    const auto zero = rejection([&] {
+        parse({"ninfer", "model.ninfer", "--prompt", "x", "--rope-yarn-factor", "2",
+               "--rope-original-max-position", "0"});
+    });
+    require(zero.find("rope-original-max-position") != std::string::npos,
+            "a zero YaRN window was refused for the wrong reason");
+    // A window with no factor to scale it has no effect, so the pair is refused.
+    const auto without_factor = rejection([&] {
+        parse({"ninfer", "model.ninfer", "--prompt", "x", "--rope-original-max-position", "32768"});
+    });
+    require(without_factor.find("rope_yarn_factor above 1") != std::string::npos,
+            "a window without a factor was refused for the wrong reason");
+    // A window times the factor below max_context would serve frequencies built for a shorter
+    // window, so the pair is refused.
+    const auto short_window = rejection([&] {
+        parse({"ninfer", "model.ninfer", "--prompt", "x", "--rope-yarn-factor", "2",
+               "--rope-original-max-position", "32768", "--max-context", "131072"});
+    });
+    require(short_window.find("below engine.max_context") != std::string::npos,
+            "a window shorter than the context was refused for the wrong reason");
+    // A rejection names the field's own flag: the Field enum and kFields must stay aligned.
+    const auto bad_factor = rejection([&] {
+        parse({"ninfer", "model.ninfer", "--prompt", "x", "--rope-yarn-factor", "9"});
+    });
+    require(bad_factor.find("--rope-yarn-factor") != std::string::npos,
+            "a bad rope factor was reported under another flag");
+}
+
 void test_arguments() {
     const auto defaults = parse({"ninfer", "--prompt", "hello", "model.ninfer"});
     const auto& engine  = defaults.launch.engine;
@@ -387,6 +427,7 @@ int main() {
         Files files;
         test_help_matches_parser();
         test_arguments();
+        test_yarn_window();
         test_file_merge(files);
         test_file_errors_and_example(files);
         test_deployment(files);

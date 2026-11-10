@@ -151,6 +151,9 @@ StartupConfigurationView view(const LaunchOptions& launch, EntryPoint entry, con
                 value = std::string("off");
             }
             break;
+        case Field::RopeOriginalMaxPosition:
+            value = std::uint64_t{e.rope_original_max_position};
+            break;
         case Field::GpuTiming:
             value = e.observability.gpu_timing;
             break;

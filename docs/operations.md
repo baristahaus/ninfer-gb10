@@ -169,6 +169,7 @@ Operational flag subset (defaults in the right column; the full table is in
 | `--max-context N` | per-sequence logical ceiling | 8192 → **262144** (the model's native context) |
 | `--kv-capacity N\|auto` | shared KV pool; `auto` maximizes from free memory | `--max-context` (≈147,456 tokens with `auto` on GB10) |
 | `--rope-yarn-factor F` | opt-in YaRN NTK-by-parts RoPE scaling; `F>1` raises the ceiling above to the native window times `F` (`F` in `[0,4]`, so at most 1,048,576). Costs quality past the native window unless the checkpoint was tuned for it, and is refused together with a draft backend whose own position capacity is smaller | `0` (off) |
+| `--rope-original-max-position N` | the checkpoint's trained window for the YaRN ramp; `0` uses the artifact's native window. Does not raise the ceiling (that stays the native window times the factor), is refused without `--rope-yarn-factor` above `1`, and is refused when `N` times the factor is below `--max-context` | `0` (the artifact's window) |
 | `--max-concurrency N` | concurrent requests, `1..8`, startup-fixed | 1 → **2** |
 | `--max-pending-requests N` | requests allowed to wait for admission | 16 |
 | `--pending-timeout DURATION` | max preparation-plus-admission wait; `30s` or `30000ms` | `30s` |

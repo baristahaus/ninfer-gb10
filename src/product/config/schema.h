@@ -20,6 +20,7 @@ enum class Field {
     PrefillDecodeShare,
     LongPrefillWait,
     RopeYarnFactor,
+    RopeOriginalMaxPosition,
     CudaGraph,
     GpuTiming,
     MaxConcurrency,

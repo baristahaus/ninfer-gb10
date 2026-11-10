@@ -325,8 +325,12 @@ Config parse_config(const artifact::Directory& directory, const LoadOptions& opt
             if (rope->rotary_dim != 64) {
                 throw ArtifactError("YaRN requires a text rotary dimension of 64");
             }
-            rope->yarn_factor                = options.rope_yarn_factor;
-            rope->yarn_original_max_position = out.text.max_position_embeddings;
+            rope->yarn_factor = options.rope_yarn_factor;
+            // The ramp's original window is the artifact's native window unless the caller names
+            // one; the ceiling is unaffected either way (see the planning-side check).
+            rope->yarn_original_max_position = options.rope_original_max_position != 0
+                                                   ? options.rope_original_max_position
+                                                   : out.text.max_position_embeddings;
             if (rope->yarn_original_max_position == 0) {
                 throw ArtifactError("YaRN needs the model's native position window");
             }

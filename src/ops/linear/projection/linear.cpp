@@ -153,7 +153,8 @@ void dispatch_linear(const Tensor& x, const Weight& w, Tensor& out, LinearPolicy
 
 std::size_t linear_workspace_capacity_bytes(QType qtype, std::int32_t output_rows,
                                             std::int32_t input_rows, LinearPolicy policy,
-                                            std::int32_t min_tokens, std::int32_t max_tokens) {
+                                            std::int32_t min_tokens, std::int32_t max_tokens,
+                                            std::string_view tag) {
     validate_linear_policy(policy);
     if (min_tokens <= 0 || max_tokens < min_tokens) {
         throw std::invalid_argument("linear workspace: invalid token interval");
@@ -185,7 +186,7 @@ std::size_t linear_workspace_capacity_bytes(QType qtype, std::int32_t output_row
                                                              min_tokens, max_tokens);
     case QType::FP8_E4M3FN_ROW_BF16:
         return detail::fp8_linear_workspace_capacity_bytes(output_rows, input_rows, policy,
-                                                           min_tokens, max_tokens);
+                                                           min_tokens, max_tokens, tag);
     case QType::EXL3: {
         if (output_rows % 128 != 0 || input_rows % 128 != 0) {
             throw std::invalid_argument("linear workspace: EXL3 dense requires 128-multiples");

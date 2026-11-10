@@ -29,7 +29,8 @@ std::size_t attention_projection_workspace_bytes(const AttentionProfile& paramet
         std::size_t peak = 0;
         for (const auto& role : *parameters.role_profiles) {
             peak = std::max(peak, ops::linear_workspace_capacity_bytes(
-                                      role.qtype, role.n, role.k, role.policy, first, last));
+                                      role.qtype, role.n, role.k, role.policy, first, last,
+                                      "attention_role"));
         }
         return peak;
     }

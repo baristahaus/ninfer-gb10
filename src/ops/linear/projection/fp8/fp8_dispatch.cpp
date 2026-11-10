@@ -51,11 +51,21 @@ const Fp8LinearShape& resolve_shape(const Weight& weight, LinearPolicy policy) {
 } // namespace
 
 std::size_t fp8_linear_workspace_capacity_bytes(std::int32_t n, std::int32_t k, LinearPolicy policy,
-                                                std::int32_t min_tokens, std::int32_t max_tokens) {
-    const Weight weight{.n = n, .k = k};
+                                                std::int32_t min_tokens, std::int32_t max_tokens,
+                                                std::string_view tag) {
     if (min_tokens <= 0 || max_tokens < min_tokens)
         throw std::invalid_argument("fp8 linear workspace: invalid token interval");
-    const auto& shape = resolve_shape(weight, policy);
+    // The capacity query has no Weight — it runs during planning, before materialization — so the
+    // descriptor is empty by construction and the only thing that can name the request is the
+    // caller's tag. It is printed with the shape on the refusal.
+    const Weight weight{.n = n, .k = k};
+    const auto& shape = [&]() -> const Fp8LinearShape& {
+        for (const auto* candidate : kShapes)
+            if (candidate->n == n && candidate->k == k) return *candidate;
+        throw std::invalid_argument("fp8 linear workspace: unsupported shape N" + std::to_string(n) +
+                                    "K" + std::to_string(k) + " for " +
+                                    (tag.empty() ? std::string("<untagged>") : std::string(tag)));
+    }();
     return allows_a8(policy) && shape.uses_a8(min_tokens, max_tokens)
                ? fp8_a8_workspace_capacity_bytes(
                      max_tokens, k,

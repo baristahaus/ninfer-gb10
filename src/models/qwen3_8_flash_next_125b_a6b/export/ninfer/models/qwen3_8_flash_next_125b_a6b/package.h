@@ -121,6 +121,11 @@ struct Package {
     [[nodiscard]] static ModelSamplingDefaults sampling_defaults(std::string_view model);
     [[nodiscard]] static LoadPlan plan_load(artifact::Binder&, const EngineOptions&,
                                             WeightsProfile);
+    // The binder transform that binds `rank` of `width` ranks. The placement policy is the model's
+    // (impl/shard_rules.h); a caller that loads a device group installs this and binds once per
+    // rank, so no layer above the model names a shard axis. Width 1 returns an empty transform,
+    // which is the single-device lane's contract.
+    [[nodiscard]] static artifact::Binder::ShardTransform shard_transform(int width, int rank);
     [[nodiscard]] static std::unique_ptr<LoadedModel>
     construct_loaded_model(LoadPlan&&, artifact::MaterializedArtifact&&);
     [[nodiscard]] static Frontend make_frontend(const LoadedModel&, const EngineOptions&);

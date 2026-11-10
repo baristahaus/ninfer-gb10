@@ -33,6 +33,7 @@ add_library(ninfer_core SHARED
   cyclic_kv_cache_pool.cpp
   linear_attention_state_pool.cpp
   device_kv_page_pool.cpp
+  tp2/kv_mirror.cpp
   host_kv_arena.cpp
   spill_kv_store.cpp
   disk_kv_cache.cpp

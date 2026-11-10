@@ -253,6 +253,9 @@ struct EngineOptions {
     std::size_t grammar_cache_bytes    = 256ULL * 1024 * 1024;
     EnginePurpose purpose              = EnginePurpose::Generation;
     int device                         = 0;
+    // The device group this engine drives, rank 0 first. Empty means the single `device`.
+    // A width above 1 is the tensor-parallel lane; the group is validated at startup.
+    std::vector<int> devices;
     // When true, per-token log-probabilities of sampled tokens are reported. A request asking
     // for probabilities against an engine loaded without this capability is rejected rather than
     // answered with placeholders.

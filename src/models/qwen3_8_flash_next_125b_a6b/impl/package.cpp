@@ -3,6 +3,7 @@
 #include "artifact/reader.h"
 #include "models/qwen3_8_flash_next_125b_a6b/impl/load_plan.h"
 #include "models/qwen3_8_flash_next_125b_a6b/impl/model.h"
+#include "models/qwen3_8_flash_next_125b_a6b/impl/shard_rules.h"
 #include "models/qwen3_8_flash_next_125b_a6b/impl/variant.h"
 
 #include <stdexcept>
@@ -131,6 +132,10 @@ Package::LoadPlan Package::plan_load(artifact::Binder& binder, const EngineOptio
     }
     return LoadPlan(std::make_unique<LoadPlan::Impl>(
         profile, plan_artifact(binder, qwen3_8_flash_next::startup_features(options))));
+}
+
+artifact::Binder::ShardTransform Package::shard_transform(int width, int rank) {
+    return flash_next_125b_a6b::shard_transform(width, rank);
 }
 
 std::unique_ptr<Package::LoadedModel>

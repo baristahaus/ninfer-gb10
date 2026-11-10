@@ -2,6 +2,7 @@
 
 #include <limits>
 #include <stdexcept>
+#include <string>
 #include <utility>
 
 namespace ninfer::models::qwen3_8_flash_next {
@@ -75,6 +76,30 @@ DecoderStateLayout plan_decoder_state(LayoutBuilder& builder, const DecoderState
                                    spec.mtp_physical_page_groups, spec.auxiliary_planes);
     }
     return layout;
+}
+
+DecoderStateSpec shard_decoder_state_spec(const DecoderStateSpec& spec, int width, int rank) {
+    if (width < 1) { throw std::invalid_argument("decoder shard width must be positive"); }
+    // Width 1 is the single-device lane: the spec is returned unchanged, so that lane is untouched
+    // by construction and no caller needs to special-case it.
+    if (width == 1) { return spec; }
+    if (rank < 0 || rank >= width) {
+        throw std::invalid_argument("decoder shard rank " + std::to_string(rank) +
+                                    " outside width " + std::to_string(width));
+    }
+    if (spec.kv_heads <= 0) {
+        throw std::invalid_argument("decoder shard requires a positive KV head count");
+    }
+    if (spec.kv_heads % width != 0) {
+        throw std::invalid_argument("decoder shard needs " + std::to_string(spec.kv_heads) +
+                                    " KV heads to divide by width " + std::to_string(width));
+    }
+    // The one sharded field. Everything else — capacity, page groups, table rows, storage, layer
+    // counts and the auxiliary (QSA index) planes — stays whole on every rank; see the header for
+    // why each of them does.
+    DecoderStateSpec sharded = spec;
+    sharded.kv_heads         = spec.kv_heads / width;
+    return sharded;
 }
 
 PagedKVCache::PagedKVCache(MemorySpan backing, const PagedKVCacheLayout& layout)

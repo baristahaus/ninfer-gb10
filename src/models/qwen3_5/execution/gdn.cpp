@@ -70,7 +70,10 @@ void gdn_projection(const Tensor& hidden, const GdnParameters& parameters, Tenso
 
 workspace::GdnExtents gdn_extents(const GdnParameters& parameters) {
     workspace::GdnExtents out;
-    out.value_heads = ops::projection_profile(parameters.control).first.n;
+    const auto control_profile = ops::projection_profile(parameters.control);
+    out.value_heads            = control_profile.first.n;
+    // The control projection's input rows are the residual width, which every rank holds whole.
+    out.hidden_size            = control_profile.first.k;
     std::int32_t qkv_rows = 0;
     if (parameters.role_rows) {
         qkv_rows          = ops::projection_profile(parameters.role_rows->at(0)).first.n;
@@ -81,7 +84,8 @@ workspace::GdnExtents gdn_extents(const GdnParameters& parameters) {
         out.value_width    = parameters.projection_rows[1];
     }
     out.key_width = (qkv_rows - out.value_width) / 2;
-    if (out.value_heads <= 0 || out.key_width <= 0 || out.value_width <= 0) {
+    if (out.value_heads <= 0 || out.key_width <= 0 || out.value_width <= 0 ||
+        out.hidden_size <= 0) {
         throw std::invalid_argument("gdn extents are not positive");
     }
     return out;

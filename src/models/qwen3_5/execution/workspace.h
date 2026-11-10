@@ -87,6 +87,10 @@ struct GdnExtents {
     std::int32_t value_heads = 0;
     std::int32_t key_width   = 0;
     std::int32_t value_width = 0;
+    // The residual width is NOT sharded: every rank holds the whole hidden vector, so this is the
+    // model's hidden size at every width. Sizing the control workspace's `hidden` from the value
+    // width instead made it 3072 at width 2 where the control op expects 5120.
+    std::int32_t hidden_size = 0;
 };
 
 struct GdnControlRoots {
@@ -98,7 +102,7 @@ struct GdnControlRoots {
 template <class Allocator>
 GdnControlRoots gdn_control(Allocator& allocator, GdnExtents extents, std::int32_t tokens) {
     return {
-        matrix(allocator, DType::BF16, dimension(extents.value_width), tokens),
+        matrix(allocator, DType::BF16, dimension(extents.hidden_size), tokens),
         matrix(allocator, DType::FP32, dimension(extents.value_heads), tokens),
         matrix(allocator, DType::FP32, dimension(extents.value_heads), tokens),
     };

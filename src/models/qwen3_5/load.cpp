@@ -4,6 +4,9 @@
 
 #include "models/common/bindings.h"
 
+#include <cstdio>
+#include <cstdlib>
+
 namespace ninfer::models::qwen3_5 {
 
 ResolvedLoadPlan::ResolvedLoadPlan(const artifact::Reader& reader,
@@ -33,7 +36,8 @@ std::vector<artifact::MatrixSlice> matrix_slices(const artifact::Reader& reader,
     std::uint64_t destination_row    = 0;
     std::uint64_t destination_column = 0;
     bool saw_column_slice            = false;
-    for (const auto& part : reference.binding.parts) {
+    for (std::size_t next = 0; next < reference.binding.parts.size(); ++next) {
+        const auto& part   = reference.binding.parts[next];
         const auto extent = part.end - part.begin;
         if (extent == 0) { continue; }
         const auto parent = reader.geometry(part.object).shape;
@@ -62,14 +66,32 @@ std::vector<artifact::MatrixSlice> matrix_slices(const artifact::Reader& reader,
             slices.push_back({part.object, row, column, rows, columns, destination_row, 0});
             destination_row += rows;
         } else {
-            // A column slice of one row. The destination row is the source row, because a column
-            // shard does not move rows; the destination COLUMN accumulates across the segments.
-            // Parts are segment-major (segment 0's rows, then segment 1's), so the offset carries
-            // over from one segment to the next and is advanced after the segment's last row --
-            // resetting it at each segment's first row would discard the previous segment's share.
+            // A column shard: the parts are one row-length range per row, grouped by segment
+            // (segment 0's rows, then segment 1's). Emit ONE slice per segment covering every row,
+            // not one slice per row: a quantized format's scale block spans rows, so a per-row
+            // slice splits it and the slicer refuses it outright. The destination column is the
+            // segment's own offset within the rank's columns.
+            const std::uint64_t segment_columns = extent;
+            std::uint64_t rows                  = 1;
+            // Start at the part AFTER this one: the outer loop has already counted this part, so
+            // starting at `next` would count it twice and emit one row too many.
+            // `next` advances only to a part actually consumed: setting it before the break test
+            // skipped the first part of the next segment, which is how the groups came out three
+            // rows instead of four.
+            std::size_t last_consumed = next;
+            for (std::size_t j = next + 1; j < reference.binding.parts.size(); ++j) {
+                const auto& following = reference.binding.parts[j];
+                if (following.end <= following.begin) { break; }
+                if (following.begin % columns != column) { break; }
+                if (following.end - following.begin != extent) { break; }
+                ++rows;
+                last_consumed = j;
+            }
+            next = last_consumed;
+            slices.push_back({part.object, 0, column, rows, segment_columns, 0,
+                              destination_column});
+            destination_column += segment_columns;
             saw_column_slice = true;
-            slices.push_back({part.object, row, column, 1, extent, row, destination_column});
-            if (row + 1 == n) { destination_column += extent; }
             destination_row = n;
         }
     }
@@ -119,9 +141,26 @@ ResolvedLoadPlan resolve_load(const artifact::Reader& reader,
             }
             continue;
         }
-        requests.push_back({artifact::slice_tensor(reader, reference.shape,
-                                                   matrix_slices(reader, reference)),
-                            devices[i], access});
+        const auto slices = matrix_slices(reader, reference);
+        if (std::getenv("NINFER_DEBUG_SLICES") != nullptr) {
+            std::fprintf(stderr, "[slices] %s rank_shape=%llu,%llu n=%zu\n", reference.name.c_str(),
+                         (unsigned long long)(reference.shape.size() > 0 ? reference.shape[0] : 0),
+                         (unsigned long long)(reference.shape.size() > 1 ? reference.shape[1] : 0),
+                         slices.size());
+            for (const auto& sl : slices) {
+                std::fprintf(stderr, "  obj=%d row=%llu col=%llu rows=%llu cols=%llu drow=%llu dcol=%llu\n",
+                             sl.object.index, (unsigned long long)sl.row, (unsigned long long)sl.column,
+                             (unsigned long long)sl.rows, (unsigned long long)sl.columns,
+                             (unsigned long long)sl.destination_row, (unsigned long long)sl.destination_column);
+            }
+        }
+        try {
+            requests.push_back({artifact::slice_tensor(reader, reference.shape, slices), devices[i],
+                                access});
+        } catch (const std::exception& error) {
+            // The slicer has no parameter name, so a rejection there is anonymous. Name it here.
+            throw artifact::ArtifactError(reference.name + ": " + error.what());
+        }
     }
     auto storage = artifact::plan_materialization(reader, requests);
     return {reader, std::move(definition), std::move(storage), std::move(devices),

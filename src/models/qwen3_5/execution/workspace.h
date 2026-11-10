@@ -79,12 +79,33 @@ TextAttentionResultRoots text_attention_results(Allocator& allocator, const Text
     };
 }
 
+// The GDN extents this rank actually holds. At width 1 they equal the config's; at width 2 they are
+// the rank's shards. They come from the prepared weights -- the same quantities the ops validate
+// against -- rather than from the model description, because a quantity taken from the description
+// describes the whole model, not this rank.
+struct GdnExtents {
+    std::int32_t value_heads = 0;
+    std::int32_t key_width   = 0;
+    std::int32_t value_width = 0;
+};
+
 struct GdnControlRoots {
     Tensor hidden;
     Tensor g;
     Tensor beta;
 };
 
+template <class Allocator>
+GdnControlRoots gdn_control(Allocator& allocator, GdnExtents extents, std::int32_t tokens) {
+    return {
+        matrix(allocator, DType::BF16, dimension(extents.value_width), tokens),
+        matrix(allocator, DType::FP32, dimension(extents.value_heads), tokens),
+        matrix(allocator, DType::FP32, dimension(extents.value_heads), tokens),
+    };
+}
+
+// The config-wide form: planning sizes the workspace for the largest shape any rank can hold, so it
+// uses the model's own extents. Correctness never uses this one.
 template <class Allocator>
 GdnControlRoots gdn_control(Allocator& allocator, const TextConfig& config, std::int32_t tokens) {
     return {
@@ -100,6 +121,16 @@ struct GdnProjectionRoots {
     Tensor key;
     Tensor value;
 };
+
+template <class Allocator>
+GdnProjectionRoots gdn_projection(Allocator& allocator, GdnExtents extents, std::int32_t tokens) {
+    return {
+        matrix(allocator, DType::BF16, dimension(extents.value_width), tokens),
+        matrix(allocator, DType::BF16, dimension(extents.key_width), tokens),
+        matrix(allocator, DType::BF16, dimension(extents.key_width), tokens),
+        matrix(allocator, DType::BF16, dimension(extents.value_width), tokens),
+    };
+}
 
 template <class Allocator>
 GdnProjectionRoots gdn_projection(Allocator& allocator, const TextConfig& config,

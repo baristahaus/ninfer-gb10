@@ -209,13 +209,16 @@ void TextRun::gdn(const BlockParameters& block, std::uint32_t compact_layer) {
     const auto* sequence = std::get_if<SequenceUpdate>(&update_);
     const auto* replay   = std::get_if<ReplayRecords>(&update_);
 
-    const auto control = workspace::gdn_control(work, cfg, tokens);
+    // The rank's own extents, not the config's: at width 2 the ops validate against the rank's
+    // sharded heads and widths, so a workspace sized from the model description is rejected.
+    const auto extents = gdn_extents(p);
+    const auto control = workspace::gdn_control(work, extents, tokens);
     Tensor h           = control.hidden;
     Tensor g           = control.g;
     Tensor beta        = control.beta;
     gdn_norm_control(residual_, block.input_norm, cfg.rms_norm_eps, p, h, g, beta, work, cuda);
 
-    const auto projection = workspace::gdn_projection(work, cfg, tokens);
+    const auto projection = workspace::gdn_projection(work, extents, tokens);
     Tensor z              = projection.output_gate.view({dv, vh, tokens});
     Tensor qc             = projection.query;
     Tensor kc             = projection.key;

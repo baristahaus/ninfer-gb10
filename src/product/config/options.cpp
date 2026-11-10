@@ -376,6 +376,15 @@ ParsedOptions parse(int argc, char** argv, EntryPoint entry,
         case Field::Device:
             engine.device = static_cast<int>(u64());
             break;
+        case Field::Devices: {
+            // The group, rank 0 first. Empty leaves the single-device lane on `engine.device`.
+            const auto ordinals = std::get<std::vector<std::uint32_t>>(value);
+            engine.devices.clear();
+            for (const auto ordinal : ordinals) {
+                engine.devices.push_back(static_cast<int>(ordinal));
+            }
+            break;
+        }
         case Field::MaxContext:
             engine.max_context = u32();
             break;

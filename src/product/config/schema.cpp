@@ -15,6 +15,9 @@ constexpr FieldSpec kFields[] = {
      "Chat template override; empty uses the artifact."},
     {Field::Vision, "model.vision", "--vision", "--no-vision", "", "Load Vision resources."},
     {Field::Device, "engine.device", "--device", "", "N", "Local CUDA device ordinal."},
+    {Field::Devices, "engine.devices", "--devices", "", "N,N",
+     "Device group, rank 0 first (e.g. 0,1). Overrides --device; empty is the single-device lane.",
+     Scope::Serve},
     {Field::MaxContext, "engine.max_context", "--max-context", "", "N",
      "Per-request context limit (8192)."},
     {Field::KvDtype, "engine.kv_dtype", "--kv-dtype", "", "bf16|int8|fp8|nvfp4|k8v4",
@@ -362,6 +365,32 @@ FieldValue parse_field_value(Field field, const RawValue& value, bool command_li
         invalid("expected a boolean");
     case Field::Device:
         return integer(value, command_line, 0, std::numeric_limits<int>::max());
+    case Field::Devices: {
+        // A comma-separated list of ordinals on the command line; an array in TOML.
+        std::vector<std::uint32_t> result;
+        if (!command_line) {
+            const auto* values = std::get_if<std::vector<std::int64_t>>(&value);
+            if (!values) invalid("expected an array of device ordinals");
+            for (const auto ordinal : *values) {
+                if (ordinal < 0 || ordinal > std::numeric_limits<int>::max())
+                    invalid("device ordinal is out of range");
+                result.push_back(static_cast<std::uint32_t>(ordinal));
+            }
+            return result;
+        }
+        const std::string raw = text(value, true);
+        std::size_t begin     = 0;
+        while (begin <= raw.size()) {
+            const std::size_t comma = raw.find(',', begin);
+            const std::string piece =
+                raw.substr(begin, comma == std::string::npos ? std::string::npos : comma - begin);
+            result.push_back(static_cast<std::uint32_t>(
+                integer(RawValue{piece}, true, 0, static_cast<std::uint64_t>(std::numeric_limits<int>::max()))));
+            if (comma == std::string::npos) { break; }
+            begin = comma + 1;
+        }
+        return result;
+    }
     case Field::MaxContext:
     case Field::MaxPendingRequests:
     case Field::PrefillMissMinTokens:

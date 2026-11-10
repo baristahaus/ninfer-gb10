@@ -12,6 +12,7 @@ enum class Field {
     ChatTemplate,
     Vision,
     Device,
+    Devices,
     MaxContext,
     KvDtype,
     KvCapacity,

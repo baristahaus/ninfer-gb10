@@ -166,10 +166,13 @@ Package::SequencePlanner Package::make_sequence_planner(DeviceContext& device,
 std::unique_ptr<Package::Program> Package::create_program(const LoadedModel& model,
                                                           SequencePlan&& plan,
                                                           DeviceContext& device,
-                                                          const StartupObserver& observer) {
+                                                          const StartupObserver& observer,
+                                                          DeviceContext* peer_device) {
     if (!model.impl_) { throw std::invalid_argument("Flash-Next loaded model is empty"); }
-    return qwen3_8_flash_next::create_program<detail::Variant>(
-        model.impl_->data.runtime, model.impl_->weights_profile, std::move(plan), device, observer);
+    return qwen3_8_flash_next::create_program<detail::Variant>(model.impl_->data.runtime,
+                                                               model.impl_->weights_profile,
+                                                               std::move(plan), device, observer,
+                                                               peer_device);
 }
 
 } // namespace ninfer::models::qwen3_8_flash_next_125b_a6b

@@ -121,8 +121,13 @@ PersistentLayout persistent_layout(const SequencePlanImpl& plan) {
                     "MTP Paged KV physical pages exceed int32"));
     LayoutBuilder builder;
     PersistentLayout out;
+    // The persistent geometry is per rank. Width 1 is the identity, so the single-device lane plans
+    // exactly the spec it planned before the group existed; at width 2 the KV heads halve and every
+    // page/state fact stays equal, which is what the rank-1 mirror needs.
     out.decoder = qwen3_8_flash_next::plan_decoder_state(
-        builder, qwen3_8_flash_next::DecoderStateSpec{
+        builder,
+        qwen3_8_flash_next::shard_decoder_state_spec(
+            qwen3_8_flash_next::DecoderStateSpec{
                      .full_attention_layers     = TextConfig::full_attention_layers(),
                      .mtp_layers                = TextConfig::mtp_layers,
                      .capacity                  = plan.capacity,
@@ -143,7 +148,8 @@ PersistentLayout persistent_layout(const SequencePlanImpl& plan) {
                              }
                              return std::vector<KVPlaneGeometry>{};
                          }(),
-                 });
+                 },
+            plan.width, plan.rank));
     qwen3_8_flash_next::StateImageSpec state_image_spec{
         .linear =
             {
@@ -181,7 +187,9 @@ PersistentLayout persistent_layout(const SequencePlanImpl& plan) {
             };
         }
     }
-    out.state_images = qwen3_8_flash_next::plan_state_image_device_pool(builder, state_image_spec);
+    out.state_images = qwen3_8_flash_next::plan_state_image_device_pool(
+        builder,
+        qwen3_8_flash_next::shard_state_image_spec(state_image_spec, plan.width, plan.rank));
     if (plan.speculative_backend != SpeculativeBackend::None) {
         const GdnReplayRecordSpec replay_spec{
             .layers          = TextConfig::gdn_layers(),
@@ -872,6 +880,8 @@ std::unique_ptr<SequencePlanImpl> build_sequence_candidate(const SequencePlannin
     impl->context_cache       = inputs.context_cache;
     impl->kv_storage          = inputs.kv_storage;
     impl->token_logprobs      = inputs.token_logprobs;
+    impl->width               = inputs.width;
+    impl->rank                = inputs.rank;
     impl->persistent          = persistent_layout(*impl);
     impl->workspace           = build_workspace_plan(*impl);
     if (impl->use_cuda_graph) {
@@ -950,6 +960,10 @@ make_sequence_planner_impl(DeviceContext& device, const EngineOptions& options,
         .device         = options.device,
         .context_cache  = options.context_cache,
         .token_logprobs = options.token_logprobs,
+        // The group the engine opened. Empty means the single `device` field, so the width is 1 and
+        // the layouts below are planned exactly as the lane planned them before groups existed.
+        .width = options.devices.empty() ? 1 : static_cast<int>(options.devices.size()),
+        .rank  = 0,
     };
     const std::uint32_t logical_pages = page_count(inputs.capacity);
     const std::uint32_t minimum_pages = std::max(logical_pages, inputs.max_concurrency);

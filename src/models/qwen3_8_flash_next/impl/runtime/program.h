@@ -23,6 +23,8 @@
 #include "models/qwen3_8_flash_next/impl/runtime/text_context.h"
 #include "models/qwen3_8_flash_next/impl/runtime/vision_context.h"
 #include "models/qwen3_8_flash_next/impl/runtime/vision_prefill.h"
+#include "core/tp2/kv_mirror.h"
+#include "models/qwen3_8_flash_next/impl/state/state_image_mirror.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -534,8 +536,12 @@ public:
         qwen3_8_flash_next::ContinuationSummary continuation_summary;
     };
 
+    // `peer_device` is rank 1's device on the two-GPU lane: when it is present and the plan's width
+    // is above 1, the Program also builds rank 1's persistent storage and attaches the mirrors that
+    // replay its own mutations into it. Null is the single-device lane, which builds neither.
     ProgramImplCore(const LoadedModelData& model, const SequencePlanImpl& plan,
-                    DeviceContext& device, const StartupObserver& startup_observer);
+                    DeviceContext& device, const StartupObserver& startup_observer,
+                    DeviceContext* peer_device = nullptr);
     ~ProgramImplCore() noexcept;
 
     [[nodiscard]] RequestBasePlan plan_request(const PreparedPromptData& prompt,
@@ -676,6 +682,22 @@ public:
     std::unique_ptr<HostKVExtentStore> host_kv_extents;
     std::size_t text_host_kv_page_stride    = 0;
     std::size_t backend_host_kv_page_stride = 0;
+    // tp 2: rank 1's persistent storage and the mirrors that replay rank 0's mutations into it.
+    // Rank 1 owns only what the mirrored pools need — the sharded persistent layouts — never a
+    // workspace, a graph family or a second Program. Absent on the single-device lane.
+    struct PeerRank {
+        MemoryArena persistent;
+        std::unique_ptr<qwen3_8_flash_next::DecoderState> decoder;
+        std::unique_ptr<qwen3_8_flash_next::StateImageDevicePool> state_images;
+        // Attached once, after both ranks' arenas exist and before the first mutation. B4 routes
+        // the Program's page, row and slot mutations through these.
+        std::unique_ptr<tp2::MirroredKVPagePool> text_kv;
+        std::unique_ptr<tp2::MirroredKVExecutionTables> text_kv_tables;
+        std::unique_ptr<qwen3_8_flash_next::MirroredStateImageDevicePool> state_image;
+        std::unique_ptr<tp2::MirroredKVPagePool> backend_kv;
+        std::unique_ptr<tp2::MirroredKVExecutionTables> backend_kv_tables;
+    };
+    std::unique_ptr<PeerRank> peer;
     std::unique_ptr<qwen3_8_flash_next::StateImageDevicePool> state_images;
     std::unique_ptr<qwen3_8_flash_next::HostStatePool> host_state_images;
     std::unique_ptr<StateImageStore> state_store;

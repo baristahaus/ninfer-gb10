@@ -132,7 +132,10 @@ struct Package {
     [[nodiscard]] static SequencePlanner make_sequence_planner(DeviceContext&, const EngineOptions&,
                                                                WeightsProfile);
     [[nodiscard]] static std::unique_ptr<Program>
-    create_program(const LoadedModel&, SequencePlan&&, DeviceContext&, const StartupObserver&);
+    // `peer_device` is rank 1's device on the two-GPU lane: the Program then builds rank 1's
+    // persistent storage and attaches the KV and StateImage mirrors. Null is the single-device lane.
+    create_program(const LoadedModel&, SequencePlan&&, DeviceContext&, const StartupObserver&,
+                   DeviceContext* peer_device = nullptr);
 };
 
 } // namespace models::qwen3_8_flash_next_125b_a6b

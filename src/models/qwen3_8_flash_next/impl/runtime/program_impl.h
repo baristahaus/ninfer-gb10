@@ -791,10 +791,35 @@ void instantiate_graph_family(DecodeGraphFamily& family, const char* label, Devi
     }
 }
 
+// Rank 1's persistent storage and the three mirrors that replay into it. Built from a copy of rank
+// 0's plan with `rank` set to 1, so the sharded specs give rank 1's own geometry; the arena is
+// allocated with rank 1's device current, and the mirrors validate the pair before anything is
+// mutated.
+std::unique_ptr<ProgramImplCore::PeerRank>
+make_peer_rank(const SequencePlanImpl& plan, DeviceContext& peer_device) {
+    if (plan.width < 2) { throw std::logic_error("a peer rank needs a group width above 1"); }
+    SequencePlanImpl peer_plan = plan;
+    peer_plan.rank             = 1;
+    PersistentLayout layout    = persistent_layout(peer_plan);
+    // The arena must be allocated with rank 1's device current, and it records that device so the
+    // release goes back to it.
+    const CudaDeviceScope scope(peer_device.device());
+    auto peer = std::make_unique<ProgramImplCore::PeerRank>(MemoryArena{layout.bytes});
+    if (peer->persistent.device() != peer_device.device()) {
+        throw std::logic_error("rank 1's arena did not land on rank 1's device");
+    }
+    const MemorySpan backing = peer->persistent.storage();
+    peer->decoder = std::make_unique<qwen3_8_flash_next::DecoderState>(backing, layout.decoder);
+    peer->state_images =
+        std::make_unique<qwen3_8_flash_next::StateImageDevicePool>(backing, layout.state_images);
+    return peer;
+}
+
 } // namespace
 
 ProgramImplCore::ProgramImplCore(const LoadedModelData& model_in, const SequencePlanImpl& plan,
-                                 DeviceContext& device_in, const StartupObserver& startup_observer)
+                                 DeviceContext& device_in, const StartupObserver& startup_observer,
+                                 DeviceContext* peer_device)
     : model(model_in), device(device_in), capacity(plan.capacity), kv_capacity(plan.kv_capacity),
       max_concurrency(plan.max_concurrency), context_cache(plan.context_cache),
       continuation_capacity(normalized_private_capacity(plan.context_cache)),
@@ -931,6 +956,36 @@ ProgramImplCore::ProgramImplCore(const LoadedModelData& model_in, const Sequence
         dropped.reserve(pressure_checkpoint_capacity);
     }
     pressure_state_scratch_.reserve(static_cast<std::size_t>(logical_state_capacity));
+
+    // tp 2: rank 1's storage and the mirrors that replay into it, attached here — after both ranks'
+    // arenas exist and before any page or slot is mutated, which is the only window in which the
+    // two replicas provably start from the same empty addressing. The Program's own mutations are
+    // routed through these wrappers by the routing item; constructing them here is what makes that
+    // routing possible.
+    if (peer_device != nullptr && plan.width > 1) {
+        peer = make_peer_rank(plan, *peer_device);
+        const tp2::MirrorTarget where{.device          = peer_device,
+                                      .stream          = peer_device->stream(),
+                                      .transfer_stream = peer_device->transfer_stream()};
+        peer->text_kv = std::make_unique<tp2::MirroredKVPagePool>(
+            decoder->text_kv.page_pool(), peer->decoder->text_kv.page_pool(), where);
+        peer->text_kv_tables = std::make_unique<tp2::MirroredKVExecutionTables>(
+            *peer->text_kv, decoder->text_kv.execution_tables(),
+            peer->decoder->text_kv.execution_tables());
+        peer->state_image = std::make_unique<qwen3_8_flash_next::MirroredStateImageDevicePool>(
+            *state_images, *peer->state_images, where);
+        // MTP's KV is the second PagedKVCache inside the decoder state, so it has a peer too. The
+        // masked-draft backends keep theirs in `dflash->full`, which the peer arena does not build
+        // yet: their mirror is a separate item and is deliberately not attached here.
+        if (speculative_backend == SpeculativeBackend::Mtp) {
+            qwen3_8_flash_next::PagedKVCache& backend = *decoder->mtp_cache();
+            qwen3_8_flash_next::PagedKVCache& peer_backend = *peer->decoder->mtp_cache();
+            peer->backend_kv = std::make_unique<tp2::MirroredKVPagePool>(
+                backend.page_pool(), peer_backend.page_pool(), where);
+            peer->backend_kv_tables = std::make_unique<tp2::MirroredKVExecutionTables>(
+                *peer->backend_kv, backend.execution_tables(), peer_backend.execution_tables());
+        }
+    }
     if (plan.persistent.replay_records) {
         replay_records.emplace(backing, *plan.persistent.replay_records);
         replay_fold.emplace(*replay_records, state_images->linear().all_layers_view());

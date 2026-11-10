@@ -17,4 +17,7 @@ extern const Nvfp4LinearShape kNvfp4N16384K5120;
 extern const Nvfp4LinearShape kNvfp4N34816K5120;
 extern const Nvfp4LinearShape kNvfp4N5120K6144;
 extern const Nvfp4LinearShape kNvfp4N5120K17408;
+// The sharded 27B lane's MLP shapes: the fused gate_up half and one gate/up role.
+extern const Nvfp4LinearShape kNvfp4N17408K5120;
+extern const Nvfp4LinearShape kNvfp4N8704K5120;
 } // namespace ninfer::ops::detail

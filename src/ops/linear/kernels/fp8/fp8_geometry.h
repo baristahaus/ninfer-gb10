@@ -30,6 +30,11 @@ using Fp8N5120K17408             = Fp8Geometry<5120, 17408>;
 using Fp8N7168K5120              = Fp8Geometry<7168, 5120>;
 using Fp8N8192K5120              = Fp8Geometry<8192, 5120>;
 using Fp8N124160K5120            = Fp8Geometry<124160, 5120>;
+// The role-split shapes of the sharded 27B lane: one role of a fused qkv/qkvz object.
+using Fp8N5120K5120              = Fp8Geometry<5120, 5120>;
+using Fp8N3072K5120              = Fp8Geometry<3072, 5120>;
+using Fp8N512K5120               = Fp8Geometry<512, 5120>;
+using Fp8N8704K5120              = Fp8Geometry<8704, 5120>;
 using Fp8Activation5120Geometry  = Fp8ActivationGeometry<5120>;
 using Fp8Activation6144Geometry  = Fp8ActivationGeometry<6144>;
 using Fp8Activation17408Geometry = Fp8ActivationGeometry<17408>;
@@ -44,6 +49,10 @@ enum class Fp8GeometryId : std::uint8_t {
     N7168K5120,
     N8192K5120,
     N124160K5120,
+    N5120K5120,
+    N3072K5120,
+    N512K5120,
+    N8704K5120,
 };
 
 inline Fp8GeometryId resolve_fp8_geometry(std::int32_t output_rows, std::int32_t input_rows) {
@@ -73,6 +82,18 @@ inline Fp8GeometryId resolve_fp8_geometry(std::int32_t output_rows, std::int32_t
     }
     if (output_rows == Fp8N124160K5120::kOutputRows && input_rows == Fp8N124160K5120::kInputRows) {
         return Fp8GeometryId::N124160K5120;
+    }
+    if (output_rows == Fp8N5120K5120::kOutputRows && input_rows == Fp8N5120K5120::kInputRows) {
+        return Fp8GeometryId::N5120K5120;
+    }
+    if (output_rows == Fp8N3072K5120::kOutputRows && input_rows == Fp8N3072K5120::kInputRows) {
+        return Fp8GeometryId::N3072K5120;
+    }
+    if (output_rows == Fp8N512K5120::kOutputRows && input_rows == Fp8N512K5120::kInputRows) {
+        return Fp8GeometryId::N512K5120;
+    }
+    if (output_rows == Fp8N8704K5120::kOutputRows && input_rows == Fp8N8704K5120::kInputRows) {
+        return Fp8GeometryId::N8704K5120;
     }
     throw std::invalid_argument("unsupported FP8 problem N" + std::to_string(output_rows) + "K" +
                                 std::to_string(input_rows));

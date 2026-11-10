@@ -34,10 +34,9 @@
 //   therefore three consecutive segments Q 2048 | K 2048 | V 6144, and a contiguous half would
 //   give rank 0 all of Q and K plus a quarter of V and rank 1 the rest of V with no Q or K. It is
 //   stated as three segments that shard independently, exactly like the Flash-Next QKV projection.
-//   Note that the Flash-Next table states its equivalent `linear_attn.conv1d.weight` row as ONE
-//   contiguous Columns block of 10240; on that model the row is wrong for the same reason, because
-//   its own `in_proj_qkv` row segments the same channel space into 2048 | 2048 | 6144. This table
-//   does not repeat the mistake.
+//   The Flash-Next table segments its own equivalent `linear_attn.conv1d.weight` row the same way
+//   (2048 | 2048 | 6144) and its test asserts the segmentation, so both tables state the channel
+//   order rather than a contiguous block.
 //
 //   `text/token_embedding` is replicated and `text/output_head` shards by rows. Every rank must
 //   gather any token id, so the embedding cannot be vocabulary-split; the head's rows are pure

@@ -49,10 +49,6 @@ std::vector<artifact::MatrixSlice> matrix_slices(const artifact::Reader& reader,
             // rows than the parent has.
             slices.push_back({part.object, 0, part.begin, 1, extent, 0, destination_column});
             destination_column += extent;
-            // The rank's own extent is the coverage this form needs; `n` already equals it for a
-            // 1-D parameter, and its destination column is an accumulated offset rather than a
-            // column of a matrix, so it is not the check the matrix path makes.
-            destination_row = n;
             continue;
         }
         if (parent.size() != 2) {
@@ -92,14 +88,20 @@ std::vector<artifact::MatrixSlice> matrix_slices(const artifact::Reader& reader,
                               destination_column});
             destination_column += segment_columns;
             saw_column_slice = true;
-            destination_row = n;
         }
     }
-    // A row-block shard never touches destination columns, so the column check applies only when
-    // the shard actually sliced columns; applying it unconditionally would refuse every row shard.
+    // The two shard forms cover different destination axes, so each gets the check that can
+    // actually fail: a column shard assigns no destination rows and must cover the rank's columns,
+    // a row shard assigns no destination columns and must cover the rank's rows. Checking one
+    // expression for both made the row test unreachable on the column path.
     const auto columns_of_rank = reference.shape.size() > 1 ? reference.shape[1] : 1;
-    if (destination_row != n || (saw_column_slice && destination_column != columns_of_rank)) {
-        throw artifact::ArtifactError(reference.name + ": shard slices do not cover its own rows");
+    if (saw_column_slice) {
+        if (destination_row != 0 || destination_column != columns_of_rank) {
+            throw artifact::ArtifactError(reference.name +
+                                          ": shard slices do not cover the rank's columns");
+        }
+    } else if (destination_row != n) {
+        throw artifact::ArtifactError(reference.name + ": shard slices do not cover the rank's rows");
     }
     return slices;
 }

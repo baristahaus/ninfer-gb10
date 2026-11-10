@@ -199,6 +199,27 @@ int exercise_mtp_and_prefix(ninfer::Engine& engine,
         return 1;
     }
 
+    // The two-token comparison above catches a divergence at the first decode round only. A longer
+    // comparison is the assertion that actually matters for prefix reuse: the reused round must
+    // produce the same token stream as the cold round for the same prompt, token for token, over
+    // enough rounds that a state restored slightly wrong drifts visibly. The hit count is not
+    // asserted here — earlier runs in this test have captured further checkpoints, so the reused
+    // length is allowed to grow — but the reused run must reuse something, or the comparison would
+    // silently degrade into cold-versus-cold.
+    const ninfer::GenerationResult reused_long =
+        engine.generate(engine.prepare_tokens(continuation), greedy_options(16, true));
+    const ninfer::GenerationResult cold_long =
+        engine.generate(engine.prepare_tokens(continuation), greedy_options(16, false));
+    if (reused_long.reused_prompt_tokens == 0 || cold_long.reused_prompt_tokens != 0 ||
+        reused_long.generated_token_ids != cold_long.generated_token_ids) {
+        std::cerr << "Flash-Next long prefix reuse diverges: reused="
+                  << reused_long.reused_prompt_tokens << " cold=" << cold_long.reused_prompt_tokens
+                  << '\n';
+        print_tokens("reused", reused_long.generated_token_ids);
+        print_tokens("cold", cold_long.generated_token_ids);
+        return 1;
+    }
+
     if (first.generated_token_ids[0] == first.generated_token_ids[1]) {
         std::cerr << "Flash-Next partial-terminal fixture repeats its first token\n";
         return 1;

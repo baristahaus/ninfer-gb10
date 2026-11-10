@@ -229,6 +229,25 @@ bool MirroredKVExecutionTables::release(KVExecutionRowLease lease) noexcept {
     return true;
 }
 
+void MirroredKVExecutionTables::acquire_mirror(std::int32_t row) {
+    if (row < 0 || static_cast<std::size_t>(row) >= rows_.size()) {
+        throw std::out_of_range("Paged KV mirror execution row is out of range");
+    }
+    auto& slot = rows_[static_cast<std::size_t>(row)];
+    if (slot.has_value()) {
+        throw std::logic_error("Paged KV mirror execution row is already bound");
+    }
+    slot.emplace(mirror_.acquire(row));
+}
+
+void MirroredKVExecutionTables::release_mirror(std::int32_t row) noexcept {
+    if (row < 0 || static_cast<std::size_t>(row) >= rows_.size()) { return; }
+    auto& slot = rows_[static_cast<std::size_t>(row)];
+    if (!slot.has_value()) { return; }
+    (void)slot->release();
+    slot.reset();
+}
+
 std::uint32_t MirroredKVExecutionTables::logical_page_capacity() const noexcept {
     return origin_.logical_page_capacity();
 }

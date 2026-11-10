@@ -1,6 +1,7 @@
 #pragma once
 
 #include "models/common/context/directory/pages.h"
+#include "core/tp2/kv_mirror.h"
 
 #include <array>
 #include <map>
@@ -268,6 +269,13 @@ private:
     [[nodiscard]] HistoryId allocate();
     [[nodiscard]] RowLease acquire_row(std::int32_t index);
     void release_row(TableRow row) noexcept;
+
+    // tp 2: replay every row acquire and release on rank 1 through the KV mirror. The directory
+    // keeps rank 0's row in its own bookkeeping, so it takes rank 1's lease alone
+    // (`acquire_mirror`/`release_mirror`) rather than the wrapper's paired acquire. Unattached is
+    // the default, so a family with no peer -- and width 1 -- is unchanged.
+    void attach_mirror(tp2::MirroredKVExecutionTables& mirror);
+    [[nodiscard]] bool mirrored() const noexcept { return mirror_ != nullptr; }
     [[nodiscard]] HistoryOwner fork_history(const HistoryPrefix& source, std::uint32_t frontier);
     [[nodiscard]] std::uint64_t writer(HistoryId history) const noexcept;
     void add_prefix(HistoryId history, std::uint32_t frontier);
@@ -293,6 +301,8 @@ private:
     std::uint64_t directory_capacity_ = kChunkPages;
     std::vector<std::uint32_t> row_generations_;
     std::vector<bool> row_active_;
+    // tp 2: rank 1's row replica, when this directory's rank 0 has a peer.
+    tp2::MirroredKVExecutionTables* mirror_ = nullptr;
     std::vector<History> histories_;
     std::vector<std::uint32_t> free_;
     std::uint32_t free_count_;

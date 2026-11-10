@@ -215,6 +215,10 @@ RowLease HistoryDirectory::acquire_row(std::int32_t index) {
     if (index < 0 || static_cast<std::size_t>(index) >= row_active_.size())
         throw std::out_of_range("KV execution row is outside directory capacity");
     if (row_active_[index]) throw std::logic_error("KV execution row is already occupied");
+    // Mirror first, after this side's own preconditions: a rank-0 refusal above leaves both sides
+    // unchanged, and a rank-1 refusal here leaves this side unchanged because nothing below has
+    // run.
+    if (mirror_ != nullptr) { mirror_->acquire_mirror(index); }
     row_active_[index] = true;
     return RowLease(*this, {pages_->allocator().pool_id(), static_cast<std::uint32_t>(index),
                             row_generations_[index]});
@@ -222,9 +226,16 @@ RowLease HistoryDirectory::acquire_row(std::int32_t index) {
 
 void HistoryDirectory::release_row(TableRow row) noexcept {
     if (!valid(row)) std::terminate();
+    // Rank 1's paired lease drops with rank 0's; there is one release path.
+    if (mirror_ != nullptr) { mirror_->release_mirror(row.index); }
     row_active_[row.index] = false;
     auto& generation       = row_generations_[row.index];
     if (++generation == 0) generation = 1;
+}
+
+void HistoryDirectory::attach_mirror(tp2::MirroredKVExecutionTables& mirror) {
+    if (mirror_ != nullptr) { throw std::logic_error("KV history directory already mirrored"); }
+    mirror_ = &mirror;
 }
 
 std::uint32_t HistoryDirectory::capacity() const noexcept { return histories_.size(); }

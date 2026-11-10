@@ -69,6 +69,7 @@ other references own narrower contracts:
 | [Paged KV context store](maintainer/paged-kv-cache.md) | typed pools, pages, replicas, address spaces, reservations and consumer views |
 | [ReplaySSM GDN](maintainer/replayssm-gdn.md) | raw transition records and faithful commitment of the verified state prefix |
 | [Op development](maintainer/op-development.md) | semantic boundaries, source ownership, numerical qualification and performance evidence |
+| [Engineering lessons](maintainer/engineering-lessons.md) | transferable method rules learned in this tree: dead-code tests, testing at the failing value, ownership seams, full builds, inference sources, fixture blindness, contract sentences, and measuring in the deployment's state |
 | [Operational logging](maintainer/logging.md) | log ownership, presentation, severity and data policy |
 | [Linear benchmark](maintainer/linear-tuning.md#6-pure-linear-timing) | pure Linear measurement, metrics and suites |
 | [Linear tuning and reports](maintainer/linear-tuning.md) | tuning ranges, priority points, dispatch tradeoffs and final performance report format |

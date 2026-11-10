@@ -4,6 +4,7 @@
 #include <iostream>
 #include <array>
 #include <stdexcept>
+#include <span>
 
 namespace {
 
@@ -11,6 +12,22 @@ int check(bool condition, const char* message) {
     if (condition) { return 0; }
     std::cerr << message << '\n';
     return 1;
+}
+
+// Field-for-field equality of two resolutions; a symmetric resolution must reproduce the
+// single-device one exactly.
+bool same_resolution(const ninfer::runtime::KvCapacityResolution& a,
+                     const ninfer::runtime::KvCapacityResolution& b) {
+    return a.mode == b.mode && a.main_page_groups == b.main_page_groups &&
+           a.maximum_main_page_groups == b.maximum_main_page_groups &&
+           a.resolved_tokens == b.resolved_tokens &&
+           a.minimum_runtime_reservation_bytes == b.minimum_runtime_reservation_bytes &&
+           a.bytes_per_additional_main_page_group == b.bytes_per_additional_main_page_group &&
+           a.runtime_reservation_bytes == b.runtime_reservation_bytes &&
+           a.available_after_weights_bytes == b.available_after_weights_bytes &&
+           a.available_after_startup_bytes == b.available_after_startup_bytes &&
+           a.automatic_headroom_bytes == b.automatic_headroom_bytes &&
+           a.planned_slack_bytes == b.planned_slack_bytes;
 }
 
 } // namespace
@@ -52,6 +69,95 @@ int main() {
             ninfer::KvCapacityPolicy::explicit_capacity(320), offers);
     } catch (const std::invalid_argument&) { group_rejected = true; }
     failures += check(group_rejected, "group capacity silently reduced an explicit request");
+
+    // --- symmetric capacity across an execution group -------------------------------------
+    // A wide curve keeps the headroom arithmetic visible: 50 bytes of headroom, 100 bytes per
+    // extra page, 1000 bytes for the minimum. A single subtraction at 1380 bytes gives capacity
+    // 1330, three extra pages (5 total, 1300 bytes); a second subtraction would give 4 pages.
+    const ninfer::runtime::SequenceCapacityCurve wide{
+        .main_page_tokens                     = 64,
+        .minimum_main_page_groups             = 2,
+        .maximum_main_page_groups             = 100,
+        .minimum_device_reservation_bytes        = 1000,
+        .bytes_per_additional_main_page_group = 100,
+    };
+    const std::array<std::size_t, 1> single_budget{1380};
+    const auto single = ninfer::runtime::resolve_kv_capacity(
+        ninfer::KvCapacityPolicy::automatic(50), wide, single_budget.front());
+    failures += check(single.main_page_groups == 5 && single.runtime_reservation_bytes == 1300 &&
+                          single.planned_slack_bytes == 80,
+                      "single-device automatic capacity baseline changed");
+
+    // Width 1 is today's behaviour exactly.
+    const auto symmetric_one = ninfer::runtime::resolve_symmetric_kv_capacity(
+        ninfer::KvCapacityPolicy::automatic(50), wide, single_budget);
+    failures += check(same_resolution(symmetric_one, single),
+                      "symmetric capacity of one rank differs from the single-device resolution");
+
+    // Two equal ranks: the headroom is subtracted once, not once per rank (5 pages, not 4).
+    const std::array<std::size_t, 2> equal_budgets{1380, 1380};
+    const auto symmetric_equal = ninfer::runtime::resolve_symmetric_kv_capacity(
+        ninfer::KvCapacityPolicy::automatic(50), wide, equal_budgets);
+    failures += check(symmetric_equal.main_page_groups == 5 &&
+                          symmetric_equal.runtime_reservation_bytes == 1300 &&
+                          symmetric_equal.planned_slack_bytes == 80,
+                      "symmetric capacity subtracted the headroom twice or selected another count");
+    failures += check(same_resolution(symmetric_equal, single),
+                      "two equal ranks resolved differently from one rank");
+
+    // Two unequal ranks: the smaller figure is the bottleneck and the resolution reports it.
+    const std::array<std::size_t, 2> unequal_budgets{1380, 1500};
+    const auto symmetric_unequal = ninfer::runtime::resolve_symmetric_kv_capacity(
+        ninfer::KvCapacityPolicy::automatic(50), wide, unequal_budgets);
+    failures += check(same_resolution(symmetric_unequal, single) &&
+                          symmetric_unequal.available_after_weights_bytes == 1380,
+                      "symmetric capacity did not resolve against the smaller rank");
+
+    // The group form credits a rank with the reservation part it does not allocate: 380 free bytes
+    // plus a 1000-byte credit is the same budget as 1380 and must not bottleneck the group.
+    const std::array group_credit{ninfer::runtime::RankCapacityOffer{wide, 380, 1000},
+                                  ninfer::runtime::RankCapacityOffer{wide, 1380, 0}};
+    const auto credited = ninfer::runtime::resolve_group_kv_capacity(
+        ninfer::KvCapacityPolicy::automatic(50), group_credit);
+    failures += check(credited[0].main_page_groups == 5 && credited[1].main_page_groups == 5 &&
+                          credited[0].runtime_reservation_bytes == 1300 &&
+                          credited[1].runtime_reservation_bytes == 1300 &&
+                          credited[0].available_after_weights_bytes == 1380 &&
+                          credited[0].planned_slack_bytes == 80,
+                      "group capacity did not credit the unallocated reservation");
+    bool uncredited_rejected = false;
+    try {
+        (void)ninfer::runtime::resolve_symmetric_kv_capacity(
+            ninfer::KvCapacityPolicy::automatic(50), wide,
+            std::array<std::size_t, 1>{380});
+    } catch (const std::invalid_argument&) { uncredited_rejected = true; }
+    failures += check(uncredited_rejected,
+                      "an uncredited 380-byte rank was accepted as the group bottleneck");
+
+    // An explicit capacity that only fits with the credit must be accepted, and rejected without
+    // it: 5 pages cost 1300 bytes.
+    const auto credited_explicit = ninfer::runtime::resolve_group_kv_capacity(
+        ninfer::KvCapacityPolicy::explicit_capacity(320), group_credit);
+    failures += check(credited_explicit[0].main_page_groups == 5 &&
+                          credited_explicit[1].main_page_groups == 5,
+                      "explicit group capacity ignored the unallocated-reservation credit");
+    const std::array group_uncredited{ninfer::runtime::RankCapacityOffer{wide, 380, 0},
+                                      ninfer::runtime::RankCapacityOffer{wide, 1380, 0}};
+    bool explicit_uncredited_rejected = false;
+    try {
+        (void)ninfer::runtime::resolve_group_kv_capacity(
+            ninfer::KvCapacityPolicy::explicit_capacity(320), group_uncredited);
+    } catch (const std::invalid_argument&) { explicit_uncredited_rejected = true; }
+    failures += check(explicit_uncredited_rejected,
+                      "explicit group capacity accepted a rank that cannot hold the pages");
+
+    // The symmetric form rejects an empty group rather than returning a default.
+    bool empty_group_rejected = false;
+    try {
+        (void)ninfer::runtime::resolve_symmetric_kv_capacity(
+            ninfer::KvCapacityPolicy::automatic(50), wide, std::span<const std::size_t>{});
+    } catch (const std::invalid_argument&) { empty_group_rejected = true; }
+    failures += check(empty_group_rejected, "symmetric capacity accepted an empty group");
 
     const auto explicit_capacity = ninfer::runtime::resolve_kv_capacity(
         ninfer::KvCapacityPolicy::explicit_capacity(129), curve, 1200);

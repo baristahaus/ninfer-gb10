@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/paged_kv_cache.h"
+#include "models/qwen3_8_flash_next/impl/runtime/kv_operations.h"
 
 #include <algorithm>
 #include <array>
@@ -112,7 +113,7 @@ private:
                             std::uint32_t requested_entitlement,
                             std::optional<std::uint32_t> activation_frontier,
                             DeviceKVPageReservation&& page_reservation,
-                            KVExecutionRowLease&& row) noexcept
+                            KVTableRowLease&& row) noexcept
         : owner_(&owner), address_(address), requested_entitlement_(requested_entitlement),
           activation_frontier_(activation_frontier), page_reservation_(std::move(page_reservation)),
           row_(std::move(row)) {}
@@ -122,7 +123,7 @@ private:
     std::uint32_t requested_entitlement_ = 0;
     std::optional<std::uint32_t> activation_frontier_;
     DeviceKVPageReservation page_reservation_;
-    std::optional<KVExecutionRowLease> row_;
+    std::optional<KVTableRowLease> row_;
 
     friend class KVAddressSpaceStore;
 };
@@ -155,7 +156,7 @@ private:
                             KVAddressSpaceHandle destination, std::uint32_t frontier,
                             std::uint32_t full_pages, std::uint32_t tail_columns,
                             std::uint32_t requested_entitlement,
-                            DeviceKVPageReservation&& page_reservation, KVExecutionRowLease&& row,
+                            DeviceKVPageReservation&& page_reservation, KVTableRowLease&& row,
                             std::optional<LogicalKVPageHandle> tail_destination,
                             bool staged_tail_release) noexcept
         : owner_(&owner), source_(source), destination_(destination), frontier_(frontier),
@@ -172,7 +173,7 @@ private:
     std::uint32_t tail_columns_          = 0;
     std::uint32_t requested_entitlement_ = 0;
     DeviceKVPageReservation page_reservation_;
-    std::optional<KVExecutionRowLease> row_;
+    std::optional<KVTableRowLease> row_;
     std::optional<LogicalKVPageHandle> tail_destination_;
     bool staged_tail_release_ = false;
     bool tail_source_settled_ = false;
@@ -241,9 +242,12 @@ private:
 
 class LogicalKVPageStore {
 public:
-    LogicalKVPageStore(DeviceKVPagePool& physical, std::uint32_t logical_capacity)
-        : physical_(&physical), pages_(logical_capacity), free_(pages_.size()),
-          free_count_(static_cast<std::uint32_t>(pages_.size())) {
+    // Width 2: the caller supplies the page funnel, which replays every physical page mutation on
+    // rank 1. The physical pool is still rank 0's, because allocation stays rank 0's.
+    LogicalKVPageStore(DeviceKVPagePool& physical, KVPageOperations operations,
+                       std::uint32_t logical_capacity)
+        : physical_(&physical), page_operations_(operations), pages_(logical_capacity),
+          free_(pages_.size()), free_count_(static_cast<std::uint32_t>(pages_.size())) {
         if (pages_.empty() || logical_capacity < physical.capacity_pages()) {
             throw std::invalid_argument("Logical KV page capacity is inconsistent");
         }
@@ -257,6 +261,23 @@ public:
     LogicalKVPageStore& operator=(const LogicalKVPageStore&) = delete;
     LogicalKVPageStore(LogicalKVPageStore&&)                 = delete;
     LogicalKVPageStore& operator=(LogicalKVPageStore&&)      = delete;
+
+    // Width 1: the plain pool, funnelled internally so the mutation call sites are the same at
+    // both widths.
+    LogicalKVPageStore(DeviceKVPagePool& physical, std::uint32_t logical_capacity)
+        : LogicalKVPageStore(physical, KVPageOperations(physical), logical_capacity) {}
+
+    // The funnel: physical page mutations go through it, so width 2 replays them on rank 1 without
+    // the caller knowing.
+    void copy_page(DeviceKVPageHandle source, DeviceKVPageHandle destination,
+                   cudaStream_t stream = nullptr) const {
+        page_operations_.copy_page(source, destination, stream);
+    }
+
+    void zero_pages(std::span<const DeviceKVPageHandle> pages,
+                    cudaStream_t stream = nullptr) const {
+        page_operations_.zero_pages(pages, stream);
+    }
 
     [[nodiscard]] DeviceKVPagePool& physical_pool() noexcept { return *physical_; }
 
@@ -824,6 +845,7 @@ private:
     }
 
     DeviceKVPagePool* physical_ = nullptr;
+    KVPageOperations page_operations_;
     std::vector<Page> pages_;
     std::vector<std::uint32_t> free_;
     std::vector<DeviceKVPageLease> materialization_scratch_;
@@ -832,14 +854,15 @@ private:
 
 class KVAddressSpaceStore {
 public:
-    KVAddressSpaceStore(LogicalKVPageStore& pages, KVExecutionTablePool& tables,
+    // Width 2: the caller supplies the table funnel, which replays every row mutation on rank 1.
+    KVAddressSpaceStore(LogicalKVPageStore& pages, KVTableOperations operations,
                         std::uint32_t address_capacity, std::uint32_t page_capacity)
-        : pages_(&pages), tables_(&tables), page_capacity_(page_capacity),
+        : pages_(&pages), table_operations_(operations), page_capacity_(page_capacity),
           addresses_(address_capacity), free_(address_capacity),
           memberships_(checked_membership_cells(address_capacity, page_capacity)),
           free_count_(address_capacity) {
         if (address_capacity == 0 || page_capacity == 0 ||
-            page_capacity != tables.logical_page_capacity()) {
+            page_capacity != table_operations_.logical_page_capacity()) {
             throw std::invalid_argument("KV address-space geometry is invalid");
         }
         for (std::uint32_t index = 0; index < address_capacity; ++index) {
@@ -847,6 +870,12 @@ public:
         }
         publish_scratch_.reserve(page_capacity_);
     }
+
+    // Width 1: the plain execution tables, funnelled internally so the mutation call sites are the
+    // same at both widths.
+    KVAddressSpaceStore(LogicalKVPageStore& pages, KVExecutionTablePool& tables,
+                        std::uint32_t address_capacity, std::uint32_t page_capacity)
+        : KVAddressSpaceStore(pages, KVTableOperations(tables), address_capacity, page_capacity) {}
 
     KVAddressSpaceStore(const KVAddressSpaceStore&)            = delete;
     KVAddressSpaceStore& operator=(const KVAddressSpaceStore&) = delete;
@@ -926,7 +955,7 @@ public:
         }
         pages_->physical_pool().resize_reservation(reservation,
                                                    static_cast<std::uint32_t>(required));
-        KVExecutionRowLease row = tables_->acquire(execution_row);
+        KVTableRowLease row = table_operations_.acquire(execution_row);
         return KVActivationReservation(*this, handle, entitlement, activation_frontier,
                                        std::move(reservation), std::move(row));
     }
@@ -1057,7 +1086,7 @@ public:
         DeviceKVPageReservation reservation = pages_->physical_pool().make_empty_reservation();
         pages_->physical_pool().resize_reservation(
             reservation, staged_tail_release ? 1U : entitlement - full_pages);
-        KVExecutionRowLease row = tables_->acquire(execution_row);
+        KVTableRowLease row = table_operations_.acquire(execution_row);
         std::optional<LogicalKVPageHandle> tail_destination;
         if (tail_columns != 0) {
             tail_destination = pages_->materialize_transfer_destination(reservation, tail_columns);
@@ -1165,7 +1194,7 @@ public:
         if (fork.tail_destination_) {
             publish_scratch_.push_back(pages_->physical(*fork.tail_destination_));
         }
-        tables_->publish(fork.row_->handle(), 0, publish_scratch_, stream);
+        table_operations_.publish(fork.row_->handle(), 0, publish_scratch_, stream);
 
         for (std::uint32_t page = 0; page < fork.full_pages_; ++page) {
             const LogicalKVPageHandle logical = membership(source, page);
@@ -1362,7 +1391,7 @@ public:
         if (snapshot.tail_destination_) {
             publish_scratch_.push_back(pages_->physical(*snapshot.tail_destination_));
         }
-        tables_->publish(source.row->handle(), 0, publish_scratch_, stream);
+        table_operations_.publish(source.row->handle(), 0, publish_scratch_, stream);
 
         for (std::uint32_t page = 0; page < snapshot.shape_.full_pages; ++page) {
             const LogicalKVPageHandle logical = membership(source, page);
@@ -1463,7 +1492,7 @@ public:
             for (const LogicalKVPageHandle page : added) {
                 publish_scratch_.push_back(pages_->physical(page));
             }
-            tables_->publish(address.row->handle(), begin, publish_scratch_, stream);
+            table_operations_.publish(address.row->handle(), begin, publish_scratch_, stream);
         } catch (...) {
             for (LogicalKVPageHandle& page : added) {
                 pages_->dematerialize(page, address.reservation);
@@ -1647,12 +1676,33 @@ public:
         return valid(handle) && addresses_[handle.index_].active;
     }
 
-    [[nodiscard]] const KVExecutionRowLease& execution_row(KVAddressSpaceHandle handle) const {
+    [[nodiscard]] const KVTableRowLease& execution_row(KVAddressSpaceHandle handle) const {
         const Address& address = require(handle);
         if (!address.active || !address.row) {
             throw std::logic_error("KV address space has no execution row");
         }
         return *address.row;
+    }
+
+    // The funnel: execution-row mutations go through it, so width 2 replays them on rank 1 without
+    // the caller knowing. The physical page mutations forward to the page store's funnel.
+    void publish_repeated(KVExecutionRowHandle row, DeviceKVPageHandle page, std::uint32_t count,
+                          cudaStream_t stream = nullptr) {
+        table_operations_.publish_repeated(row, page, count, stream);
+    }
+
+    void zero_pages(std::span<const DeviceKVPageHandle> pages,
+                    cudaStream_t stream = nullptr) const {
+        pages_->zero_pages(pages, stream);
+    }
+
+    void copy_page(DeviceKVPageHandle source, DeviceKVPageHandle destination,
+                   cudaStream_t stream = nullptr) const {
+        pages_->copy_page(source, destination, stream);
+    }
+
+    [[nodiscard]] std::uint32_t logical_page_capacity() const noexcept {
+        return table_operations_.logical_page_capacity();
     }
 
     [[nodiscard]] DeviceKVPageHandle physical_page(KVAddressSpaceHandle handle,
@@ -1741,7 +1791,7 @@ private:
         std::uint32_t committed_frontier  = 0;
         std::uint32_t checkpoint_frontier = 0;
         DeviceKVPageReservation reservation;
-        std::optional<KVExecutionRowLease> row;
+        std::optional<KVTableRowLease> row;
         bool occupied = false;
         bool active   = false;
     };
@@ -1848,11 +1898,11 @@ private:
         for (std::uint32_t page = 0; page < address.page_count; ++page) {
             publish_scratch_.push_back(pages_->physical(membership(address, page)));
         }
-        tables_->publish(address.row->handle(), 0, publish_scratch_, stream);
+        table_operations_.publish(address.row->handle(), 0, publish_scratch_, stream);
     }
 
-    LogicalKVPageStore* pages_    = nullptr;
-    KVExecutionTablePool* tables_ = nullptr;
+    LogicalKVPageStore* pages_ = nullptr;
+    KVTableOperations table_operations_;
     std::uint32_t page_capacity_  = 0;
     std::vector<Address> addresses_;
     std::vector<std::uint32_t> free_;

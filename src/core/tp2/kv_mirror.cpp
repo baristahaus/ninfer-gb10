@@ -109,7 +109,7 @@ MirroredKVPagePool::MirroredKVPagePool(DeviceKVPagePool& origin, DeviceKVPagePoo
 }
 
 void MirroredKVPagePool::zero_pages(std::span<const DeviceKVPageHandle> pages,
-                                    cudaStream_t stream) {
+                                    cudaStream_t stream) const {
     origin_.zero_pages(pages, stream);
     if (pages.empty()) { return; }
     // The same contiguous physical runs on rank 1, in the origin's order.
@@ -129,7 +129,7 @@ void MirroredKVPagePool::zero_pages(std::span<const DeviceKVPageHandle> pages,
 }
 
 void MirroredKVPagePool::copy_page(DeviceKVPageHandle source, DeviceKVPageHandle destination,
-                                   cudaStream_t stream) {
+                                   cudaStream_t stream) const {
     origin_.copy_page(source, destination, stream);
     const std::int32_t source_index      = origin_.physical_page(source);
     const std::int32_t destination_index = origin_.physical_page(destination);
@@ -199,17 +199,24 @@ KVExecutionRowLease MirroredKVExecutionTables::acquire(std::int32_t row) {
     return origin_lease;
 }
 
-bool MirroredKVExecutionTables::release(KVExecutionRowLease lease) {
+bool MirroredKVExecutionTables::release(KVExecutionRowLease lease) noexcept {
     const std::int32_t row = lease.row_index();
     const bool released    = lease.release();
     if (!released) { return false; }
-    auto& slot = rows_.at(static_cast<std::size_t>(row));
+    if (row < 0 || static_cast<std::size_t>(row) >= rows_.size()) { return false; }
+    auto& slot = rows_[static_cast<std::size_t>(row)];
     if (slot.has_value()) {
         (void)slot->release();
         slot.reset();
     }
     return true;
 }
+
+std::uint32_t MirroredKVExecutionTables::logical_page_capacity() const noexcept {
+    return origin_.logical_page_capacity();
+}
+
+std::int32_t MirroredKVExecutionTables::row_count() const noexcept { return origin_.row_count(); }
 
 void MirroredKVExecutionTables::publish(KVExecutionRowHandle row, std::uint32_t logical_begin,
                                         std::span<const DeviceKVPageHandle> pages,

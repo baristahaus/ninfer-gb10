@@ -1221,7 +1221,7 @@ std::vector<float> ProgramImplCore::causal_score(PreparedPromptData&& prompt,
                  flash_ple_records ? &*flash_ple_records : nullptr, nullptr, io, prefill_hidden,
                  prefill_chunk, proposal_head, mtp_prefill_hidden ? &*mtp_prefill_hidden : nullptr,
                  state_images->mtp_hidden_store()},
-                decoder->text_kv.execution_view(text_kv_addresses->execution_row(*address)),
+                decoder->text_kv.execution_view(text_kv_addresses->execution_row(*address).lease()),
                 {},
                 decoder->text_kv,
                 nullptr,
@@ -5305,7 +5305,7 @@ void ProgramImplCore::prepare_prefix_forks(MaterializationTransaction& transacti
         if (*transaction.text_activation_frontier % static_cast<std::uint32_t>(kPagedKVPageSize) !=
             0) {
             start_context_transfer_timer(runtime::ContextResourceClass::MainKV);
-            text_kv_pages->physical_pool().copy_page(
+            text_kv_pages->copy_page(
                 text_kv_addresses->prefix_fork_tail_source(*transaction.text_prefix_fork),
                 text_kv_addresses->prefix_fork_tail_destination(*transaction.text_prefix_fork),
                 device.transfer_stream());
@@ -5338,7 +5338,7 @@ void ProgramImplCore::prepare_prefix_forks(MaterializationTransaction& transacti
                 static_cast<std::uint32_t>(kPagedKVPageSize) !=
             0) {
             start_context_transfer_timer(runtime::ContextResourceClass::BackendKV);
-            backend_kv_pages->physical_pool().copy_page(
+            backend_kv_pages->copy_page(
                 backend_kv_addresses->prefix_fork_tail_source(*transaction.backend_prefix_fork),
                 backend_kv_addresses->prefix_fork_tail_destination(
                     *transaction.backend_prefix_fork),
@@ -8397,7 +8397,7 @@ void ProgramImplCore::enqueue_active_capture_transfers(ActiveCaptureTransaction&
     }
     if (transaction.text_snapshot && transaction.text_snapshot->needs_tail_copy()) {
         start_context_transfer_timer(runtime::ContextResourceClass::MainKV);
-        decoder->text_kv.page_pool().copy_page(
+        text_kv_pages->copy_page(
             text_kv_addresses->active_snapshot_tail_source(*transaction.text_snapshot),
             text_kv_addresses->active_snapshot_tail_destination(*transaction.text_snapshot),
             device.transfer_stream());
@@ -8408,7 +8408,7 @@ void ProgramImplCore::enqueue_active_capture_transfers(ActiveCaptureTransaction&
     }
     if (transaction.backend_snapshot && transaction.backend_snapshot->needs_tail_copy()) {
         start_context_transfer_timer(runtime::ContextResourceClass::BackendKV);
-        backend_kv_cache()->page_pool().copy_page(
+        backend_kv_pages->copy_page(
             backend_kv_addresses->active_snapshot_tail_source(*transaction.backend_snapshot),
             backend_kv_addresses->active_snapshot_tail_destination(*transaction.backend_snapshot),
             device.transfer_stream());
@@ -11333,7 +11333,8 @@ ProgramImplCore::text_kv_view(const SequenceState& sequence) const {
     if (!sequence.kv || !text_kv_addresses->active(sequence.kv->text)) {
         throw std::logic_error("sequence has no active KV execution mapping");
     }
-    return decoder->text_kv.execution_view(text_kv_addresses->execution_row(sequence.kv->text));
+    return decoder->text_kv.execution_view(
+        text_kv_addresses->execution_row(sequence.kv->text).lease());
 }
 
 qwen3_8_flash_next::PagedKVCacheView
@@ -11344,7 +11345,7 @@ ProgramImplCore::mtp_kv_view(const SequenceState& sequence) const {
         throw std::logic_error("sequence has no active MTP KV execution mapping");
     }
     return decoder->mtp_cache()->execution_view(
-        backend_kv_addresses->execution_row(*sequence.kv->backend));
+        backend_kv_addresses->execution_row(*sequence.kv->backend).lease());
 }
 
 void ProgramImplCore::set_device_i32(Tensor& tensor, std::int32_t value) {
@@ -11394,8 +11395,7 @@ void ProgramImplCore::prepare_graphs() {
                                           KVAddressSpaceStore& addresses,
                                           std::vector<KVAddressSpaceHandle>& allocations,
                                           const char* label) {
-        DeviceKVPagePool& pool       = cache.page_pool();
-        KVExecutionTablePool& tables = cache.execution_tables();
+        DeviceKVPagePool& pool = cache.page_pool();
         if (pool.capacity_pages() < max_concurrency) {
             throw std::invalid_argument(std::string(label) +
                                         " cannot provide one Paged KV page per concurrent request");
@@ -11411,9 +11411,9 @@ void ProgramImplCore::prepare_graphs() {
             // Capture profiles exercise arbitrary context envelopes. Repeating each row's private
             // page across its temporary table keeps every dummy read/write address valid without
             // reserving C full contexts solely for graph construction.
-            tables.publish_repeated(addresses.execution_row(*allocation).handle(),
-                                    addresses.physical_page(*allocation, 0),
-                                    tables.logical_page_capacity(), device.stream());
+            addresses.publish_repeated(addresses.execution_row(*allocation).handle(),
+                                       addresses.physical_page(*allocation, 0),
+                                       addresses.logical_page_capacity(), device.stream());
         }
     };
     reserve_capture_rows(decoder->text_kv, *text_kv_addresses, text_capture_allocations,
@@ -11453,7 +11453,7 @@ void ProgramImplCore::prepare_graphs() {
             for (std::uint32_t row = 0; row < batch_size; ++row) {
                 pages.push_back(addresses.physical_page(allocations[row], 0));
             }
-            cache.page_pool().zero_pages(pages, device.stream());
+            addresses.zero_pages(pages, device.stream());
         };
     const auto prepare_representative = [&](std::uint32_t frontier, std::uint32_t batch_size) {
         if (batch_size == 0 || batch_size > max_concurrency) {

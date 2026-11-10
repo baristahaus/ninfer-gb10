@@ -62,7 +62,12 @@ inline bool cuda_unavailable() {
     int n               = 0;
     const cudaError_t e = cudaGetDeviceCount(&n);
     if (e == cudaSuccess) { return n == 0; }
-    if (e == cudaErrorNoDevice || e == cudaErrorInsufficientDriver) { return true; }
+    // The stub-library case matters: it is how a GPU-less builder links at all, so every Op test
+    // must skip on it rather than fail.
+    if (e == cudaErrorNoDevice || e == cudaErrorInsufficientDriver ||
+        e == cudaErrorStubLibrary) {
+        return true;
+    }
     throw std::runtime_error(std::string("cudaGetDeviceCount: ") + cudaGetErrorString(e));
 }
 

@@ -321,6 +321,21 @@ ServeOptions parse_serve_options(int argc, char** argv) {
             options.preserve_thinking = true;
         } else if (arg == "--cors") {
             options.enable_cors = true;
+        } else if (arg == "--prefill-miss-dump") {
+            options.prefill_miss_dump_dir = require_value("--prefill-miss-dump");
+            if (options.prefill_miss_dump_dir.empty()) {
+                throw std::invalid_argument("--prefill-miss-dump must not be empty");
+            }
+        } else if (arg == "--prefill-miss-min-tokens") {
+            const int tokens = parse_nonnegative_int(require_value("--prefill-miss-min-tokens"),
+                                                     "prefill-miss-min-tokens");
+            if (tokens == 0) {
+                throw std::invalid_argument("--prefill-miss-min-tokens must be positive");
+            }
+            options.prefill_miss_min_tokens = static_cast<std::uint32_t>(tokens);
+        } else if (arg == "--prefill-miss-min-match") {
+            options.prefill_miss_min_match = parse_float_in(
+                require_value("--prefill-miss-min-match"), "prefill-miss-min-match", 0.0f, 1.0f);
         } else if (arg == "--temperature") {
             options.sampling_overrides.temperature =
                 parse_float_in(require_value("--temperature"), "temperature", 0.0f, 2.0f);

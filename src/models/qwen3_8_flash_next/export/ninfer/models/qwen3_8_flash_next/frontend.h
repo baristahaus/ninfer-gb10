@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <memory>
 #include <span>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -45,6 +46,10 @@ public:
 
     [[nodiscard]] PromptSummary summary() const;
     [[nodiscard]] PromptPreparationStats preparation_stats() const noexcept;
+    // The rendered prompt's token ids, exactly as the Engine will execute them. The view is valid
+    // while this prompt is alive and is not mutable: these ids are the prompt's identity.
+    [[nodiscard]] std::span<const TokenId> token_ids() const;
+
     // SP-4 tier policy: the context-cache session identity of this prompt, or an empty
     // view when the prompt has no session key. The view is valid while the prompt is.
     [[nodiscard]] std::string_view tier_session_key() const noexcept;
@@ -146,6 +151,10 @@ public:
     [[nodiscard]] std::vector<TokenId> tokenize_text(std::string_view text) const;
     // The artifact tokenizer's raw bytes for each id, for per-token probability reporting.
     [[nodiscard]] std::vector<std::string> token_pieces(std::span<const TokenId> tokens) const;
+    // Artifact-tokenizer text for a token range, including special tokens' own bytes. This is the
+    // inverse of tokenize_text for a range the caller already owns; it adds no special token and
+    // applies no chat template.
+    [[nodiscard]] std::string detokenize_text(std::span<const TokenId> token_ids) const;
     [[nodiscard]] MediaCacheSummary media_cache_summary() const;
     [[nodiscard]] OutputSession
     make_output_session(const PreparedPrompt& prompt, const StopPolicy& caller_stop,

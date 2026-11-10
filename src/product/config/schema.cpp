@@ -102,6 +102,13 @@ constexpr FieldSpec kFields[] = {
      ConfigurationUnit::Milliseconds},
     {Field::RequestJsonl, "logging.request_jsonl", "--request-log-jsonl", "", "FILE",
      "Structured startup/request log; empty disables it.", Scope::Serve},
+    {Field::PrefillMissDump, "server.prefill_miss.dump_dir", "--prefill-miss-dump", "", "DIR",
+     "Write a prefix-reuse miss dump under DIR; empty disables it. Contains conversation text.",
+     Scope::Serve},
+    {Field::PrefillMissMinTokens, "server.prefill_miss.min_tokens", "--prefill-miss-min-tokens", "",
+     "N", "Recomputed prompt tokens a dump requires (10000).", Scope::Serve},
+    {Field::PrefillMissMinMatch, "server.prefill_miss.min_match", "--prefill-miss-min-match", "", "F",
+     "Share of the prompt that must match a recent context, in [0,1] (0.5).", Scope::Serve},
     {Field::Prompt, "cli.prompt", "--prompt", "", "TEXT",
      "Prompt text, mutually exclusive with --messages.", Scope::Cli},
     {Field::Messages, "cli.messages", "--messages", "", "FILE",
@@ -316,6 +323,7 @@ FieldValue parse_field_value(Field field, const RawValue& value, bool command_li
         return integer(value, command_line, 0, std::numeric_limits<int>::max());
     case Field::MaxContext:
     case Field::MaxPendingRequests:
+    case Field::PrefillMissMinTokens:
     case Field::MaxTokens:
     case Field::ThinkingBudget:
         return integer(value, command_line, 1, kU32Max);
@@ -359,6 +367,7 @@ FieldValue parse_field_value(Field field, const RawValue& value, bool command_li
         return real(value, command_line, 0, 2);
     case Field::TopP:
     case Field::MinP:
+    case Field::PrefillMissMinMatch:
         return real(value, command_line, 0, 1);
     case Field::PresencePenalty:
     case Field::FrequencyPenalty:
@@ -390,6 +399,7 @@ FieldValue parse_field_value(Field field, const RawValue& value, bool command_li
     case Field::ApiKey:
     case Field::ModelId:
     case Field::RequestJsonl:
+    case Field::PrefillMissDump:
     case Field::Regex:
         return text(value);
     case Field::StopIds: {

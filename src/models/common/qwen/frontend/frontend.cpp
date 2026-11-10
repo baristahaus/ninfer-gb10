@@ -622,6 +622,11 @@ PromptSummary PreparedPrompt::summary() const {
                          .has_media           = data_->has_media()};
 }
 
+std::span<const TokenId> PreparedPrompt::token_ids() const {
+    if (data_ == nullptr) { throw std::logic_error("prepared prompt is empty"); }
+    return data_->token_ids;
+}
+
 PromptPreparationStats PreparedPrompt::preparation_stats() const noexcept {
     if (data_ == nullptr) { return {}; }
     const PrepareStats& stats = data_->prepare;
@@ -859,6 +864,11 @@ PreparedPrompt Frontend::prepare_tokens(std::vector<TokenId> token_ids,
 std::vector<TokenId> Frontend::tokenize_text(std::string_view text) const {
     if (impl_ == nullptr) { throw std::logic_error("frontend is empty"); }
     return impl_->tokenizer->encode(text);
+}
+
+std::string Frontend::detokenize_text(std::span<const TokenId> token_ids) const {
+    if (impl_ == nullptr) { throw std::logic_error("frontend is empty"); }
+    return impl_->tokenizer->decode(token_ids);
 }
 
 OutputSession Frontend::make_output_session(const PreparedPrompt& prompt,

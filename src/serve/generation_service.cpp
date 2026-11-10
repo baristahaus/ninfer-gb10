@@ -333,6 +333,16 @@ GenerationService::GenerationService(product::ServeOptions options,
     request_capacity_               = std::make_shared<RequestCapacity>(
         static_cast<std::size_t>(options_.launch.engine.max_concurrency) +
         options_.launch.engine.max_pending_requests);
+    if (!options_.prefill_miss_dump_dir.empty()) {
+        const ninfer::Engine* engine = engine_.get();
+        prefill_miss_dump_           = std::make_shared<PrefillMissDump>(
+            PrefillMissDumpOptions{.directory  = options_.prefill_miss_dump_dir,
+                                   .min_tokens = options_.prefill_miss_min_tokens,
+                                   .min_match  = options_.prefill_miss_min_match},
+            [engine](std::span<const ninfer::TokenId> tokens) {
+                return engine->detokenize_text(tokens);
+            });
+    }
 }
 
 std::shared_ptr<RequestLifetime>
@@ -426,6 +436,10 @@ PreparedRequest GenerationService::prepare_impl(const GenerationRequest& request
         if (!prepared.enable_thinking) {
             request_options.execution.thinking.budget.reset();
             prepared.thinking_budget.reset();
+        }
+        if (prefill_miss_dump_ != nullptr) {
+            const std::span<const ninfer::TokenId> prompt_ids = prompt.token_ids();
+            prepared.prompt_token_ids.assign(prompt_ids.begin(), prompt_ids.end());
         }
         prepared.prompt_tokens           = static_cast<int>(prompt.summary().prompt_tokens);
         prepared.preparation             = prompt.preparation_stats();
@@ -522,6 +536,13 @@ GenerationOutcome GenerationService::run(PreparedRequest& prepared, const Stream
 
     outcome.tool_calls      = std::move(result.tool_calls);
     outcome.tool_call_parse = result.tool_call_parse;
+    if (prefill_miss_dump_ != nullptr && !prepared.prompt_token_ids.empty()) {
+        outcome.prefill_miss = prefill_miss_dump_->observe(
+            prepared.prompt_token_ids, outcome.generated_token_ids,
+            static_cast<std::uint32_t>(outcome.stats.reused_prompt_tokens),
+            outcome.finish_reason == ninfer::FinishReason::Cancelled ? "cancelled" : "finished");
+    }
+    prepared.prompt_token_ids = {};
     return outcome;
 }
 

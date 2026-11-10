@@ -692,7 +692,15 @@ std::string format_request_done_json(const std::string& server_instance_id, std:
          {"tool_call_count",
           std::count_if(outcome.tool_calls.begin(), outcome.tool_calls.end(),
                         [](const auto& call) { return call.status == ToolCallStatus::Complete; })},
-         {"tool_call_parse", tool_call_parse_json(outcome.tool_call_parse)}};
+         {"tool_call_parse", tool_call_parse_json(outcome.tool_call_parse)},
+         {"prefill_miss",
+          outcome.prefill_miss
+              ? Json{{"directory", outcome.prefill_miss->directory},
+                     {"prompt_tokens", outcome.prefill_miss->prompt_tokens},
+                     {"reused_tokens", outcome.prefill_miss->reused_tokens},
+                     {"common_prefix_tokens", outcome.prefill_miss->common_prefix},
+                     {"old_context_tokens", outcome.prefill_miss->old_context_tokens}}
+              : Json(nullptr)}};
     record["timings_seconds"] =
         Json{{"prepare", outcome.service_prepare_seconds + outcome.stats.timings.prepare_seconds},
              {"ttft", outcome.stats.timings.first_token_seconds + outcome.service_prepare_seconds},

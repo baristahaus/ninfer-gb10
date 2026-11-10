@@ -4,6 +4,7 @@
 // adapters normalize before this layer and render IDs, usage, and response events after it.
 
 #include "ninfer/engine.h"
+#include "serve/prefill_miss_dump.h"
 #include "serve/request.h"
 #include "product/config/options.h"
 
@@ -35,6 +36,8 @@ struct GenerationOutcome {
     std::optional<std::string> matched_stop_string;
     RequestStats stats;
     double service_prepare_seconds = 0.0;
+    // --prefill-miss-dump: set when this request's prefill qualified and was dumped.
+    std::optional<PrefillMissReport> prefill_miss;
 };
 
 // A transport may report an interrupted stream through a callback or is_cancelled().
@@ -85,6 +88,9 @@ struct PreparedRequest {
     std::optional<std::uint32_t> thinking_budget;
     std::optional<ninfer::ReasoningEffort> reasoning_effort;
     std::optional<bool> preserve_thinking;
+    // --prefill-miss-dump only: the prompt token ids, copied before submission because the
+    // prepared prompt is consumed by submit().
+    std::vector<ninfer::TokenId> prompt_token_ids;
     std::shared_ptr<RequestLifetime> lifetime;
 };
 
@@ -147,6 +153,9 @@ private:
     product::ServeOptions options_;
     std::unique_ptr<ninfer::Engine> engine_;
     std::shared_ptr<RequestCapacity> request_capacity_;
+    // --prefill-miss-dump: null unless the option is given. Its detokenizer holds the Engine, which
+    // outlives it: both are members of this service, which is never moved.
+    std::shared_ptr<PrefillMissDump> prefill_miss_dump_;
 };
 
 } // namespace ninfer::serve

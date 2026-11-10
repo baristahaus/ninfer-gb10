@@ -4,8 +4,10 @@
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cstdlib>
+#include <span>
 #include <iostream>
 #include <optional>
 #include <stdexcept>
@@ -114,6 +116,21 @@ void check_none_effort_with_disabled_thinking(const flash::Frontend& frontend) {
 
 } // namespace
 
+void check_prepared_views(const flash::Frontend& frontend) {
+    // The prompt's ids are the prompt's identity: the view must be exactly what was prepared.
+    const std::vector<ninfer::TokenId> tokens{1, 2, 3, 4};
+    const auto prompt = frontend.prepare_tokens(tokens);
+    const std::span<const ninfer::TokenId> ids = prompt.token_ids();
+    require(ids.size() == tokens.size() && std::equal(ids.begin(), ids.end(), tokens.begin()),
+            "PreparedPrompt::token_ids did not expose the prepared ids");
+    require(prompt.summary().prompt_tokens == ids.size(),
+            "PreparedPrompt::token_ids disagrees with the prompt summary");
+    // detokenize_text is the tokenizer inverse; no chat template, no implicit special token.
+    const std::string text = "hello world";
+    require(frontend.detokenize_text(frontend.tokenize_text(text)) == text,
+            "detokenize_text did not invert tokenize_text");
+}
+
 int main() {
     const char* path = std::getenv("NINFER_QWEN38_FLASH_NEXT_WEIGHTS");
     if (!path || !*path) { return 77; }
@@ -167,6 +184,8 @@ int main() {
         std::cout << "OK Flash-Next tool-call recovery after quoted marker and repeated parameter\n";
         check_none_effort_with_disabled_thinking(frontend);
         std::cout << "OK Flash-Next none-effort thinking disable prepares; real efforts conflict\n";
+        check_prepared_views(frontend);
+        std::cout << "OK Flash-Next prepared-prompt token view and detokenize inverse\n";
         return 0;
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';

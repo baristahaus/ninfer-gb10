@@ -352,6 +352,7 @@ ParsedOptions parse(int argc, char** argv, EntryPoint entry,
         const auto u64     = [&] { return std::get<std::uint64_t>(value); };
         const auto u32     = [&] { return static_cast<std::uint32_t>(u64()); };
         const auto real    = [&] { return static_cast<float>(std::get<double>(value)); };
+        const auto real64  = [&] { return std::get<double>(value); };
         const auto boolean = [&] { return std::get<bool>(value); };
         const auto string  = [&]() -> const std::string& { return std::get<std::string>(value); };
         const auto path    = [&] {
@@ -492,6 +493,15 @@ ParsedOptions parse(int argc, char** argv, EntryPoint entry,
             break;
         case Field::IgnoreEos:
             parsed.serve.ignore_eos = boolean();
+            break;
+        case Field::PrefillMissDump:
+            parsed.serve.prefill_miss_dump_dir = path();
+            break;
+        case Field::PrefillMissMinTokens:
+            parsed.serve.prefill_miss_min_tokens = u32();
+            break;
+        case Field::PrefillMissMinMatch:
+            parsed.serve.prefill_miss_min_match = real64();
             break;
         case Field::MaxRequestSize:
             parsed.serve.max_request_bytes = u64();

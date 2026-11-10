@@ -1080,6 +1080,9 @@ The table lists executable defaults. The startup example selects a long-context 
 | `--media-live-mib N` | all live prepared BF16 media payloads | `2048` |
 | `--media-preprocess-threads N` | bounded media preprocessing workers; `0` selects at most 16 from host concurrency | `0` |
 | `--request-log-jsonl FILE` | append full-precision server/request records | disabled |
+| `--prefill-miss-dump DIR` | write a prefix-reuse miss dump under `DIR`; a request that recomputes at least `--prefill-miss-min-tokens` prompt tokens while sharing at least `--prefill-miss-min-match` of its prompt with one of the last 16 contexts writes both texts, their token ids and a `summary.json` with the divergence point, at most 64 dumps per process. The dumps contain conversation text verbatim | disabled |
+| `--prefill-miss-min-tokens N` | recomputed prompt tokens a dump requires | `10000` |
+| `--prefill-miss-min-match F` | share of the prompt, in `[0,1]`, that must match a recent context | `0.5` |
 | `--response-store-max-records N` | maximum locally retained Responses objects | `1024` |
 | `--response-store-max-mib N` | total local Response envelope/Item/context budget | `256` |
 | `--kv-dtype bf16\|int8\|fp8\|nvfp4\|k8v4` | KV-cache storage | `bf16` |

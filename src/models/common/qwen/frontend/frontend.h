@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <memory>
 #include <span>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -42,6 +43,9 @@ public:
 
     [[nodiscard]] PromptSummary summary() const;
     [[nodiscard]] PromptPreparationStats preparation_stats() const noexcept;
+    // The rendered prompt's token ids, exactly as the Engine will execute them. The view is valid
+    // while this prompt is alive and is not mutable: these ids are the prompt's identity.
+    [[nodiscard]] std::span<const TokenId> token_ids() const;
     [[nodiscard]] explicit operator bool() const noexcept;
 
 private:
@@ -68,6 +72,10 @@ public:
     [[nodiscard]] PreparedPrompt prepare_tokens(std::vector<TokenId> token_ids,
                                                 bool allow_prefix_identity = true) const;
     [[nodiscard]] std::vector<TokenId> tokenize_text(std::string_view text) const;
+    // Artifact-tokenizer text for a token range, including special tokens' own bytes. This is the
+    // inverse of tokenize_text for a range the caller already owns; it adds no special token and
+    // applies no chat template.
+    [[nodiscard]] std::string detokenize_text(std::span<const TokenId> token_ids) const;
     [[nodiscard]] MediaCacheSummary media_cache_summary() const;
     [[nodiscard]] OutputSession
     make_output_session(const PreparedPrompt& prompt, const StopPolicy& caller_stop,

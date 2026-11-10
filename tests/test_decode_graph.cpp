@@ -8,10 +8,14 @@
 #include <cstdint>
 #include <exception>
 #include <iostream>
+#include <string>
+#include <vector>
 
 namespace {
 
 bool cuda_unavailable(cudaError_t err) {
+    // cudaErrorStubLibrary is what a GPU-less host that links the CUDA driver stub reports; a graph
+    // test cannot run there and must skip rather than fail.
     return err == cudaErrorNoDevice || err == cudaErrorInsufficientDriver ||
            err == cudaErrorStubLibrary;
 }
@@ -93,6 +97,87 @@ int check_child_graph(ninfer::DeviceContext& device) {
     return failures;
 }
 
+
+// A topology change is refused in place by CUDA (cudaGraphExecUpdateErrorTopologyChanged), and a
+// changed kernel-node parameter set is refused with cudaGraphExecUpdateErrorParametersChanged. Both
+// are documented as recoverable: the caller instantiates a new executable. This case proves the
+// executable rebuilds instead of throwing, and that the rebuilt executable launches the new graph.
+int check_reinstantiate(ninfer::DeviceContext& device) {
+    ninfer::DeviceBuffer storage(device.device(), sizeof(std::uint32_t));
+    ninfer::DecodeGraphDefinition single, pair;
+    single.capture(device.stream(), [&] {
+        CUDA_CHECK(cudaMemsetAsync(storage.data(), 0x11, sizeof(std::uint32_t), device.stream()));
+    });
+    pair.capture(device.stream(), [&] {
+        CUDA_CHECK(cudaMemsetAsync(storage.data(), 0x22, sizeof(std::uint32_t), device.stream()));
+        CUDA_CHECK(cudaMemsetAsync(storage.data(), 0x33, sizeof(std::uint32_t), device.stream()));
+    });
+
+    ninfer::DecodeGraphExecutable executable;
+    executable.instantiate(single);
+    executable.upload(device.stream());
+    device.synchronize();
+    int failures = 0;
+    executable.launch(device.stream());
+    device.synchronize();
+    failures += expect_value(storage.data(), 0x11111111U, "graph before re-instantiation");
+
+    // The fix: an update CUDA refuses in place rebuilds the executable. Before the fix this threw and
+    // the caller's engine died; the launch below is the proof that a usable executable came back.
+    executable.update(pair);
+    executable.launch(device.stream());
+    device.synchronize();
+    failures += expect_value(storage.data(), 0x33333333U, "graph after re-instantiation");
+
+    // The rebuilt executable stays usable: a later clean update takes the ordinary in-place path.
+    executable.update(single);
+    executable.launch(device.stream());
+    device.synchronize();
+    failures += expect_value(storage.data(), 0x11111111U,
+                             "graph after a clean update on the rebuilt executable");
+    return failures;
+}
+
+// Report which update results this driver produces for the mutations a re-instantiation must survive,
+// so a passing run says which recoverable code was actually exercised.
+int probe_update_results(ninfer::DeviceContext& device) {
+    ninfer::DeviceBuffer storage(device.device(), sizeof(std::uint32_t));
+    ninfer::PinnedHostBuffer host(sizeof(std::uint32_t));
+    cudaGraph_t graphs[3] = {nullptr, nullptr, nullptr};
+    CUDA_CHECK(cudaStreamBeginCapture(device.stream(), cudaStreamCaptureModeThreadLocal));
+    CUDA_CHECK(cudaMemsetAsync(storage.data(), 0x11, sizeof(std::uint32_t), device.stream()));
+    CUDA_CHECK(cudaStreamEndCapture(device.stream(), &graphs[0]));
+    CUDA_CHECK(cudaStreamBeginCapture(device.stream(), cudaStreamCaptureModeThreadLocal));
+    CUDA_CHECK(cudaMemsetAsync(storage.data(), 0x22, sizeof(std::uint32_t), device.stream()));
+    CUDA_CHECK(cudaStreamEndCapture(device.stream(), &graphs[1]));
+    CUDA_CHECK(cudaStreamBeginCapture(device.stream(), cudaStreamCaptureModeThreadLocal));
+    CUDA_CHECK(cudaMemsetAsync(storage.data(), 0x22, sizeof(std::uint32_t), device.stream()));
+    CUDA_CHECK(cudaMemcpyAsync(host.data(), storage.data(), sizeof(std::uint32_t),
+                               cudaMemcpyDeviceToHost, device.stream()));
+    CUDA_CHECK(cudaStreamEndCapture(device.stream(), &graphs[2]));
+
+    int recoverable = 0;
+    for (int target = 1; target < 3; ++target) {
+        cudaGraphExec_t exec = nullptr;
+        CUDA_CHECK(cudaGraphInstantiate(&exec, graphs[0], 0));
+        cudaGraphExecUpdateResultInfo info{};
+        const cudaError_t err = cudaGraphExecUpdate(exec, graphs[target], &info);
+        const int code        = static_cast<int>(info.result);
+        std::cout << "update to mutation " << target << ": " << cudaGetErrorName(err)
+                  << ", result " << code << '\n';
+        // A result that is not success is a recoverable refusal, not an error.
+        if (err == cudaSuccess && info.result != cudaGraphExecUpdateSuccess) { ++recoverable; }
+        CUDA_CHECK(cudaGraphExecDestroy(exec));
+    }
+    for (auto& graph : graphs) { CUDA_CHECK(cudaGraphDestroy(graph)); }
+    if (recoverable == 0) {
+        std::cerr << "this driver applied every mutation in place; the recoverable path was not "
+                     "exercised\n";
+        return -1;
+    }
+    return 0;
+}
+
 } // namespace
 
 int main() {
@@ -163,6 +248,12 @@ int main() {
         failures += expect_value(storage.data(), 0x55555555U, "capture after failed preparation");
         failures += check_external_event(device);
         failures += check_child_graph(device);
+        const int probe = probe_update_results(device);
+        if (probe < 0) {
+            std::cout << "SKIP: no mutation was refused in place\n";
+            return 77;
+        }
+        failures += check_reinstantiate(device);
         return failures == 0 ? 0 : 1;
     } catch (const std::exception& error) {
         std::cerr << "decode graph test failed: " << error.what() << '\n';

@@ -3,6 +3,7 @@
 #include <cuda_runtime.h>
 
 #include <functional>
+#include <vector>
 
 namespace ninfer {
 
@@ -70,7 +71,32 @@ public:
     void reset() noexcept;
 
 private:
+    // A child binding is valid only for the definition graph its node handle came from, so a rebuild
+    // keeps just the bindings taken from the graph it instantiates.
+    struct ChildBinding {
+        cudaGraph_t parent   = nullptr;
+        cudaGraphNode_t node = nullptr;
+        cudaGraph_t child    = nullptr;
+    };
+
+    // Instantiate a fresh executable from `definition` and swap it in. The previous executable is
+    // destroyed only after its last launch has retired.
+    void rebuild(const DecodeGraphDefinition& definition);
+    void retain_bindings(cudaGraph_t parent);
+    void rebind_children();
+
     cudaGraphExec_t exec_ = nullptr;
+    // The definition graph `exec_` was instantiated from; a child node handle is meaningful only
+    // against the graph that owns it.
+    cudaGraph_t definition_ = nullptr;
+    // The stream of the last launch. Read only on the rebuild path, to retire in-flight work before
+    // the old executable is destroyed; the clean-update path never touches it.
+    cudaStream_t launch_stream_ = nullptr;
+    // The stream of the last upload, and whether a rebuild left the executable un-uploaded. The next
+    // launch uploads it on its own stream, keeping the caller's pre-warm.
+    cudaStream_t upload_stream_ = nullptr;
+    bool needs_upload_          = false;
+    std::vector<ChildBinding> children_;
 };
 
 } // namespace ninfer

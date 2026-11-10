@@ -37,6 +37,12 @@ constexpr FieldSpec kFields[] = {
      "Cross-request history reuse; also accepts =default."},
     {Field::ExtraStateSlots, "context_cache.extra_state_slots", "--extra-state-slots", "",
      "N|default", "Extra complete StateImages beyond active lanes."},
+    {Field::MaxLongAnchors, "context_cache.max_long_anchors_per_continuation",
+     "--max-long-anchors-per-continuation", "", "N",
+     "Retained long-anchor checkpoints per continuation; default 2."},
+    {Field::TurnAnchors, "context_cache.turn_anchors", "--turn-anchors", "", "N",
+     "Private long anchors the server adds at the last N message boundaries; default 0.",
+     Scope::Serve},
     {Field::HostCapacity, "context_cache.host_capacity", "--host-cache-capacity", "",
      "SIZE|default", "Shared Host State/KV and in-flight capacity; 0B disables backing.",
      Scope::Common, ConfigurationUnit::Bytes},
@@ -275,6 +281,8 @@ FieldValue parse_field_value(Field field, const RawValue& value, bool command_li
     switch (field) {
     case Field::PrefixReuse:
     case Field::ExtraStateSlots:
+    case Field::MaxLongAnchors:
+    case Field::TurnAnchors:
     case Field::HostCapacity:
     case Field::PrefillChunk:
     case Field::MaxTokens:
@@ -321,6 +329,8 @@ FieldValue parse_field_value(Field field, const RawValue& value, bool command_li
         return integer(value, command_line, 1, kU32Max);
     case Field::ExtraStateSlots:
     case Field::DraftTokens:
+    case Field::MaxLongAnchors:
+    case Field::TurnAnchors:
         return integer(value, command_line, 0, kU32Max);
     case Field::MaxConcurrency:
         return integer(value, command_line, 1, kMaximumConcurrency);

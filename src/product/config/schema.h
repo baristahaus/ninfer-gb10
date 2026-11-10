@@ -23,6 +23,8 @@ enum class Field {
     PendingTimeout,
     PrefixReuse,
     ExtraStateSlots,
+    MaxLongAnchors,
+    TurnAnchors,
     HostCapacity,
     CostPresets,
     SpecBackend,

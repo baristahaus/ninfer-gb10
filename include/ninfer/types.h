@@ -145,6 +145,16 @@ struct ContextCacheOptions {
     std::optional<std::uint32_t> max_shared_prefixes;
     // Bounded per-continuation long-anchor count. Absent lets the cache use its default.
     std::optional<std::uint32_t> max_long_anchors_per_continuation;
+    // Turn anchors: private long-anchor opportunities the serving layer adds at the last N
+    // message boundaries of each request (0 disables, the default). A same-session follow-up
+    // consumes the previous turn's continuation and its closure capture replaces the previous
+    // closure, so without an anchor a cancelled or edited turn re-prefills the whole
+    // conversation. Ported from capy-flash (--turn-anchors); capy-flash defaults it to 1 on
+    // every architecture but Qwen4Exp, which this fork does not do because the default must
+    // leave existing behaviour unchanged (see docs/serving.md).
+    // The engine's retention bound is max_long_anchors_per_continuation above: an anchor past
+    // that bound is not retained.
+    std::uint32_t turn_anchors = 0;
     // State spill tier for agent-class retention: a file-backed cache of checkpoint coverage
     // below Host, truncated at startup because it is a cache rather than a record. Absent
     // capacity disables the tier entirely; set capacity and path together. The path is the

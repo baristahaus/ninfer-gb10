@@ -159,6 +159,12 @@ StartupConfigurationView view(const LaunchOptions& launch, EntryPoint entry, con
         case Field::ExtraStateSlots:
             value = std::uint64_t{e.context_cache.extra_state_slots.value_or(e.max_concurrency)};
             break;
+        case Field::MaxLongAnchors:
+            value = std::uint64_t{e.context_cache.max_long_anchors_per_continuation.value_or(2)};
+            break;
+        case Field::TurnAnchors:
+            value = std::uint64_t{e.context_cache.turn_anchors};
+            break;
         case Field::HostCapacity:
             value = optional_value(e.context_cache.host_capacity_bytes, "default (target/model)");
             break;

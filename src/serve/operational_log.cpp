@@ -480,9 +480,11 @@ void OperationalLog::engine_capacity(const GenerationService& service) const {
                 budget.graphs->preparation_increment_bytes, budget.retained_bytes);
     }
 
-    logger_->info("context | history {} | {} active + {} extra device states | host {}",
+    logger_->info("context | history {} | {} active + {} extra device states | host {} | "
+                  "anchors {} per turn / {} per continuation",
                   cache.enabled ? "on" : "off", engine.max_concurrency, *cache.extra_state_slots,
-                  product::format_pretty_bytes(*cache.host_capacity_bytes));
+                  product::format_pretty_bytes(*cache.host_capacity_bytes), cache.turn_anchors,
+                  cache.max_long_anchors_per_continuation.value_or(2));
 
     if (service.options().launch.engine.enable_vision) {
         const ninfer::MediaCacheSummary media = service.snapshot().media;

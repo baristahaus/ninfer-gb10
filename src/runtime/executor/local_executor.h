@@ -15,24 +15,46 @@ public:
     using Protocol = typename Types::ExecutionTypes;
     using Event    = ExecutionEvent<Protocol>;
 
-    LocalExecutor(std::unique_ptr<RankWorker<Types>> worker, SessionEpoch epoch)
-        : worker_(std::move(worker)), epoch_(epoch), pool_(worker_->program().capacity()),
+    // `workers` are the group's ranks in rank order. Width 1 is a one-element vector and every
+    // call below takes exactly the path it took when the executor held one worker; width 2 adds
+    // rank 1 to the same loops, in the same order, which is the ordering argument the rank-1
+    // mirrors rely on.
+    LocalExecutor(std::vector<std::unique_ptr<RankWorker<Types>>> workers, SessionEpoch epoch)
+        : workers_(std::move(workers)), epoch_(epoch),
+          pool_(workers_.front()->program().capacity()),
           compute_(pool_.capacity().compute_frames), context_(pool_.capacity().context_frames) {
-        this->observations_.resize(1);
-        this->observations_[0].hardware = worker_->device_name();
+        if (workers_.empty()) { throw std::invalid_argument("executor needs at least one rank"); }
+        this->observations_.resize(workers_.size());
+        for (std::size_t rank = 0; rank < workers_.size(); ++rank) {
+            this->observations_[rank].hardware = workers_[rank]->device_name();
+        }
         sample_resources(true);
     }
 
     ~LocalExecutor() override {
         try {
-            worker_->bind_to_current_thread();
-            worker_->program().drain();
+            bind_to_current_thread();
+            for_each_program([](auto& program) { program.drain(); });
         } catch (...) {
             // RankProgram's teardown retains its allocation owners until outstanding work ends.
         }
     }
 
-    void bind_to_current_thread() override { worker_->bind_to_current_thread(); }
+    void bind_to_current_thread() override {
+        for (auto& worker : workers_) { worker->bind_to_current_thread(); }
+    }
+
+    // Rank 0's Program is the authority: it owns the capacity, the frame pool and the events the
+    // engine consumes. A rank above 0 replays, so its results are issued but never read here.
+    [[nodiscard]] typename Types::RankProgram& program() noexcept {
+        return workers_.front()->program();
+    }
+
+    // Every mutation is issued on every rank, rank 0 first, in the same order.
+    template <typename Fn>
+    void for_each_program(Fn&& fn) {
+        for (auto& worker : workers_) { fn(worker->program()); }
+    }
 
     [[nodiscard]] SessionEpoch epoch() const noexcept override { return epoch_; }
 
@@ -47,7 +69,7 @@ public:
                                          typename Protocol::Work work) override {
         require_available();
         if (!reservation) throw std::logic_error("empty execution reservation");
-        worker_->program().validate_work(work, reservation.frame().kind);
+        program().validate_work(work, reservation.frame().kind);
         const ExecutionTicket ticket{epoch_, ++next_execution_,
                                      pool_.accept(std::move(reservation))};
         auto& flight = slot(ticket.frame);
@@ -55,7 +77,9 @@ public:
         flight.clock.start(Protocol::describe_work(work), observation_time_ns());
         try {
             observe_host_call(host_.submit_ns, [&] {
-                worker_->program().start({ticket, flight.command, std::move(work)});
+                for_each_program([&](auto& program) {
+                    program.start({ticket, flight.command, work});
+                });
             });
         } catch (...) { record_failure(ticket); }
         return ticket;
@@ -67,12 +91,22 @@ public:
         if (flight.phase != Phase::Decision || flight.decision_stage != input.stage) {
             throw std::logic_error("decision input does not match the pending execution stage");
         }
-        worker_->program().validate_decision(ticket, input);
+        program().validate_decision(ticket, input);
         flight.command = next_command();
         flight.phase   = Phase::Running;
         try {
             observe_host_call(host_.supply_ns, [&] {
-                worker_->program().supply(ticket, flight.command, std::move(input));
+                // The payload is per-round control data, identical on every rank; rank 0 takes
+                // the move and the others take a copy, in rank order.
+                for (std::size_t rank = 0; rank < workers_.size(); ++rank) {
+                    auto& program = workers_[rank]->program();
+                    if (rank == 0) {
+                        program.supply(ticket, flight.command, std::move(input));
+                    } else {
+                        auto copy = input;
+                        program.supply(ticket, flight.command, std::move(copy));
+                    }
+                }
             });
         } catch (...) { record_failure(ticket); }
     }
@@ -84,12 +118,20 @@ public:
         if (flight.phase != Phase::Result) {
             throw std::logic_error("execution has no result awaiting commit");
         }
-        worker_->program().prepare_commit(ticket, commit);
+        program().prepare_commit(ticket, commit);
         flight.command = next_command();
         flight.phase   = Phase::Retiring;
         try {
             observe_host_call(host_.commit_ns, [&] {
-                worker_->program().commit(ticket, flight.command, std::move(commit));
+                for (std::size_t rank = 0; rank < workers_.size(); ++rank) {
+                    auto& program = workers_[rank]->program();
+                    if (rank == 0) {
+                        program.commit(ticket, flight.command, std::move(commit));
+                    } else {
+                        auto copy = commit;
+                        program.commit(ticket, flight.command, std::move(copy));
+                    }
+                }
             });
         } catch (...) {
             record_failure(ticket);
@@ -107,7 +149,12 @@ public:
         flight.phase   = Phase::Discarding;
         try {
             observe_host_call(host_.discard_ns,
-                              [&] { worker_->program().discard(ticket, flight.command); });
+                              [&] {
+                                  for_each_program(
+                                      [&](auto& program) {
+                                          program.discard(ticket, flight.command);
+                                      });
+                              });
             flight.clock.resolve(observation_time_ns());
         } catch (...) { record_failure(ticket); }
     }
@@ -120,7 +167,13 @@ public:
         try {
             for (;;) {
                 event =
-                    observe_host_call(host_.progress_ns, [&] { return worker_->program().poll(); });
+                    observe_host_call(host_.progress_ns, [&] {
+                        auto event = program().poll();
+                        for (std::size_t rank = 1; rank < workers_.size(); ++rank) {
+                            (void)workers_[rank]->program().poll();
+                        }
+                        return event;
+                    });
                 if (!event) return {};
                 if (std::holds_alternative<ExecutionFailed>(*event)) {
                     failed_ = true;
@@ -191,7 +244,7 @@ public:
         closed_ = true;
         std::exception_ptr error;
         try {
-            worker_->program().drain();
+            for_each_program([](auto& program) { program.drain(); });
         } catch (...) { error = std::current_exception(); }
         pool_.retire_submitted();
         std::fill(compute_.begin(), compute_.end(), Flight{});
@@ -210,8 +263,10 @@ public:
     [[nodiscard]] bool has_pending_work() const noexcept override { return pool_.busy(); }
 
     void reset_measurement_peaks() override {
-        worker_->program().reset_measurement_peaks();
-        this->observations_[0].memory = worker_->program().observe_resources();
+        for_each_program([](auto& program) { program.reset_measurement_peaks(); });
+        for (std::size_t rank = 0; rank < workers_.size(); ++rank) {
+            this->observations_[rank].memory = workers_[rank]->program().observe_resources();
+        }
     }
 
 private:
@@ -220,11 +275,11 @@ private:
         const auto now = observation_time_ns();
         // The program observation is cheap and carries the measurement peaks; only the
         // physical device sample keeps its period.
-        snapshot.memory = worker_->program().observe_resources();
+        snapshot.memory = program().observe_resources();
         snapshot.host   = host_;
         if (!force && now - snapshot.stamp.sampled_ns < kResourceSamplePeriodNs) return;
         if (force || !pool_.in_flight())
-            snapshot.physical_memory = sample_physical_memory(worker_->device());
+            snapshot.physical_memory = sample_physical_memory(workers_.front()->device());
         snapshot.stamp       = {snapshot.stamp.sequence + 1, now};
         snapshot.received_ns = now;
     }
@@ -268,7 +323,7 @@ private:
         if (!failure_) failure_ = ExecutionFailed{ticket, std::move(message)};
     }
 
-    std::unique_ptr<RankWorker<Types>> worker_;
+    std::vector<std::unique_ptr<RankWorker<Types>>> workers_;
     SessionEpoch epoch_;
     ExecutionPool pool_;
     std::vector<Flight> compute_, context_;

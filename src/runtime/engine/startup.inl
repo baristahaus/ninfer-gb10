@@ -340,8 +340,19 @@ BuiltModel<typename Setup::Types> build_local_model(const artifact::Reader& read
     } else if (execution->width() > 1) {
         throw std::invalid_argument("this model's local route has no per-rank materialization");
     }
-    auto worker = std::make_unique<RankWorker<Types>>(device, std::move(instance));
-    auto executor = std::make_unique<LocalExecutor<Types>>(std::move(worker), next_session_epoch());
+    // The executor drives every rank of the group in rank order. Rank 0 is always present, so a
+    // width-1 group is the one-element case of the same loop and takes exactly the path it took
+    // before the loop existed. A rank above 0 needs its own RankProgram, which is the step that
+    // follows; until then a width above 1 fails loudly here instead of running on one card.
+    if (execution->width() > 1) {
+        throw std::invalid_argument(
+            "the peer rank's Program is not built yet; tensor parallelism needs it before it can "
+            "run");
+    }
+    std::vector<std::unique_ptr<RankWorker<Types>>> workers;
+    workers.push_back(std::make_unique<RankWorker<Types>>(device, std::move(instance)));
+    auto executor =
+        std::make_unique<LocalExecutor<Types>>(std::move(workers), next_session_epoch());
     auto inference = std::make_unique<InferenceInstance<Types>>(
         setup.definition(), std::move(frontend), std::move(executor), std::move(*prepared_session),
         std::move(memory));

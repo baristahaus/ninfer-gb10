@@ -12,10 +12,11 @@ namespace ninfer::models::qwen3_5 {
 ResolvedLoadPlan::ResolvedLoadPlan(const artifact::Reader& reader,
                                    std::shared_ptr<const ModelDefinition> definition,
                                    artifact::MaterializationPlan materialization,
+                                   std::vector<WeightBinding> bindings,
                                    std::vector<Device> devices, std::vector<Device> bank_devices)
     : reader_(&reader), definition_(std::move(definition)),
-      materialization_(std::move(materialization)), devices_(std::move(devices)),
-      bank_devices_(std::move(bank_devices)) {}
+      materialization_(std::move(materialization)), bindings_(std::move(bindings)),
+      devices_(std::move(devices)), bank_devices_(std::move(bank_devices)) {}
 
 
 namespace {
@@ -49,10 +50,6 @@ std::vector<artifact::MatrixSlice> matrix_slices(const artifact::Reader& reader,
             // rows than the parent has.
             slices.push_back({part.object, 0, part.begin, 1, extent, 0, destination_column});
             destination_column += extent;
-            // The rank's own extent is the coverage this form needs; `n` already equals it for a
-            // 1-D parameter, and its destination column is an accumulated offset rather than a
-            // column of a matrix, so it is not the check the matrix path makes.
-            destination_row = n;
             continue;
         }
         if (parent.size() != 2) {
@@ -92,14 +89,21 @@ std::vector<artifact::MatrixSlice> matrix_slices(const artifact::Reader& reader,
                               destination_column});
             destination_column += segment_columns;
             saw_column_slice = true;
-            destination_row = n;
         }
     }
-    // A row-block shard never touches destination columns, so the column check applies only when
-    // the shard actually sliced columns; applying it unconditionally would refuse every row shard.
+    // The two shard forms cover different destination axes, so each gets the check that can
+    // actually fail: a column shard assigns no destination rows and must cover the rank's columns,
+    // a row shard assigns no destination columns and must cover the rank's rows. Checking one
+    // expression for both made the row test unreachable on the column path.
     const auto columns_of_rank = reference.shape.size() > 1 ? reference.shape[1] : 1;
-    if (destination_row != n || (saw_column_slice && destination_column != columns_of_rank)) {
-        throw artifact::ArtifactError(reference.name + ": shard slices do not cover its own rows");
+    if (saw_column_slice) {
+        if (destination_row != 0 || destination_column != columns_of_rank) {
+            throw artifact::ArtifactError(reference.name +
+                                          ": shard slices do not cover the rank's columns");
+        }
+    } else if (destination_row != n) {
+        throw artifact::ArtifactError(reference.name +
+                                      ": shard slices do not cover the rank's rows");
     }
     return slices;
 }
@@ -130,7 +134,14 @@ ResolvedLoadPlan resolve_load(const artifact::Reader& reader,
     // width; the reference's sliced binding has to reach the plan. A whole-object reference keeps
     // `whole_tensor`, which is why width 1 takes exactly the path it took before.
     std::vector<artifact::TensorRequest> requests;
+    std::vector<WeightBinding> bindings;
+    bindings.reserve(devices.size());
     for (std::size_t i = 0; i < devices.size(); ++i) {
+        // Every weight becomes one request whose storage is exactly the rank's own matrix: the
+        // object itself when the parameter is whole, its slices gathered into the rank's shape when
+        // it is sharded. So the binding is uniform -- the request, from 0 to the rank's element
+        // count -- and it is what the object handle cannot express.
+        const auto request_index = requests.size();
         const auto& reference = definition->parameter({i});
         const auto access     = devices[i] == Device::cpu() ? artifact::HostAccess::CudaTransfer
                                                             : artifact::HostAccess::CpuOnly;
@@ -139,6 +150,8 @@ ResolvedLoadPlan resolve_load(const artifact::Reader& reader,
                 requests.push_back({artifact::whole_tensor(reader, part.object), devices[i],
                                     access});
             }
+            bindings.push_back({artifact::StorageId{request_index}, 0,
+                                reference.binding.elements});
             continue;
         }
         const auto slices = matrix_slices(reader, reference);
@@ -161,10 +174,15 @@ ResolvedLoadPlan resolve_load(const artifact::Reader& reader,
             // The slicer has no parameter name, so a rejection there is anonymous. Name it here.
             throw artifact::ArtifactError(reference.name + ": " + error.what());
         }
+        bindings.push_back({artifact::StorageId{request_index}, 0,
+                            reference.binding.elements});
+    }
+    if (bindings.size() != devices.size()) {
+        throw artifact::ArtifactError("sharded plan is missing a weight binding");
     }
     auto storage = artifact::plan_materialization(reader, requests);
-    return {reader, std::move(definition), std::move(storage), std::move(devices),
-            std::move(banks)};
+    return {reader, std::move(definition), std::move(storage), std::move(bindings),
+            std::move(devices), std::move(banks)};
 }
 
 std::unique_ptr<ModelShard> materialize_model(ResolvedLoadPlan&& plan, DeviceContext& device,
@@ -180,7 +198,7 @@ std::unique_ptr<ModelShard> materialize_model(ResolvedLoadPlan&& plan, DeviceCon
         pending.push_back(
             {definition->parameter({i}), description.uses, description.source_objects});
     }
-    auto bound = resolve_weights(std::move(pending), backing, plan.devices_);
+    auto bound = resolve_weights(std::move(pending), backing, plan.devices_, plan.bindings_);
     // A column-sharded weight is many small ranges in its parent, which no consumer can take; the
     // gather turns each into one contiguous parent. The condition is structural (non-contiguous
     // parts in one parent), so width 1 never enters it and needs no guard.

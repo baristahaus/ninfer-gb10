@@ -27,6 +27,12 @@ ninfer_add_test(ninfer_consumer_geometry_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_consumer_geometry.cpp"
   LIBRARIES ninfer_core)
 
+# A plan containing ONLY a sliced request must bind, by the plan's request rather than by object
+# handle. Host-only.
+ninfer_add_test(ninfer_sliced_binding_test
+  SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_sliced_binding.cpp"
+  LIBRARIES ninfer_model_loading ninfer_artifact)
+
 ninfer_add_test(ninfer_shard_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_shard.cpp"
   LIBRARIES ninfer_artifact)

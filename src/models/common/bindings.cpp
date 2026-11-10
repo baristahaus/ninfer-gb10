@@ -81,4 +81,28 @@ std::vector<BoundWeight> resolve_weights(std::vector<PendingWeight>&& pending,
     return out;
 }
 
+std::vector<BoundWeight> resolve_weights(std::vector<PendingWeight>&& pending,
+                                         const artifact::MaterializedArtifact& materialized,
+                                         std::span<const Device> devices,
+                                         std::span<const WeightStorage> storage) {
+    if (storage.size() != pending.size()) {
+        throw artifact::ArtifactError("materialization plan is missing a weight binding");
+    }
+    std::vector<BoundWeight> out;
+    out.reserve(pending.size());
+    for (std::size_t i = 0; i < pending.size(); ++i) {
+        auto& item = pending[i];
+        const auto& parent = materialized.parent(storage[i].request, devices[i]);
+        if (storage[i].end > parent.geometry.elements) {
+            throw artifact::ArtifactError(item.reference.name +
+                                          ": plan storage does not cover its region");
+        }
+        WeightView view{item.reference.shape,
+                        {WeightRegion{&parent, storage[i].begin, storage[i].end}}};
+        out.push_back({std::move(item.reference.name), std::move(item.source_objects),
+                       std::move(view), std::move(item.uses)});
+    }
+    return out;
+}
+
 } // namespace ninfer::models

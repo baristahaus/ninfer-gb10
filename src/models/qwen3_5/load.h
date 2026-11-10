@@ -1,8 +1,11 @@
 #pragma once
 
+#include "models/common/bindings.h"
 #include "models/qwen3_5/model.h"
 
 namespace ninfer::models::qwen3_5 {
+
+using WeightBinding = models::WeightStorage;
 
 // One local materialization. The Reader remains alive until materialize_model returns;
 // the definition and all resulting storage survive independently of it.
@@ -26,10 +29,12 @@ private:
     friend std::unique_ptr<ModelShard> materialize_model(ResolvedLoadPlan&&, DeviceContext&,
                                                          const StartupObserver*);
     ResolvedLoadPlan(const artifact::Reader&, std::shared_ptr<const ModelDefinition>,
-                     artifact::MaterializationPlan, std::vector<Device>, std::vector<Device>);
+                     artifact::MaterializationPlan, std::vector<WeightBinding>,
+                     std::vector<Device>, std::vector<Device>);
     const artifact::Reader* reader_;
     std::shared_ptr<const ModelDefinition> definition_;
     artifact::MaterializationPlan materialization_;
+    std::vector<WeightBinding> bindings_;
     std::vector<Device> devices_, bank_devices_;
 };
 

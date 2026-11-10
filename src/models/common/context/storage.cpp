@@ -82,7 +82,7 @@ DevicePageStorage::DevicePageStorage(MemorySpan backing, const DeviceKVPagePoolL
     validation_marks_.resize(capacity_pages(), 0);
 }
 
-DeviceKVPagePool& DevicePageStorage::mirror_origin() {
+DeviceKVPagePool& DevicePageStorage::mirror_origin() const {
     if (mirror_origin_ != nullptr) { return *mirror_origin_; }
     // A view over this storage's own backing with this storage's own layout, so the mirror replays
     // exactly the planes this storage owns. It allocates nothing.
@@ -430,7 +430,7 @@ ExecutionTableStorage::ExecutionTableStorage(MemorySpan backing,
                                              const KVExecutionTableLayout& layout,
                                              const DevicePageStorage& pages)
     : spec_(layout.spec), block_tables_(layout.block_tables.bind(backing)),
-      page_capacity_(pages.capacity_pages()) {
+      page_capacity_(pages.capacity_pages()), backing_(backing), pages_(&pages) {
     if (backing.device != pages.device()) {
         throw std::invalid_argument("Execution tables must share their page storage device");
     }
@@ -441,6 +441,23 @@ ExecutionTableStorage::ExecutionTableStorage(MemorySpan backing,
         block_tables_.ne[3] != 1) {
         throw std::invalid_argument("Execution table layout has inconsistent geometry");
     }
+}
+
+KVExecutionTablePool& ExecutionTableStorage::table_origin() {
+    if (table_origin_ != nullptr) { return *table_origin_; }
+    if (pages_ == nullptr) { throw std::logic_error("Execution table has no page storage"); }
+    KVExecutionTableLayout layout;
+    layout.spec = spec_;
+    const auto* base = static_cast<const std::byte*>(backing_.data);
+    layout.block_tables.region.offset =
+        static_cast<std::size_t>(static_cast<const std::byte*>(block_tables_.data) - base);
+    layout.block_tables.region.bytes = block_tables_.bytes();
+    layout.block_tables.dtype        = block_tables_.dtype;
+    layout.block_tables.shape        = {block_tables_.ne[0], block_tables_.ne[1],
+                                        block_tables_.ne[2], block_tables_.ne[3]};
+    table_origin_ = std::make_unique<KVExecutionTablePool>(backing_, layout,
+                                                           pages_->mirror_origin());
+    return *table_origin_;
 }
 
 void ExecutionTableStorage::attach_mirror(tp2::MirroredKVExecutionTables& mirror) {

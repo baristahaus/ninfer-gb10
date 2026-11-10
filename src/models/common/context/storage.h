@@ -58,7 +58,7 @@ public:
     // first use. The wiring builds the mirror from it (`MirroredKVPagePool(origin_view, rank1,
     // target)`) and then attaches the mirror here; this storage cannot build the mirror itself
     // because the mirror needs rank 1's pool, which it does not own.
-    [[nodiscard]] DeviceKVPagePool& mirror_origin();
+    [[nodiscard]] DeviceKVPagePool& mirror_origin() const;
     void attach_mirror(tp2::MirroredKVPagePool& mirror);
     [[nodiscard]] bool mirrored() const noexcept { return mirror_ != nullptr; }
 
@@ -112,7 +112,7 @@ private:
     // The span the storage borrows, kept so the mirror's origin view can be built over it.
     MemorySpan backing_;
     // tp 2: the origin view pool and the attached mirror. Both null/empty unless a rank 1 exists.
-    std::unique_ptr<DeviceKVPagePool> mirror_origin_;
+    mutable std::unique_ptr<DeviceKVPagePool> mirror_origin_;
     tp2::MirroredKVPagePool* mirror_ = nullptr;
     std::vector<Tensor> planes_;
     HostKVPageLayout host_layout_;
@@ -149,6 +149,9 @@ public:
 
     // tp 2: replay this table's row publications on rank 1. Unattached (the default) keeps the
     // original path, so a family with no peer is unchanged.
+    // The mirror's origin side is a `KVExecutionTablePool` view over this table's own backing,
+    // built on first use, for the same reason `DevicePageStorage::mirror_origin` exists.
+    [[nodiscard]] KVExecutionTablePool& table_origin();
     void attach_mirror(tp2::MirroredKVExecutionTables& mirror);
     [[nodiscard]] bool mirrored() const noexcept { return mirror_ != nullptr; }
 
@@ -156,6 +159,9 @@ private:
     KVExecutionTableSpec spec_;
     Tensor block_tables_;
     std::uint32_t page_capacity_ = 0;
+    MemorySpan backing_;
+    const DevicePageStorage* pages_ = nullptr;
+    std::unique_ptr<KVExecutionTablePool> table_origin_;
     tp2::MirroredKVExecutionTables* mirror_ = nullptr;
 };
 

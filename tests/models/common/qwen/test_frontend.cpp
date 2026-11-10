@@ -2632,6 +2632,23 @@ int test_media_auto_threads_respect_affinity() {
 
 } // namespace
 
+int test_prepared_views(const Frontend& frontend) {
+    int failures = 0;
+    // The prompt's ids are the prompt's identity: the view must be exactly what was prepared.
+    const std::vector<ninfer::TokenId> tokens{1, 2, 3, 4};
+    const auto prompt = frontend.prepare_tokens(tokens);
+    const std::span<const ninfer::TokenId> ids = prompt.token_ids();
+    failures += check(ids.size() == tokens.size() && std::equal(ids.begin(), ids.end(), tokens.begin()),
+                      "PreparedPrompt::token_ids did not expose the prepared ids");
+    failures += check(prompt.summary().prompt_tokens == ids.size(),
+                      "PreparedPrompt::token_ids disagrees with the prompt summary");
+    // detokenize_text is the tokenizer inverse; no chat template, no implicit special token.
+    const std::string text = "hello world";
+    failures += check(frontend.detokenize_text(frontend.tokenize_text(text)) == text,
+                      "detokenize_text did not invert tokenize_text");
+    return failures;
+}
+
 int main() {
     const FrontendResources owned = resources();
     const Frontend frontend       = make_frontend(owned);
@@ -2685,5 +2702,6 @@ int main() {
     failures += test_media_auto_threads_respect_affinity();
     failures += test_invalid_media_classification();
     failures += test_disabled_vision();
+    failures += test_prepared_views(frontend);
     return failures == 0 ? 0 : 1;
 }

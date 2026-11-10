@@ -78,6 +78,12 @@ const PromptSummary& PreparedPrompt::summary() const noexcept {
     return impl_ != nullptr ? impl_->summary : empty;
 }
 
+std::span<const TokenId> PreparedPrompt::token_ids() const {
+    static const std::span<const TokenId> empty;
+    if (impl_ == nullptr) { return empty; }
+    return std::visit([](const auto& value) { return value.token_ids(); }, impl_->value);
+}
+
 const PromptPreparationStats& PreparedPrompt::preparation_stats() const noexcept {
     static const PromptPreparationStats empty;
     return impl_ != nullptr ? impl_->prepare : empty;
@@ -327,6 +333,13 @@ std::vector<TokenId> Engine::tokenize_text(std::string_view text) const {
     if (impl_ == nullptr) { throw std::logic_error("Engine is moved from"); }
     return std::visit([&](const auto& instance) { return instance->frontend.tokenize_text(text); },
                       impl_->active);
+}
+
+std::string Engine::detokenize_text(std::span<const TokenId> token_ids) const {
+    if (impl_ == nullptr) { throw std::logic_error("Engine is moved from"); }
+    return std::visit(
+        [&](const auto& instance) { return instance->frontend.detokenize_text(token_ids); },
+        impl_->active);
 }
 
 std::vector<float> Engine::score_tokens(std::vector<TokenId> tokens, std::uint32_t first_target) {

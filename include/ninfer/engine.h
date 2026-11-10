@@ -4,6 +4,8 @@
 
 #include <chrono>
 #include <memory>
+#include <span>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -22,6 +24,11 @@ public:
 
     [[nodiscard]] const PromptSummary& summary() const noexcept;
     [[nodiscard]] const PromptPreparationStats& preparation_stats() const noexcept;
+    // The rendered prompt's token ids, exactly as the Engine will execute them. A view into the
+    // prepared prompt: valid until this PreparedPrompt is destroyed or moved from, and never
+    // mutable. Empty for a default-constructed prompt. These ids are the prompt's identity, so a
+    // consumer that needs to reason about prefix reuse reads them instead of re-tokenizing text.
+    [[nodiscard]] std::span<const TokenId> token_ids() const;
     [[nodiscard]] explicit operator bool() const noexcept;
 
 private:
@@ -76,6 +83,11 @@ public:
 
     // Artifact-tokenizer raw-text encoding. No chat template or implicit special token is added.
     [[nodiscard]] std::vector<TokenId> tokenize_text(std::string_view text) const;
+
+    // Artifact-tokenizer text for a token range, the inverse of tokenize_text for ids the caller
+    // already owns. Special tokens keep their own bytes; no chat template is applied. Routes to the
+    // resident model family's tokenizer, so a caller renders ids without knowing the family.
+    [[nodiscard]] std::string detokenize_text(std::span<const TokenId> token_ids) const;
 
     // Returns log p(tokens[i] | tokens[0..i)) for i in [first_target,tokens.size()).
     [[nodiscard]] std::vector<float> score_tokens(std::vector<TokenId> tokens,

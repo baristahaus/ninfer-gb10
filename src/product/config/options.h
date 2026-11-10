@@ -95,6 +95,14 @@ struct ServeOptions {
     // Benchmark/measurement knob: suppress the model's default end-of-sequence stop tokens for
     // every request on the instance. Explicit per-request stop strings still apply.
     bool ignore_eos                          = false;
+    // Prefix-reuse miss diagnostic. Non-empty DIR enables it: a request that recomputes at least
+    // min_tokens prompt tokens while sharing at least min_match of its prompt with a recent context
+    // writes both texts, their token ids and a summary to a new directory under DIR. The dumps
+    // contain conversation text verbatim; off by default. The component and its defaults live in
+    // serve/prefill_miss_dump.h, whose kDefaultPrefillMissMinTokens/MinMatch match these values.
+    std::filesystem::path prefill_miss_dump_dir;
+    std::uint32_t prefill_miss_min_tokens = 10000;
+    double prefill_miss_min_match         = 0.5;
     std::size_t max_request_bytes          = kDefaultMaxRequestBytes;
     std::size_t response_store_max_records = kDefaultResponseStoreRecords;
     std::size_t response_store_max_bytes   = kDefaultResponseStoreBytes;

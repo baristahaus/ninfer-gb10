@@ -276,6 +276,17 @@ StartupConfigurationView view(const LaunchOptions& launch, EntryPoint entry, con
         case Field::IgnoreEos:
             value = server->ignore_eos;
             break;
+        case Field::PrefillMissDump:
+            value = server->prefill_miss_dump_dir.empty()
+                        ? std::string("disabled")
+                        : server->prefill_miss_dump_dir.string();
+            break;
+        case Field::PrefillMissMinTokens:
+            value = std::uint64_t{server->prefill_miss_min_tokens};
+            break;
+        case Field::PrefillMissMinMatch:
+            value = server->prefill_miss_min_match;
+            break;
         case Field::MaxRequestSize:
             value = std::uint64_t{server->max_request_bytes};
             break;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/device.h"
+#include "models/common/sharded_group.h"
 #include "runtime/executor/contract.h"
 
 #include <memory>
@@ -15,8 +16,8 @@ struct RankModelInstance {
     std::unique_ptr<typename Types::RankProgram> program;
     // The group-scoped resources of a two-GPU lane (the shared mailbox and the partial pair),
     // borrowed from the owner that declared them — they outlive every instance. Null on the
-    // single-device lane and on any family without a two-GPU lane.
-    const typename Types::ShardedGroup* sharded = nullptr;
+    // single-device lane.
+    const models::ShardedGroup* sharded = nullptr;
 
     RankModelInstance(std::unique_ptr<typename Types::ModelShard> model,
                       std::shared_ptr<const typename Types::Profile> profile)

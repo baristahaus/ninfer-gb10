@@ -1,3 +1,8 @@
+ninfer_add_test(ninfer_sharded_group_test
+  SOURCES "${CMAKE_CURRENT_LIST_DIR}/test_sharded_group.cpp"
+  LIBRARIES ninfer_model_execution)
+set_tests_properties(ninfer_sharded_group_test PROPERTIES SKIP_RETURN_CODE 77)
+
 ninfer_add_test(ninfer_qwen3_5_loading_real_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/test_loading_real.cpp"
   LIBRARIES ninfer_model_loading)

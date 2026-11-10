@@ -30,6 +30,7 @@ target_include_directories(ninfer_model_control SYSTEM PRIVATE
 
 # Rank-owned storage, mathematical execution and graph preparation.
 add_library(ninfer_model_execution STATIC
+  common/sharded_group.cpp
   common/context/storage.cpp
   common/context/transfer.cpp
   common/moe/execution.cpp

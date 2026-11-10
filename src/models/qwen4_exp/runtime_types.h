@@ -6,12 +6,7 @@
 
 namespace ninfer::models::qwen4_exp {
 
-// qwen4_exp has no two-GPU lane, so its group-scoped sharded resources are empty. The type exists
-// only so the shared startup can pass a null pointer of it through the generic rank plumbing.
-struct ShardedGroup {};
-
 struct RuntimeTypes {
-    using ShardedGroup      = qwen4_exp::ShardedGroup;
     using ModelDefinition   = qwen4_exp::ModelDefinition;
     using ModelShard        = qwen4_exp::ModelShard;
     using Parameters        = execution::Parameters;

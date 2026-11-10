@@ -12,7 +12,7 @@ namespace ninfer::models::qwen3_5::detail {
 
 RankProgramImpl::RankProgramImpl(const execution::Parameters& values, const SequencePlanImpl& plan,
                                  DeviceContext& context, const StartupObserver& observer,
-                                 const execution::ShardedGroup* sharded)
+                                 const models::ShardedGroup* sharded)
     : parameters(values), device(context), capacity(plan.capacity), kv_capacity(plan.kv_capacity),
       max_concurrency(plan.max_concurrency), prefill_chunk(plan.prefill_chunk),
       draft_window(plan.draft_window), backend(plan.speculative_backend),
@@ -33,7 +33,11 @@ RankProgramImpl::RankProgramImpl(const execution::Parameters& values, const Sequ
     // the group width yet, so "width 2 without the bundle" cannot be detected here; the executor
     // that owns the group is the place that must always hand it over.
     if (sharded_ != nullptr) {
-        const ExecutionContext& group = sharded_->execution;
+        if (sharded_->execution == nullptr || sharded_->mailbox == nullptr) {
+            throw std::invalid_argument(
+                "Qwen3.5 rank: the sharded group bundle is not fully constructed");
+        }
+        const ExecutionContext& group = *sharded_->execution;
         if (group.width() != 2) {
             throw std::invalid_argument(
                 "Qwen3.5 rank: the sharded group requires an execution group of exactly two ranks");
@@ -41,15 +45,17 @@ RankProgramImpl::RankProgramImpl(const execution::Parameters& values, const Sequ
         // This Program's rank is the group member whose device is this Program's device. A Program
         // that is not in the group is a wiring error, and it must fail here rather than in a
         // reduce: the rank decides which stream the exchange lands on.
-        int rank = -1;
+        std::vector<int> device_indices;
+        device_indices.reserve(static_cast<std::size_t>(group.width()));
         for (int member = 0; member < group.width(); ++member) {
-            if (group.device(member).device() == device.device()) { rank = member; }
+            device_indices.push_back(group.device(member).device().index());
         }
+        const int rank = models::sharded_rank_of(device_indices, device.device().index());
         if (rank < 0) {
             throw std::logic_error(
                 "Qwen3.5 rank: the Program's device is not a member of its execution group");
         }
-        collective_.emplace(execution::ShardedCollective{group, sharded_->mailbox, rank});
+        collective_.emplace(execution::ShardedCollective{group, *sharded_->mailbox, rank});
     }
     std::vector<context::ContextPoolStorage> pools{
         {0, &resources.decoder.text_kv.pages(), &resources.decoder.text_kv.tables()}};

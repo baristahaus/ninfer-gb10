@@ -74,7 +74,7 @@ std::unique_ptr<RankProgram> create_rank_program(const execution::Parameters& p,
                                                  qwen4_exp::ExecutionPlan&& plan,
                                                  DeviceContext& device,
                                                  const StartupObserver& observer,
-                                                 const ShardedGroup* /*sharded*/) {
+                                                 const models::ShardedGroup* /*sharded*/) {
     auto program = std::make_unique<RankProgram>(p, std::move(plan), device, observer);
     program->prepare_execution();
     return program;

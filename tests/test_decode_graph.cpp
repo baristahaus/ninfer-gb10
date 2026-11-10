@@ -12,7 +12,8 @@
 namespace {
 
 bool cuda_unavailable(cudaError_t err) {
-    return err == cudaErrorNoDevice || err == cudaErrorInsufficientDriver;
+    return err == cudaErrorNoDevice || err == cudaErrorInsufficientDriver ||
+           err == cudaErrorStubLibrary;
 }
 
 int expect_value(void* device, std::uint32_t expected, const char* label) {

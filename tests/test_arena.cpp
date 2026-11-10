@@ -21,7 +21,8 @@ int fail(const char* message) {
 }
 
 bool cuda_unavailable(cudaError_t err) {
-    return err == cudaErrorNoDevice || err == cudaErrorInsufficientDriver;
+    return err == cudaErrorNoDevice || err == cudaErrorInsufficientDriver ||
+           err == cudaErrorStubLibrary;
 }
 
 template <typename Exception, typename Fn>

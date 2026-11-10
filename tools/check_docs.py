@@ -8,6 +8,8 @@ Checks:
     tables is parsed by that file (a stale flag name fails);
   - every `--flag` named in `docs/cli.md` is declared for the cli or common scope, so the guide
     cannot advertise a flag the CLI parser rejects;
+  - the benchmark's own parser and its usage text agree: `ninfer_bench` is the third flag surface
+    and has no schema, so its accepted long and short flags must match the help it prints;
   - every `NINFER_*` environment variable read with getenv() under `src/` is named somewhere under
     `docs/`;
   - every `cmake --preset NAME` and `ctest --preset NAME` names a preset in `CMakePresets.json`
@@ -117,6 +119,39 @@ missing += [
     if flag not in cli_surface
 ]
 
+# The benchmark's flag surface is the schema's common flags (generated help, so the two cannot
+# disagree) plus a hand-written extras table and its own help block in
+# `bench/inference/options.cpp`. The extras are the drift-prone part: every extra the parser
+# accepts must be named in the help, and every flag the help names must be accepted by the schema
+# or by the extras table.
+common_scope = serve_scope & cli_scope
+bench_options = read("bench/inference/options.cpp")
+extras = re.search(r"constexpr product::CommandLineOption kOptions\[\] = \{(.*?)\};",
+                   bench_options, re.S)
+if extras is None:
+    missing.append(
+        "bench/inference/options.cpp: cannot locate the kOptions table; update tools/check_docs.py"
+    )
+    bench_extras = set()
+else:
+    bench_extras = set(re.findall(r'"(--[a-z0-9-]+)"', extras.group(1)))
+    bench_usage = bench_options[bench_options.index("std::string usage_text"):]
+    bench_documented = set()
+    for usage_line in bench_usage.splitlines():
+        if re.match(r"^\s+--[a-z0-9-]", usage_line):
+            bench_documented.update(re.findall(r"--[a-z0-9-]+", usage_line))
+    missing += [
+        f"bench flag {flag} is parsed but bench/inference/options.cpp's usage text does not name it"
+        for flag in sorted(bench_extras)
+        if flag not in bench_documented
+    ]
+    missing += [
+        f"bench flag {flag} is named in the bench usage text but neither the schema nor the "
+        f"kOptions table accepts it"
+        for flag in sorted(bench_documented)
+        if flag not in bench_extras | common_scope
+    ]
+
 # 2. Environment variables must be documented somewhere under docs/.
 documented_text = "\n".join(
     path.read_text(encoding="utf-8", errors="replace") for path in (root / "docs").rglob("*.md")
@@ -171,6 +206,6 @@ if missing:
 
 print(
     f"ok: {len(flags)} serve flags, {len(cli_surface)} cli flags, "
-    f"{len(environment)} environment variables, {len(presets)} presets, "
-    f"and the preset binary paths are documented"
+    f"{len(bench_extras)} bench extras, {len(environment)} environment variables, "
+    f"{len(presets)} presets, and the preset binary paths are documented"
 )

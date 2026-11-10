@@ -19,7 +19,8 @@ int fail(const char* message) {
 }
 
 bool cuda_unavailable(cudaError_t err) {
-    return err == cudaErrorNoDevice || err == cudaErrorInsufficientDriver;
+    return err == cudaErrorNoDevice || err == cudaErrorInsufficientDriver ||
+           err == cudaErrorStubLibrary;
 }
 
 int expect_throws_device(int device_id) {

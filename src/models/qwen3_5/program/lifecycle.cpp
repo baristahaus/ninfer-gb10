@@ -3,6 +3,8 @@
 #include "models/qwen3_5/execution/text.h"
 
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <exception>
 #include <stdexcept>
 #include <string>
@@ -131,7 +133,16 @@ void RankProgramImpl::start(runtime::ExecutionRequest<ExecutionTypes>&& request)
     // plausible.
     // So the refusal stands until the tokens match, and it names that reason rather than claiming
     // the loop is unwired.
-    if (peer_text_kv != nullptr) {
+    // The comparison that must justify removing this refusal cannot run while it stands, so there is
+    // exactly one escape, it must be set explicitly, and it says so on stderr. An escape that is
+    // quiet is an escape that becomes the default.
+    const bool experiment = std::getenv("NINFER_TP2_UNVALIDATED") != nullptr;
+    if (experiment) {
+        std::fprintf(stderr,
+                     "WARNING: NINFER_TP2_UNVALIDATED is set. The sharded forward has no validated "
+                     "round; any numbers this process produces are unverified.\n");
+    }
+    if (peer_text_kv != nullptr && !experiment) {
         throw std::logic_error(
             "the sharded forward has no validated round yet: this lane loads but cannot infer. A "
             "width-2 round has never been compared token for token against a width-1 round, and "

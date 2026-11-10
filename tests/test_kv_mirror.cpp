@@ -209,16 +209,54 @@ int exercise_page_and_row_replay(ninfer::DeviceContext& rank0, ninfer::DeviceCon
     for (std::size_t index = 0; index < pattern.size(); ++index) {
         pattern[index] = static_cast<std::byte>((index * 7 + 3) & 0xff);
     }
-    if (cudaMemcpy(origin.plane(0).data, pattern.data(), page_bytes, cudaMemcpyHostToDevice) !=
-        cudaSuccess) {
-        return fail("pattern upload failed");
+    // The handles name physical pages that the allocator chose, so the offsets must come from the
+    // handles and not from their position in the lease vector. Assuming handles[0] is physical page
+    // 0 and handles[1] page 1 is what made this check fail: the pattern went to one page and the
+    // readback came from another.
+    const std::int32_t source_index = origin.physical_page(handles[0]);
+    const std::int32_t destination_index = origin.physical_page(handles[1]);
+    if (source_index == destination_index) { return fail("the two pages are the same page"); }
+    // The mirror's contract is index-identical, not byte-identical: it replays *which* page moved,
+    // never the bytes. The source content therefore has to exist on both ranks before the copy —
+    // injecting it on rank 0 alone tests something the mirror never promises, because the replayed
+    // copy reads rank 1's own source page, which is still zero.
+    for (const auto& [arena, index] :
+         {std::pair<void*, std::int32_t>{origin.plane(0).data, source_index},
+          std::pair<void*, std::int32_t>{mirror.plane(0).data, source_index}}) {
+        if (cudaMemcpy(static_cast<std::byte*>(arena) + index * page_bytes, pattern.data(),
+                       page_bytes, cudaMemcpyHostToDevice) != cudaSuccess) {
+            return fail("pattern upload failed");
+        }
     }
     mirrored.copy_page(handles[0], handles[1], rank0.stream());
     rank0.synchronize();
     rank1.synchronize();
-    const std::vector<std::byte> copied =
-        read_bytes(static_cast<const std::byte*>(mirror.plane(0).data) + page_bytes, page_bytes);
-    failures += (copied == pattern ? 0 : fail("replayed page copy differs on rank 1"));
+    failures += (read_bytes(static_cast<const std::byte*>(origin.plane(0).data) +
+                                destination_index * page_bytes,
+                            page_bytes) == pattern
+                     ? 0
+                     : fail("origin page copy did not land"));
+    const std::vector<std::byte> copied = read_bytes(
+        static_cast<const std::byte*>(mirror.plane(0).data) + destination_index * page_bytes,
+        page_bytes);
+    if (copied != pattern) {
+        std::cerr << "  DIAG source_index=" << source_index
+                  << " destination_index=" << destination_index
+                  << " page_bytes=" << page_bytes
+                  << " plane.nb[3]=" << origin.plane(0).nb[3]
+                  << " plane.ne=" << origin.plane(0).ne[0] << "," << origin.plane(0).ne[1] << ","
+                  << origin.plane(0).ne[2] << "," << origin.plane(0).ne[3] << "\n";
+        std::cerr << "  DIAG pattern[0..8]=";
+        for (std::size_t i = 0; i < 8 && i < pattern.size(); ++i) {
+            std::cerr << static_cast<int>(pattern[i]) << " ";
+        }
+        std::cerr << " copied[0..8]=";
+        for (std::size_t i = 0; i < 8 && i < copied.size(); ++i) {
+            std::cerr << static_cast<int>(copied[i]) << " ";
+        }
+        std::cerr << "\n";
+        failures += fail("replayed page copy differs on rank 1");
+    }
 
     // Execution-row publication replays the same physical indices into rank 1's row.
     ninfer::DeviceBuffer origin_tables_arena(rank0.device(), plan.bytes);
@@ -280,9 +318,12 @@ int exercise_state_image_replay(ninfer::DeviceContext& rank0, ninfer::DeviceCont
     for (std::size_t index = 0; index < pattern.size(); ++index) {
         pattern[index] = static_cast<std::byte>(0xa5);
     }
-    if (cudaMemcpy(origin.image(0).data, pattern.data(), image_bytes, cudaMemcpyHostToDevice) !=
-        cudaSuccess) {
-        return fail("StateImage pattern upload failed");
+    // Same contract as the KV copy: the source content must exist on both ranks, because the
+    // replayed copy reads rank 1's own source slot.
+    for (void* arena : {origin.image(0).data, mirror.image(0).data}) {
+        if (cudaMemcpy(arena, pattern.data(), image_bytes, cudaMemcpyHostToDevice) != cudaSuccess) {
+            return fail("StateImage pattern upload failed");
+        }
     }
 
     mirrored.copy(0, 1, rank0.execution_view());

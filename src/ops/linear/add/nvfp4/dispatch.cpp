@@ -1,14 +1,39 @@
+#include "core/weight.h"
 #include "ops/linear/add/nvfp4/dispatch.h"
+
+#include <stdexcept>
+#include <cstdio>
+#include <string>
 
 namespace ninfer::ops::detail {
 namespace {
+// The refused weight's full descriptor. n and k alone do not identify it: a fused consumer or a
+// repack gather can present a shape no artifact binding declares, and `ndim`/`shape[]` plus the
+// qdata address are what tell those apart against a binding dump.
+std::string describe_weight(const Weight& w) {
+    std::string out = "N" + std::to_string(w.n) + "K" + std::to_string(w.k) + " [ndim=" +
+                      std::to_string(w.ndim) + " shape=";
+    for (std::uint32_t axis = 0; axis < w.ndim && axis < 4; ++axis) {
+        out += (axis ? "," : "") + std::to_string(w.shape[axis]);
+    }
+    out += " qtype=" + std::to_string(static_cast<int>(w.qtype)) + " layout=" +
+           std::to_string(static_cast<int>(w.layout)) + " payload_bytes=" +
+           std::to_string(w.payload_bytes) + " qdata=";
+    char text[32];
+    std::snprintf(text, sizeof(text), "%p", static_cast<const void*>(w.qdata));
+    return out + text + "]";
+}
+
+
 Nvfp4LinearAddPlan select_plan(std::int32_t rows, std::int32_t k, LinearPolicy policy,
                                std::int32_t tokens) {
     if (tokens > 0 && rows == 5120) {
         if (k == 6144) return select_nvfp4_add_n5120_k6144(policy, tokens);
         if (k == 17408) return select_nvfp4_add_n5120_k17408(policy, tokens);
+        if (k == 8704) return select_nvfp4_add_n5120_k8704(policy, tokens);
     }
-    throw std::invalid_argument("nvfp4 linear_add: unsupported shape or token extent");
+    throw std::invalid_argument("nvfp4 linear_add: unsupported shape " +
+                                describe_weight(Weight{.n = rows, .k = k}));
 }
 } // namespace
 

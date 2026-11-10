@@ -7,6 +7,7 @@
 #include "core/device.h"
 
 #include <cstddef>
+#include <string_view>
 #include <cstdint>
 #include <memory>
 
@@ -72,7 +73,8 @@ enum class LinearPolicy : std::uint8_t {
                                                           std::int32_t input_rows,
                                                           LinearPolicy policy,
                                                           std::int32_t min_tokens,
-                                                          std::int32_t max_tokens);
+                                                          std::int32_t max_tokens,
+                                                          std::string_view tag = {});
 
 /**
  * Y[n,t] = sum_k decode(W)[n,k] * X[k,t].

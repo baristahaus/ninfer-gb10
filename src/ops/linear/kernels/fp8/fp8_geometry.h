@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdint>
 #include <stdexcept>
+#include <string>
 
 namespace ninfer::ops::detail {
 template <std::int32_t OutputRows, std::int32_t InputRows>
@@ -25,6 +26,10 @@ using Fp8N34816K5120             = Fp8Geometry<34816, 5120>;
 using Fp8N248320K5120            = Fp8Geometry<248320, 5120>;
 using Fp8N5120K6144              = Fp8Geometry<5120, 6144>;
 using Fp8N5120K17408             = Fp8Geometry<5120, 17408>;
+// One rank's half of the fused FP8 objects the 27B binds at tensor-parallel width 2.
+using Fp8N7168K5120              = Fp8Geometry<7168, 5120>;
+using Fp8N8192K5120              = Fp8Geometry<8192, 5120>;
+using Fp8N124160K5120            = Fp8Geometry<124160, 5120>;
 using Fp8Activation5120Geometry  = Fp8ActivationGeometry<5120>;
 using Fp8Activation6144Geometry  = Fp8ActivationGeometry<6144>;
 using Fp8Activation17408Geometry = Fp8ActivationGeometry<17408>;
@@ -36,6 +41,9 @@ enum class Fp8GeometryId : std::uint8_t {
     N248320K5120,
     N5120K6144,
     N5120K17408,
+    N7168K5120,
+    N8192K5120,
+    N124160K5120,
 };
 
 inline Fp8GeometryId resolve_fp8_geometry(std::int32_t output_rows, std::int32_t input_rows) {
@@ -57,7 +65,17 @@ inline Fp8GeometryId resolve_fp8_geometry(std::int32_t output_rows, std::int32_t
     if (output_rows == Fp8N5120K17408::kOutputRows && input_rows == Fp8N5120K17408::kInputRows) {
         return Fp8GeometryId::N5120K17408;
     }
-    throw std::invalid_argument("unsupported FP8 problem");
+    if (output_rows == Fp8N7168K5120::kOutputRows && input_rows == Fp8N7168K5120::kInputRows) {
+        return Fp8GeometryId::N7168K5120;
+    }
+    if (output_rows == Fp8N8192K5120::kOutputRows && input_rows == Fp8N8192K5120::kInputRows) {
+        return Fp8GeometryId::N8192K5120;
+    }
+    if (output_rows == Fp8N124160K5120::kOutputRows && input_rows == Fp8N124160K5120::kInputRows) {
+        return Fp8GeometryId::N124160K5120;
+    }
+    throw std::invalid_argument("unsupported FP8 problem N" + std::to_string(output_rows) + "K" +
+                                std::to_string(input_rows));
 }
 
 } // namespace ninfer::ops::detail

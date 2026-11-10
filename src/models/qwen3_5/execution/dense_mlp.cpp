@@ -29,12 +29,12 @@ std::size_t dense_mlp_workspace_bytes(const DenseProfile& parameters, std::int32
         {
             auto scope = layout.scope();
             (void)layout.alloc_bytes(ops::linear_workspace_capacity_bytes(
-                gate.qtype, gate.n, gate.k, gate.policy, first, last));
+                gate.qtype, gate.n, gate.k, gate.policy, first, last, "mlp_gate_role"));
         }
         {
             auto scope = layout.scope();
             (void)layout.alloc_bytes(ops::linear_workspace_capacity_bytes(
-                up.qtype, up.n, up.k, up.policy, first, last));
+                up.qtype, up.n, up.k, up.policy, first, last, "mlp_up_role"));
         }
         (void)layout.alloc_bytes(ops::linear_add_workspace_capacity_bytes(
             down.qtype, down.n, down.k, parameters.down.policy, first, last));
@@ -45,12 +45,14 @@ std::size_t dense_mlp_workspace_bytes(const DenseProfile& parameters, std::int32
         {
             auto scope = layout.scope();
             (void)layout.alloc_bytes(ops::linear_workspace_capacity_bytes(
-                gu.qtype, gu.n, gu.k, parameters.gate_up.policy, first, last));
+                gu.qtype, gu.n, gu.k, parameters.gate_up.policy, first, last,
+                use == DenseMlpUse::Mtp ? "mtp_gate_up" : "mlp_gate_up"));
         }
         (void)layout.alloc(DType::BF16, {gu.n / 2, last});
         (void)layout.alloc(DType::BF16, {down.n, last});
         (void)layout.alloc_bytes(ops::linear_workspace_capacity_bytes(
-            down.qtype, down.n, down.k, parameters.down.policy, first, last));
+            down.qtype, down.n, down.k, parameters.down.policy, first, last,
+            use == DenseMlpUse::Mtp ? "mtp_down" : "mlp_down"));
     } else {
         (void)layout.alloc(DType::BF16, {gu.n / 2, last});
         {

@@ -25,4 +25,13 @@ extern const Fp8LinearShape kFp8N248320K2560;
 extern const Fp8LinearShape kFp8ProjN12288K2560;
 extern const Fp8LinearShape kFp8ProjN10240K320;
 extern const Fp8LinearShape kFp8ProjN2560K640;
+
+// The sharded shapes of the 27B's FP8 parameters at tensor-parallel width 2, one per fused op view.
+// A Rows shard halves the output rows of the fused object: 14336 -> 7168 (the attention qkv),
+// 16384 -> 8192 (the GDN qkvz) and 248320 -> 124160 (the output head). Each inherits the schedule
+// set and token bands of the shape it halves, because halving an axis changes the tile count and
+// not the tile shapes.
+extern const Fp8LinearShape kFp8N7168K5120;
+extern const Fp8LinearShape kFp8N8192K5120;
+extern const Fp8LinearShape kFp8N124160K5120;
 } // namespace ninfer::ops::detail

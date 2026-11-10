@@ -657,8 +657,13 @@ void validate_target_options(const execution::ModelProfile& profile, DeviceConte
         }
         break;
     }
-    if (device.compute_capability() != 120) {
-        throw std::invalid_argument("Qwen3.5 family runtime requires compute capability 12.0");
+    // Both Blackwell parts this tree targets: the RTX 5090 is 12.0 and the GB10 is 12.1, and the
+    // kernels are built for sm_120a and sm_121a. The exact 12.0 test here rejected our own GB10
+    // target outright, so the family could not run on it at all. The Flash-Next guard already
+    // accepts both; this one now matches it.
+    if (device.compute_capability() != 120 && device.compute_capability() != 121) {
+        throw std::invalid_argument(
+            "Qwen3.5 family runtime requires compute capability 12.0 or 12.1 (Blackwell)");
     }
 }
 

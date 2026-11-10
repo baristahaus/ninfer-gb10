@@ -8,8 +8,23 @@
 namespace ninfer::models::qwen3_5 {
 Startup::Startup(const artifact::Reader& definition_source, const artifact::Reader& rank_source,
                  const EngineOptions& options, Device device)
-    : reader_(rank_source), definition_(read_definition(definition_source, load_options(options))),
-      architecture_(definition_->config().text.architecture) {
+    : reader_(rank_source) {
+    // One definition per rank: bindings are computed once by `read_definition` and then
+    // materialized, so a rank cannot share its peer's definition. The group's width comes from the
+    // engine's device list; at width 1 this reads exactly one definition, with an empty transform,
+    // which is the load the single-device lane made before groups existed.
+    const LoadOptions base = load_options(options);
+    const int width        = base.width;
+    if (width < 1) { throw std::invalid_argument("model load width must be positive"); }
+    rank_definitions_.reserve(static_cast<std::size_t>(width));
+    for (int rank = 0; rank < width; ++rank) {
+        LoadOptions sharded = base;
+        sharded.width       = width;
+        sharded.rank        = rank;
+        rank_definitions_.push_back(read_definition(definition_source, sharded));
+    }
+    definition_   = rank_definitions_.front();
+    architecture_ = definition_->config().text.architecture;
     if (options.deployment) {
         const auto& deployment = *options.deployment;
         const auto& parallel   = deployment.parallel;

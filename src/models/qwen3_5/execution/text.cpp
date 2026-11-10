@@ -228,17 +228,17 @@ void TextRun::gdn(const BlockParameters& block, std::uint32_t compact_layer) {
     Tensor vc             = projection.value;
     if (sequence) {
         Tensor qkv    = workspace::gdn_prefill_conv(work, cfg, tokens);
-        Tensor z_flat = z.view({dimension(gdn.value_width()), tokens});
+        Tensor z_flat = z.view({extents_.value_width, tokens});
         gdn_projection(h, p, qkv, z_flat, work, cuda);
         Tensor source      = view_.states.conv_slot(compact_layer, sequence->source_slot);
         Tensor destination = view_.states.conv_slot(compact_layer, sequence->destination_slot);
         ops::causal_conv1d_silu_split(qkv, p.convolution, source, destination, qc, kc, vc, cuda);
     } else {
-        Tensor projection_input = h.view({dimension(cfg.hidden_size), width, batch});
-        Tensor query_output     = qc.view({dimension(gdn.key_width()), width, batch});
-        Tensor key_output       = kc.view({dimension(gdn.key_width()), width, batch});
-        Tensor value_output     = vc.view({dimension(gdn.value_width()), width, batch});
-        Tensor gate_output      = z.view({dimension(gdn.value_width()), width, batch});
+        Tensor projection_input = h.view({extents_.hidden_size, width, batch});
+        Tensor query_output     = qc.view({extents_.key_width, width, batch});
+        Tensor key_output       = kc.view({extents_.key_width, width, batch});
+        Tensor value_output     = vc.view({extents_.value_width, width, batch});
+        Tensor gate_output      = z.view({extents_.value_width, width, batch});
         Tensor conv             = view_.states.layer_view(compact_layer).conv;
         const bool exl3_route = is_exl3_gdn(p);
         if (exl3_route) {
@@ -248,8 +248,8 @@ void TextRun::gdn(const BlockParameters& block, std::uint32_t compact_layer) {
             // each split output is a contiguous row range of its result.
             const std::int32_t kColumns = width * batch;
             Tensor qkv       = workspace::gdn_prefill_conv(work, cfg, kColumns);
-            Tensor z_flat    = z.view({dimension(gdn.value_width()), kColumns});
-            Tensor hidden_2d = h.view({dimension(cfg.hidden_size), kColumns});
+            Tensor z_flat    = z.view({extents_.value_width, kColumns});
+            Tensor hidden_2d = h.view({extents_.hidden_size, kColumns});
             gdn_projection(hidden_2d, p, qkv, z_flat, work, cuda);
             Tensor conv_out    = workspace::gdn_prefill_conv(work, cfg, kColumns);
             Tensor conv_input  = qkv.view({dimension(gdn.conv_channels()), width, batch});
@@ -296,21 +296,21 @@ void TextRun::gdn(const BlockParameters& block, std::uint32_t compact_layer) {
             const auto group_channels = dimension(gdn.conv_channels());
             const auto* source = static_cast<const std::byte*>(conv_out.data);
             CUDA_CHECK(cudaMemcpy2DAsync(
-                query_output.data, static_cast<std::size_t>(dimension(gdn.key_width())) * 2,
+                query_output.data, static_cast<std::size_t>(extents_.key_width) * 2,
                 source, static_cast<std::size_t>(group_channels) * 2,
-                static_cast<std::size_t>(dimension(gdn.key_width())) * 2, kColumns,
+                static_cast<std::size_t>(extents_.key_width) * 2, kColumns,
                 cudaMemcpyDeviceToDevice, cuda.stream()));
             CUDA_CHECK(cudaMemcpy2DAsync(
-                key_output.data, static_cast<std::size_t>(dimension(gdn.key_width())) * 2,
-                source + static_cast<std::size_t>(dimension(gdn.key_width())) * 2,
+                key_output.data, static_cast<std::size_t>(extents_.key_width) * 2,
+                source + static_cast<std::size_t>(extents_.key_width) * 2,
                 static_cast<std::size_t>(group_channels) * 2,
-                static_cast<std::size_t>(dimension(gdn.key_width())) * 2, kColumns,
+                static_cast<std::size_t>(extents_.key_width) * 2, kColumns,
                 cudaMemcpyDeviceToDevice, cuda.stream()));
             CUDA_CHECK(cudaMemcpy2DAsync(
-                value_output.data, static_cast<std::size_t>(dimension(gdn.value_width())) * 2,
-                source + static_cast<std::size_t>(2 * dimension(gdn.key_width())) * 2,
+                value_output.data, static_cast<std::size_t>(extents_.value_width) * 2,
+                source + static_cast<std::size_t>(2 * extents_.key_width) * 2,
                 static_cast<std::size_t>(group_channels) * 2,
-                static_cast<std::size_t>(dimension(gdn.value_width())) * 2, kColumns,
+                static_cast<std::size_t>(extents_.value_width) * 2, kColumns,
                 cudaMemcpyDeviceToDevice, cuda.stream()));
         } else if (replay) {
             const auto records = replay->records.layer(compact_layer, batch);
@@ -329,7 +329,7 @@ void TextRun::gdn(const BlockParameters& block, std::uint32_t compact_layer) {
     Tensor q = qc.view({dk, qh, tokens});
     Tensor k = kc.view({dk, qh, tokens});
     Tensor v = vc.view({dv, vh, tokens});
-    Tensor o = workspace::gdn_recurrent_output(work, cfg, tokens).view({dv, vh, tokens});
+    Tensor o = workspace::gdn_recurrent_output(work, extents_, tokens).view({dv, vh, tokens});
     if (sequence && !replay) {
         Tensor source      = view_.states.recurrent_slot(compact_layer, sequence->source_slot);
         Tensor destination = view_.states.recurrent_slot(compact_layer, sequence->destination_slot);
@@ -354,15 +354,15 @@ void TextRun::gdn(const BlockParameters& block, std::uint32_t compact_layer) {
         }
     }
 
-    Tensor normalized = workspace::gdn_normalized_output(work, cfg, tokens).view({dv, vh, tokens});
+    Tensor normalized = workspace::gdn_normalized_output(work, extents_, tokens).view({dv, vh, tokens});
     ops::silu_gated_rmsnorm(o, p.norm, z, cfg.rms_norm_eps, normalized, cuda);
     if (view_.collective != nullptr) {
         // Column-parallel, same residual rule as the attention output projection.
         std::array<Tensor, 2> partials = column_partials(tokens);
-        sharded_project_columns_add(normalized.view({dimension(gdn.value_width()), tokens}),
+        sharded_project_columns_add(normalized.view({extents_.value_width, tokens}),
                                     p.output, partials, residual_, *view_.collective, work, cuda);
     } else {
-        ops::linear_add(normalized.view({dimension(gdn.value_width()), tokens}), p.output.weight,
+        ops::linear_add(normalized.view({extents_.value_width, tokens}), p.output.weight,
                         residual_, p.output.policy, work, cuda);
     }
 }

@@ -153,6 +153,18 @@ Tensor gdn_prefill_conv(Allocator& allocator, const TextConfig& config, std::int
 }
 
 template <class Allocator>
+Tensor gdn_recurrent_output(Allocator& allocator, GdnExtents extents, std::int32_t tokens) {
+    return matrix(allocator, DType::BF16, dimension(extents.value_width), tokens);
+}
+
+template <class Allocator>
+Tensor gdn_normalized_output(Allocator& allocator, GdnExtents extents, std::int32_t tokens) {
+    return matrix(allocator, DType::BF16, dimension(extents.value_width), tokens);
+}
+
+// The config-wide forms: planning sizes the arena for the largest shape any rank can hold, so it uses
+// the model's own extents. Correctness never calls these.
+template <class Allocator>
 Tensor gdn_recurrent_output(Allocator& allocator, const TextConfig& config, std::int32_t tokens) {
     return matrix(allocator, DType::BF16, dimension(config.gdn->value_width()), tokens);
 }

@@ -295,6 +295,12 @@ generated token IDs in diagnostics.
 
 Run `./build/rtx5090-release/apps/ninfer --help` for the exact option contract.
 
+## Two-GPU lane validation
+
+`NINFER_TP2_UNVALIDATED=1` lets a width-above-one round run before the sharded forward has a validated
+token-for-token comparison against a single-device round. It prints a warning to stderr and exists only so
+that comparison can be made; without it the lane refuses to infer. Do not set it for serving.
+
 ## Shard-slice debugging
 
 `NINFER_DEBUG_SLICES=1` prints, for every sharded weight, the `MatrixSlice` list the loader derives

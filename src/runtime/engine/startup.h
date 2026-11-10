@@ -9,6 +9,7 @@
 
 #include <memory>
 #include <variant>
+#include <vector>
 
 namespace ninfer::runtime {
 
@@ -30,6 +31,10 @@ struct ConstructedModel {
     // their Startup classes. Rank 0 is the execution device, so a width-1 group behaves exactly
     // as a single DeviceContext did.
     std::unique_ptr<ExecutionContext> execution;
+    // Flash-Next only: the peer ranks' immutable weights, one entry per rank after rank 0, in
+    // rank order. Rank 0's plan and backing live inside `instance`. Empty at width 1 and on the
+    // other routes, so the single-device lane carries nothing.
+    std::vector<flashnext_runtime::RankWeights> peer_weights;
 };
 
 [[nodiscard]] ConstructedModel construct_model(EngineOptions&);

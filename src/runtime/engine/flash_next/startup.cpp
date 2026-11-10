@@ -16,6 +16,7 @@
 #include <string>
 #include <thread>
 #include <utility>
+#include <vector>
 
 namespace ninfer::flashnext_runtime {
 namespace {
@@ -175,86 +176,115 @@ ConstructedFlashNextModel construct_flash_next(EngineOptions& options, artifact:
         throw std::invalid_argument("Flash-Next uses its registered artifact chat template; "
                                     "--chat-template is unsupported");
     }
-    artifact::Binder binder(reader);
-    auto plan        = Model::plan_load(binder, options, Model::WeightsProfile::Nvfp4);
+    // One plan per rank. Binding is computed once and then materialized, so a rank cannot share
+    // its peer's plan: each rank binds through its own transform, and the binder is consumed by
+    // finish(), so every rank needs its own binder over the same reader. At width 1 the model
+    // returns an empty transform, which is the single-device lane's contract, so this loop runs
+    // once and binds exactly what the lane bound before the group existed.
+    const int width = execution->width();
+    std::vector<Model::LoadPlan> plans;
+    plans.reserve(static_cast<std::size_t>(width));
+    for (int rank = 0; rank < width; ++rank) {
+        artifact::Binder binder(reader);
+        binder.set_shard_transform(Model::shard_transform(width, rank));
+        plans.push_back(Model::plan_load(binder, options, Model::WeightsProfile::Nvfp4));
+    }
     auto planner     = Model::make_sequence_planner(device, options, Model::WeightsProfile::Nvfp4);
     const auto curve = planner.capacity_curve();
 
-    std::vector<artifact::PlacementRequest> requests;
-    requests.reserve(plan.device_objects().size());
-    for (const auto object : plan.device_objects()) {
-        requests.push_back({object, device.device(), artifact::HostAccess::CpuOnly});
-    }
     // SP-4 tiered banks: the device budget = the obtainable bytes less the startup reserve
     // (state slots, workspaces, graph pools, KV headroom); the plain device objects and the
     // hot mini-banks consume first, and the remainder buys whole-expert cache tail slots.
-    // NINFER_EXPERT_TAIL_SLOTS caps the tail for the tail-limited measurements.
-    const auto obtainable = obtainable_device_bytes(device, options, true);
+    // NINFER_EXPERT_TAIL_SLOTS caps the tail for the tail-limited measurements. Every rank sizes
+    // against its own device: a group's ranks need not have the same free memory.
     constexpr std::uint64_t kTierStartupReserveBytes = 6ULL << 30;
-    artifact::TierBudget tier_budget{
-        .device_bytes = obtainable > kTierStartupReserveBytes
-                            ? obtainable - kTierStartupReserveBytes
-                            : 0,
-        .slot_cap     = 0};
+    std::uint32_t tail_slot_cap                      = 0;
     if (const char* cap = std::getenv("NINFER_EXPERT_TAIL_SLOTS")) {
-        tier_budget.slot_cap = static_cast<std::uint32_t>(std::stoul(cap));
+        tail_slot_cap = static_cast<std::uint32_t>(std::stoul(cap));
     }
-    auto storage = artifact::plan_materialization(reader, requests, plan.tier_inputs(),
-                                                  tier_budget,
-                                                  std::move(plan.materialization()));
-
-    // SP-4: on an integrated device the device arena, the pinned tiered warm mini-banks, and
-    // the Host-resident weights all draw from one MemAvailable; the budget counts them all.
-    // NINFER_BUDGET_DRY_RUN prints the resident-set budget and exits before any allocation.
-    const auto tier_pinned  = storage.tier_pinned_bytes;
-    const auto host_backing = storage.host_capacity_bytes;
-    if (std::getenv("NINFER_BUDGET_DRY_RUN") != nullptr) {
-        std::fprintf(stderr,
-                     "budget-dry-run: device=%zu MiB tier_pinned=%zu MiB host=%zu MiB "
-                     "obtainable=%zu MiB verdict=%s\n",
-                     storage.device_capacity_bytes >> 20, tier_pinned >> 20,
-                     host_backing >> 20, obtainable >> 20,
-                     storage.device_capacity_bytes + tier_pinned + host_backing <= obtainable
-                         ? "FITS"
-                         : "DOES_NOT_FIT");
-        throw std::invalid_argument("budget dry run complete");
-    }
-    if (device.properties().integrated &&
-        storage.device_capacity_bytes + tier_pinned + host_backing > obtainable) {
-        throw std::invalid_argument(
-            "Flash-Next resident set exceeds integrated-pool budget: need " +
-            std::to_string(storage.device_capacity_bytes >> 20) + " MiB device + " +
-            std::to_string(tier_pinned >> 20) + " MiB pinned tiered warm banks + " +
-            std::to_string(host_backing >> 20) + " MiB Host weights, obtainable " +
-            std::to_string(obtainable >> 20) + " MiB");
-    }
-    if (storage.device_capacity_bytes > obtainable) {
-        throw std::invalid_argument(
-            "Flash-Next weights exceed free GPU memory: need " +
-            std::to_string(storage.device_capacity_bytes >> 20) + " MiB, obtainable " +
-            std::to_string(obtainable >> 20) + " MiB");
-    }
-    if (tier_pinned != 0 && device.properties().integrated &&
-        options.kv_capacity.mode == KvCapacityMode::Automatic) {
-        throw std::invalid_argument(
-            "tiered loads on an integrated device require an explicit --kv-capacity; the "
-            "auto resolver cannot see the pinned warm mini-banks");
-    }
-    (void)resolve_kv_capacity(options.kv_capacity, curve,
-                              obtainable - storage.device_capacity_bytes - tier_pinned);
-
     std::set<std::string> formats{"fp8_e4m3fn"};
-    for (const auto& request : requests) {
-        formats.insert(reader.directory().tensor(request.object).format);
-    }
 
-    StartupPhaseScope materialize_phase(options.startup_observer, StartupPhase::WeightsMaterialize);
-    auto backing =
-        artifact::materialize(reader, std::move(storage), device.transfer_view(),
-                              &options.startup_observer);
-    materialize_phase.complete();
-    const auto stats = backing.stats();
-    auto model       = Model::construct_loaded_model(std::move(plan), std::move(backing));
+    // Every rank materializes its own bindings onto its own device. At width 1 the loop body runs
+    // once with the same requests, the same budget and the same checks the single-device lane ran
+    // before the group existed, so that lane's numbers are unchanged.
+    std::vector<RankWeights> rank_weights;
+    rank_weights.reserve(plans.size());
+    for (int rank = 0; rank < width; ++rank) {
+        DeviceContext& rank_device = execution->device(rank);
+        Model::LoadPlan& rank_plan = plans[static_cast<std::size_t>(rank)];
+        std::vector<artifact::PlacementRequest> requests;
+        requests.reserve(rank_plan.device_objects().size());
+        for (const auto object : rank_plan.device_objects()) {
+            requests.push_back({object, rank_device.device(), artifact::HostAccess::CpuOnly});
+        }
+        const auto obtainable = obtainable_device_bytes(rank_device, options, true);
+        artifact::TierBudget tier_budget{
+            .device_bytes = obtainable > kTierStartupReserveBytes
+                                ? obtainable - kTierStartupReserveBytes
+                                : 0,
+            .slot_cap     = tail_slot_cap};
+        auto storage = artifact::plan_materialization(reader, requests, rank_plan.tier_inputs(),
+                                                      tier_budget,
+                                                      std::move(rank_plan.materialization()));
+
+        // SP-4: on an integrated device the device arena, the pinned tiered warm mini-banks, and
+        // the Host-resident weights all draw from one MemAvailable; the budget counts them all.
+        // NINFER_BUDGET_DRY_RUN prints the resident-set budget and exits before any allocation.
+        const auto tier_pinned  = storage.tier_pinned_bytes;
+        const auto host_backing = storage.host_capacity_bytes;
+        if (std::getenv("NINFER_BUDGET_DRY_RUN") != nullptr) {
+            std::fprintf(stderr,
+                         "budget-dry-run: rank=%d device=%zu MiB tier_pinned=%zu MiB "
+                         "host=%zu MiB obtainable=%zu MiB verdict=%s\n",
+                         rank, storage.device_capacity_bytes >> 20, tier_pinned >> 20,
+                         host_backing >> 20, obtainable >> 20,
+                         storage.device_capacity_bytes + tier_pinned + host_backing <= obtainable
+                             ? "FITS"
+                             : "DOES_NOT_FIT");
+            throw std::invalid_argument("budget dry run complete");
+        }
+        if (rank_device.properties().integrated &&
+            storage.device_capacity_bytes + tier_pinned + host_backing > obtainable) {
+            throw std::invalid_argument(
+                "Flash-Next resident set exceeds integrated-pool budget: need " +
+                std::to_string(storage.device_capacity_bytes >> 20) + " MiB device + " +
+                std::to_string(tier_pinned >> 20) + " MiB pinned tiered warm banks + " +
+                std::to_string(host_backing >> 20) + " MiB Host weights, obtainable " +
+                std::to_string(obtainable >> 20) + " MiB");
+        }
+        if (storage.device_capacity_bytes > obtainable) {
+            throw std::invalid_argument(
+                "Flash-Next weights exceed free GPU memory: need " +
+                std::to_string(storage.device_capacity_bytes >> 20) + " MiB, obtainable " +
+                std::to_string(obtainable >> 20) + " MiB");
+        }
+        if (tier_pinned != 0 && rank_device.properties().integrated &&
+            options.kv_capacity.mode == KvCapacityMode::Automatic) {
+            throw std::invalid_argument(
+                "tiered loads on an integrated device require an explicit --kv-capacity; the "
+                "auto resolver cannot see the pinned warm mini-banks");
+        }
+        (void)resolve_kv_capacity(options.kv_capacity, curve,
+                                  obtainable - storage.device_capacity_bytes - tier_pinned);
+
+        // The load summary describes the execution device, so only rank 0 contributes its formats.
+        if (rank == 0) {
+            for (const auto& request : requests) {
+                formats.insert(reader.directory().tensor(request.object).format);
+            }
+        }
+
+        StartupPhaseScope materialize_phase(options.startup_observer,
+                                            StartupPhase::WeightsMaterialize);
+        auto backing = artifact::materialize(reader, std::move(storage),
+                                             rank_device.transfer_view(),
+                                             &options.startup_observer);
+        materialize_phase.complete();
+        rank_weights.push_back({std::move(rank_plan), std::move(backing)});
+    }
+    const auto stats = rank_weights.front().backing.stats();
+    auto model = Model::construct_loaded_model(std::move(rank_weights.front().plan),
+                                               std::move(rank_weights.front().backing));
     auto instance    = std::make_unique<FlashNextInstance>(std::move(model), options);
 
     StartupPhaseScope planning_phase(options.startup_observer, StartupPhase::TargetFinalize);
@@ -302,6 +332,12 @@ ConstructedFlashNextModel construct_flash_next(EngineOptions& options, artifact:
     constructed.load         = std::move(summary);
     constructed.context_cost = std::move(cost.model);
     constructed.execution    = std::move(execution);
+    // Ranks 1..width-1: bound, planned and materialized on their own device, unread until the
+    // mirrors and the sharded forward take them. At width 1 this is empty.
+    constructed.peer_weights.reserve(rank_weights.size() > 1 ? rank_weights.size() - 1 : 0);
+    for (std::size_t index = 1; index < rank_weights.size(); ++index) {
+        constructed.peer_weights.push_back(std::move(rank_weights[index]));
+    }
     return constructed;
 }
 

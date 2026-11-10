@@ -17,6 +17,7 @@ using ninfer::artifact::split_evenly;
 using ninfer::models::flash_next_125b_a6b::parameter_shards;
 using ninfer::models::flash_next_125b_a6b::ranges_for;
 using ninfer::models::flash_next_125b_a6b::shard_parameter;
+using ninfer::models::flash_next_125b_a6b::shard_transform;
 using ninfer::models::flash_next_125b_a6b::total_extent;
 
 int check(bool condition, const std::string& message) {
@@ -185,6 +186,51 @@ int test_shard_parameter() {
     return failures;
 }
 
+// The binder transform the loader installs per rank. Its whole contract is: width 1 gives an
+// empty function (the single-device lane, so the binder stays untouched), width 2 gives a callable
+// that slices exactly as `shard_parameter` does, and a rank outside the width is refused rather
+// than silently bound as another rank.
+int test_shard_transform_factory() {
+    int failures = 0;
+
+    failures += check(!shard_transform(1, 0), "width 1 returns an empty transform");
+    failures += check(static_cast<bool>(shard_transform(2, 0)),
+                      "width 2 rank 0 returns a transform");
+    failures += check(static_cast<bool>(shard_transform(2, 1)),
+                      "width 2 rank 1 returns a transform");
+
+    const auto reference =
+        synthetic("model.layers.3.self_attn.k_proj.weight", {512, 2560}, 512);
+    const auto transform0 = shard_transform(2, 0);
+    const auto transform1 = shard_transform(2, 1);
+    const auto rank0      = transform0(reference);
+    const auto rank1      = transform1(reference);
+    failures += check(rank0.shape[0] == 256 && rank0.binding.parts[0].begin == 0 &&
+                          rank0.binding.parts[0].end == 256,
+                      "rank 0's transform owns the first half");
+    failures += check(rank1.shape[0] == 256 && rank1.binding.parts[0].begin == 256 &&
+                          rank1.binding.parts[0].end == 512,
+                      "rank 1's transform owns the second half");
+    failures += check(rank0.shape[0] + rank1.shape[0] == reference.shape[0],
+                      "the two ranks' transforms partition the parameter");
+
+    // A parameter the table does not name is Replicated and the transform must not touch it.
+    const auto whole = synthetic("model.layers.3.mlp.gate.weight", {513, 2560}, 513);
+    const auto kept  = transform1(whole);
+    failures += check(kept.shape[0] == 513 && kept.binding.elements == 513 &&
+                          kept.binding.parts[0].end == 513,
+                      "an unlisted parameter passes through the transform unchanged");
+
+    bool threw = false;
+    try {
+        (void)shard_transform(2, 2);
+    } catch (const std::invalid_argument&) {
+        threw = true;
+    }
+    failures += check(threw, "a rank outside the width is refused");
+    return failures;
+}
+
 } // namespace
 
 int main() {
@@ -193,6 +239,7 @@ int main() {
     failures += test_width_three_is_partial();
     failures += test_qkv_segmentation();
     failures += test_shard_parameter();
+    failures += test_shard_transform_factory();
     if (failures == 0) {
         std::cout << "ok (" << parameter_shards().size() << " parameters)\n";
     }

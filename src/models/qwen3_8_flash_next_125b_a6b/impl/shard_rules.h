@@ -70,4 +70,12 @@ struct ParameterShard {
 [[nodiscard]] artifact::ParameterReference shard_parameter(
     const artifact::ParameterReference& reference, int width, int rank);
 
+// `rank`'s placement policy as the binder's transform, so a caller that binds one plan per rank
+// asks the model for the policy and never names a shard axis itself.
+//
+// Width 1 returns an empty function rather than an identity one: the binder's contract is that an
+// unset transform is the single-device lane, and `has_shard_transform()` must report that lane
+// honestly. An identity lambda would make a width-1 load look sharded to anything that asks.
+[[nodiscard]] artifact::Binder::ShardTransform shard_transform(int width, int rank);
+
 } // namespace ninfer::models::flash_next_125b_a6b

@@ -141,4 +141,15 @@ std::span<const ParameterShard> parameter_shards() noexcept {
     return kParameterShards;
 }
 
+artifact::Binder::ShardTransform shard_transform(int width, int rank) {
+    if (width <= 1) { return {}; }
+    if (rank < 0 || rank >= width) {
+        throw std::invalid_argument("sharding: rank " + std::to_string(rank) + " outside width " +
+                                    std::to_string(width));
+    }
+    return [width, rank](const artifact::ParameterReference& reference) {
+        return shard_parameter(reference, width, rank);
+    };
+}
+
 } // namespace ninfer::models::flash_next_125b_a6b

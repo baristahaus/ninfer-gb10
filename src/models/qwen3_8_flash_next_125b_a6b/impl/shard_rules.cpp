@@ -14,7 +14,7 @@ using artifact::ShardAxis;
 
 // Suffixes are relative to one layer's prefix, so the same rows serve the 48 text layers and the
 // MTP layer. The extents are the fixed 125B-A6B geometry from the model reference.
-constexpr std::array<ParameterShard, 23> kParameterShards{{
+constexpr std::array<ParameterShard, 29> kParameterShards{{
     // ---- QSA (12 full-attention layers) -------------------------------------------------------
     // Rows by the 24 gated query heads: 12288 = 48 head-slots of 256. See the header's packing note.
     {"self_attn.q_proj.weight", ShardAxis::Rows, {12288}, 1},
@@ -60,6 +60,25 @@ constexpr std::array<ParameterShard, 23> kParameterShards{{
     // The router is whole on every rank: each rank routes its own tokens and must see all 512
     // experts plus the shared-gate row, whatever experts it actually holds.
     {"mlp.gate.weight", ShardAxis::Replicated, {513}, 1},
+    // The shared expert is dense, so it splits like a dense MLP: gate and up by their 640
+    // intermediate rows, down by its 640 intermediate columns, and each rank's partial output is
+    // summed by the all-reduce. The shared-expert gate is one row and stays whole.
+    {"shared_expert.gate_proj.weight", ShardAxis::Rows, {640}, 1},
+    {"shared_expert.up_proj.weight", ShardAxis::Rows, {640}, 1},
+    {"shared_expert.down_proj.weight", ShardAxis::Columns, {640}, 1},
+    {"shared_expert_gate.weight", ShardAxis::Replicated, {1}, 1},
+
+    // ---- Output head ---------------------------------------------------------------------------
+    // Rows by the 248320-entry vocabulary: 124160 each at width 2. The review claimed this row
+    // halved but the table did not carry it, so at width 2 the head was replicated on both ranks
+    // and cost 1.27 GiB per rank instead of 0.64.
+    {"lm_head.weight", ShardAxis::Rows, {248320}, 1},
+
+    // ---- PLE -----------------------------------------------------------------------------------
+    // The 320M-entry n-gram table is host-mapped and read whole by every rank's gather, which
+    // indexes it by n-gram hash and not by rank, so it is replicated: sharding it would put a
+    // different vocabulary slice on each rank and every lookup outside the local slice would miss.
+    {"ple_embedding.ngram_embedding.weight", ShardAxis::Replicated, {320001536}, 1},
 }};
 
 // The comment block above the QKV row is where the segmentation came from; keep it adjacent.

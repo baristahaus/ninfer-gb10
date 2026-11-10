@@ -152,6 +152,16 @@ public:
                         std::span<const DeviceKVPageHandle> destination,
                         cudaStream_t stream = nullptr) const;
 
+    // tp2 mirror replay surface: the same physical mutation addressed by page index, so a rank-1
+    // replica can replay it without minting a handle of this pool. The range must lie inside
+    // capacity_pages() and a copy's two ranges must not overlap; the caller owns ordering on
+    // `stream`. This pool's own page bookkeeping is not consulted or changed.
+    void zero_page_run(std::int32_t first, std::uint32_t count, cudaStream_t stream = nullptr) const;
+    void copy_page_run(std::int32_t source_first, std::int32_t destination_first,
+                       std::uint32_t count, cudaStream_t stream = nullptr) const;
+    // The physical page a handle names, after validating the handle.
+    [[nodiscard]] std::int32_t physical_page(DeviceKVPageHandle handle) const;
+
 private:
     friend class DeviceKVPageLease;
     friend class DeviceKVPageReservation;
@@ -263,6 +273,15 @@ public:
                  std::span<const DeviceKVPageLease> pages, cudaStream_t stream = nullptr);
     void publish_repeated(KVExecutionRowHandle row, DeviceKVPageHandle page, std::uint32_t count,
                           cudaStream_t stream = nullptr);
+
+    // tp2 mirror replay surface: the same publication by physical page index, without handles of
+    // this pool. A mirror replays rank 0's row at the same physical indices.
+    void publish_physical(KVExecutionRowHandle row_handle, std::uint32_t logical_begin,
+                          std::span<const std::int32_t> indices, cudaStream_t stream = nullptr);
+
+    // Whether any execution row is leased. A mirror cannot be attached while one is: both replicas
+    // must start from the same empty addressing.
+    [[nodiscard]] bool any_row_bound() const noexcept;
 
     [[nodiscard]] Tensor row(KVExecutionRowHandle handle) const;
 

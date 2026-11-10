@@ -280,7 +280,7 @@ int main(int argc, char** argv) {
             }
         }
         if (path.empty()) {
-            std::cout << "SKIP: supply an explicit --artifact\n";
+            std::cerr << "SKIP: supply an explicit --artifact\n";
             return 77;
         }
         std::unique_ptr<DeviceContext> device;

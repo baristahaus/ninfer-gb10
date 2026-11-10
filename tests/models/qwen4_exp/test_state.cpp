@@ -141,7 +141,10 @@ void cache(DeviceContext& device, KvCacheStorage storage, std::uint32_t layers,
 
 int main() {
     int count = 0;
-    if (cudaGetDeviceCount(&count) != cudaSuccess || !count) return 77;
+    if (cudaGetDeviceCount(&count) != cudaSuccess || !count) {
+        std::cerr << "SKIP: no usable CUDA device; the test did not run\n";
+        return 77;
+    }
     try {
         DeviceContext device;
         image(device, false);

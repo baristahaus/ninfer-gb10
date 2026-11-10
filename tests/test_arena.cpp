@@ -52,7 +52,7 @@ int main() {
     int count                   = 0;
     const cudaError_t count_err = cudaGetDeviceCount(&count);
     if (cuda_unavailable(count_err)) {
-        std::cout << "SKIP: no usable CUDA device\n";
+        std::cerr << "SKIP: no usable CUDA device\n";
         return 77;
     }
     if (count_err != cudaSuccess) {
@@ -60,7 +60,7 @@ int main() {
         return 1;
     }
     if (count == 0) {
-        std::cout << "SKIP: no CUDA devices\n";
+        std::cerr << "SKIP: no CUDA devices\n";
         return 77;
     }
 

@@ -779,7 +779,10 @@ int exercise_forced_own_source_compound(const char* artifact) {
 
 int main() {
     const char* artifact = std::getenv("NINFER_QWEN38_FLASH_NEXT_WEIGHTS");
-    if (artifact == nullptr || *artifact == '\0') { return 77; }
+    if (artifact == nullptr || *artifact == '\0') {
+        std::cerr << "SKIP: NINFER_QWEN38_FLASH_NEXT_WEIGHTS is not set; the 125B real-engine test did not run\n";
+        return 77;
+    }
     const std::string recipe       = artifact_recipe(artifact);
     const bool qad                 = qad_recipe(recipe);
     const auto& expected_prefix    = qad ? qad_mtp_output() : canonical_output();

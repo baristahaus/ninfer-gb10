@@ -83,6 +83,39 @@ ctest --test-dir build/rtx5090-dev --output-on-failure
 in the commands below; `ctest --preset <preset-name>` runs its registered suite. See
 [Build system](../docs/maintainer/build-system.md) for local interpreter presets.
 
+### Suite-run discipline
+
+**A suite run must rebuild every target or start from an empty build directory.** A reused build
+directory keeps the previous revision's executable for any target that no longer compiles, and
+`ctest` runs it. Those results describe a different revision, not the one under test, and they are
+indistinguishable from real results in the summary. Two rules follow:
+
+- **A `Not Run` or a result from a target that did not build is a build failure, not a test
+  result.** Check the build log for `FAILED` targets before reading the summary. On a reused tree,
+  compare the registered tests against the timestamps under `build/<preset>/tests/`; on a fresh tree the build either
+  succeeded or it did not.
+- The cheap habit is `cmake --build <dir> -j` (or the test-target subset) and a look at its exit
+  code, then `ctest`. Deleting the build directory first costs a full rebuild but removes the
+  ambiguity entirely; prefer it for any run whose numbers will be published.
+
+**Every skip names its own kind.** A reader should be able to tell these apart from the message
+alone, because they call for different action:
+
+| kind | example message | action |
+|---|---|---|
+| artifact absent | `NINFER_TEST_ARTIFACT is not set` | populate the cache |
+| artifact component absent | `this artifact carries no dflash2 component` | use an artifact that carries it |
+| target shape | `exercises a Host context tier, which this target does not have` | never runs on this target; not a gap to close |
+| GPU topology | `tp2 replay needs two devices, found 1` | run on a multi-device node |
+| harness gap | a prerequisite the registration does not supply | fix the registration |
+
+**A test that skips must exit 77, and only a partial skip may exit 0.** A test whose whole purpose
+cannot run exits 77 so `ctest` reports a skip rather than a pass. A test that ran some cases and
+skipped a device-dependent subset follows the `return failures == 0 ? 77 : 1;` idiom used by
+`test_kv_mirror.cpp`, `test_state_image_mirror.cpp`, `test_sharded_group.cpp` and
+`test_kv_operations.cpp`: a skip when the runnable part passed, a failure when it did not. Printing
+a skip and returning success hides the coverage gap, which is a defect in the test.
+
 The chat-template reference test uses Python Jinja2.
 
 PLE reading foundations run with

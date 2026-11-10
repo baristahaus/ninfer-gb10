@@ -21,7 +21,7 @@ int main() {
         return 1;
     }
     if (cuda_unavailable()) {
-        std::cout << "SKIP: no usable CUDA device\n";
+        std::cerr << "SKIP: no usable CUDA device\n";
         return 77;
     }
 

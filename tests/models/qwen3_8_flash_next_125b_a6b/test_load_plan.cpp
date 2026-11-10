@@ -9,7 +9,10 @@
 
 int main() {
     const char* path = std::getenv("NINFER_QWEN38_FLASH_NEXT_WEIGHTS");
-    if (path == nullptr || *path == '\0') { return 77; }
+    if (path == nullptr || *path == '\0') {
+        std::cerr << "SKIP: NINFER_QWEN38_FLASH_NEXT_WEIGHTS is not set; the load-plan test did not run\n";
+        return 77;
+    }
     try {
         ninfer::artifact::Reader reader{std::filesystem::path(path)};
         const auto& provenance = reader.directory().provenance;

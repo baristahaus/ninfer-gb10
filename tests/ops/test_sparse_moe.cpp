@@ -1331,7 +1331,7 @@ private:
 
 int main() {
     if (cuda_unavailable()) {
-        std::cout << "SKIP: no usable CUDA device\n";
+        std::cerr << "SKIP: no usable CUDA device\n";
         return 77;
     }
 

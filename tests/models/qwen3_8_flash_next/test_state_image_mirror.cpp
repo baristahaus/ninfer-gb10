@@ -353,14 +353,14 @@ int main() {
     int count                   = 0;
     const cudaError_t count_err = cudaGetDeviceCount(&count);
     if (cuda_unavailable(count_err)) {
-        std::cout << "SKIP: no usable CUDA device; the replay cases did not run\n";
+        std::cerr << "SKIP: no usable CUDA device; the replay cases did not run\n";
         return failures == 0 ? 77 : 1;
     }
     if (count_err != cudaSuccess) {
         return fail(std::string("cudaGetDeviceCount failed: ") + cudaGetErrorString(count_err));
     }
     if (count < 2) {
-        std::cout << "SKIP: tp2 replay needs two devices, found " << count << '\n';
+        std::cerr << "SKIP: tp2 replay needs two devices, found " << count << '\n';
         return failures == 0 ? 77 : 1;
     }
 

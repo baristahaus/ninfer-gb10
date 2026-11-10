@@ -171,7 +171,10 @@ void bind_requests(q4::Session& session, models::qwen::Frontend& frontend) {
 } // namespace
 
 int main(int argc, char** argv) {
-    if (argc != 3) return 77;
+    if (argc != 3) {
+        std::cerr << "SKIP: the test needs its deployment file and artifact arguments; CTest supplies none\n";
+        return 77;
+    }
     try {
         auto deployment = product::read_deployment_file(argv[1]);
         artifact::Reader reader(argv[2]);

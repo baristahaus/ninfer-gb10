@@ -84,7 +84,10 @@ int run_mxfp8_a16() {
 } // namespace
 
 int main() {
-    if (!cuda_available()) { return 77; }
+    if (!cuda_available()) {
+        std::cerr << "SKIP: no usable CUDA device; the test did not run\n";
+        return 77;
+    }
     const int failures = run_mxfp8_a16();
     if (failures != 0) { std::cerr << "MXFP8 A16 failures: " << failures << '\n'; }
     return failures == 0 ? 0 : 1;

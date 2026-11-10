@@ -85,11 +85,11 @@ ninfer::PromptInput media_prompt(ninfer::MediaKind kind) {
 int main(int argc, char** argv) {
     const char* artifact = std::getenv("NINFER_TEST_ARTIFACT");
     if (!artifact || !*artifact) {
-        std::cout << "skip: NINFER_TEST_ARTIFACT is not set\n";
+        std::cerr << "SKIP: NINFER_TEST_ARTIFACT is not set; the real-engine test did not run\n";
         return 77;
     }
     if (!artifact_has_component(artifact, "dflash2")) {
-        std::cout << "skip: this artifact carries no dflash2 component\n";
+        std::cerr << "SKIP: this artifact carries no dflash2 component; the test did not run\n";
         return 77;
     }
     try {

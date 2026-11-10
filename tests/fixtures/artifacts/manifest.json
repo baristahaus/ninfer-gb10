@@ -84,7 +84,8 @@
         "ninfer_qwen3_5_dflash_prefill_real_test",
         "ninfer_qwen3_5_moe_real_test",
         "ninfer_qwen3_5_moe_offload_real_test",
-        "ninfer_qwen3_5_dflash_real_test"
+        "ninfer_qwen3_5_dflash_real_test",
+        "ninfer_qwen3_5_tp2_refusal_real_test"
       ],
       "notes": "Dense 27B v3 artifact. ninfer_qwen3_5_loading_real_test is argv-driven (--artifact PATH) and never runs under CTest, so it is not a consumer here. The MoE, DFlash v1 and DFlash2 tests need companions this artifact does not carry; they skip when a required component is absent.",
       "volumes": [

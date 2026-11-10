@@ -138,7 +138,10 @@ void test_handoff_lifetime(ninfer::DeviceContext& device,
 int main() {
     namespace q35        = ninfer::models::qwen3_5;
     const char* artifact = std::getenv("NINFER_TEST_ARTIFACT");
-    if (!artifact || !*artifact) { return 77; }
+    if (!artifact || !*artifact) {
+        std::cerr << "SKIP: NINFER_TEST_ARTIFACT is not set; the Vision workspace test did not run\n";
+        return 77;
+    }
     try {
         int devices       = 0;
         const auto status = cudaGetDeviceCount(&devices);

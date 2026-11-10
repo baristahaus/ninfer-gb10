@@ -93,17 +93,21 @@ int test_rejections() {
 int main() {
     const int devices = device_count();
     if (devices < 1) {
-        std::cout << "skipped: no CUDA device\n";
-        return 0;
+        // Nothing in this test can run without a device.
+        std::cerr << "SKIP: no CUDA device is available\n";
+        return 77;
     }
     int failures = 0;
     failures += test_single_device();
     if (devices >= 2) {
         failures += test_two_devices();
     } else {
-        std::cout << "skipped the two-device cases: one device present\n";
+        std::cerr << "SKIP: the two-device cases did not run; one device is present\n";
     }
     failures += test_rejections();
     if (failures == 0) { std::cout << "ok (" << devices << " device(s))\n"; }
+    // The two-device cases did not run. Report a skip, as the other two-device tests in this tree
+    // do, so the suite's coverage gap is visible instead of being counted as a pass.
+    if (failures == 0 && devices < 2) { return 77; }
     return failures == 0 ? 0 : 1;
 }

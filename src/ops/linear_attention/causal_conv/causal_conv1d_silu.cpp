@@ -37,7 +37,10 @@ void require_weight_shape(const Tensor& weight, std::int32_t C) {
 void require_state_shape(const Tensor& conv_state, std::int32_t C) {
     if (conv_state.ne[0] != C || conv_state.ne[1] != 3 || conv_state.ne[2] != 1 ||
         conv_state.ne[3] != 1) {
-        throw std::invalid_argument("causal_conv1d: conv_state must have shape [C,3]");
+        throw std::invalid_argument(
+            "causal_conv1d: conv_state must have shape [C,3]; got [" +
+            std::to_string(conv_state.ne[0]) + "," + std::to_string(conv_state.ne[1]) +
+            "], C=" + std::to_string(C));
     }
 }
 

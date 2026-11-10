@@ -34,6 +34,10 @@ void gdn_control_proj(const Tensor& x, const ProjectionWeights& weights, const T
     control::execute_projection(x, operands, a_log, dt_bias, out, plan, scratch, execution);
 }
 
+std::int32_t gdn_control_heads(const ProjectionWeights& weights) {
+    return control::describe_profile(projection_profile(weights)).heads;
+}
+
 void gdn_norm_control_proj(const Tensor& x, const Tensor& norm_weight, float eps,
                            const ProjectionWeights& weights, const Tensor& a_log,
                            const Tensor& dt_bias, GdnNormControlOutputs out, MemoryArena& workspace,

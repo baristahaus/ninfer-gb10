@@ -70,7 +70,9 @@ void gdn_projection(const Tensor& hidden, const GdnParameters& parameters, Tenso
 
 workspace::GdnExtents gdn_extents(const GdnParameters& parameters) {
     workspace::GdnExtents out;
-    out.value_heads = ops::projection_profile(parameters.control).first.n;
+    // The op validates g and beta against the geometry's heads, which is NOT the profile's `n` for
+    // the fused a|b form (two rows per head). Ask the same function the op asks.
+    out.value_heads = ops::gdn_control_heads(parameters.control);
     std::int32_t qkv_rows = 0;
     if (parameters.role_rows) {
         qkv_rows          = ops::projection_profile(parameters.role_rows->at(0).weight).first.n;

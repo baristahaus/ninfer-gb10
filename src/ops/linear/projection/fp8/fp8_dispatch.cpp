@@ -12,7 +12,12 @@ const std::array kShapes{&kFp8N14336K5120, &kFp8N16384K5120, &kFp8N34816K5120,
                          &kFp8N5120K6144,  &kFp8N5120K17408, &kFp8N248320K5120,
                          &kFp8N10240K2560, &kFp8N6144K2560,  &kFp8N2560K6144,
                          &kFp8N320K10240,  &kFp8N248320K2560, &kFp8ProjN12288K2560,
-                         &kFp8ProjN10240K320, &kFp8ProjN2560K640};
+                         &kFp8ProjN10240K320, &kFp8ProjN2560K640,
+                         // The role-split and fused-half shapes a width-2 rank presents. Appended,
+                         // never reordered: the lookup is linear first-match, so the fourteen above
+                         // resolve exactly as they did.
+                         &kFp8N5120K5120,  &kFp8N3072K5120,  &kFp8N512K5120, &kFp8N8704K5120,
+                         &kFp8N7168K5120,  &kFp8N8192K5120,  &kFp8N124160K5120};
 
 // A refused shape's FULL descriptor, not just n and k. n and k do not identify the weight: a fused
 // consumer and a repack gather can both present a shape that no binding in the artifact declares,

@@ -175,8 +175,8 @@ WorkspaceSpec build_workspace_plan(const SequencePlanImpl& plan) {
     };
     const auto linear_scratch = [&](WorkspaceLayoutBuilder& layout, const ops::LinearProfile& p,
                                     int first, int last) {
-        scratch(layout,
-                ops::linear_workspace_capacity_bytes(p.qtype, p.n, p.k, p.policy, first, last));
+        scratch(layout, ops::linear_workspace_capacity_bytes(p.qtype, p.n, p.k, p.policy, first,
+                                                             last, "text_linear_scratch"));
     };
     const auto add_scratch = [&](WorkspaceLayoutBuilder& layout, const ops::LinearProfile& p,
                                  int first, int last) {

@@ -98,5 +98,5 @@ void launch_a16(const Tensor& x, const Weight& weight, Tensor& out, cudaStream_t
 bool uses_a8(std::int32_t, std::int32_t) { return false; }
 } // namespace
 
-const Fp8LinearShape kFp8N124160K5120{248320, 5120, launch_a16, nullptr, uses_a8};
+const Fp8LinearShape kFp8N124160K5120{124160, 5120, launch_a16, nullptr, uses_a8};
 } // namespace ninfer::ops::detail

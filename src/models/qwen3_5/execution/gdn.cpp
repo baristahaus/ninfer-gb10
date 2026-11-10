@@ -15,7 +15,8 @@ std::size_t gdn_projection_workspace_bytes(const GdnProfile& parameters, std::in
         std::size_t peak = 0;
         for (const auto& role : *parameters.role_profiles) {
             peak = std::max(peak, ops::linear_workspace_capacity_bytes(
-                                      role.qtype, role.n, role.k, role.policy, first, last));
+                                      role.qtype, role.n, role.k, role.policy, first, last,
+                                      "gdn_role"));
         }
         return peak;
     }

@@ -57,6 +57,6 @@ std::size_t partial_capacity_bytes(std::int32_t max_tokens) {
 }
 } // namespace
 
-const Fp8LinearShape kFp8N8192K5120{16384,     5120,    launch_a16,
+const Fp8LinearShape kFp8N8192K5120{8192,     5120,    launch_a16,
                                      launch_a8, uses_a8, partial_capacity_bytes};
 } // namespace ninfer::ops::detail

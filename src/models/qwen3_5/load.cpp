@@ -50,6 +50,10 @@ std::vector<artifact::MatrixSlice> matrix_slices(const artifact::Reader& reader,
             // rows than the parent has.
             slices.push_back({part.object, 0, part.begin, 1, extent, 0, destination_column});
             destination_column += extent;
+            // A 1-D parameter is declared Rows in the shard table, so its coverage is a ROW
+            // coverage: the rank's own extent is exactly `n`. Without this the slice falls into the
+            // row check with `destination_row` still 0 and is refused.
+            destination_row = n;
             continue;
         }
         if (parent.size() != 2) {

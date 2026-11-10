@@ -952,13 +952,13 @@ ProgramImplCore::ProgramImplCore(const LoadedModelData& model_in, const Sequence
         plan_host_kv_page_layout(decoder->text_kv.page_pool().geometry()).page_stride;
     text_kv_pages = std::make_unique<LogicalKVPageStore>(
         decoder->text_kv.page_pool(),
-        peer ? KVPageOperations(*peer->text_kv)
-             : KVPageOperations(decoder->text_kv.page_pool()),
+        peer ? tp2::KVPageOperations(*peer->text_kv)
+             : tp2::KVPageOperations(decoder->text_kv.page_pool()),
         logical_page_capacity(decoder->text_kv.page_pool()));
     text_kv_addresses = std::make_unique<KVAddressSpaceStore>(
         *text_kv_pages,
-        peer ? KVTableOperations(*peer->text_kv_tables)
-             : KVTableOperations(decoder->text_kv.execution_tables()),
+        peer ? tp2::KVTableOperations(*peer->text_kv_tables)
+             : tp2::KVTableOperations(decoder->text_kv.execution_tables()),
         address_capacity, decoder->text_kv.execution_tables().logical_page_capacity());
     state_images = std::make_unique<qwen3_8_flash_next::StateImageDevicePool>(
         backing, plan.persistent.state_images);
@@ -1031,13 +1031,13 @@ ProgramImplCore::ProgramImplCore(const LoadedModelData& model_in, const Sequence
         const bool mirrored_backend = peer != nullptr && peer->backend_kv != nullptr;
         backend_kv_pages = std::make_unique<LogicalKVPageStore>(
             backend->page_pool(),
-            mirrored_backend ? KVPageOperations(*peer->backend_kv)
-                             : KVPageOperations(backend->page_pool()),
+            mirrored_backend ? tp2::KVPageOperations(*peer->backend_kv)
+                             : tp2::KVPageOperations(backend->page_pool()),
             logical_page_capacity(backend->page_pool()));
         backend_kv_addresses = std::make_unique<KVAddressSpaceStore>(
             *backend_kv_pages,
-            mirrored_backend ? KVTableOperations(*peer->backend_kv_tables)
-                             : KVTableOperations(backend->execution_tables()),
+            mirrored_backend ? tp2::KVTableOperations(*peer->backend_kv_tables)
+                             : tp2::KVTableOperations(backend->execution_tables()),
             address_capacity, backend->execution_tables().logical_page_capacity());
     }
     pressure_text_page_scratch_.resize(text_kv_pages->capacity());

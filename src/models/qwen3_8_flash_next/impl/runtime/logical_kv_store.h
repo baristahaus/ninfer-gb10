@@ -1,7 +1,7 @@
 #pragma once
 
 #include "core/paged_kv_cache.h"
-#include "models/qwen3_8_flash_next/impl/runtime/kv_operations.h"
+#include "core/tp2/kv_operations.h"
 
 #include <algorithm>
 #include <array>
@@ -113,7 +113,7 @@ private:
                             std::uint32_t requested_entitlement,
                             std::optional<std::uint32_t> activation_frontier,
                             DeviceKVPageReservation&& page_reservation,
-                            KVTableRowLease&& row) noexcept
+                            tp2::KVTableRowLease&& row) noexcept
         : owner_(&owner), address_(address), requested_entitlement_(requested_entitlement),
           activation_frontier_(activation_frontier), page_reservation_(std::move(page_reservation)),
           row_(std::move(row)) {}
@@ -123,7 +123,7 @@ private:
     std::uint32_t requested_entitlement_ = 0;
     std::optional<std::uint32_t> activation_frontier_;
     DeviceKVPageReservation page_reservation_;
-    std::optional<KVTableRowLease> row_;
+    std::optional<tp2::KVTableRowLease> row_;
 
     friend class KVAddressSpaceStore;
 };
@@ -156,7 +156,7 @@ private:
                             KVAddressSpaceHandle destination, std::uint32_t frontier,
                             std::uint32_t full_pages, std::uint32_t tail_columns,
                             std::uint32_t requested_entitlement,
-                            DeviceKVPageReservation&& page_reservation, KVTableRowLease&& row,
+                            DeviceKVPageReservation&& page_reservation, tp2::KVTableRowLease&& row,
                             std::optional<LogicalKVPageHandle> tail_destination,
                             bool staged_tail_release) noexcept
         : owner_(&owner), source_(source), destination_(destination), frontier_(frontier),
@@ -173,7 +173,7 @@ private:
     std::uint32_t tail_columns_          = 0;
     std::uint32_t requested_entitlement_ = 0;
     DeviceKVPageReservation page_reservation_;
-    std::optional<KVTableRowLease> row_;
+    std::optional<tp2::KVTableRowLease> row_;
     std::optional<LogicalKVPageHandle> tail_destination_;
     bool staged_tail_release_ = false;
     bool tail_source_settled_ = false;
@@ -244,7 +244,7 @@ class LogicalKVPageStore {
 public:
     // Width 2: the caller supplies the page funnel, which replays every physical page mutation on
     // rank 1. The physical pool is still rank 0's, because allocation stays rank 0's.
-    LogicalKVPageStore(DeviceKVPagePool& physical, KVPageOperations operations,
+    LogicalKVPageStore(DeviceKVPagePool& physical, tp2::KVPageOperations operations,
                        std::uint32_t logical_capacity)
         : physical_(&physical), page_operations_(operations), pages_(logical_capacity),
           free_(pages_.size()), free_count_(static_cast<std::uint32_t>(pages_.size())) {
@@ -265,7 +265,7 @@ public:
     // Width 1: the plain pool, funnelled internally so the mutation call sites are the same at
     // both widths.
     LogicalKVPageStore(DeviceKVPagePool& physical, std::uint32_t logical_capacity)
-        : LogicalKVPageStore(physical, KVPageOperations(physical), logical_capacity) {}
+        : LogicalKVPageStore(physical, tp2::KVPageOperations(physical), logical_capacity) {}
 
     // The funnel: physical page mutations go through it, so width 2 replays them on rank 1 without
     // the caller knowing.
@@ -845,7 +845,7 @@ private:
     }
 
     DeviceKVPagePool* physical_ = nullptr;
-    KVPageOperations page_operations_;
+    tp2::KVPageOperations page_operations_;
     std::vector<Page> pages_;
     std::vector<std::uint32_t> free_;
     std::vector<DeviceKVPageLease> materialization_scratch_;
@@ -855,7 +855,7 @@ private:
 class KVAddressSpaceStore {
 public:
     // Width 2: the caller supplies the table funnel, which replays every row mutation on rank 1.
-    KVAddressSpaceStore(LogicalKVPageStore& pages, KVTableOperations operations,
+    KVAddressSpaceStore(LogicalKVPageStore& pages, tp2::KVTableOperations operations,
                         std::uint32_t address_capacity, std::uint32_t page_capacity)
         : pages_(&pages), table_operations_(operations), page_capacity_(page_capacity),
           addresses_(address_capacity), free_(address_capacity),
@@ -875,7 +875,8 @@ public:
     // same at both widths.
     KVAddressSpaceStore(LogicalKVPageStore& pages, KVExecutionTablePool& tables,
                         std::uint32_t address_capacity, std::uint32_t page_capacity)
-        : KVAddressSpaceStore(pages, KVTableOperations(tables), address_capacity, page_capacity) {}
+        : KVAddressSpaceStore(pages, tp2::KVTableOperations(tables), address_capacity,
+                              page_capacity) {}
 
     KVAddressSpaceStore(const KVAddressSpaceStore&)            = delete;
     KVAddressSpaceStore& operator=(const KVAddressSpaceStore&) = delete;
@@ -955,7 +956,7 @@ public:
         }
         pages_->physical_pool().resize_reservation(reservation,
                                                    static_cast<std::uint32_t>(required));
-        KVTableRowLease row = table_operations_.acquire(execution_row);
+        tp2::KVTableRowLease row = table_operations_.acquire(execution_row);
         return KVActivationReservation(*this, handle, entitlement, activation_frontier,
                                        std::move(reservation), std::move(row));
     }
@@ -1086,7 +1087,7 @@ public:
         DeviceKVPageReservation reservation = pages_->physical_pool().make_empty_reservation();
         pages_->physical_pool().resize_reservation(
             reservation, staged_tail_release ? 1U : entitlement - full_pages);
-        KVTableRowLease row = table_operations_.acquire(execution_row);
+        tp2::KVTableRowLease row = table_operations_.acquire(execution_row);
         std::optional<LogicalKVPageHandle> tail_destination;
         if (tail_columns != 0) {
             tail_destination = pages_->materialize_transfer_destination(reservation, tail_columns);
@@ -1676,7 +1677,7 @@ public:
         return valid(handle) && addresses_[handle.index_].active;
     }
 
-    [[nodiscard]] const KVTableRowLease& execution_row(KVAddressSpaceHandle handle) const {
+    [[nodiscard]] const tp2::KVTableRowLease& execution_row(KVAddressSpaceHandle handle) const {
         const Address& address = require(handle);
         if (!address.active || !address.row) {
             throw std::logic_error("KV address space has no execution row");
@@ -1791,7 +1792,7 @@ private:
         std::uint32_t committed_frontier  = 0;
         std::uint32_t checkpoint_frontier = 0;
         DeviceKVPageReservation reservation;
-        std::optional<KVTableRowLease> row;
+        std::optional<tp2::KVTableRowLease> row;
         bool occupied = false;
         bool active   = false;
     };
@@ -1902,7 +1903,7 @@ private:
     }
 
     LogicalKVPageStore* pages_ = nullptr;
-    KVTableOperations table_operations_;
+    tp2::KVTableOperations table_operations_;
     std::uint32_t page_capacity_  = 0;
     std::vector<Address> addresses_;
     std::vector<std::uint32_t> free_;

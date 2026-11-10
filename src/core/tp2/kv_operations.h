@@ -1,7 +1,11 @@
 #pragma once
 
-// The KV funnel: the one place the Program's and the logical KV store's physical KV mutations go
+// The KV funnel: the one place a Program's and a logical KV store's physical KV mutations go
 // through, so a width-2 run replays them on rank 1 without editing a call site.
+//
+// This is a core contract, not a model fact: both families' KV owners mutate the same two core
+// pools, so the funnel lives beside the mirror it drives (`core/tp2/kv_mirror.h`) rather than in a
+// family's impl directory.
 //
 // Two halves, because the two owners own different pools: `LogicalKVPageStore` has a page pool and
 // no execution tables; `KVAddressSpaceStore` has both. Each half holds either the plain pool or the
@@ -30,7 +34,7 @@
 #include <span>
 #include <utility>
 
-namespace ninfer::models::qwen3_8_flash_next::detail {
+namespace ninfer::tp2 {
 
 class KVTableOperations;
 
@@ -182,4 +186,4 @@ private:
     tp2::MirroredKVPagePool* mirrored_    = nullptr;
 };
 
-} // namespace ninfer::models::qwen3_8_flash_next::detail
+} // namespace ninfer::tp2

@@ -2,6 +2,7 @@
 
 // Small fixed-capacity request execution for every backend.
 
+#include "runtime/engine/flash_next/memory_report.h"
 #include "core/device.h"
 #include "core/nvtx.h"
 #include "ninfer/ops/flash_next_moe.h"
@@ -286,6 +287,14 @@ public:
                                            std::chrono::steady_clock::now().time_since_epoch()
                                                .count())};
         out.runtime  = runtime_stats();
+        // This route has no rank workers; report the resident device as rank 0 so the snapshot
+        // describes the allocation instead of leaving it empty.
+        ninfer::RankSnapshot rank;
+        rank.rank     = 0;
+        rank.node     = 0;
+        rank.stamp    = out.stamp;
+        rank.memory   = rank_memory_usage(instance_.program->memory_summary());
+        out.ranks.push_back(std::move(rank));
         return out;
     }
 
@@ -1059,16 +1068,18 @@ private:
                             std::uint32_t accepted_tokens) {
         if (accepted_tokens == 0) { return std::nullopt; }
         cumulative_stats_.generated_tokens += accepted_tokens;
-        const bool observe_wall =
-            request->observation.phase_timings || request->observation.live_timings;
-        const bool need_now         = !request->first_token || observe_wall;
-        const Clock::time_point now = need_now ? Clock::now() : Clock::time_point{};
+        // Both wall bounds are recorded for every request, as the generic engine does: the serve
+        // layer renders prompt and generation wall time into the protocol timings block, which is
+        // not an optional observation. The flags below only add the per-phase observations.
+        const Clock::time_point now = Clock::now();
         if (!request->first_token) { request->first_token = now; }
-        if (!observe_wall) { return std::nullopt; }
+        request->last_token = now;
+        if (!request->observation.phase_timings && !request->observation.live_timings) {
+            return std::nullopt;
+        }
         if (!request->admitted_at || !request->first_token) {
             throw std::logic_error("committed output has no observed admission boundary");
         }
-        request->last_token = now;
         if (!request->observation.live_timings) { return std::nullopt; }
         if (request->generated.size() > std::numeric_limits<std::uint32_t>::max()) {
             throw std::overflow_error("generated token count exceeds observation domain");
@@ -1126,10 +1137,9 @@ private:
             throw std::logic_error("request admission published generation start twice");
         }
         request->admitted_begin = begin;
-        if (request->observation.phase_timings || request->observation.live_timings ||
-            request->observation.prompt_progress) {
-            request->admitted_at = Clock::now();
-        }
+        // The prompt wall bound is recorded for every request; the observation flags only decide
+        // which events are published from it.
+        request->admitted_at = Clock::now();
         if (request->consumer_mode != OutputConsumerMode::Streaming) { return; }
         {
             std::lock_guard lock(request->mutex);
@@ -1237,7 +1247,7 @@ private:
         HostPhaseMeasurement completion = begin_host_phase();
         double prompt_wall_seconds      = 0.0;
         double generation_wall_seconds  = 0.0;
-        if (request->observation.phase_timings && request->first_token) {
+        if (request->first_token) {
             if (!request->admitted_at || !request->last_token) {
                 throw std::logic_error("observed request completed without stable timing bounds");
             }

@@ -128,3 +128,11 @@ ninfer_add_test(ninfer_speculation_detail_test
 ninfer_add_test(ninfer_reasoning_retry_wire_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_reasoning_retry_wire.cpp"
   LIBRARIES ninfer_serve)
+
+ninfer_add_test(ninfer_chat_timings_test
+  SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_chat_timings.cpp"
+  LIBRARIES ninfer_serve)
+
+ninfer_add_test(ninfer_startup_resources_test
+  SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_startup_resources.cpp"
+  LIBRARIES ninfer_engine ninfer_product_logging ninfer::json)

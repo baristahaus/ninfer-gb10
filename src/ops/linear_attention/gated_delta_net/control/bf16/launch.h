@@ -26,6 +26,10 @@ void launch_n96_k2560(const Inputs& in, GdnControlOutputs out, Plan plan, Scratc
                       CudaExecutionView execution);
 void launch_n48_k2560(const Inputs& in, GdnControlOutputs out, Plan plan, Scratch scratch,
                       CudaExecutionView execution);
+// One rank of the 27B's [48, 5120] a/b pair at tensor-parallel width 2: 24 value heads, so 48
+// control rows, over the same 5120 hidden width as the single-device n96_k5120 instance.
+void launch_n48_k5120(const Inputs& in, GdnControlOutputs out, Plan plan, Scratch scratch,
+                      CudaExecutionView execution);
 void launch_norm_n96_k5120(const Inputs& in, const Norm& norm, GdnControlOutputs out, NormPlan plan,
                            cudaStream_t stream);
 bool launch_norm_n64_k2048(const Inputs& in, const Norm& norm, GdnControlOutputs out, NormPlan plan,

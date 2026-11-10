@@ -64,10 +64,12 @@ Geometry describe_profile(const ProjectionProfile& weights) {
         return {a.n / 2, a.k};
     }
     const auto& b = *weights.second;
-    require(a.qtype == QType::BF16 && b.qtype == QType::BF16 && a.n == 48 && a.k == 5120 &&
-                b.n == 48 && b.k == 5120,
+    // The paired form is one row per value head, so `heads` is the row count: 48 on one device and
+    // 24 for one rank of the 27B at tensor-parallel width 2.
+    require(a.qtype == QType::BF16 && b.qtype == QType::BF16 && (a.n == 48 || a.n == 24) &&
+                a.k == 5120 && b.n == a.n && b.k == 5120,
             "unsupported paired geometry");
-    return {48, 5120};
+    return {a.n, 5120};
 }
 
 Weights describe_weights(const ProjectionWeights& weights) {
@@ -78,8 +80,11 @@ Weights describe_weights(const ProjectionWeights& weights) {
         return {geometry, &w, nullptr};
     }
     const auto& pair = std::get<PairedProjectionWeights>(weights);
-    describe_matrix(pair.first, 48, 5120);
-    describe_matrix(pair.second, 48, 5120);
+    // The paired parents are `geometry.heads` rows wide, which is 48 on one device and 24 for one
+    // rank at tensor-parallel width 2. Stating 48 here would reject the tp2 rank's weight even
+    // though describe_profile accepted its profile.
+    describe_matrix(pair.first, geometry.heads, geometry.input_rows);
+    describe_matrix(pair.second, geometry.heads, geometry.input_rows);
     return {geometry, &pair.first, &pair.second};
 }
 

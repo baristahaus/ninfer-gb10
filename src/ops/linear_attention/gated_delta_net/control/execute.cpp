@@ -23,6 +23,10 @@ void execute_projection(const Tensor& x, const Weights& weights, const Tensor& a
     const auto in = inputs(x, weights, a_log, dt_bias);
     switch (weights.geometry.input_rows) {
     case 5120:
+        if (weights.geometry.heads == 24) {
+            launch_n48_k5120(in, out, plan, scratch, execution);
+            return;
+        }
         launch_n96_k5120(in, out, plan, scratch, execution);
         return;
     case 2048:

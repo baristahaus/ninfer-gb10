@@ -33,7 +33,10 @@ template <class Geometry, int Split, int Warps = 8, bool Normalize = false, int 
 bool launch_mma(const Inputs& in, GdnControlOutputs out, Scratch scratch,
                 CudaExecutionView execution, const Norm* norm = nullptr) {
     constexpr int tile   = Geometry::kBlockN;
-    constexpr int rows   = (Geometry::kPaired ? Geometry::kHeads : 2 * Geometry::kHeads) / kBlockM;
+    // The grid's head dimension is the geometry's padded tile count, the same value the kernel
+    // indexes with. Computing it here independently is how a head count that is not a multiple of
+    // the 16-head tile loses its remainder.
+    constexpr int rows   = Geometry::kHeadTiles;
     constexpr int shared = Geometry::shared_bytes;
     const auto submit    = [&](const Tensor& x, GdnControlOutputs result, Tensor normalized) {
         const int columns = x.ne[1];

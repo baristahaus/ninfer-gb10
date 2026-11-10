@@ -280,10 +280,14 @@ ProjectionWeights prepare_projection_weights(std::span<const WeightInput> rows) 
 
 ProjectionWeights prepare_gdn_control_proj_weights(const WeightInput& a, const WeightInput& b) {
     const auto& shape = matrix(a);
+    // {24, 5120} is one rank of the 27B's [48, 5120] a/b pair at tensor-parallel width 2: the
+    // 48 value heads split by rows, giving 24. It is only reachable through the non-contiguous
+    // branch below, because a rank's a and b blocks are halves of the same parent at opposite ends.
     require(shape == matrix(b) && (shape == std::vector<std::uint64_t>{48, 5120} ||
                                    shape == std::vector<std::uint64_t>{32, 2048} ||
                                    shape == std::vector<std::uint64_t>{48, 2560} ||
-                                   shape == std::vector<std::uint64_t>{24, 2560}),
+                                   shape == std::vector<std::uint64_t>{24, 2560} ||
+                                   shape == std::vector<std::uint64_t>{24, 5120}),
             "GDN control: unsupported A/B geometry");
     const std::array inputs{a, b};
     if (contiguous(concatenate_rows(inputs))) {
@@ -291,7 +295,10 @@ ProjectionWeights prepare_gdn_control_proj_weights(const WeightInput& a, const W
         require(result.weight.qtype == QType::BF16, "GDN control requires BF16 weights");
         return result;
     }
-    require(shape == std::vector<std::uint64_t>{48, 5120},
+    // A split pair is only legal where the two blocks are the halves of one combined parent, which
+    // is what the 48-row and the per-rank 24-row geometries both are.
+    require(shape == std::vector<std::uint64_t>{48, 5120} ||
+                shape == std::vector<std::uint64_t>{24, 5120},
             "GDN control: this geometry requires a combined parent");
     const auto first  = prepare_linear_weight(a);
     const auto second = prepare_linear_weight(b);

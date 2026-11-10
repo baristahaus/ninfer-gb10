@@ -24,10 +24,21 @@ struct MmaGeometry {
     static constexpr bool kPaired   = Paired;
     static constexpr bool kHeadFast = HeadFast;
     static constexpr int kHeads = Heads, kHidden = Hidden, kBlockN = BlockN;
+    // Rows of the control output: one per value head in the paired form (g and beta are separate
+    // matrices), two per head in the merged form.
+    static constexpr int kLogicalRows = Paired ? Heads : 2 * Heads;
+    // The M tile is 16 heads, so a head count that is not a multiple of 16 is served by PADDING the
+    // last tile rather than by dropping the remainder. This is the only definition of the tile
+    // count: `launch_mma`'s grid and the kernel's own indexing both read it, because two places
+    // computing it separately is how a 24-head geometry silently loses its last 8 heads. The
+    // padding is masked in two places — the weight load reads zeroes and the epilogue writes
+    // nothing — so the padded rows cannot contribute to a real output.
+    static constexpr int kHeadTiles  = (kLogicalRows + kBlockM - 1) / kBlockM;
+    static constexpr int kPaddedRows = kHeadTiles * kBlockM;
     static constexpr int shared_bytes =
         kStages * (BlockN * kBlockK + (Paired ? 2 : 1) * kBlockM * kBlockK) * sizeof(__nv_bfloat16);
     static_assert(BlockN == 64 || BlockN == 128);
-    static_assert(Heads % kBlockM == 0);
+    static_assert(kLogicalRows > 0);
     static_assert(Hidden % kBlockK == 0);
 };
 
@@ -47,7 +58,7 @@ __global__ __launch_bounds__(Warps * 32, 1) void mma_kernel(
     constexpr int kHeads       = Geometry::kHeads;
     constexpr int kHidden      = Geometry::kHidden;
     constexpr int kBlockN      = Geometry::kBlockN;
-    constexpr int kLogicalRows = 2 * kHeads;
+    constexpr int kPartialRows = 2 * kHeads; // split-K partial row stride
     constexpr int kKTiles      = kHidden / kBlockK;
     static_assert(SplitK >= 1 && kKTiles % SplitK == 0,
                   "BF16 GDN split-K must divide the exact geometry's K tiles");
@@ -70,7 +81,7 @@ __global__ __launch_bounds__(Warps * 32, 1) void mma_kernel(
     const int lane           = tid & 31;
     const int gid            = lane >> 2;
     const int lid            = lane & 3;
-    constexpr int kHeadTiles = (Paired ? kHeads : 2 * kHeads) / kBlockM;
+    constexpr int kHeadTiles = Geometry::kHeadTiles;
     const int linear_tile =
         static_cast<int>(blockIdx.y) * static_cast<int>(gridDim.x) + static_cast<int>(blockIdx.x);
     const int head_tile    = Geometry::kHeadFast ? linear_tile % kHeadTiles : blockIdx.y;
@@ -108,7 +119,7 @@ __global__ __launch_bounds__(Warps * 32, 1) void mma_kernel(
                 sums[token_local] = common::warp_reduce_sum(sums[token_local]);
                 if (lane == 0 && token_local < token_count) {
                     float* norm_partial =
-                        partial + static_cast<std::int64_t>(SplitK) * t * kLogicalRows;
+                        partial + static_cast<std::int64_t>(SplitK) * t * kPartialRows;
                     norm_partial[static_cast<std::int64_t>(split) * t + token0 + token_local] =
                         sums[token_local];
                 }
@@ -174,8 +185,15 @@ __global__ __launch_bounds__(Warps * 32, 1) void mma_kernel(
             __nv_bfloat16* dst = (Paired && is_b ? bws : aws) + stage * kBlockM * kBlockK +
                                  row * kBlockK + swizzle(row, kk);
             const __nv_bfloat16* weight = is_b ? b_weight : a_weight;
-            common::cp_async<16, Cache::cg>(
-                dst, &weight[static_cast<std::int64_t>(weight_head0 + row) * kHidden + k0 + kk]);
+            // A padded row of the last M tile has no weight behind it: the parent holds exactly
+            // `kHeads` rows per matrix. Zero-fill instead of reading past the block, the same shape
+            // the x-token load above uses. For an exact tile count this is always true.
+            const bool row_valid = weight_head0 + row < kHeads;
+            common::cp_async_zfill<16, Cache::cg>(
+                dst,
+                &weight[static_cast<std::int64_t>(row_valid ? weight_head0 + row : 0) * kHidden + k0 +
+                        kk],
+                row_valid ? 16 : 0);
         }
     };
 
@@ -256,6 +274,11 @@ __global__ __launch_bounds__(Warps * 32, 1) void mma_kernel(
             const int col0 = token0 + warp * kWarpN + ni * 8 + 2 * lid;
             const int col1 = col0 + 1;
             auto store     = [&](int token, int row, float av, float bv) {
+                // Padded rows of the last M tile compute from zero weights and must not be written:
+                // The output holds `Geometry::kLogicalRows` rows per column: kHeads in the paired
+                // form (g and beta are separate matrices) and 2*kHeads in the merged form. Rows
+                // past that are the padding of the last M tile and are never stored.
+                if (row >= Geometry::kLogicalRows) { return; }
                 if constexpr (SplitK == 1) {
                     const std::int64_t out_i =
                         static_cast<std::int64_t>(token) * kHeads + (Paired ? row : row % kHeads);
@@ -270,7 +293,7 @@ __global__ __launch_bounds__(Warps * 32, 1) void mma_kernel(
                     }
                 } else {
                     const std::int64_t base =
-                        (static_cast<std::int64_t>(split) * t + token) * kLogicalRows;
+                        (static_cast<std::int64_t>(split) * t + token) * kPartialRows;
                     partial[base + row] = av;
                     if constexpr (Paired) partial[base + kHeads + row] = bv;
                 }
@@ -304,7 +327,7 @@ __global__ __launch_bounds__(Warps * 32, 1) void mma_kernel(
         const int elems = kHeads * t;
         if constexpr (NormalizeInput) {
             const float* norm_partial =
-                partial + static_cast<std::int64_t>(SplitK) * t * kLogicalRows;
+                partial + static_cast<std::int64_t>(SplitK) * t * kPartialRows;
             const int hidden_elems = kHidden * t;
             for (int i = block_linear * kThreads + tid; i < hidden_elems; i += grid_threads) {
                 const int k     = i % kHidden;
@@ -327,13 +350,13 @@ __global__ __launch_bounds__(Warps * 32, 1) void mma_kernel(
             float bv        = 0.0f;
 #pragma unroll
             for (int s = 0; s < SplitK; ++s) {
-                const std::int64_t base = (static_cast<std::int64_t>(s) * t + token) * kLogicalRows;
+                const std::int64_t base = (static_cast<std::int64_t>(s) * t + token) * kPartialRows;
                 av += partial[base + row];
                 bv += partial[base + kHeads + row];
             }
             if constexpr (NormalizeInput) {
                 const float* norm_partial =
-                    partial + static_cast<std::int64_t>(SplitK) * t * kLogicalRows;
+                    partial + static_cast<std::int64_t>(SplitK) * t * kPartialRows;
                 float sum = 0.0F;
 #pragma unroll
                 for (int s = 0; s < SplitK; ++s) {

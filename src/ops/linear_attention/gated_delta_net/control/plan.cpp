@@ -43,10 +43,15 @@ static_assert(closed(kN96K5120) && closed(kN64K2048) && closed(kNormN96K5120) &&
 std::span<const Route> routes(Geometry geometry, bool norm = false) {
     if (norm) {
         if (geometry.heads == 48 && geometry.input_rows == 5120) return kNormN96K5120;
+        // A 24-head rank has no fused norm kernel (norm.cuh is written for H = 48), so its norm
+        // plan normalizes with ops::rmsnorm and then runs the projection routes below.
+        if (geometry.heads == 24 && geometry.input_rows == 5120) return routes_n48_k5120();
         if (geometry.heads == 32 && geometry.input_rows == 2048) return kNormN64K2048;
         throw std::invalid_argument("gdn_control: unsupported norm geometry");
     }
     if (geometry.heads == 48 && geometry.input_rows == 5120) return kN96K5120;
+    // One rank of the 27B's control pair at tensor-parallel width 2: half the heads, same width.
+    if (geometry.heads == 24 && geometry.input_rows == 5120) return routes_n48_k5120();
     if (geometry.heads == 32 && geometry.input_rows == 2048) return kN64K2048;
     if (geometry.heads == 48 && geometry.input_rows == 2560) return routes_n96_k2560();
 #if NINFER_TARGET_SPARK
@@ -72,7 +77,10 @@ NormPlan select_norm_plan(Geometry geometry, std::int32_t columns) {
             projection = route.plan;
             break;
         }
-    if (geometry.input_rows == 5120 && columns <= 42) {
+    // The fused 5120 norm kernel carries `H = 48` as a compile-time constant, so it serves only the
+    // single-device geometry. A 24-head rank falls through to the materialized fallback below, which
+    // normalizes with ops::rmsnorm and then runs the projection plan.
+    if (geometry.input_rows == 5120 && geometry.heads == 48 && columns <= 42) {
         if (columns <= 2) return {NormKernel::Simt, {}, {}, 1, 512};
         if (columns <= 14) return {NormKernel::Simt, {}, {}, 2, 512};
         if (columns <= 28) return {NormKernel::Simt, {}, {}, 2, 256};

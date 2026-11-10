@@ -295,6 +295,22 @@ generated token IDs in diagnostics.
 
 Run `./build/rtx5090-release/apps/ninfer --help` for the exact option contract.
 
+## Shard-slice debugging
+
+`NINFER_DEBUG_SLICES=1` prints, for every sharded weight, the `MatrixSlice` list the loader derives
+before it is handed to the artifact slicer — each slice's source object, row, column, extent, and its
+destination row and column. It is a debugging aid for tensor-parallel loading, and it exists because a
+wrong derivation produces a plausible-looking weight rather than a failure: the slicer rejects only
+what it can prove is wrong (a split scale block, an uncovered destination), and a derivation that
+covers the destination with the right element count but the wrong columns passes every check.
+
+Enable it when a two-GPU load fails with a slicer message, or when a sharded weight's values look
+wrong without an error. It prints to stderr and is off unless the variable is set.
+
+```bash
+NINFER_DEBUG_SLICES=1 ./build/rtx5090-release/apps/ninfer-serve --devices 0,1 model.ninfer
+```
+
 ## CUDA synchronization
 
 `NINFER_CUDA_SYNC` selects the CUDA device synchronization schedule at startup for both the CLI

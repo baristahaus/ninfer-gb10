@@ -167,6 +167,13 @@ public:
         try {
             for (;;) {
                 event =
+                    // Rank 0's event is the ticket's progress. That is sound only while every
+                    // peer's work is strictly stream-ordered behind rank 0's, which is what the
+                    // rank-1 mirrors' ordering argument gives: both ranks issue the same sequence
+                    // in the same order, so rank 0 cannot complete a round before a peer has been
+                    // issued the same round. If a peer ever gains independent progress (its own
+                    // scheduler decision, a conditional exchange), this becomes a race and the
+                    // ticket must wait for every rank's event instead.
                     observe_host_call(host_.progress_ns, [&] {
                         auto event = program().poll();
                         for (std::size_t rank = 1; rank < workers_.size(); ++rank) {

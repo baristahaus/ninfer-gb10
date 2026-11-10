@@ -134,6 +134,18 @@ EngineOptions normalize_engine_options(EngineOptions options) {
                 "rank 1's stream and a host transfer would leave it stale. Clear the Host tier "
                 "options (--host-kv-mib, --host-state-slots, host context-cache capacity)");
         }
+        // Graph capture is per Program, and each rank has its own Program, so two ranks capture
+        // separately. That is only sound while no captured node touches both devices; the moment a
+        // captured round contains a cross-rank exchange the two captures must be joint, which the
+        // per-Program capture cannot express. Refusing here is deliberate: a subtly wrong capture
+        // is silent, a refusal is not. Eager rounds are correct today, so the lane runs without
+        // graphs until joint capture lands.
+        if (options.use_cuda_graph) {
+            throw std::invalid_argument(
+                "tensor parallelism cannot capture CUDA graphs yet: each rank captures its own "
+                "graph and a round with a cross-rank exchange needs one joint capture. Pass "
+                "--no-cuda-graph; the lane runs eager until joint capture lands");
+        }
     }
 
     const std::uint32_t concurrency = options.max_concurrency;

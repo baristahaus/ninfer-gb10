@@ -13,7 +13,16 @@
 
 namespace ninfer::ops {
 
-inline constexpr std::uint32_t kCausalAttentionMaximumVisibleKeys = 262144;
+// The widest visible-key set any plan may be built for. Four times the Qwen3.8 native window, which
+// is the ceiling an opt-in YaRN factor of 4 reaches; the native window itself stays 262,144.
+//
+// Raising this relaxes a guard only. Every causal plan derives its split count from
+// CausalKvPartition::active(), which is clamped to CausalKvPartition::kMaxSplits (256), so a wider
+// envelope does not add splits or workspace at any width this engine serves: at 262,144 the
+// decode split count is already the partition target, and at 1,048,576 it is the same value.
+// The kernel-side per-split key span is what grows, and the decode kernels must bound it from the
+// page table rather than from a precomputed span.
+inline constexpr std::uint32_t kCausalAttentionMaximumVisibleKeys = 1048576;
 
 struct CausalAttentionExecutionEnvelope {
     std::uint32_t min_visible_keys = 0;

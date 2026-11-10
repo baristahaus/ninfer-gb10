@@ -584,8 +584,18 @@ void validate_target_options(const execution::ModelProfile& profile, DeviceConte
     if (profile.draft && options.max_context > profile.config.draft->max_position_embeddings) {
         throw std::invalid_argument("max_context exceeds the selected draft position capacity");
     }
-    if (options.max_context == 0 ||
-        options.max_context > profile.config.text.max_position_embeddings) {
+    // YaRN is opt-in: the config's max_position_embeddings is the model's TRUE native window and
+    // stays untouched; an opt-in rope factor raises the addressable ceiling to native x factor,
+    // which is what the rope table installed at load actually serves. Factor 0 and 1 leave this
+    // identical to the pre-YaRN engine.
+    const double yarn_factor = options.rope_yarn_factor > 1.0F ? options.rope_yarn_factor : 1.0;
+    const std::uint64_t context_ceiling = static_cast<std::uint64_t>(
+        static_cast<double>(profile.config.text.max_position_embeddings) * yarn_factor);
+    if (context_ceiling > ops::kCausalAttentionMaximumVisibleKeys) {
+        throw std::invalid_argument(
+            "rope_yarn_factor extends the context past the attention visible-keys ceiling");
+    }
+    if (options.max_context == 0 || options.max_context > context_ceiling) {
         throw std::invalid_argument("max_context exceeds the configured position capacity");
     }
     if (options.prefill_chunk % kPrefillChunkAlignment != 0) {

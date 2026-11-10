@@ -16,6 +16,7 @@ enum class Field {
     KvDtype,
     KvCapacity,
     PrefillChunk,
+    RopeYarnFactor,
     CudaGraph,
     GpuTiming,
     MaxConcurrency,

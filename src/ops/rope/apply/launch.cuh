@@ -12,6 +12,7 @@ struct RopeArguments {
     Tensor* second;
     int rotary_dim;
     float theta;
+    RopeYarnDevice yarn;
 
     [[nodiscard]] __nv_bfloat16* second_data() const {
         return second ? static_cast<__nv_bfloat16*>(second->data) : nullptr;
@@ -25,7 +26,7 @@ void launch_rope_fixed(const RopeArguments& a, int threads, cudaStream_t stream)
     rope_fixed_kernel<Mode, QHeads, KHeads><<<a.positions.ne[0], threads, 0, stream>>>(
         static_cast<const std::int32_t*>(a.positions.data),
         static_cast<__nv_bfloat16*>(a.first.data), a.second_data(), a.positions.ne[0],
-        a.first.nb[2] / 2, a.second_stride());
+        a.first.nb[2] / 2, a.second_stride(), a.yarn);
 }
 
 template <int HeadsPerBlock, int QHeads, int KHeads>
@@ -51,7 +52,7 @@ inline void launch_rope_generic(const RopeArguments& a, int threads, cudaStream_
         static_cast<const std::int32_t*>(a.positions.data), a.positions.ne[1],
         static_cast<__nv_bfloat16*>(a.first.data), a.second_data(), a.first.ne[0], a.rotary_dim,
         a.theta, a.first.ne[1], a.second ? a.second->ne[1] : 0, a.positions.ne[0],
-        a.first.nb[2] / 2, a.second_stride());
+        a.first.nb[2] / 2, a.second_stride(), a.yarn);
 }
 
 } // namespace ninfer::ops::detail

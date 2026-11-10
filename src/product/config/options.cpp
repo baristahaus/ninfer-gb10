@@ -393,6 +393,12 @@ ParsedOptions parse(int argc, char** argv, EntryPoint entry,
         case Field::PrefillChunk:
             engine.prefill_chunk = u32();
             break;
+        case Field::RopeYarnFactor:
+            engine.rope_yarn_factor = static_cast<float>(real());
+            if (!(engine.rope_yarn_factor >= 0.0F) || !(engine.rope_yarn_factor <= 4.0F)) {
+                throw std::invalid_argument("rope_yarn_factor must be in [0,4]; 0 and 1 disable YaRN");
+            }
+            break;
         case Field::GpuTiming:
             engine.observability.gpu_timing = boolean();
             break;

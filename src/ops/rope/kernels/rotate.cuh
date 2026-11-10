@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ops/rope/kernels/phase.cuh"
+#include "ops/rope/kernels/yarn_device.h"
 #include "ops/common/numeric/convert.cuh"
 
 #include <cuda_bf16.h>
@@ -47,19 +48,37 @@ __device__ __forceinline__ void fixed_axis_frequency(int pair, int* axis, float*
     }
 }
 
+// Text geometries YaRN scales. Vision (D72R72) has its own effective dimension and table, and the
+// DFlash D128R128 drafter is a separate component, so neither is reached from here.
+template <RopeKernelMode Mode>
+inline constexpr bool kYarnMode = Mode == RopeKernelMode::D256R64 ||
+                                  Mode == RopeKernelMode::MropeD256R64;
+
 template <RopeKernelMode Mode>
 __device__ __forceinline__ void fixed_sincos(const std::int32_t* positions, int tokens, int token,
-                                             int pair, float* sine, float* cosine) {
+                                             int pair, float* sine, float* cosine,
+                                             RopeYarnDevice yarn = {}) {
     if constexpr (Mode == RopeKernelMode::D128R128) {
         rope_d128_theta1e7_sincos(positions, token, pair, sine, cosine);
     } else {
         int axis = 0;
         float frequency;
         fixed_axis_frequency<Mode>(pair, &axis, &frequency);
+        if constexpr (kYarnMode<Mode>) {
+            if (yarn.enabled && pair < yarn.pair_count) { frequency = yarn.inv_frequency[pair]; }
+        }
         const float angle =
             static_cast<float>(positions[static_cast<std::int64_t>(axis) * tokens + token]) *
             frequency;
         sincosf(angle, sine, cosine);
+        if constexpr (kYarnMode<Mode>) {
+            // Exactly 1.0F when disabled, and only reached when enabled, so the disabled path
+            // keeps the pre-YaRN instruction sequence.
+            if (yarn.enabled) {
+                *sine *= yarn.scale;
+                *cosine *= yarn.scale;
+            }
+        }
     }
 }
 
@@ -82,7 +101,7 @@ __device__ __forceinline__ void apply_rope_head(__nv_bfloat16* data, std::int64_
 template <RopeKernelMode Mode, int QHeads, int KHeads>
 __global__ void rope_fixed_kernel(const std::int32_t* positions, __nv_bfloat16* q, __nv_bfloat16* k,
                                   std::int32_t tokens, std::int64_t q_token_stride,
-                                  std::int64_t k_token_stride) {
+                                  std::int64_t k_token_stride, RopeYarnDevice yarn) {
     constexpr int kHeadDim = Mode == RopeKernelMode::AxialD72R72 ? 72
                              : Mode == RopeKernelMode::D128R128  ? 128
                                                                  : 256;
@@ -96,7 +115,8 @@ __global__ void rope_fixed_kernel(const std::int32_t* positions, __nv_bfloat16* 
     __shared__ float sin_cache[kHalf];
     if (threadIdx.x < kHalf) {
         const int pair = static_cast<int>(threadIdx.x);
-        fixed_sincos<Mode>(positions, tokens, token, pair, &sin_cache[pair], &cos_cache[pair]);
+        fixed_sincos<Mode>(positions, tokens, token, pair, &sin_cache[pair], &cos_cache[pair],
+                           yarn);
     }
     __syncthreads();
 
@@ -221,7 +241,7 @@ static __global__ void rope_generic_kernel(const std::int32_t* positions, std::i
                                            std::int32_t head_dim, std::int32_t rotary_dim,
                                            float theta, std::int32_t q_heads, std::int32_t k_heads,
                                            std::int32_t tokens, std::int64_t q_token_stride,
-                                           std::int64_t k_token_stride) {
+                                           std::int64_t k_token_stride, RopeYarnDevice yarn) {
     const int token = static_cast<int>(blockIdx.x);
     if (token >= tokens) { return; }
     const int half = rotary_dim / 2;
@@ -236,11 +256,21 @@ static __global__ void rope_generic_kernel(const std::int32_t* positions, std::i
             int axis       = 0;
             float exponent = 0.0F;
             generic_axis_frequency(axes, head_dim, rotary_dim, pair, &axis, &exponent);
-            const float frequency = powf(theta, exponent);
+            float frequency = powf(theta, exponent);
+            // YaRN covers the text geometries only. The axial Vision branch above uses its own
+            // effective dimension (36, not 72) and its own table, so it is never reached here.
+            const bool axial_vision = axes == 2 && head_dim == 72 && rotary_dim == 72;
+            if (!axial_vision && yarn.enabled && pair < yarn.pair_count) {
+                frequency = yarn.inv_frequency[pair];
+            }
             const float angle =
                 static_cast<float>(positions[static_cast<std::int64_t>(axis) * tokens + token]) *
                 frequency;
             sincosf(angle, &sin_cache[pair], &cos_cache[pair]);
+            if (!axial_vision && yarn.enabled) {
+                sin_cache[pair] *= yarn.scale;
+                cos_cache[pair] *= yarn.scale;
+            }
         }
     }
     __syncthreads();

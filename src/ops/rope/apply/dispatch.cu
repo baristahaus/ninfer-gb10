@@ -107,13 +107,13 @@ void apply(const RopeArguments& arguments, int multiprocessor_count, cudaStream_
 } // namespace
 
 void rope_dispatch(const Tensor& positions, int rotary_dim, float theta, Tensor& q, Tensor& k,
-                   int multiprocessor_count, cudaStream_t stream) {
-    apply({positions, q, &k, rotary_dim, theta}, multiprocessor_count, stream);
+                   int multiprocessor_count, cudaStream_t stream, RopeYarnDevice yarn) {
+    apply({positions, q, &k, rotary_dim, theta, yarn}, multiprocessor_count, stream);
 }
 
 void rope_dispatch(const Tensor& positions, int rotary_dim, float theta, Tensor& x,
-                   int multiprocessor_count, cudaStream_t stream) {
-    apply({positions, x, nullptr, rotary_dim, theta}, multiprocessor_count, stream);
+                   int multiprocessor_count, cudaStream_t stream, RopeYarnDevice yarn) {
+    apply({positions, x, nullptr, rotary_dim, theta, yarn}, multiprocessor_count, stream);
 }
 
 } // namespace ninfer::ops::detail

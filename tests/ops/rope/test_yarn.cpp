@@ -13,11 +13,13 @@
 // definition the kernel will call is the one measured here.
 
 #include "ops/kernel/yarn.h"
+#include "ops/rope/apply/yarn_resolve.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
+#include <stdexcept>
 #include <vector>
 
 namespace {
@@ -232,6 +234,67 @@ void check_degenerate_ramp() {
     check(finite, "a collapsed ramp stays finite and keeps high > low");
 }
 
+
+// ------------------------------------------------------------------ launch resolution
+// The launcher resolves the Op's request into the per-launch device struct
+// (src/ops/rope/apply/yarn_resolve.h). That is the code that decides whether the kernel sees a
+// YaRN table at all, so it carries the "default path is untouched" claim: at factor 0 or 1 the
+// struct must be the default-constructed one, which is what makes the kernel take the compiled-in
+// table and apply no scale.
+void check_resolution_disabled_is_default() {
+    for (float factor : {0.0F, 1.0F, 0.5F}) {
+        const auto device = ninfer::ops::detail::resolve_yarn(factor, 262144, 32.0F, 1.0F, 1.0e7F,
+                                                              /*axes=*/1, /*rotary_dim=*/64);
+        const ninfer::ops::detail::RopeYarnDevice pristine{};
+        bool identical = !device.enabled && device.pair_count == 0 && device.scale == 1.0F;
+        for (int pair = 0; pair < 32; ++pair) {
+            identical = identical && device.inv_frequency[pair] == pristine.inv_frequency[pair];
+        }
+        std::printf("  factor %.1f: enabled=%d pairs=%d scale=%.1f\n", factor,
+                    device.enabled ? 1 : 0, device.pair_count, static_cast<double>(device.scale));
+        check(identical, "a disabled factor resolves to the default device struct");
+    }
+}
+
+void check_resolution_enabled_matches_oracle() {
+    for (double factor : {2.0, 4.0}) {
+        const auto device = ninfer::ops::detail::resolve_yarn(
+            static_cast<float>(factor), 262144, 32.0F, 1.0F, 1.0e7F, /*axes=*/1, /*rotary_dim=*/64);
+        check(device.enabled && device.pair_count == 32, "an enabled factor carries 32 pairs");
+        const Oracle oracle = oracle_yarn(factor, 64, 1.0e7, 262144.0, 32.0, 1.0);
+        double worst        = 0.0;
+        for (int pair = 0; pair < 32; ++pair) {
+            worst = std::max(worst, relative_error(device.inv_frequency[pair],
+                                                   oracle.inv_freq[static_cast<std::size_t>(pair)]));
+        }
+        std::printf("  factor %.1f: resolved table worst rel. error %.3e, scale %.9f\n", factor,
+                    worst, static_cast<double>(device.scale));
+        check(worst < 1.0e-6, "the resolved launch table matches the double oracle");
+        check(relative_error(device.scale, oracle.mscale) < 1.0e-7,
+              "the resolved attention scale matches the oracle");
+    }
+}
+
+void check_resolution_rejects_unsupported() {
+    using ninfer::ops::detail::resolve_yarn;
+    const auto throws = [](auto&& call) {
+        try {
+            call();
+        } catch (const std::invalid_argument&) { return true; }
+        return false;
+    };
+    check(throws([&] { resolve_yarn(2.0F, 262144, 32.0F, 1.0F, 1.0e7F, 1, 128); }),
+          "a rotary width other than 64 is rejected, not silently left unscaled");
+    check(throws([&] { resolve_yarn(2.0F, 262144, 32.0F, 1.0F, 1.0e7F, 2, 72); }),
+          "Vision 2-D with an enabled factor is rejected");
+    check(throws([&] { resolve_yarn(2.0F, 0, 32.0F, 1.0F, 1.0e7F, 1, 64); }),
+          "a zero native window is rejected");
+    check(throws([&] { resolve_yarn(2.0F, 262144, 0.0F, 1.0F, 1.0e7F, 1, 64); }),
+          "a non-positive beta is rejected");
+    check(!throws([&] { resolve_yarn(2.0F, 262144, 32.0F, 1.0F, 1.0e7F, 3, 64); }),
+          "Text MRoPE is accepted");
+}
+
 }  // namespace
 
 int main() {
@@ -241,6 +304,9 @@ int main() {
     check_enabled_matches_oracle();
     check_known_factor_and_position();
     check_degenerate_ramp();
+    check_resolution_disabled_is_default();
+    check_resolution_enabled_matches_oracle();
+    check_resolution_rejects_unsupported();
     std::printf("%s (%d failure%s)\n", failures ? "FAILED" : "ALL PASS", failures,
                 failures == 1 ? "" : "s");
     return failures ? 1 : 0;

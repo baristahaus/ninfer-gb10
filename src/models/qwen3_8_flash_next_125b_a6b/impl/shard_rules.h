@@ -25,6 +25,7 @@
 //   Q and K plus a sixth of V, and rank 1 the rest of V with no Q or K at all. It is therefore
 //   stated as three segments that shard independently.
 
+#include "artifact/binder.h"
 #include "artifact/shard.h"
 
 #include <array>
@@ -56,5 +57,17 @@ struct ParameterShard {
                                                           int rank);
 
 [[nodiscard]] std::span<const ParameterShard> parameter_shards() noexcept;
+
+// The parameter as `rank` sees it at `width`: the same reference with its binding sliced to the
+// rank's ranges and its sharded extent reduced to the rank's share. `shape[0]` shrinks for Rows and
+// `shape[1]` for Columns — a segmented parameter shrinks by the sum of its per-rank segments, so
+// the QKV projection's 10240 rows become 5120 at width 2. A parameter the table does not name is
+// Replicated and comes back unchanged. At width 1 the reference is returned unchanged.
+//
+// Throws std::invalid_argument when the table names the parameter but its binding does not cover
+// the extents the table declares: that is a mismatch between the artifact and the model, and
+// clipping it silently would give a rank fewer elements than its kernels expect.
+[[nodiscard]] artifact::ParameterReference shard_parameter(
+    const artifact::ParameterReference& reference, int width, int rank);
 
 } // namespace ninfer::models::flash_next_125b_a6b

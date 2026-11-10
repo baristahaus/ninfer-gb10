@@ -1,6 +1,8 @@
 #include "models/qwen3_8_flash_next_125b_a6b/impl/shard_rules.h"
 
 #include <array>
+#include <stdexcept>
+#include <string>
 #include <vector>
 
 namespace ninfer::models::flash_next_125b_a6b {
@@ -83,6 +85,56 @@ std::vector<artifact::ShardRange> ranges_for(const ParameterShard& shard, int wi
         offset += segment;
     }
     return ranges;
+}
+
+namespace {
+
+// The table row whose suffix is the tail of `name`. Parameters are bound with a layer prefix, so
+// the match is on the suffix.
+const ParameterShard* shard_for(std::string_view name) noexcept {
+    for (const ParameterShard& shard : kParameterShards) {
+        if (name.size() < shard.suffix.size()) { continue; }
+        if (name.substr(name.size() - shard.suffix.size()) == shard.suffix) { return &shard; }
+    }
+    return nullptr;
+}
+
+} // namespace
+
+artifact::ParameterReference shard_parameter(const artifact::ParameterReference& reference,
+                                             int width, int rank) {
+    if (width <= 1) { return reference; }
+    const ParameterShard* shard = shard_for(reference.name);
+    if (shard == nullptr) { return reference; } // Replicated: not in the table.
+
+    const auto ranges = ranges_for(*shard, width, rank);
+    if (static_cast<std::uint64_t>(total_extent(*shard)) != reference.binding.elements) {
+        throw std::invalid_argument(
+            "sharding: " + std::string(reference.name) + " binds " +
+            std::to_string(reference.binding.elements) + " elements but the table declares " +
+            std::to_string(total_extent(*shard)));
+    }
+
+    artifact::ParameterReference sharded = reference;
+    sharded.binding = artifact::shard_binding_ranges(reference.binding, ranges);
+
+    std::uint64_t share = 0;
+    for (const auto& range : ranges) { share += static_cast<std::uint64_t>(range.extent); }
+
+    // Only a split changes the shape. Replicated keeps every rank's shape whole, and PrimaryOnly
+    // keeps rank 0's shape whole while a rank that holds none reports a zero extent on the axis it
+    // would have owned — which for these parameters is the row axis.
+    if (shard->axis == artifact::ShardAxis::Rows || shard->axis == artifact::ShardAxis::Columns) {
+        const std::size_t axis_index = shard->axis == artifact::ShardAxis::Rows ? 0 : 1;
+        if (sharded.shape.size() <= axis_index) {
+            throw std::invalid_argument("sharding: " + std::string(reference.name) +
+                                        " has no axis to shard");
+        }
+        sharded.shape[axis_index] = share;
+    } else if (shard->axis == artifact::ShardAxis::PrimaryOnly) {
+        if (!sharded.shape.empty()) { sharded.shape[0] = share; }
+    }
+    return sharded;
 }
 
 std::span<const ParameterShard> parameter_shards() noexcept {

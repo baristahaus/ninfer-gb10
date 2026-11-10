@@ -2,6 +2,7 @@
 // cleanly at width 2, and the table must report honestly which do not at width 3. This is the
 // review's head-count finding made executable.
 
+#include "artifact/binder.h"
 #include "artifact/shard.h"
 #include "models/qwen3_8_flash_next_125b_a6b/impl/shard_rules.h"
 
@@ -15,6 +16,7 @@ using ninfer::artifact::ShardAxis;
 using ninfer::artifact::split_evenly;
 using ninfer::models::flash_next_125b_a6b::parameter_shards;
 using ninfer::models::flash_next_125b_a6b::ranges_for;
+using ninfer::models::flash_next_125b_a6b::shard_parameter;
 using ninfer::models::flash_next_125b_a6b::total_extent;
 
 int check(bool condition, const std::string& message) {
@@ -117,6 +119,72 @@ int test_qkv_segmentation() {
     return failures;
 }
 
+// A reference whose binding covers `extent` elements — the parameter's sharded extent, which is
+// the row count for a Rows parameter and the column count for a Columns one.
+ninfer::artifact::ParameterReference synthetic(std::string name,
+                                               std::vector<std::uint64_t> shape,
+                                               std::uint64_t extent) {
+    ninfer::artifact::ParameterReference reference;
+    reference.name = std::move(name);
+    reference.shape = std::move(shape);
+    reference.binding.elements = extent;
+    reference.binding.parts.push_back(
+        ninfer::artifact::Part{ninfer::artifact::ObjectHandle{0}, 0, extent});
+    return reference;
+}
+
+int test_shard_parameter() {
+    int failures = 0;
+
+    // A Rows parameter halves its first axis and its binding.
+    const auto key = shard_parameter(synthetic("model.layers.3.self_attn.k_proj.weight", {512, 2560}, 512),
+                                     2, 0);
+    failures += check(key.shape[0] == 256 && key.shape[1] == 2560,
+                      "the KV projection halves its rows and keeps its columns");
+    failures += check(key.binding.elements == 256, "the KV binding halves");
+    failures += check(key.binding.parts.size() == 1 && key.binding.parts[0].begin == 0 &&
+                          key.binding.parts[0].end == 256,
+                      "rank 0 owns the first half of the KV projection");
+
+    // A Columns parameter halves its second axis.
+    const auto out = shard_parameter(synthetic("model.layers.3.self_attn.o_proj.weight", {2560, 6144}, 6144),
+                                     2, 1);
+    failures += check(out.shape[0] == 2560 && out.shape[1] == 3072,
+                      "the output projection halves its columns and keeps its rows");
+
+    // A segmented parameter halves each segment: 10240 rows become 5120, in three slices.
+    const auto qkv = shard_parameter(
+        synthetic("model.layers.3.linear_attn.in_proj_qkv.weight", {10240, 2560}, 10240), 2, 0);
+    failures += check(qkv.shape[0] == 5120 && qkv.shape[1] == 2560,
+                      "the QKV projection keeps its rows' half and its columns");
+    failures += check(qkv.binding.parts.size() == 3, "the QKV binding is three slices");
+    failures += check(qkv.binding.elements == 5120, "the QKV binding totals the rank's share");
+
+    // A Replicated parameter is untouched.
+    const auto norm = shard_parameter(
+        synthetic("model.layers.3.attn_hyper_connection.hc_norm.weight", {10240}, 10240), 2, 1);
+    failures += check(norm.shape[0] == 10240 && norm.binding.elements == 10240,
+                      "a replicated parameter is unchanged");
+    failures += check(norm.binding.parts.size() == 1 && norm.binding.parts[0].end == 10240,
+                      "a replicated parameter keeps its whole binding");
+
+    // Width 1 returns the reference unchanged.
+    const auto single = shard_parameter(
+        synthetic("model.layers.3.self_attn.k_proj.weight", {512, 2560}, 512), 1, 0);
+    failures += check(single.shape[0] == 512 && single.binding.elements == 512,
+                      "width 1 leaves the parameter whole");
+
+    // A binding that disagrees with the table is rejected, not clipped.
+    bool threw = false;
+    try {
+        (void)shard_parameter(synthetic("model.layers.3.self_attn.k_proj.weight", {256, 2560}, 256), 2, 0);
+    } catch (const std::invalid_argument&) {
+        threw = true;
+    }
+    failures += check(threw, "a binding that disagrees with the table is rejected");
+    return failures;
+}
+
 } // namespace
 
 int main() {
@@ -124,6 +192,7 @@ int main() {
     failures += test_width_two_is_complete();
     failures += test_width_three_is_partial();
     failures += test_qkv_segmentation();
+    failures += test_shard_parameter();
     if (failures == 0) {
         std::cout << "ok (" << parameter_shards().size() << " parameters)\n";
     }

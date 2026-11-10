@@ -67,7 +67,6 @@ A test that needs an **artifact** skips with exit 77 when its entry is absent fr
 | `ninfer_media_decode_test` | host | — | — | 0.03 s |
 | `ninfer_prompt_input_test` | host | — | — | 0.00 s |
 | `ninfer_pretty_logging_test` | host | — | — | unmeasured |
-| `ninfer_mtp_capture_test` | host | — | — | unmeasured |
 | `ninfer_perplexity_evaluation_test` | host | — | — | unmeasured |
 | `ninfer_cli_options_test` | host | — | — | 0.00 s |
 | `ninfer_openai_schema_test` | GPU | — | — | unmeasured (GPU) |

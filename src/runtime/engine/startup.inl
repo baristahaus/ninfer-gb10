@@ -435,6 +435,21 @@ BuiltModel<typename Setup::Types> build_local_model(const artifact::Reader& read
                     "must resolve the same capacity. The box is asymmetric or the options differ "
                     "per rank");
             }
+            // The startup record describes every rank the executor drives, and the per-rank report
+            // indexes `startup.ranks` by the description's rank index. Rank 1 materializes on its
+            // own device and has its own budget, so it needs an entry or the report reads past the
+            // end of a one-element vector.
+            memory.rank_budgets.push_back(
+                {peer_available,
+                 peer_plan->capacity.runtime_reservation_bytes,
+                 peer_plan->capacity.minimum_runtime_reservation_bytes,
+                 peer_plan->capacity.bytes_per_additional_main_page_group,
+                 peer_plan->capacity.available_after_weights_bytes,
+                 peer_plan->capacity.available_after_startup_bytes,
+                 peer_plan->capacity.automatic_headroom_bytes,
+                 peer_plan->capacity.planned_slack_bytes,
+                 memory.startup_retained_bytes,
+                 memory.cuda_graph});
             peers.front()->program = create_rank_program(
                 peers.front()->parameters, std::move(peer_plan->sequence), peer_device,
                 options.startup_observer, peers.front()->sharded);

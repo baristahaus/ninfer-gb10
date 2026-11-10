@@ -14,6 +14,10 @@ struct Fp8LinearAddPlan {
 
 Fp8LinearAddPlan select_fp8_add_n5120_k6144(LinearPolicy policy, std::int32_t tokens);
 Fp8LinearAddPlan select_fp8_add_n5120_k17408(LinearPolicy policy, std::int32_t tokens);
+// The Columns-sharded halves of the two shapes above: one rank's input-column block at
+// tensor-parallel width 2. Same schedules and token bands, half the K tiles.
+Fp8LinearAddPlan select_fp8_add_n5120_k8704(LinearPolicy policy, std::int32_t tokens);
+Fp8LinearAddPlan select_fp8_add_n5120_k3072(LinearPolicy policy, std::int32_t tokens);
 std::size_t fp8_linear_add_workspace_capacity_bytes(std::int32_t rows, std::int32_t k,
                                                     LinearPolicy policy, std::int32_t first,
                                                     std::int32_t last);

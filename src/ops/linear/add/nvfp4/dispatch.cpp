@@ -1,5 +1,8 @@
 #include "ops/linear/add/nvfp4/dispatch.h"
 
+#include <stdexcept>
+#include <string>
+
 namespace ninfer::ops::detail {
 namespace {
 Nvfp4LinearAddPlan select_plan(std::int32_t rows, std::int32_t k, LinearPolicy policy,
@@ -7,8 +10,10 @@ Nvfp4LinearAddPlan select_plan(std::int32_t rows, std::int32_t k, LinearPolicy p
     if (tokens > 0 && rows == 5120) {
         if (k == 6144) return select_nvfp4_add_n5120_k6144(policy, tokens);
         if (k == 17408) return select_nvfp4_add_n5120_k17408(policy, tokens);
+        if (k == 8704) return select_nvfp4_add_n5120_k8704(policy, tokens);
     }
-    throw std::invalid_argument("nvfp4 linear_add: unsupported shape or token extent");
+    throw std::invalid_argument("nvfp4 linear_add: unsupported shape N" + std::to_string(rows) +
+                                "K" + std::to_string(k));
 }
 } // namespace
 

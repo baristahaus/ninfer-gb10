@@ -1,5 +1,8 @@
 #include "ops/linear/add/fp8/dispatch.h"
 
+#include <stdexcept>
+#include <string>
+
 namespace ninfer::ops::detail {
 namespace {
 Fp8LinearAddPlan select_plan(std::int32_t rows, std::int32_t k, LinearPolicy policy,
@@ -7,8 +10,11 @@ Fp8LinearAddPlan select_plan(std::int32_t rows, std::int32_t k, LinearPolicy pol
     if (tokens > 0 && rows == 5120) {
         if (k == 6144) return select_fp8_add_n5120_k6144(policy, tokens);
         if (k == 17408) return select_fp8_add_n5120_k17408(policy, tokens);
+        if (k == 3072) return select_fp8_add_n5120_k3072(policy, tokens);
+        if (k == 8704) return select_fp8_add_n5120_k8704(policy, tokens);
     }
-    throw std::invalid_argument("fp8 linear_add: unsupported shape or token extent");
+    throw std::invalid_argument("fp8 linear_add: unsupported shape N" + std::to_string(rows) + "K" +
+                                std::to_string(k));
 }
 } // namespace
 

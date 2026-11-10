@@ -14,20 +14,31 @@
 namespace ninfer::ops::detail {
 namespace {
 
-using Geometry              = Fp8N34816K5120;
-constexpr int kIntermediate = Geometry::kOutputRows / 2;
+// The fused gate_up object's input width, the same for every shape this file serves: 5120.
+constexpr int kInputRows = 5120;
+
+// `kIntermediate` is the fused object's output rows over two, and it is a COMPILE-TIME value
+// because SwiGluBranchRows tiles by it. Two shapes are served here: the single device's [34816,
+// 5120] object (intermediate 17408) and one rank's Rows half at tensor-parallel width 2 ([17408,
+// 5120], intermediate 8704). The matrix path below reads weight.n / 2 at run time and needs no
+// branch; only this small-T path does.
+template <int Intermediate>
+void launch_small_t(const Tensor& x, const Weight& weight, Tensor& out, cudaStream_t stream) {
+    using Schedule =
+        Fp8A16SimtSchedule<4, 2, 16, 4, 1, Fp8SimtActivationAccess::TokenPacked,
+                           Fp8CodeCache::Default, 1, Fp8SimtBlockOrder::RowsContiguous, 1>;
+    using Rows = SwiGluBranchRows<Schedule::kRowsPerWarp / 2, Intermediate>;
+    launch_fp8_a16_simt<Fp8ScheduleInstance<Schedule, kInputRows, 4>>(
+        fp8_a16_operands(x, weight),
+        LinearBf16Output{static_cast<__nv_bfloat16*>(out.data), Intermediate},
+        SwiGluPairEpilogue{}, stream, Rows{});
+}
 } // namespace
 
 void launch_fp8_swiglu_small_t(const Tensor& x, const Weight& weight, Tensor& out,
                                cudaStream_t stream) {
-    using Schedule =
-        Fp8A16SimtSchedule<4, 2, 16, 4, 1, Fp8SimtActivationAccess::TokenPacked,
-                           Fp8CodeCache::Default, 1, Fp8SimtBlockOrder::RowsContiguous, 1>;
-    using Rows = SwiGluBranchRows<Schedule::kRowsPerWarp / 2, kIntermediate>;
-    launch_fp8_a16_simt<Fp8ScheduleInstance<Schedule, Geometry::kInputRows, 4>>(
-        fp8_a16_operands(x, weight),
-        LinearBf16Output{static_cast<__nv_bfloat16*>(out.data), kIntermediate},
-        SwiGluPairEpilogue{}, stream, Rows{});
+    if (weight.n / 2 == 8704) return launch_small_t<8704>(x, weight, out, stream);
+    return launch_small_t<17408>(x, weight, out, stream);
 }
 
 void launch_fp8_swiglu_matrix(const Tensor& x, const Weight& weight, Tensor& out,

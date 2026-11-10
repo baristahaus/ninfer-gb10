@@ -3,6 +3,7 @@
 #include "ops/linear/projection/fp8/fp8_shapes.h"
 #include <array>
 #include <stdexcept>
+#include <string>
 
 namespace ninfer::ops::detail {
 namespace {
@@ -16,7 +17,10 @@ const Fp8LinearShape& resolve_shape(std::int32_t n, std::int32_t k, LinearPolicy
     if (!valid_linear_policy(policy)) throw std::invalid_argument("fp8 linear: unsupported policy");
     for (const auto* shape : kShapes)
         if (shape->n == n && shape->k == k) return *shape;
-    throw std::invalid_argument("fp8 linear: unsupported shape");
+    // Name the shape: "unsupported shape" alone does not say which weight was refused, and on the
+    // two-GPU lane the caller is looking at a halved shard it did not write by hand.
+    throw std::invalid_argument("fp8 linear: unsupported shape N" + std::to_string(n) + "K" +
+                                std::to_string(k));
 }
 } // namespace
 

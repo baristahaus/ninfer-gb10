@@ -14,10 +14,16 @@ struct Nvfp4LinearAddPlan {
 
 Nvfp4LinearAddPlan select_nvfp4_add_n5120_k6144(LinearPolicy policy, std::int32_t tokens);
 Nvfp4LinearAddPlan select_nvfp4_add_n5120_k17408(LinearPolicy policy, std::int32_t tokens);
+// The Columns-sharded half of the shape above: one rank's input-column block at tensor-parallel
+// width 2 (mlp/down is NVFP4 in 56 of the 27B's 64 layers). Same schedules and token bands, half
+// the K tiles.
+Nvfp4LinearAddPlan select_nvfp4_add_n5120_k8704(LinearPolicy policy, std::int32_t tokens);
 void launch_nvfp4_add_n5120_k6144_tma(const Tensor&, const Weight&, Tensor&, Nvfp4A4Workspace,
                                       cudaStream_t);
 void launch_nvfp4_add_n5120_k17408_tma(const Tensor&, const Weight&, Tensor&, Nvfp4A4Workspace,
                                        cudaStream_t);
+void launch_nvfp4_add_n5120_k8704_tma(const Tensor&, const Weight&, Tensor&, Nvfp4A4Workspace,
+                                      cudaStream_t);
 std::size_t nvfp4_linear_add_workspace_capacity_bytes(std::int32_t rows, std::int32_t k,
                                                       LinearPolicy policy, std::int32_t first,
                                                       std::int32_t last);

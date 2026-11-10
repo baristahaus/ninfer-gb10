@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "file": "tokens.ids",
+  "tokens": 2048,
+  "bytes": 10281,
+  "sha256": "fdefeddec92471bcf4c1fbc17ec4290fc4085f4636f769f75e5bb82c466ebe32",
+  "source": "bench/fixtures/bench_corpus.ids",
+  "source_sha256": "27e4f63c17efe3f89b5cf278b3b1a42a737316ed4044d7d0d1d52437059d1002",
+  "source_tokens": 65536,
+  "slice": [0, 2048],
+  "note": [
+    "The first 2048 ids of the committed benchmark corpus: real, in-distribution Qwen3.6-27B tokens",
+    "with no special tokens and no chat template (see bench/fixtures/bench_corpus.manifest.json).",
+    "Tests that need an exact prefill length take a prefix of this file; a test that needs a longer",
+    "prefill slices the bench corpus instead of duplicating it here."
+  ]
+}

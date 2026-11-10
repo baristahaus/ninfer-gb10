@@ -1,0 +1,191 @@
+{
+  "schema": 1,
+  "comment": [
+    "Test artifact manifest. Each entry names one artifact a test can consume, the environment",
+    "variable the test reads, the file name in the cache, its size and sha256 when pinned, and",
+    "where to obtain it. tools/fetch_test_artifacts.py populates the cache from this file.",
+    "",
+    "A null sha256 or bytes means the entry is not pinned yet: the tool fetches it but cannot",
+    "verify it. Pin an entry once on a machine that has the artifact with",
+    "  tools/fetch_test_artifacts.py --pin NAME --from /path/to/artifact",
+    "which copies it into the cache, records bytes+sha256 here, and leaves the artifact out of git.",
+    "",
+    "A test whose entry is missing from the cache skips (exit 77) instead of failing."
+  ],
+  "cache": {
+    "variable": "NINFER_TEST_ARTIFACT_CACHE",
+    "default": "~/.cache/ninfer/test-artifacts"
+  },
+  "fixtures": [
+    {
+      "name": "tiny_artifact",
+      "path": "tests/fixtures/artifacts/tiny.ninfer",
+      "bytes": 4352,
+      "sha256": "def829d3d27b36888f0d7e9995b01cfdbafa257382fdefd0c6dcd02bb7857757",
+      "purpose": "Deterministic one-tensor v3 artifact for framing/codec tests. Regenerate with tests/fixtures/artifacts/make_tiny_artifact.py; the digest must not change.",
+      "consumer": "ninfer_artifact_reader_test"
+    },
+    {
+      "name": "token_corpus",
+      "path": "tests/fixtures/corpus/tokens.ids",
+      "bytes": 10281,
+      "sha256": "fdefeddec92471bcf4c1fbc17ec4290fc4085f4636f769f75e5bb82c466ebe32",
+      "purpose": "First 2048 ids of the committed benchmark corpus; exact-prefill fixtures slice it. Provenance in tests/fixtures/corpus/manifest.json.",
+      "consumer": "host-only tests that need a fixed token stream"
+    },
+    {
+      "name": "prompt_corpus",
+      "path": "tests/fixtures/prompts/corpus.json",
+      "bytes": 2428,
+      "sha256": "cc383848f5dd4d47a9740a91e0b0314183ebeeb9d385ea51b56da7ca34a61700",
+      "purpose": "Eight fixed, model-agnostic prompts with budgets and coarse expectations; a GPU test that needs a prompt takes one from here instead of inventing a string.",
+      "consumer": "host-only tests that validate the fixture; GPU tests that read it"
+    }
+  ],
+  "artifacts": [
+    {
+      "name": "exl3_codec_ground_truth",
+      "env": "NINFER_EXL3_FIXTURE",
+      "file": "exllamav3-1.6.1.json",
+      "bytes": 1775847,
+      "sha256": "41c0557c5bae4ccb38011b07192b012950f228b7be088533261bd5d72d9ee877",
+      "source": {
+        "kind": "committed",
+        "path": "tests/fixtures/exl3/exllamav3-1.6.1.json"
+      },
+      "tests": [
+        "ninfer_exl3_codec_test"
+      ],
+      "notes": "Ground truth of the EXL3 contract, generated once by tests/fixtures/exl3/generate_fixture.py and committed. The test already falls back to the committed path when the variable is unset, so this entry is documentation plus a digest."
+    },
+    {
+      "name": "qwen3_8_27b_groupwise",
+      "env": "NINFER_TEST_ARTIFACT",
+      "file": "qwen3_8_27b_groupwise.ninfer",
+      "bytes": 1024,
+      "sha256": "8164d746f8e97b86ce90bff3c2ef395dae98cfacd42e98cc3c3247a164d2b898",
+      "source": {
+        "kind": "file",
+        "path": "out/qwen3_8_27b_groupwise.ninfer",
+        "hint": "the maintainer's groupwise-int 27B product artifact"
+      },
+      "default": true,
+      "tests": [
+        "ninfer_qwen3_5_loading_real_test",
+        "ninfer_qwen3_5_native_transactions_test",
+        "ninfer_qwen3_5_mtp_history_real_test",
+        "ninfer_qwen3_5_prefix_real_test",
+        "ninfer_qwen3_5_agent_continuation_real_test",
+        "ninfer_qwen3_5_preemption_real_test",
+        "ninfer_qwen3_5_grammar_real_test",
+        "ninfer_qwen3_5_tools_real_test",
+        "ninfer_qwen3_5_score_real_test",
+        "ninfer_qwen3_5_vision_workspace_test"
+      ],
+      "notes": "Default for NINFER_TEST_ARTIFACT. Must carry the Vision component and the MTP head: vision_workspace and mtp_history need them."
+    },
+    {
+      "name": "qwen3_8_27b_nvfp4",
+      "env": "NINFER_TEST_ARTIFACT",
+      "file": "qwen3_8_27b_nvfp4.ninfer",
+      "bytes": null,
+      "sha256": null,
+      "source": {
+        "kind": "file",
+        "path": "out/qwen3_8_27b_nvfp4.ninfer",
+        "hint": "the nvfp4 27B artifact; same test set as the groupwise one"
+      },
+      "tests": [],
+      "notes": "Alternative to the default for the same NINFER_TEST_ARTIFACT tests; not a second default because one cache entry serves the variable."
+    },
+    {
+      "name": "qwen3_6_35b_a3b",
+      "env": "NINFER_TEST_ARTIFACT",
+      "file": "qwen3_6_35b_a3b.ninfer",
+      "bytes": null,
+      "sha256": null,
+      "source": {
+        "kind": "file",
+        "path": "out/qwen3_6_35b_a3b.ninfer",
+        "hint": "the 35B-A3B MoE artifact with the DFlash v1 companion"
+      },
+      "tests": [
+        "ninfer_qwen3_5_moe_real_test",
+        "ninfer_qwen3_5_moe_offload_real_test",
+        "ninfer_qwen3_5_dflash_real_test"
+      ],
+      "notes": "The MoE and DFlash v1 tests need a 35B-A3B artifact, not a 27B one. Set NINFER_TEST_ARTIFACT to this entry's cache path to run them."
+    },
+    {
+      "name": "qwen3_8_27b_dflash2",
+      "env": "NINFER_TEST_ARTIFACT",
+      "file": "qwen3_8_27b_dflash2.ninfer",
+      "bytes": null,
+      "sha256": null,
+      "source": {
+        "kind": "file",
+        "path": "out/qwen3_8_27b_dflash2.ninfer",
+        "hint": "27B with MTP and the DFlash2 K=7 companion"
+      },
+      "tests": [
+        "ninfer_qwen3_5_dflash2_real_test",
+        "ninfer_qwen3_5_dflash_prefill_real_test",
+        "ninfer_qwen3_5_speculative_invariant_real_test"
+      ],
+      "notes": "speculative_invariant_real exercises MTP and DFlash2 on the same artifact; dflash2_real and dflash_prefill_real need the DFlash2 companion."
+    },
+    {
+      "name": "qwen3_8_flash_next_125b_a6b",
+      "env": "NINFER_QWEN38_FLASH_NEXT_WEIGHTS",
+      "file": "qwen3_8_flash_next_125b_a6b.ninfer",
+      "bytes": null,
+      "sha256": null,
+      "source": {
+        "kind": "file",
+        "path": "out/qwen3_8_flash_next_125b_a6b_nvfp4_fp8_mtp.ninfer",
+        "hint": "the ~70 GiB Flash-Next artifact; needs the GB10 lane or a host-RAM tiered 5090 run"
+      },
+      "default": true,
+      "tests": [
+        "ninfer_qwen3_8_flash_next_engine_real_test",
+        "ninfer_qwen3_8_flash_next_engine_fault_test",
+        "ninfer_qwen3_8_flash_next_frontend_test",
+        "ninfer_qwen3_8_flash_next_125b_a6b_load_plan_test"
+      ],
+      "notes": "Does not fit a 32 GiB 5090 as one device; the 5090 lane skips these by design."
+    },
+    {
+      "name": "qwen3_8_flash_next_125b_a6b_dflash2",
+      "env": "NINFER_QWEN38_FLASH_NEXT_DFLASH2_WEIGHTS",
+      "file": "qwen3_8_flash_next_125b_a6b_dflash2.ninfer",
+      "bytes": null,
+      "sha256": null,
+      "source": {
+        "kind": "file",
+        "path": "out/qwen3_8_flash_next_125b_a6b_dflash2.ninfer",
+        "hint": "the Flash-Next DFlash2 companion artifact"
+      },
+      "tests": [
+        "ninfer_qwen3_8_flash_next_125b_a6b_load_plan_test"
+      ],
+      "notes": "load_plan reads both weight variables; it skips unless both are present."
+    },
+    {
+      "name": "qwen4_exp_banks",
+      "env": "NINFER_QWEN4_EXP_TEST_ARTIFACT",
+      "file": "qwen4_exp_banks.ninfer",
+      "bytes": null,
+      "sha256": null,
+      "source": {
+        "kind": "file",
+        "path": "out/qwen4_exp_banks.ninfer",
+        "hint": "the Qwen4-exp bank/state test artifact"
+      },
+      "tests": [
+        "ninfer_qwen4_exp_reclaim_real_test",
+        "ninfer_qwen4_exp_score_state_real_test"
+      ],
+      "notes": "Both tests need a GPU and the artifact."
+    }
+  ]
+}

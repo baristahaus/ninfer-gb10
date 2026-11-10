@@ -19,3 +19,8 @@ if(NINFER_BUILD_ENGINE)
 endif()
 include(ops/tests.cmake)
 include(distributed/tests.cmake)
+
+# Resolve the test-artifact manifest last: it sets each artifact variable only on the tests that
+# are registered above and only when the artifact is present, so an absent entry means skip.
+include(cmake/TestArtifacts.cmake)
+ninfer_register_test_artifacts()

@@ -39,6 +39,9 @@ std::vector<ninfer::TokenId> run_round(const char* artifact, int width, int devi
     options.artifact_path  = artifact;
     options.use_cuda_graph = false; // width > 1 refuses capture (caf91488)
     options.max_context    = 2048;
+    // The default capacity is 8192 tokens, outside the usable range for a 2048 context; without this
+    // the engine refuses at option validation before either round runs.
+    options.kv_capacity    = ninfer::KvCapacityPolicy::explicit_capacity(2048);
     if (width > 1) {
         options.devices = {0, 1};
     } else {

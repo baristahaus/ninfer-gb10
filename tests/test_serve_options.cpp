@@ -115,6 +115,64 @@ void test_anchor_options() {
     });
 }
 
+void test_recovered_serve_flags() {
+    // These flags were documented but unreachable: the historical parser that declared them was
+    // never compiled. They are wired into the live schema now, and this pins the wiring.
+    const auto capacities = parse({"ninfer-serve", "model.ninfer", "--host-state-slots", "6",
+                                   "--host-kv-mib", "4096", "--max-private-continuations", "4",
+                                   "--max-shared-prefixes", "8", "--extra-state-slots", "2"});
+    const auto& cache = capacities.launch.engine.context_cache;
+    require(cache.host_state_slots == 6, "--host-state-slots did not reach the engine options");
+    require(cache.host_kv_capacity_bytes == (4096ULL << 20U),
+            "--host-kv-mib did not convert MiB to bytes");
+    require(cache.max_private_continuations == 4,
+            "--max-private-continuations did not reach the engine options");
+    require(cache.max_shared_prefixes == 8, "--max-shared-prefixes did not reach the engine options");
+    require(cache.extra_state_slots == 2, "--extra-state-slots did not reach the engine options");
+
+    // The startup configuration report must carry the same values: a field with no report case
+    // renders as an empty row.
+    const auto view = ninfer::product::configuration_view(capacities);
+    const auto reported = [&](std::string_view key) -> std::optional<std::uint64_t> {
+        for (const auto& item : view.items) {
+            if (item.key != key) { continue; }
+            if (const auto* value = std::get_if<std::uint64_t>(&item.value)) { return *value; }
+            return std::nullopt;
+        }
+        return std::nullopt;
+    };
+    require(reported("context_cache.host_state_slots") == std::uint64_t{6},
+            "the startup report lost host_state_slots");
+    require(reported("context_cache.host_kv_mib") == std::uint64_t{4096},
+            "the startup report lost host_kv_mib");
+    require(reported("context_cache.max_private_continuations") == std::uint64_t{4},
+            "the startup report lost max_private_continuations");
+    require(reported("context_cache.max_shared_prefixes") == std::uint64_t{8},
+            "the startup report lost max_shared_prefixes");
+
+    const auto scheduling = parse({"ninfer-serve", "model.ninfer", "--prefill-decode-share", "125",
+                                   "--long-prefill-wait-ms", "500"});
+    require(scheduling.launch.engine.prefill_decode_share_percent == 125,
+            "--prefill-decode-share did not reach the engine options");
+    require(scheduling.launch.engine.long_prefill_wait_ms == 500,
+            "--long-prefill-wait-ms did not reach the engine options");
+
+    const auto logprobs = parse({"ninfer-serve", "model.ninfer", "--token-logprobs"});
+    require(logprobs.launch.engine.token_logprobs, "--token-logprobs did not reach the engine");
+    const auto no_logprobs = parse({"ninfer-serve", "model.ninfer", "--no-token-logprobs"});
+    require(!no_logprobs.launch.engine.token_logprobs, "--no-token-logprobs did not clear the flag");
+
+    // Ranges and the `default` keyword.
+    const auto unset = parse({"ninfer-serve", "model.ninfer", "--host-state-slots", "default",
+                              "--host-kv-mib", "default", "--max-shared-prefixes", "default"});
+    require(!unset.launch.engine.context_cache.host_state_slots &&
+                !unset.launch.engine.context_cache.host_kv_capacity_bytes &&
+                !unset.launch.engine.context_cache.max_shared_prefixes,
+            "`default` did not clear a capacity");
+    rejects([] { (void)parse({"ninfer-serve", "model.ninfer", "--prefill-decode-share", "1001"}); });
+    rejects([] { (void)parse({"ninfer-serve", "model.ninfer", "--host-state-slots", "-1"}); });
+}
+
 void test_request_defaults() {
     const auto options =
         parse({"ninfer-serve", "model.ninfer", "--temperature", "0", "--top-p", "0.9", "--seed",
@@ -173,6 +231,7 @@ int main() {
     try {
         test_resources_and_units();
         test_anchor_options();
+        test_recovered_serve_flags();
         test_request_defaults();
         test_provenance();
         std::cout << "ok\n";

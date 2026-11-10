@@ -138,6 +138,12 @@ StartupConfigurationView view(const LaunchOptions& launch, EntryPoint entry, con
             else
                 value = std::uint64_t{e.prefill_chunk};
             break;
+        case Field::PrefillDecodeShare:
+            value = std::uint64_t{e.prefill_decode_share_percent};
+            break;
+        case Field::LongPrefillWait:
+            value = std::uint64_t{e.long_prefill_wait_ms};
+            break;
         case Field::RopeYarnFactor:
             if (e.rope_yarn_factor > 1.0F) {
                 value = static_cast<double>(e.rope_yarn_factor);
@@ -165,6 +171,20 @@ StartupConfigurationView view(const LaunchOptions& launch, EntryPoint entry, con
             break;
         case Field::ExtraStateSlots:
             value = std::uint64_t{e.context_cache.extra_state_slots.value_or(e.max_concurrency)};
+            break;
+        case Field::HostStateSlots:
+            value = std::uint64_t{e.context_cache.host_state_slots};
+            break;
+        case Field::HostKvMib:
+            // The flag and the config key are a MiB count; the option is bytes.
+            value = std::uint64_t{e.context_cache.host_kv_capacity_bytes >> 20U};
+            break;
+        case Field::MaxPrivateContinuations:
+            value = optional_value(e.context_cache.max_private_continuations,
+                                   "default (target/model)");
+            break;
+        case Field::MaxSharedPrefixes:
+            value = optional_value(e.context_cache.max_shared_prefixes, "default (target/model)");
             break;
         case Field::MaxLongAnchors:
             value = std::uint64_t{e.context_cache.max_long_anchors_per_continuation.value_or(2)};
@@ -207,6 +227,9 @@ StartupConfigurationView view(const LaunchOptions& launch, EntryPoint entry, con
             break;
         case Field::Thinking:
             value = optional_value(g.enable_thinking);
+            break;
+        case Field::TokenLogprobs:
+            value = e.token_logprobs;
             break;
         case Field::PreserveThinking:
             value = optional_value(g.preserve_thinking);

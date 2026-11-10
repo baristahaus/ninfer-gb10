@@ -76,54 +76,26 @@ for match in re.finditer(r"\{Field::\w+,(.*?)\}", schema_source, re.S):
     parsed_flags.update(re.findall(r'"(--[a-z0-9-]+)"', body))
 flags = sorted(parsed_flags)
 
-# Documented in docs/serving.md but NOT declared in the live schema, so the real `ninfer-serve`
-# rejects them. This is a real gap, not an allow-list of convenience: every entry here is a flag a
-# user can read about and cannot pass. The underlying options mostly exist in `EngineOptions` and
-# `ServeOptions` and simply are not exposed in the schema; the rest need removing from the docs.
-# The list must only ever shrink — fixing one means deleting its line, and the guard then holds the
-# line for good.
-DOCUMENTED_NOT_WIRED = {
-    "--default-max-tokens", "--default-thinking-budget", "--device-state-slots",
-    "--greedy", "--host-kv-mib",
-    "--host-state-slots", "--lm-head-draft", "--log-stats-interval-ms", "--long-prefill-wait-ms",
-    "--max-private-continuations", "--max-request-mib", "--max-shared-prefixes",
-    "--media-cache-mib", "--media-live-mib", "--mtp-capture", "--pending-timeout-ms",
-    "--prefill-decode-share", "--proposal-head-rows", "--response-store-max-mib",
-    "--shutdown-timeout-seconds", "--token-logprobs",
-}
-
-# A negation is documented by its positive form: a reader who finds `--vision` documented does not
-# need a separate row for `--no-vision`.
-UNDOCUMENTED_REAL = {
-    "--cuda-graph", "--extra-state-slots", "--gpu-timing", "--host-cache-capacity", "--ignore-eos",
-    "--max-request-size", "--max-tokens", "--media-cache-capacity", "--media-live-capacity",
-    "--pending-timeout", "--prefix-reuse", "--proposal-head", "--response-store-max-size",
-    "--stats-interval", "--thinking", "--thinking-budget",
-}
+# Both directions are strict: a serve flag must be documented, and a documented serve flag must be
+# real. The historical parser at `src/serve/serve_options.cpp` was deleted on 2026-11-09 and the
+# gap it hid is closed: `--host-state-slots`, `--host-kv-mib`, `--max-private-continuations`,
+# `--max-shared-prefixes`, `--prefill-decode-share`, `--long-prefill-wait-ms` and
+# `--token-logprobs` are declared by the schema, and every serve flag the schema declares has a
+# `docs/serving.md` row. Keep it that way: a new flag needs its row in the same change, and a
+# retired flag loses its row in the same change.
 missing += [
     f"serve flag {flag} is parsed but no docs/serving.md option table names it"
     for flag in flags
     if f"`{flag}`" not in table_rows and f"`{flag} " not in table_rows
     and not flag.startswith("--no-")
-    and flag not in UNDOCUMENTED_REAL
 ]
-awaiting_docs = sorted(set(UNDOCUMENTED_REAL) & set(flags))
-if awaiting_docs:
-    print(f"note: {len(awaiting_docs)} real serve flag(s) undocumented: "
-          f"{', '.join(awaiting_docs)}", file=sys.stderr)
 documented_flags = sorted(set(re.findall(r"`(--[a-z0-9-]+)", table_rows)))
 missing += [
     f"serve flag {flag} is named in docs/serving.md but src/product/config/schema.cpp does not "
     f"declare it for the serve scope"
     for flag in documented_flags
-    if flag not in parsed_flags and flag not in DOCUMENTED_NOT_WIRED
+    if flag not in parsed_flags
 ]
-
-# Report the known gap as a standing count so it cannot quietly grow, and so shrinking it is visible.
-awaiting = sorted(DOCUMENTED_NOT_WIRED & set(documented_flags))
-if awaiting:
-    print(f"note: {len(awaiting)} serve flag(s) documented but not wired: {', '.join(awaiting)}",
-          file=sys.stderr)
 
 # 2. Environment variables must be documented somewhere under docs/.
 documented_text = "\n".join(

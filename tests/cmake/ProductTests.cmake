@@ -117,3 +117,7 @@ ninfer_add_test(ninfer_gpu_telemetry_test
 ninfer_add_test(ninfer_prefill_miss_dump_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_prefill_miss_dump.cpp"
   LIBRARIES ninfer_serve)
+
+ninfer_add_test(ninfer_speculation_detail_test
+  SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_speculation_detail.cpp"
+  LIBRARIES ninfer_serve)

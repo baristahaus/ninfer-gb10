@@ -95,6 +95,11 @@ struct ServeOptions {
     // Benchmark/measurement knob: suppress the model's default end-of-sequence stop tokens for
     // every request on the instance. Explicit per-request stop strings still apply.
     bool ignore_eos                          = false;
+    // --log-speculation-detail: record per-step accepted draft lengths on every request_done
+    // record. Requires the JSONL request log. The step bound keeps one long answer's record small;
+    // a shorter array than the request's decode steps marks the sequence truncated.
+    bool log_speculation_detail                = false;
+    std::uint32_t speculation_detail_max_steps = 4096;
     std::size_t max_request_bytes          = kDefaultMaxRequestBytes;
     std::size_t response_store_max_records = kDefaultResponseStoreRecords;
     std::size_t response_store_max_bytes   = kDefaultResponseStoreBytes;

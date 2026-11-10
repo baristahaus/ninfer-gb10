@@ -276,6 +276,12 @@ StartupConfigurationView view(const LaunchOptions& launch, EntryPoint entry, con
         case Field::IgnoreEos:
             value = server->ignore_eos;
             break;
+        case Field::LogSpeculationDetail:
+            value = server->log_speculation_detail;
+            break;
+        case Field::SpeculationDetailMaxSteps:
+            value = std::uint64_t{server->speculation_detail_max_steps};
+            break;
         case Field::MaxRequestSize:
             value = std::uint64_t{server->max_request_bytes};
             break;

@@ -885,6 +885,9 @@ using GenerationFirstTokenObserver = std::function<void(const GenerationFirstTok
 // Streaming consumer. Request wall/execution statistics are always collected.
 struct GenerationObservationOptions {
     bool constraint_timings = false;
+    // Record SpeculativeStats::accepted_lengths for at most this many decode steps; 0 records
+    // nothing. A diagnostic bound, not an execution option: it changes no generated token.
+    std::uint32_t accepted_length_steps = 0;
     // Retained for the direct-Program engine route: per-phase wall timings are collected for an
     // Aggregate terminal response.
     bool phase_timings     = false;

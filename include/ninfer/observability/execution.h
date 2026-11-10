@@ -221,6 +221,9 @@ struct GenerationFirstOutputTiming {
     ContextTransferStats context_transfers;
 };
 
+// Sentinel entry of SpeculativeStats::accepted_lengths for a decode step that verified no draft.
+inline constexpr std::uint8_t kSpeculativeFallbackStep = 0xFF;
+
 struct SpeculativeStats {
     SpeculativeBackend backend           = SpeculativeBackend::None;
     bool enabled                         = false;
@@ -236,6 +239,12 @@ struct SpeculativeStats {
     // consumer reading them before that must size-guard (the /metrics renderer does).
     std::vector<std::uint64_t> attempted_per_position;
     std::vector<std::uint64_t> accepted_per_position;
+    // One entry per committed decode step, in execution order: the number of draft tokens the round
+    // accepted, or kSpeculativeFallbackStep for a step that verified no draft. Empty unless the
+    // request asked for it (GenerationObservationOptions::accepted_length_steps); bounded by that
+    // value, so a long answer keeps the record small. Fewer entries than rounds + fallback_steps
+    // means the bound truncated the sequence.
+    std::vector<std::uint8_t> accepted_lengths;
 };
 
 struct ThinkingBudgetStats {

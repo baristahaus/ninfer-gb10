@@ -533,6 +533,12 @@ ParsedOptions parse(int argc, char** argv, EntryPoint entry,
         case Field::IgnoreEos:
             parsed.serve.ignore_eos = boolean();
             break;
+        case Field::LogSpeculationDetail:
+            parsed.serve.log_speculation_detail = boolean();
+            break;
+        case Field::SpeculationDetailMaxSteps:
+            parsed.serve.speculation_detail_max_steps = u32();
+            break;
         case Field::MaxRequestSize:
             parsed.serve.max_request_bytes = u64();
             break;
@@ -656,6 +662,11 @@ CliOptions parse_cli_options(int argc, char** argv) {
 ServeOptions parse_serve_options(int argc, char** argv) {
     auto parsed         = parse(argc, argv, EntryPoint::Serve);
     parsed.serve.launch = std::move(parsed.common.launch);
+    // The detail lands in the JSONL request log, so recording it without that log would collect
+    // per-step arrays nobody reads.
+    if (parsed.serve.log_speculation_detail && parsed.serve.launch.logging.request_jsonl.empty()) {
+        throw std::invalid_argument("--log-speculation-detail requires --request-log-jsonl");
+    }
     return std::move(parsed.serve);
 }
 

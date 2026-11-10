@@ -128,6 +128,13 @@ constexpr FieldSpec kFields[] = {
      ConfigurationUnit::Milliseconds},
     {Field::RequestJsonl, "logging.request_jsonl", "--request-log-jsonl", "", "FILE",
      "Structured startup/request log; empty disables it.", Scope::Serve},
+    {Field::LogSpeculationDetail, "logging.speculation_detail", "--log-speculation-detail",
+     "--no-log-speculation-detail", "",
+     "Record per-step accepted draft lengths on request_done; needs --request-log-jsonl.",
+     Scope::Serve},
+    {Field::SpeculationDetailMaxSteps, "logging.speculation_detail_max_steps",
+     "--log-speculation-detail-max-steps", "", "N",
+     "Decode steps recorded per request (4096).", Scope::Serve},
     {Field::Prompt, "cli.prompt", "--prompt", "", "TEXT",
      "Prompt text, mutually exclusive with --messages.", Scope::Cli},
     {Field::Messages, "cli.messages", "--messages", "", "FILE",
@@ -340,6 +347,7 @@ FieldValue parse_field_value(Field field, const RawValue& value, bool command_li
     case Field::PreserveThinking:
     case Field::Cors:
     case Field::IgnoreEos:
+    case Field::LogSpeculationDetail:
     case Field::RawOutput:
     case Field::PrintTokenIds:
         if (const auto* boolean = std::get_if<bool>(&value)) return *boolean;
@@ -349,6 +357,7 @@ FieldValue parse_field_value(Field field, const RawValue& value, bool command_li
         return integer(value, command_line, 0, std::numeric_limits<int>::max());
     case Field::MaxContext:
     case Field::MaxPendingRequests:
+    case Field::SpeculationDetailMaxSteps:
     case Field::MaxTokens:
     case Field::ThinkingBudget:
         return integer(value, command_line, 1, kU32Max);

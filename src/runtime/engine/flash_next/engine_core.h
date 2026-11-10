@@ -1663,6 +1663,17 @@ private:
                 counters.accepted_tokens - observed.accepted_tokens;
             cumulative_stats_.speculative_fallback_steps +=
                 counters.fallback_steps - observed.fallback_steps;
+            // --log-speculation-detail: one entry per committed decode step, from the same deltas
+            // aggregated below. See the generic engine for the round/fallback distinction.
+            if (request->observation.accepted_length_steps != 0 && counters.enabled &&
+                decode_round &&
+                observed.accepted_lengths.size() < request->observation.accepted_length_steps) {
+                observed.accepted_lengths.push_back(
+                    counters.rounds != observed.rounds
+                        ? static_cast<std::uint8_t>(counters.accepted_tokens -
+                                                    observed.accepted_tokens)
+                        : kSpeculativeFallbackStep);
+            }
             const std::size_t positions = counters.attempted_per_position.size();
             if (cumulative_stats_.speculative_attempted_per_position.size() < positions) {
                 cumulative_stats_.speculative_attempted_per_position.resize(positions, 0);

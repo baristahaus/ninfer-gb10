@@ -323,6 +323,33 @@ Json error_json(const ApiError& error) {
                 {"message", error.message}};
 }
 
+// --log-speculation-detail: one character per committed decode step in execution order - the
+// hexadecimal digit of the draft tokens the step accepted, or '-' for a step that verified no
+// draft. null when the request did not ask for the sequence or holds a length beyond the draft
+// window, which no backend produces. A shorter sequence than the request's decode steps
+// (rounds + fallback_steps) means the step bound truncated it.
+Json speculation_detail_json(const RequestStats& metrics) {
+    const auto& lengths = metrics.speculative.accepted_lengths;
+    if (lengths.empty()) { return nullptr; }
+    constexpr std::string_view kDigits = "0123456789abcdef";
+    std::string steps;
+    steps.reserve(lengths.size());
+    for (const std::uint8_t length : lengths) {
+        if (length == ninfer::kSpeculativeFallbackStep) {
+            steps.push_back('-');
+        } else if (length <= metrics.speculative.draft_window && length < kDigits.size()) {
+            steps.push_back(kDigits[length]);
+        } else {
+            return nullptr;
+        }
+    }
+    return Json{{"accepted_lengths", steps},
+                {"draft_window", metrics.speculative.draft_window},
+                {"accepted_lengths_truncated",
+                 lengths.size() <
+                     metrics.speculative.rounds + metrics.speculative.fallback_steps}};
+}
+
 Json speculative_json(const RequestStats& metrics) {
     return Json{{"backend", product::speculative_backend_name(metrics.speculative.backend)},
                 {"draft_window", metrics.speculative.draft_window},
@@ -331,7 +358,8 @@ Json speculative_json(const RequestStats& metrics) {
                 {"accepted_tokens", metrics.speculative.accepted_tokens},
                 {"committed_draft_tokens", metrics.speculative.committed_draft_tokens},
                 {"fallback_steps", metrics.speculative.fallback_steps},
-                {"accepted_per_position", metrics.speculative.accepted_per_position}};
+                {"accepted_per_position", metrics.speculative.accepted_per_position},
+                {"detail", speculation_detail_json(metrics)}};
 }
 
 Json scheduling_json(const ninfer::GenerationSchedulingStats& stats) {

@@ -131,3 +131,16 @@ if(Python3_EXECUTABLE)
     COMMAND ${Python3_EXECUTABLE} -B ${PROJECT_SOURCE_DIR}/tools/check_docs.py --self-test)
   set_tests_properties(ninfer_docs_guard_self_test PROPERTIES LABELS "host")
 endif()
+
+# The test-skip guard: a skip must carry a message on stderr and must not be counted as a pass.
+# It runs with the suite so the next silent `return 77` fails a normal test run.
+if(Python3_EXECUTABLE)
+  add_test(NAME ninfer_test_skip_guard_test
+    COMMAND ${Python3_EXECUTABLE} -B ${PROJECT_SOURCE_DIR}/tools/check_test_skips.py
+            ${PROJECT_SOURCE_DIR})
+  set_tests_properties(ninfer_test_skip_guard_test PROPERTIES LABELS "host")
+
+  add_test(NAME ninfer_test_skip_guard_self_test
+    COMMAND ${Python3_EXECUTABLE} -B ${PROJECT_SOURCE_DIR}/tools/check_test_skips.py --self-test)
+  set_tests_properties(ninfer_test_skip_guard_self_test PROPERTIES LABELS "host")
+endif()

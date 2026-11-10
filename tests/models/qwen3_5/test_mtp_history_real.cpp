@@ -515,7 +515,7 @@ private:
 int main() {
     const char* path = std::getenv("NINFER_TEST_ARTIFACT");
     if (!path || !*path) {
-        std::cout << "SKIP: set NINFER_TEST_ARTIFACT to an explicit MTP .ninfer artifact\n";
+        std::cerr << "SKIP: set NINFER_TEST_ARTIFACT to an explicit MTP .ninfer artifact\n";
         return 77;
     }
     const char* graph    = std::getenv("NINFER_TEST_GRAPH");

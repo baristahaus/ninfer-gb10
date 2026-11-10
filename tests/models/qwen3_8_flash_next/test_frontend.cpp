@@ -133,7 +133,10 @@ void check_prepared_views(const flash::Frontend& frontend) {
 
 int main() {
     const char* path = std::getenv("NINFER_QWEN38_FLASH_NEXT_WEIGHTS");
-    if (!path || !*path) { return 77; }
+    if (!path || !*path) {
+        std::cerr << "SKIP: NINFER_QWEN38_FLASH_NEXT_WEIGHTS is not set; the frontend test did not run\n";
+        return 77;
+    }
     try {
         ninfer::artifact::Reader reader(path);
         const auto& resources = reader.directory().component("text").resources;

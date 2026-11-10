@@ -652,7 +652,10 @@ void qualify_top10_bridge_routes(const DeviceContext& device, const CpuTopology&
 } // namespace
 
 int main() {
-    if (ninfer::test::cuda_unavailable()) { return 77; }
+    if (ninfer::test::cuda_unavailable()) {
+        std::cerr << "SKIP: no usable CUDA device; the test did not run\n";
+        return 77;
+    }
     try {
         qualify_allocation();
         CpuTopology topology;

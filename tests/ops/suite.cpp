@@ -101,7 +101,7 @@ int OpSuite::main(int argc, char** argv) const {
         if (!count) throw std::invalid_argument("no declared cases match the filters");
         if (list) return 0;
         if (needs_cuda_ && cuda_unavailable()) {
-            std::cout << "SKIP: no usable CUDA device\n";
+            std::cerr << "SKIP: no usable CUDA device\n";
             return 77;
         }
 

@@ -297,7 +297,10 @@ int run_replay_fold() {
 } // namespace
 
 int main() {
-    if (ninfer::test::cuda_unavailable()) { return 77; }
+    if (ninfer::test::cuda_unavailable()) {
+        std::cerr << "SKIP: no usable CUDA device; the test did not run\n";
+        return 77;
+    }
     try {
         const int failures = run(false) + run(true) + run_replay_fold();
         std::cout << (failures == 0 ? "OK" : "FAIL") << " Flash-Next PLE\n";

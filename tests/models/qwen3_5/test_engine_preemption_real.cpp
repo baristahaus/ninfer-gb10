@@ -534,7 +534,7 @@ void exercise(const std::filesystem::path& artifact, ninfer::SpeculativeBackend 
 int main() {
     const auto configured_artifact = setting("NINFER_TEST_ARTIFACT", "");
     if (configured_artifact.empty()) {
-        std::cout << "skip: NINFER_TEST_ARTIFACT is not set\n";
+        std::cerr << "SKIP: NINFER_TEST_ARTIFACT is not set; the real-engine test did not run\n";
         return 77;
     }
     if (ninfer::test::skip_without_host_tier("test_engine_preemption_real")) { return 77; }

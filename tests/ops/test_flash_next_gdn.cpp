@@ -367,7 +367,10 @@ int run_pending_fold(const PendingFoldCase& test) {
 } // namespace
 
 int main() {
-    if (ninfer::test::cuda_unavailable()) { return 77; }
+    if (ninfer::test::cuda_unavailable()) {
+        std::cerr << "SKIP: no usable CUDA device; the test did not run\n";
+        return 77;
+    }
     try {
         int failures = run();
         // Pending entries in a different order from the verify rows; extents 2, 4, 0 and 1; a

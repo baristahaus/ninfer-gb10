@@ -217,7 +217,10 @@ void ple_window(q4::Resources& resources, const q4::ModelShard& model, DeviceCon
 } // namespace
 
 int main(int argc, char** argv) {
-    if (argc < 2) return 77;
+    if (argc < 2) {
+        std::cerr << "SKIP: the test needs an explicit --artifact argument; CTest supplies none\n";
+        return 77;
+    }
     try {
         DeviceContext device;
         bool materialize = false, host = false;

@@ -198,7 +198,10 @@ int run() {
 } // namespace
 
 int main() {
-    if (ninfer::test::cuda_unavailable()) { return 77; }
+    if (ninfer::test::cuda_unavailable()) {
+        std::cerr << "SKIP: no usable CUDA device; the test did not run\n";
+        return 77;
+    }
     try {
         const int failures = run();
         std::cout << (failures == 0 ? "OK" : "FAIL") << " tier swap oracle\n";

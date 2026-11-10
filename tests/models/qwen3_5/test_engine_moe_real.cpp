@@ -345,11 +345,11 @@ int main(int argc, char** argv) {
             throw std::invalid_argument("expected --offload or no arguments");
         const char* artifact = std::getenv("NINFER_TEST_ARTIFACT");
         if (artifact == nullptr || *artifact == '\0') {
-            std::cout << "skip: NINFER_TEST_ARTIFACT is not set\n";
+            std::cerr << "SKIP: NINFER_TEST_ARTIFACT is not set; the real-engine test did not run\n";
             return 77;
         }
         if (!artifact_is_moe(artifact)) {
-            std::cout << "skip: this artifact is a dense model, not the MoE class this test needs\n";
+            std::cerr << "SKIP: this artifact is a dense model, not the MoE class this test needs\n";
             return 77;
         }
 

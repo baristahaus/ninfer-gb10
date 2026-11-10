@@ -226,7 +226,10 @@ int main() {
     return 1;
 #else
     const char* artifact = std::getenv("NINFER_QWEN38_FLASH_NEXT_WEIGHTS");
-    if (artifact == nullptr || *artifact == '\0') { return 77; }
+    if (artifact == nullptr || *artifact == '\0') {
+        std::cerr << "SKIP: NINFER_QWEN38_FLASH_NEXT_WEIGHTS is not set; the 125B fault-injection test did not run\n";
+        return 77;
+    }
     try {
         if (exercise_oom_recovery(artifact) != 0) { return 1; }
         if (exercise_oom_recovery_cap(artifact) != 0) { return 1; }

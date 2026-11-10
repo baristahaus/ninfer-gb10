@@ -206,7 +206,7 @@ int main() {
     if (devices < 2) {
         // This test exercises only the two-device transport, so with fewer devices it skips
         // entirely: exit 77 so ctest reports a skip rather than a pass.
-        std::cout << "skipped: the mailbox transport needs two devices\n";
+        std::cerr << "SKIP: two CUDA devices are required for the mailbox transport; fewer are present\n";
         return 77;
     }
     int failures = 0;

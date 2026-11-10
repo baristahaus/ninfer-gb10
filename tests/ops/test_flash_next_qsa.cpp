@@ -573,7 +573,10 @@ int run_query_gate(bool fp8, int tokens) {
 } // namespace
 
 int main() {
-    if (ninfer::test::cuda_unavailable()) { return 77; }
+    if (ninfer::test::cuda_unavailable()) {
+        std::cerr << "SKIP: no usable CUDA device; the test did not run\n";
+        return 77;
+    }
     try {
         int failures = run(17) + run(18);
         for (const bool fp8 : {false, true}) {

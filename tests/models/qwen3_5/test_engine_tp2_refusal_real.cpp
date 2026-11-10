@@ -42,7 +42,7 @@ int main() {
     const cudaError_t count_err = cudaGetDeviceCount(&devices);
     const bool have_two_devices = count_err == cudaSuccess && devices >= 2;
     if (!have_artifact || !have_two_devices) {
-        std::cout << "SKIP: the two-GPU refusal case needs two CUDA devices and a 27B artifact"
+        std::cerr << "SKIP: the two-GPU refusal case needs two CUDA devices and a 27B artifact"
                   << " (devices: "
                   << (count_err == cudaSuccess ? std::to_string(devices)
                                                : std::string("unavailable"))

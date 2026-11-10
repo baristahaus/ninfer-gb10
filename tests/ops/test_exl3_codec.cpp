@@ -140,7 +140,7 @@ int check_composition(const Json& linear) {
 int main() {
     const auto path = fixture_path();
     if (!std::filesystem::exists(path)) {
-        std::cout << "skip: EXL3 fixture " << path << " has not been generated\n";
+        std::cerr << "SKIP: EXL3 fixture " << path << " has not been generated\n";
         return kSkip;
     }
     try {

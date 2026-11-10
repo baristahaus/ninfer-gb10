@@ -192,7 +192,7 @@ int main() {
     int count                   = 0;
     const cudaError_t count_err = cudaGetDeviceCount(&count);
     if (cuda_unavailable(count_err) || (count_err == cudaSuccess && count == 0)) {
-        std::cout << "SKIP: no usable CUDA device\n";
+        std::cerr << "SKIP: no usable CUDA device\n";
         return 77;
     }
     if (count_err != cudaSuccess) {
@@ -258,7 +258,7 @@ int main() {
         failures += check_child_graph(device);
         const int probe = probe_update_results(device);
         if (probe < 0) {
-            std::cout << "SKIP: no mutation was refused in place\n";
+            std::cerr << "SKIP: no mutation was refused in place\n";
             return 77;
         }
         failures += check_reinstantiate(device);

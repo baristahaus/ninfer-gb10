@@ -191,16 +191,21 @@ PersistentLayout persistent_layout(const SequencePlanImpl& plan) {
         builder,
         qwen3_8_flash_next::shard_state_image_spec(state_image_spec, plan.width, plan.rank));
     if (plan.speculative_backend != SpeculativeBackend::None) {
-        const GdnReplayRecordSpec replay_spec{
-            .layers          = TextConfig::gdn_layers(),
-            .record_capacity = static_cast<std::int32_t>(plan.max_concurrency),
-            .width           = static_cast<std::int32_t>(plan.draft_window + 1U),
-            .conv_channels   = TextConfig::convolution_dim,
-            .qk_heads        = TextConfig::gdn_key_heads,
-            .value_heads     = TextConfig::gdn_value_heads,
-            .key_dim         = TextConfig::gdn_key_head_dim,
-            .value_dim       = TextConfig::gdn_value_head_dim,
-        };
+        // The replay records carry the GDN per-head extents, so a rank's plan sizes them at that
+        // rank's width: without this, rank 1 sized them at full width (B2c in
+        // review/phase3/rank1-arena.md). Width 1 returns the spec unchanged.
+        const GdnReplayRecordSpec replay_spec = shard_gdn_replay_spec(
+            GdnReplayRecordSpec{
+                .layers          = TextConfig::gdn_layers(),
+                .record_capacity = static_cast<std::int32_t>(plan.max_concurrency),
+                .width           = static_cast<std::int32_t>(plan.draft_window + 1U),
+                .conv_channels   = TextConfig::convolution_dim,
+                .qk_heads        = TextConfig::gdn_key_heads,
+                .value_heads     = TextConfig::gdn_value_heads,
+                .key_dim         = TextConfig::gdn_key_head_dim,
+                .value_dim       = TextConfig::gdn_value_head_dim,
+            },
+            plan.width, plan.rank);
         out.replay_records = plan_gdn_replay_records(builder, replay_spec);
         if (plan.speculative_backend == SpeculativeBackend::Mtp) {
             out.replay_snapshot = plan_gdn_replay_records(builder, replay_spec);

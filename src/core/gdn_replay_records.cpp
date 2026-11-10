@@ -141,7 +141,6 @@ GdnReplayRecordLayer GdnReplayRecords::layer(std::int32_t layer_index, std::int3
     };
 }
 
-
 void copy_gdn_replay_record_rows(const GdnReplayRecords& source,
                                  const GdnReplayRecords& destination, std::int32_t rows,
                                  cudaStream_t stream) {
@@ -179,11 +178,61 @@ void copy_gdn_replay_record_rows(const GdnReplayRecords& source,
         const std::size_t row_bytes = bytes / outer;
         for (std::int32_t layer = 0; layer < a.layers; ++layer) {
             const auto offset = static_cast<std::size_t>(layer) * a.record_capacity * row_bytes;
-            CUDA_CHECK(cudaMemcpyAsync(static_cast<std::byte*>(to->data) + offset, begin + offset, row_bytes * rows, cudaMemcpyDeviceToDevice,
-                                       stream));
+            CUDA_CHECK(cudaMemcpyAsync(static_cast<std::byte*>(to->data) + offset, begin + offset,
+                                       row_bytes * rows, cudaMemcpyDeviceToDevice, stream));
         }
     }
     CUDA_CHECK(cudaGetLastError());
+}
+
+GdnReplayRecordSpec shard_gdn_replay_spec(const GdnReplayRecordSpec& spec, int width, int rank) {
+    if (width < 1) { throw std::invalid_argument("GDN replay shard width must be positive"); }
+    // Width 1 is the single-device lane: the spec is returned unchanged, so that lane is untouched
+    // by construction and no caller needs to special-case it.
+    if (width == 1) { return spec; }
+    if (rank < 0 || rank >= width) {
+        throw std::invalid_argument("GDN replay shard rank " + std::to_string(rank) +
+                                    " outside width " + std::to_string(width));
+    }
+    if (spec.layers <= 0 || spec.record_capacity <= 0 || spec.width <= 0 || spec.qk_heads <= 0 ||
+        spec.value_heads <= 0 || spec.key_dim <= 0 || spec.value_dim <= 0 ||
+        spec.conv_channels <= 0) {
+        throw std::invalid_argument("GDN replay shard requires positive extents");
+    }
+    // conv_channels = 2 * key_width + value_width is the invariant the state plan relies on; check
+    // it before halving so a broken spec is rejected rather than split into an inconsistent one.
+    const std::int64_t key_width   = static_cast<std::int64_t>(spec.qk_heads) * spec.key_dim;
+    const std::int64_t value_width = static_cast<std::int64_t>(spec.value_heads) * spec.value_dim;
+    if (static_cast<std::int64_t>(spec.conv_channels) != 2 * key_width + value_width) {
+        throw std::invalid_argument(
+            "GDN replay shard requires conv_channels = 2 * key_width + value_width");
+    }
+    // Whole heads, not just a dividing sum: 16 key heads do not divide by 3, and a rank holding a
+    // partial head would compute a different head than its KV/state mirror holds.
+    if (spec.qk_heads % width != 0 || spec.value_heads % width != 0) {
+        throw std::invalid_argument("GDN replay shard needs " + std::to_string(spec.qk_heads) +
+                                    " key and " + std::to_string(spec.value_heads) +
+                                    " value heads to divide by width " + std::to_string(width));
+    }
+    if (key_width % width != 0 || value_width % width != 0 || spec.conv_channels % width != 0) {
+        throw std::invalid_argument("GDN replay shard needs the key (" + std::to_string(key_width) +
+                                    "), value (" + std::to_string(value_width) +
+                                    ") and convolution (" + std::to_string(spec.conv_channels) +
+                                    ") extents to divide by width " + std::to_string(width));
+    }
+    GdnReplayRecordSpec sharded = spec;
+    sharded.qk_heads            = spec.qk_heads / width;
+    sharded.value_heads         = spec.value_heads / width;
+    sharded.conv_channels       = spec.conv_channels / width;
+    // The per-rank channels must be the per-rank heads' channels; the invariant above plus the
+    // divisibility checks make this true, and the check keeps a future edit from breaking it.
+    const std::int64_t sharded_channels =
+        2 * static_cast<std::int64_t>(sharded.qk_heads) * sharded.key_dim +
+        static_cast<std::int64_t>(sharded.value_heads) * sharded.value_dim;
+    if (sharded_channels != sharded.conv_channels) {
+        throw std::logic_error("GDN replay shard produced an inconsistent channel count");
+    }
+    return sharded;
 }
 
 } // namespace ninfer

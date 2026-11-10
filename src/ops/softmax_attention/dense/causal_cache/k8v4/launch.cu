@@ -62,10 +62,9 @@ void execute_grouped(const Tensor& q, const Tensor& positions, float scale,
     const auto partial = allocate_causal_partials(workspace, plan.query_heads, plan.width,
                                                   plan.partition.capacity, plan.batch);
     const auto p = make_causal_operands(q, positions, out, scale, plan.envelope.max_visible_keys);
-    if (plan.query_heads == 24)
-        grouped_instance<CausalD256H24Kv4>(p, view, input, plan.partition, partial.view(), stream);
-    else
-        grouped_instance<CausalD256H16Kv2>(p, view, input, plan.partition, partial.view(), stream);
+    with_causal_geometry(plan.query_heads, [&]<class G>() {
+        grouped_instance<G>(p, view, input, plan.partition, partial.view(), stream);
+    });
 }
 
 template <class G, int Tokens>
@@ -110,10 +109,7 @@ void execute_parallel(const CausalAttentionOperands& p, K8V4KvReadView cache,
         }
         throw std::logic_error("K8V4 parallel plan exceeds its query tiles");
     };
-    if (plan.query_heads == 24)
-        invoke.template operator()<CausalD256H24Kv4>();
-    else
-        invoke.template operator()<CausalD256H16Kv2>();
+    with_causal_geometry(plan.query_heads, invoke);
 }
 
 } // namespace

@@ -3,6 +3,7 @@
 #include "core/layout.h"
 #include "ops/common/host/operands.h"
 #include "core/paged_kv_storage.h"
+#include "ops/softmax_attention/kernels/causal/geometry.h"
 #include "ops/softmax_attention/dense/causal_cache/bf16/plan.h"
 #include "ops/softmax_attention/dense/causal_cache/bf16/launch.h"
 #include "ops/softmax_attention/dense/causal_cache/fp8/plan.h"
@@ -30,9 +31,14 @@ constexpr std::int32_t kMaximumVerifyTokens = 16;
 constexpr std::int32_t kMaximumBatchSize    = 8;
 
 void require_causal_geometry(AttentionHeadGeometry geometry, const char* op) {
+    // The accepted set and the KV head count both come from detail::causal_kv_heads, which is the
+    // same table the launch dispatch reads. Keeping one table means a head count cannot pass this
+    // check and then be launched with another instance's geometry — the 12/2 per-rank shape of the
+    // 27B at tensor-parallel width 2 is registered there beside 24/4 and 16/2.
+    int kv_heads = 0;
     if (!valid_attention_head_geometry(geometry) || geometry.head_dim != kHeadDim ||
-        !((geometry.query_heads == 24 && geometry.kv_heads == 4) ||
-          (geometry.query_heads == 16 && geometry.kv_heads == 2))) {
+        !detail::causal_kv_heads(geometry.query_heads, &kv_heads) ||
+        geometry.kv_heads != kv_heads) {
         throw std::invalid_argument(std::string(op) + ": unsupported head geometry");
     }
 }

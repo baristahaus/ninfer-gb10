@@ -16,7 +16,9 @@
 
 #include "ops/softmax_attention/dense/causal_cache/bf16/plan.h"
 #include "ops/softmax_attention/dense/causal_cache/int8/plan.h"
+#include "ops/softmax_attention/kernels/causal/geometry.h"
 
+#include <array>
 #include <cstdint>
 #include <cstdio>
 #include <limits>
@@ -114,6 +116,65 @@ void check_int8(const CausalAttentionExecutionEnvelope& envelope, int heads, int
     check(active >= 1, "int8 active split count is positive");
 }
 
+// Every registered geometry must be accepted by every plan selector, and every unregistered head
+// count must be refused. The dispatch table (detail::causal_kv_heads) is what both the Op's geometry
+// check and the launch dispatch read, so this is the gate that keeps a plan from accepting a head
+// count the kernels cannot launch.
+void check_registered_geometries() {
+    const CausalAttentionExecutionEnvelope envelope{1, kNewCeiling};
+    for (const auto& geometry : ninfer::ops::detail::kCausalHeadCounts) {
+        const int heads = geometry.query_heads;
+        const int kv    = geometry.kv_heads;
+        int table_kv    = 0;
+        check(ninfer::ops::detail::causal_kv_heads(heads, &table_kv) && table_kv == kv,
+              "causal_kv_heads reports the registered KV head count");
+        bool accepted = true;
+        try {
+            (void)ninfer::ops::detail::select_bf16_kv_causal_plan(heads, 1, 1, envelope, 170);
+            (void)ninfer::ops::detail::select_int8_kv_causal_plan(heads, 1, 1, envelope, 170);
+        } catch (const std::invalid_argument&) { accepted = false; }
+        std::printf("  geometry %2d/%d: %s\n", heads, kv, accepted ? "accepted" : "REJECTED");
+        check(accepted, "every registered geometry is accepted by the plan selectors");
+    }
+    // 12/2 is the 27B's per-rank shape at tensor-parallel width 2; its group size is 6, the same as
+    // 24/4, which is why the existing schedules apply unchanged.
+    check(ninfer::ops::detail::CausalD256H12Kv2::GroupSize == 6,
+          "the 12/2 instance groups 6 query heads per KV head");
+    check(ninfer::ops::detail::CausalD256H12Kv2::GroupSize ==
+              ninfer::ops::detail::CausalD256H24Kv4::GroupSize,
+          "12/2 and 24/4 share the group size the schedules are keyed on");
+
+    for (const int unregistered : {8, 20, 32}) {
+        int kv = 0;
+        check(!ninfer::ops::detail::causal_kv_heads(unregistered, &kv),
+              "an unregistered head count is refused by the table");
+        bool refused = false;
+        try {
+            (void)ninfer::ops::detail::select_bf16_kv_causal_plan(unregistered, 1, 1, envelope, 170);
+        } catch (const std::invalid_argument&) { refused = true; }
+        check(refused, "an unregistered head count is refused by the plan selectors");
+    }
+}
+
+// The launch dispatch must reach the geometry the table names, not fall through to another one.
+void check_dispatch_selects_the_registered_geometry() {
+    const auto query_heads_of = [](int heads) {
+        int selected = 0;
+        ninfer::ops::detail::with_causal_geometry(heads, [&]<class G>() {
+            selected = G::QHeads;
+        });
+        return selected;
+    };
+    for (const int heads : {24, 16, 12}) {
+        check(query_heads_of(heads) == heads, "the dispatch reaches the geometry for its head count");
+    }
+    bool threw = false;
+    try {
+        (void)query_heads_of(20);
+    } catch (const std::invalid_argument&) { threw = true; }
+    check(threw, "the dispatch throws for an unregistered head count instead of falling through");
+}
+
 // The envelope only bounds the WIDEST row; other batch rows are shorter, and a shorter row is not
 // automatically a smaller split count because `live()` re-rounds keys per split against the row
 // length. The workspace is sized once from `capacity`, so the real invariant is that no row length
@@ -164,7 +225,7 @@ int main() {
         // captured plan must serve.
         const CausalAttentionExecutionEnvelope envelope{1, ceiling};
         for (const int sms : kSmCounts) {
-            for (const int heads : {24, 16}) {
+            for (const int heads : {24, 16, 12}) {
                 // Decode widths are the speculative window sizes; a wide prefill width exercises
                 // the tiled family.
                 for (const int width : {1, 4, 16}) {
@@ -180,11 +241,13 @@ int main() {
     // geometry of both model classes at both ceilings.
     for (const std::uint32_t ceiling : {kOldCeiling, kNewCeiling}) {
         const CausalAttentionExecutionEnvelope envelope{1, ceiling};
-        for (const int heads : {24, 16}) {
+        for (const int heads : {24, 16, 12}) {
             check_bf16_covers_every_row(envelope, heads, 1, 1, 170);
             check_int8_covers_every_row(envelope, heads, 1, 1, 170);
         }
     }
+    check_registered_geometries();
+    check_dispatch_selects_the_registered_geometry();
     std::printf("%s (%d failure%s)\n", failures ? "FAILED" : "ALL PASS", failures,
                 failures == 1 ? "" : "s");
     return failures ? 1 : 0;

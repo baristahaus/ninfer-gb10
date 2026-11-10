@@ -13,6 +13,11 @@ struct LoadOptions {
     ProposalHead proposal_head     = ProposalHead::Full;
     // EngineOptions::rope_yarn_factor, 0 (or 1) = off.
     float rope_yarn_factor         = 0.0F;
+    // The execution group this load is for: `width` 1 and `rank` 0 are the single-device lane and
+    // are what every existing path gets. A load for `rank` at `width` installs the model's shard
+    // transform on the binder, so the definition it reads holds that rank's bindings.
+    int width = 1;
+    int rank  = 0;
 
     bool operator==(const LoadOptions&) const = default;
 
@@ -55,7 +60,11 @@ struct LoadOptions {
             .vision           = options.enable_vision,
             .speculative      = options.speculative.backend,
             .proposal_head    = options.speculative.proposal_head,
-            .rope_yarn_factor = options.rope_yarn_factor};
+            .rope_yarn_factor = options.rope_yarn_factor,
+            // Empty `devices` means the single `device` field, so the width is 1 and the load is
+            // exactly the load it was before groups existed.
+            .width = options.devices.empty() ? 1 : static_cast<int>(options.devices.size()),
+            .rank  = 0};
 }
 
 } // namespace ninfer::models

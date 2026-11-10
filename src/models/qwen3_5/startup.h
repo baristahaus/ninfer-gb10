@@ -2,6 +2,9 @@
 
 #include "models/common/startup.h"
 #include "models/qwen3_5/load.h"
+
+#include <span>
+#include <vector>
 #include "models/qwen3_5/runtime_types.h"
 #include "models/qwen3_5/program/graph_preparation.h"
 
@@ -42,6 +45,14 @@ public:
         return definition_;
     }
 
+    // One definition per rank of the load's execution group, rank 0 first. Rank 0 is the local
+    // rank and is what `definition()` returns; a rank above 0 holds that rank's bindings, read with
+    // the model's shard transform installed, and is what the peer rank's materialization needs.
+    // Width 1 holds exactly one entry, so the single-device lane is unchanged.
+    [[nodiscard]] std::span<const std::shared_ptr<const ModelDefinition>> rank_definitions() const {
+        return rank_definitions_;
+    }
+
     std::shared_ptr<const execution::ModelProfile> profile;
 
 private:
@@ -49,6 +60,7 @@ private:
     std::shared_ptr<const moe::Plan> offload_;
     const artifact::Reader& reader_;
     std::shared_ptr<const ModelDefinition> definition_;
+    std::vector<std::shared_ptr<const ModelDefinition>> rank_definitions_;
     Architecture architecture_;
 };
 

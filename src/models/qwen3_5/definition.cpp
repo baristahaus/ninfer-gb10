@@ -1,6 +1,7 @@
 #include "models/qwen3_5/definition.h"
 
 #include "models/qwen3_5/load/bindings.h"
+#include "models/qwen3_5/shard_rules.h"
 #include "models/qwen3_5/expert_weights.h"
 
 namespace ninfer::models::qwen3_5 {
@@ -67,6 +68,11 @@ std::shared_ptr<const ModelDefinition> read_definition(const artifact::Reader& r
     out->options     = options;
     out->config      = parse_config(reader.directory(), options);
     artifact::Binder binder(reader);
+    // Every weight in this load goes through `Binder::parameter` (Bindings::parameter and
+    // Bindings::direct both do), so one transform covers the whole definition. Width 1 returns an
+    // empty transform, so the single-device lane binds exactly what it bound before the group
+    // existed; a width above 1 binds this rank's share of the parameters the table places.
+    binder.set_shard_transform(shard_transform(options.width, options.rank));
     out->resources = loading::bind_resources(binder, out->config);
     Bindings bindings(binder);
     const auto& text  = out->config.text;

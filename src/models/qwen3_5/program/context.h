@@ -160,10 +160,6 @@ struct MtpBridgeInput {
 
 void sample_from_hidden(PrefillContext& state, const Tensor& hidden, std::int32_t absolute_position,
                         std::int32_t purpose);
-void mtp_bridge_and_propose(PrefillContext& state, const Tensor& next_token,
-                            const Tensor& previous_hidden, std::int32_t position,
-                            std::span<const std::int32_t> rope_position, bool build_proposal,
-                            const Tensor* next_embedding = nullptr);
 void mtp_bridge_multimodal(PrefillContext& state, const PreparedPromptData& prompt,
                            VisionPrefillSession& vision, const MtpBridgeInput& bridge);
 

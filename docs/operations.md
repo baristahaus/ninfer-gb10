@@ -124,8 +124,10 @@ not appear in a shared configuration file.
 | `NINFER_FLASH_NEXT_STATE_FRONTIER` | execution-token count at which to capture the committed GDN convolution frontier. |
 | `NINFER_FLASH_NEXT_LOGITS_DIR` | directory for Flash-Next logits dumps. |
 
-`tools/check_docs.py` fails the build when a serve flag or an environment variable is read without a
-line here or in the serving reference.
+`tools/check_docs.py` runs as the `ninfer_docs_guard_test` CTest and fails when a serve flag, a
+CLI flag, a benchmark flag or an environment variable is read without a line here or in the
+serving, CLI or benchmark reference. It also checks the preset names, the binary paths and that
+every source file is compiled by a CMake target.
 
 ## 4. Starting the server
 

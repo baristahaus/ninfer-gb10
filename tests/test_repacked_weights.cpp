@@ -133,6 +133,74 @@ int check_shard(std::uint64_t rows, std::uint64_t columns, std::uint64_t begin,
     return 0;
 }
 
+// A fused consumer needs one parent across several parameters. The three members here sit in three
+// DIFFERENT parents (three artifact objects), each one whole region -- the shape the real artifact
+// has -- and the gather must put them into one parent in member order, with distinguishable content
+// per member so a wrong order cannot pass.
+int check_fused(std::uint64_t columns) {
+    constexpr std::uint64_t q_rows = 8;
+    constexpr std::uint64_t k_rows = 8;
+    constexpr std::uint64_t v_rows = 16;
+    const std::uint64_t total      = q_rows + k_rows + v_rows;
+
+    HostMatrix q = make_matrix(q_rows, columns);
+    HostMatrix k = make_matrix(k_rows, columns);
+    HostMatrix v = make_matrix(v_rows, columns);
+    // Make each member's content distinguishable: add a per-member constant.
+    for (auto& w : q.words) { w = static_cast<std::uint16_t>(w + 0); }
+    for (auto& w : k.words) { w = static_cast<std::uint16_t>(w + 0x1000); }
+    for (auto& w : v.words) { w = static_cast<std::uint16_t>(w + 0x2000); }
+
+    std::vector<ninfer::models::BoundWeight> weights;
+    const auto whole = [](const HostMatrix& m, std::uint64_t rows) {
+        ninfer::WeightView view;
+        view.shape = {rows, m.parent.geometry.shape[1]};
+        view.parts.push_back({&m.parent, 0, rows * view.shape[1]});
+        return view;
+    };
+    weights.push_back({"gdn/query", {}, whole(q, q_rows), {}});
+    weights.push_back({"gdn/key", {}, whole(k, k_rows), {}});
+    weights.push_back({"gdn/value", {}, whole(v, v_rows), {}});
+
+    ninfer::models::RepackedWeights repacked;
+    const std::vector<ninfer::models::FusedGroup> groups{
+        {{ninfer::models::WeightId{0}, ninfer::models::WeightId{1},
+          ninfer::models::WeightId{2}}}};
+    repacked.gather(weights, groups);
+    if (repacked.count() != 1) { return fail("fused gather did not make one parent"); }
+
+    const auto* parent = weights.front().view.parts.front().parent;
+    for (const auto& w : weights) {
+        if (w.view.parts.size() != 1 || w.view.parts.front().parent != parent) {
+            return fail("a fused member is not one region of the shared parent");
+        }
+    }
+    if (parent->geometry.shape[0] != total) {
+        return fail("the fused parent is not the summed rows");
+    }
+    // The value oracle: each member's rows must be at its own destination offset, in order.
+    const auto* got = reinterpret_cast<const std::uint16_t*>(parent->data);
+    const auto check_member = [&](const HostMatrix& m, std::uint64_t rows,
+                                  std::uint64_t first_row, const char* label) {
+        for (std::uint64_t row = 0; row < rows; ++row) {
+            for (std::uint64_t column = 0; column < columns; ++column) {
+                const std::uint16_t want = m.words[row * columns + column];
+                const std::uint16_t have = got[(first_row + row) * columns + column];
+                if (want != have) {
+                    return fail(std::string(label) + ": value differs at row " +
+                                std::to_string(row));
+                }
+            }
+        }
+        return 0;
+    };
+    int failures = 0;
+    failures += check_member(q, q_rows, 0, "query");
+    failures += check_member(k, k_rows, q_rows, "key");
+    failures += check_member(v, v_rows, q_rows + k_rows, "value");
+    return failures;
+}
+
 // A view that is already one contiguous range must not be repacked.
 int check_untouched(std::uint64_t rows, std::uint64_t columns, std::uint64_t begin,
                     std::uint64_t extent, const char* label) {
@@ -164,6 +232,7 @@ int main() {
         // A one-row shard is already one contiguous range, so the gather must leave it alone: the
         // detection condition is "not contiguous", and this pins that it does not over-fire.
         failures += check_untouched(1, 64, 32, 32, "single row shard");
+        failures += check_fused(64);
         if (failures == 0) { std::cout << "ok\n"; }
         return failures == 0 ? 0 : 1;
     } catch (const std::exception& error) {

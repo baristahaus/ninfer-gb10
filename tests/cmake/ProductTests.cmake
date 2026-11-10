@@ -22,6 +22,10 @@ ninfer_add_test(ninfer_shard_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_shard.cpp"
   LIBRARIES ninfer_artifact)
 
+ninfer_add_test(ninfer_sharded_forward_test
+  SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_sharded_forward.cpp"
+  LIBRARIES ninfer_artifact)
+
 ninfer_add_test(ninfer_layout_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_layout.cpp"
   LIBRARIES ninfer_core)

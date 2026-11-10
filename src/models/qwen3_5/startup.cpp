@@ -99,9 +99,12 @@ std::optional<Startup::ExecutionPlan> Startup::plan(DeviceContext& device,
 }
 
 std::unique_ptr<ModelShard> Startup::materialize(DeviceContext& device, WeightPlacement placement,
-                                                 const StartupObserver& observer) {
+                                                 const StartupObserver& observer, int rank) {
+    if (rank < 0 || static_cast<std::size_t>(rank) >= rank_definitions_.size()) {
+        throw std::out_of_range("model load rank is outside the execution group");
+    }
     auto resolved =
-        resolve_load(reader_, definition_, device.device(),
+        resolve_load(reader_, rank_definitions_[static_cast<std::size_t>(rank)], device.device(),
                      placement == WeightPlacement::HostExperts ? Device::cpu() : device.device());
     return materialize_model(std::move(resolved), device, &observer);
 }

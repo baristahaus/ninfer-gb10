@@ -28,8 +28,11 @@ public:
 
     [[nodiscard]] std::optional<ExecutionPlan> plan(DeviceContext&, const EngineOptions&,
                                                     WeightPlacement, std::size_t available) const;
+    // `rank` selects which of `rank_definitions()` the materialization reads, so a group's rank
+    // materializes its own bindings on its own device. Rank 0 is the local rank and the default, so
+    // every existing caller is unchanged.
     [[nodiscard]] std::unique_ptr<ModelShard> materialize(DeviceContext&, WeightPlacement,
-                                                          const StartupObserver&);
+                                                          const StartupObserver&, int rank = 0);
     [[nodiscard]] qwen::Frontend frontend(const EngineOptions&) const;
     [[nodiscard]] GraphPreparationPlan graph_plan(const EngineOptions&,
                                                   const ExecutionPreparation&) const;

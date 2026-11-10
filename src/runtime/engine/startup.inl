@@ -7,6 +7,7 @@
 #include "artifact/reader.h"
 #include "artifact/formats.h"
 #include "models/registry.h"
+#include "models/common/startup.h"
 #include "core/startup.h"
 #include "core/platform.h"
 
@@ -169,9 +170,15 @@ prepare_program(const Setup& setup, RankModelInstance<typename Setup::Types>& in
 
 template <class Types>
 struct BuiltModel {
+    // The group is declared first so it is destroyed last: every worker borrows its rank's device.
+    std::unique_ptr<ExecutionContext> execution;
     std::unique_ptr<InferenceInstance<Types>> instance;
     LoadSummary load;
     ContextMachineCostModel context_cost;
+    // Ranks 1..width-1 of the group: their own materialized shards, read from their own
+    // definitions. Empty at width 1. The peer Program and its mirrors are the next step; this is
+    // the storage they will be built on.
+    std::vector<std::unique_ptr<RankModelInstance<Types>>> peers;
 };
 
 template <class Setup>
@@ -205,13 +212,16 @@ BuiltModel<typename Setup::Types> build_local_model(const artifact::Reader& read
         rank_reader = std::make_unique<artifact::Reader>(node.artifact);
     }
     Setup setup(reader, rank_reader ? *rank_reader : reader, options, Device::cuda(options.device));
-    std::unique_ptr<DeviceContext> device_owner;
+    // The engine opens a group, not one device: empty `devices` is the single `device` field, so
+    // the width-1 lane gets a one-element group and behaves exactly as it did with a bare device.
+    std::unique_ptr<ExecutionContext> execution;
     {
         StartupPhaseScope phase(options.startup_observer, StartupPhase::CudaInitialize);
-        device_owner = std::make_unique<DeviceContext>(options.device);
+        execution = std::make_unique<ExecutionContext>(
+            options.devices.empty() ? std::vector<int>{options.device} : options.devices);
         phase.complete();
     }
-    auto& device       = *device_owner;
+    auto& device       = execution->primary();
     const auto initial = device_memory_snapshot(device.device());
     const auto limit   = device_budget(initial.available_bytes());
     const auto headroom =
@@ -315,12 +325,28 @@ BuiltModel<typename Setup::Types> build_local_model(const artifact::Reader& read
          capacity.bytes_per_additional_main_page_group, capacity.available_after_weights_bytes,
          capacity.available_after_startup_bytes, capacity.automatic_headroom_bytes,
          capacity.planned_slack_bytes, memory.startup_retained_bytes, memory.cuda_graph});
-    auto worker = std::make_unique<RankWorker<Types>>(std::move(device_owner), std::move(instance));
+    // Every other rank materializes its own bindings on its own device. Rank 0's instance above is
+    // the local one; the peers are the storage the rank-1 Program and its mirrors will be built on.
+    std::vector<std::unique_ptr<RankModelInstance<Types>>> peers;
+    if constexpr (requires(Setup& s, DeviceContext& d, const StartupObserver& o) {
+                      s.materialize(d, models::WeightPlacement::Resident, o, 1);
+                  }) {
+        for (int rank = 1; rank < execution->width(); ++rank) {
+            auto shard = setup.materialize(execution->device(rank), choices[selected].placement,
+                                           options.startup_observer, rank);
+            peers.push_back(
+                std::make_unique<RankModelInstance<Types>>(std::move(shard), setup.profile));
+        }
+    } else if (execution->width() > 1) {
+        throw std::invalid_argument("this model's local route has no per-rank materialization");
+    }
+    auto worker = std::make_unique<RankWorker<Types>>(device, std::move(instance));
     auto executor = std::make_unique<LocalExecutor<Types>>(std::move(worker), next_session_epoch());
     auto inference = std::make_unique<InferenceInstance<Types>>(
         setup.definition(), std::move(frontend), std::move(executor), std::move(*prepared_session),
         std::move(memory));
-    return {std::move(inference), std::move(summary), std::move(context_cost.model)};
+    return {std::move(execution), std::move(inference), std::move(summary),
+            std::move(context_cost.model), std::move(peers)};
 }
 
 } // namespace ninfer::runtime::detail

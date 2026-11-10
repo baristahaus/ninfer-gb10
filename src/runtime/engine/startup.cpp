@@ -42,9 +42,13 @@ void validate_options(const EngineOptions& options) {
         case models::Architecture::Qwen3_8FlashNext:
             break;
         case models::Architecture::Qwen3_5:
+            // The 27B's group route: one process, two devices, one plan per rank (the same shape
+            // the Flash-Next lane uses). The MoE architecture stays refused until its expert
+            // placement is wired.
+            break;
         case models::Architecture::Qwen3_5Moe:
             throw std::invalid_argument(
-                "tensor parallelism is not implemented for this architecture yet; pass a single "
+                "tensor parallelism is not implemented for the MoE architecture yet; pass a single "
                 "device with --device");
         case models::Architecture::Qwen4Exp:
 #if NINFER_ENABLE_DISTRIBUTED
@@ -164,17 +168,21 @@ ConstructedModel construct_model(EngineOptions& options) {
         if (options.deployment && options.deployment->ranks.size() > 1) {
             auto built = detail::build_distributed_model<models::qwen4_exp::ParallelStartup>(
                 reader, options, start);
-            return {std::move(built.instance), std::move(built.load),
+            return {nullptr, std::move(built.instance), std::move(built.load),
                     std::move(built.context_cost)};
         }
 #endif
         auto built = detail::build_local_model<models::qwen4_exp::Startup>(reader, options, start);
-        return {std::move(built.instance), std::move(built.load), std::move(built.context_cost)};
+        return {std::move(built.execution), std::move(built.instance), std::move(built.load),
+                std::move(built.context_cost)};
     }
     case models::Architecture::Qwen3_5:
     case models::Architecture::Qwen3_5Moe: {
         auto built = detail::build_local_model<models::qwen3_5::Startup>(reader, options, start);
-        return {std::move(built.instance), std::move(built.load), std::move(built.context_cost)};
+        ConstructedModel constructed{std::move(built.execution), std::move(built.instance),
+                                     std::move(built.load), std::move(built.context_cost)};
+        constructed.qwen3_5_peers = std::move(built.peers);
+        return constructed;
     }
     case models::Architecture::Qwen3_8FlashNext:
         return flashnext_runtime::construct_flash_next(options, reader, start);

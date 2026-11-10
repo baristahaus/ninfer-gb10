@@ -31,9 +31,6 @@ venv/
 *.gguf
 *.ninfer
 *.ninfer.conversion.json
-# Model artifacts stay out of git, but the tiny checked-in framing fixture is deliberately small
-# and its digest is pinned in tests/fixtures/artifacts/manifest.json.
-!tests/fixtures/artifacts/tiny.ninfer
 /models/
 out/
 

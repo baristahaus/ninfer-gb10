@@ -32,9 +32,9 @@ needs no per-test plumbing: name it in the manifest once.
 | `default` | the entry a bare `NINFER_TEST_ARTIFACT` resolves to |
 
 The manifest also carries a `fixtures` array for the small committed fixtures
-(`tests/fixtures/artifacts/tiny.ninfer`, `tests/fixtures/corpus/tokens.ids`,
-`tests/fixtures/prompts/corpus.json`). Those are always present, and their digests are checked on
-every host by `ninfer_test_artifacts_manifest_test`.
+(`tests/fixtures/corpus/tokens.ids`, `tests/fixtures/prompts/corpus.json`). Those are always
+present, and their digests are checked on every host by
+`ninfer_test_artifacts_manifest_test`.
 
 ## The cache
 
@@ -78,7 +78,9 @@ ctest --preset rtx5090-dev -L real
 
 ## What a fixture cannot do
 
-`tests/fixtures/artifacts/tiny.ninfer` is a one-tensor v3 artifact: it exercises framing, the reader,
-and codecs. It is not a model and cannot stand in for one. The tests named in the manifest need the
-real weights; the tiny fixture is for the artifact layer, and the fixed prompt and token corpora are
-for tests that need deterministic input rather than a deterministic model.
+A committed artifact cannot stand in for a model. The artifact layer builds its v3 fixture in a
+temporary directory (`tests/artifact/fixture.h`), so there is no checked-in `.ninfer` sample: the
+writer that produces it is the authority, and the reader tests exercise the same bytes without a
+second copy that could drift. The tests named in the manifest need the real weights; the fixed
+prompt and token corpora are for tests that need deterministic input rather than a deterministic
+model.

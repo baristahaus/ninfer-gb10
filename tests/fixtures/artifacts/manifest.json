@@ -18,14 +18,6 @@
   },
   "fixtures": [
     {
-      "name": "tiny_artifact",
-      "path": "tests/fixtures/artifacts/tiny.ninfer",
-      "bytes": 4352,
-      "sha256": "def829d3d27b36888f0d7e9995b01cfdbafa257382fdefd0c6dcd02bb7857757",
-      "purpose": "Deterministic one-tensor v3 artifact for framing/codec tests. Regenerate with tests/fixtures/artifacts/make_tiny_artifact.py; the digest must not change.",
-      "consumer": "ninfer_artifact_reader_test"
-    },
-    {
       "name": "token_corpus",
       "path": "tests/fixtures/corpus/tokens.ids",
       "bytes": 10281,

@@ -201,64 +201,42 @@ void TextRun::gdn(const BlockParameters& block, std::uint32_t compact_layer) {
     const auto tokens    = residual_.ne[1];
     const auto width     = inputs_.ids.ne[0];
     const auto batch     = inputs_.ids.ne[1];
-<<<<<<< HEAD
-    // The rank's heads, not the config's. Every use below is a view or a recurrent kernel geometry, and
-    // at width 2 the rank holds half the heads while the config still describes the whole model -- so a
-    // view sized from the config asks for twice the elements the tensor has.
-    const auto extents_ = gdn_extents(p);
-    const auto vh        = extents_.value_heads;
-    const auto qh        = extents_.key_width / dimension(gdn.linear_key_head_dim);
-    const auto dk        = dimension(gdn.linear_key_head_dim);
-    const auto dv        = dimension(gdn.linear_value_head_dim);
-    const auto scale     = static_cast<float>(1.0 / std::sqrt(double(gdn.linear_key_head_dim)));
-=======
     const auto dk    = dimension(gdn.linear_key_head_dim);
     const auto dv    = dimension(gdn.linear_value_head_dim);
     const auto scale = static_cast<float>(1.0 / std::sqrt(double(gdn.linear_key_head_dim)));
->>>>>>> w5/shardedloop
     const auto* sequence = std::get_if<SequenceUpdate>(&update_);
     const auto* replay   = std::get_if<ReplayRecords>(&update_);
 
     // The rank's own extents, not the config's: at width 2 the ops validate against the rank's
-<<<<<<< HEAD
-    // sharded heads and widths, so a workspace sized from the model description is rejected.
-    const auto control = workspace::gdn_control(work, extents_, tokens);
-=======
     // sharded heads and widths, so a workspace sized from the model description is rejected. The
     // head counts follow from the widths, so the two cannot disagree with the tensors they shape.
     const auto extents = gdn_extents(p);
     const auto qh      = static_cast<std::uint32_t>(extents.key_width / dk);
     const auto vh      = static_cast<std::uint32_t>(extents.value_heads);
     const auto control = workspace::gdn_control(work, extents, tokens);
->>>>>>> w5/shardedloop
     Tensor h           = control.hidden;
     Tensor g           = control.g;
     Tensor beta        = control.beta;
     gdn_norm_control(residual_, block.input_norm, cfg.rms_norm_eps, p, h, g, beta, work, cuda);
 
-    const auto projection = workspace::gdn_projection(work, extents_, tokens);
+    const auto projection = workspace::gdn_projection(work, extents, tokens);
     Tensor z              = projection.output_gate.view({dv, vh, tokens});
     Tensor qc             = projection.query;
     Tensor kc             = projection.key;
     Tensor vc             = projection.value;
     if (sequence) {
-<<<<<<< HEAD
-        Tensor qkv    = workspace::gdn_prefill_conv(work, cfg, tokens);
-        Tensor z_flat = z.view({extents_.value_width, tokens});
-=======
         Tensor qkv    = workspace::gdn_prefill_conv(work, extents, tokens);
-        Tensor z_flat = z.view({dimension(gdn.value_width()), tokens});
->>>>>>> w5/shardedloop
+        Tensor z_flat = z.view({extents.value_width, tokens});
         gdn_projection(h, p, qkv, z_flat, work, cuda);
         Tensor source      = view_.states.conv_slot(compact_layer, sequence->source_slot);
         Tensor destination = view_.states.conv_slot(compact_layer, sequence->destination_slot);
         ops::causal_conv1d_silu_split(qkv, p.convolution, source, destination, qc, kc, vc, cuda);
     } else {
-        Tensor projection_input = h.view({extents_.hidden_size, width, batch});
-        Tensor query_output     = qc.view({extents_.key_width, width, batch});
-        Tensor key_output       = kc.view({extents_.key_width, width, batch});
-        Tensor value_output     = vc.view({extents_.value_width, width, batch});
-        Tensor gate_output      = z.view({extents_.value_width, width, batch});
+        Tensor projection_input = h.view({extents.hidden_size, width, batch});
+        Tensor query_output     = qc.view({extents.key_width, width, batch});
+        Tensor key_output       = kc.view({extents.key_width, width, batch});
+        Tensor value_output     = vc.view({extents.value_width, width, batch});
+        Tensor gate_output      = z.view({extents.value_width, width, batch});
         Tensor conv             = view_.states.layer_view(compact_layer).conv;
         const bool exl3_route = is_exl3_gdn(p);
         if (exl3_route) {
@@ -267,19 +245,13 @@ void TextRun::gdn(const BlockParameters& block, std::uint32_t compact_layer) {
             // over the qkv rows. The conv preserves the projection's row order, so
             // each split output is a contiguous row range of its result.
             const std::int32_t kColumns = width * batch;
-<<<<<<< HEAD
-            Tensor qkv       = workspace::gdn_prefill_conv(work, cfg, kColumns);
-            Tensor z_flat    = z.view({extents_.value_width, kColumns});
-            Tensor hidden_2d = h.view({extents_.hidden_size, kColumns});
-=======
             Tensor qkv       = workspace::gdn_prefill_conv(work, extents, kColumns);
-            Tensor z_flat    = z.view({dimension(gdn.value_width()), kColumns});
-            Tensor hidden_2d = h.view({dimension(cfg.hidden_size), kColumns});
->>>>>>> w5/shardedloop
+            Tensor z_flat    = z.view({extents.value_width, kColumns});
+            Tensor hidden_2d = h.view({extents.hidden_size, kColumns});
             gdn_projection(hidden_2d, p, qkv, z_flat, work, cuda);
             Tensor conv_out    = workspace::gdn_prefill_conv(work, extents, kColumns);
-            Tensor conv_input  = qkv.view({dimension(gdn.conv_channels()), width, batch});
-            Tensor conv_result = conv_out.view({dimension(gdn.conv_channels()), width, batch});
+            Tensor conv_input  = qkv.view({extents.conv_channels(), width, batch});
+            Tensor conv_result = conv_out.view({extents.conv_channels(), width, batch});
             if (replay) {
                 // Record round (plan W1.1/W1.2): the conv runs over a scratch state
                 // tensor — the layer's committed state is untouched, and the replay
@@ -289,7 +261,7 @@ void TextRun::gdn(const BlockParameters& block, std::uint32_t compact_layer) {
                 // history inside the scratch. The conv history record is the qkv
                 // plane itself: the fused record op's [C,W,B] column order is the
                 // plane's own layout.
-                const std::int32_t channels = dimension(gdn.conv_channels());
+                const std::int32_t channels = extents.conv_channels();
                 Tensor scratch_states = work.alloc(DType::BF16, {channels, 3, kColumns});
                 Tensor heads = work.alloc(DType::I32, {batch});
                 // One device-side op fills the reservation heads and gathers the source
@@ -301,7 +273,7 @@ void TextRun::gdn(const BlockParameters& block, std::uint32_t compact_layer) {
                                                  conv_result, cuda);
                 const auto records = replay->records.layer(compact_layer, batch);
                 if (!(records.conv.dtype == DType::BF16 &&
-                      records.conv.ne[0] == dimension(gdn.conv_channels()) &&
+                      records.conv.ne[0] == extents.conv_channels() &&
                       records.conv.ne[1] == width && records.conv.ne[2] == batch)) {
                     throw std::invalid_argument(
                         "gdn record: conv record geometry differs from the round");
@@ -319,24 +291,24 @@ void TextRun::gdn(const BlockParameters& block, std::uint32_t compact_layer) {
             // The qkv plane is row-fastest [rows, kColumns]: each row group's rows for column j
             // live at j*conv_channels. The split outputs keep the same row-fastest layout, so
             // each group is a strided 2D copy, not a flat range.
-            const auto group_channels = dimension(gdn.conv_channels());
+            const auto group_channels = extents.conv_channels();
             const auto* source = static_cast<const std::byte*>(conv_out.data);
             CUDA_CHECK(cudaMemcpy2DAsync(
-                query_output.data, static_cast<std::size_t>(extents_.key_width) * 2,
+                query_output.data, static_cast<std::size_t>(extents.key_width) * 2,
                 source, static_cast<std::size_t>(group_channels) * 2,
-                static_cast<std::size_t>(extents_.key_width) * 2, kColumns,
+                static_cast<std::size_t>(extents.key_width) * 2, kColumns,
                 cudaMemcpyDeviceToDevice, cuda.stream()));
             CUDA_CHECK(cudaMemcpy2DAsync(
-                key_output.data, static_cast<std::size_t>(extents_.key_width) * 2,
-                source + static_cast<std::size_t>(extents_.key_width) * 2,
+                key_output.data, static_cast<std::size_t>(extents.key_width) * 2,
+                source + static_cast<std::size_t>(extents.key_width) * 2,
                 static_cast<std::size_t>(group_channels) * 2,
-                static_cast<std::size_t>(extents_.key_width) * 2, kColumns,
+                static_cast<std::size_t>(extents.key_width) * 2, kColumns,
                 cudaMemcpyDeviceToDevice, cuda.stream()));
             CUDA_CHECK(cudaMemcpy2DAsync(
-                value_output.data, static_cast<std::size_t>(extents_.value_width) * 2,
-                source + static_cast<std::size_t>(2 * extents_.key_width) * 2,
+                value_output.data, static_cast<std::size_t>(extents.value_width) * 2,
+                source + static_cast<std::size_t>(2 * extents.key_width) * 2,
                 static_cast<std::size_t>(group_channels) * 2,
-                static_cast<std::size_t>(extents_.value_width) * 2, kColumns,
+                static_cast<std::size_t>(extents.value_width) * 2, kColumns,
                 cudaMemcpyDeviceToDevice, cuda.stream()));
         } else if (replay) {
             const auto records = replay->records.layer(compact_layer, batch);
@@ -355,11 +327,7 @@ void TextRun::gdn(const BlockParameters& block, std::uint32_t compact_layer) {
     Tensor q = qc.view({dk, qh, tokens});
     Tensor k = kc.view({dk, qh, tokens});
     Tensor v = vc.view({dv, vh, tokens});
-<<<<<<< HEAD
-    Tensor o = workspace::gdn_recurrent_output(work, extents_, tokens).view({dv, vh, tokens});
-=======
     Tensor o = workspace::gdn_recurrent_output(work, extents, tokens).view({dv, vh, tokens});
->>>>>>> w5/shardedloop
     if (sequence && !replay) {
         Tensor source      = view_.states.recurrent_slot(compact_layer, sequence->source_slot);
         Tensor destination = view_.states.recurrent_slot(compact_layer, sequence->destination_slot);
@@ -384,19 +352,15 @@ void TextRun::gdn(const BlockParameters& block, std::uint32_t compact_layer) {
         }
     }
 
-<<<<<<< HEAD
-    Tensor normalized = workspace::gdn_normalized_output(work, extents_, tokens).view({dv, vh, tokens});
-=======
     Tensor normalized = workspace::gdn_normalized_output(work, extents, tokens).view({dv, vh, tokens});
->>>>>>> w5/shardedloop
     ops::silu_gated_rmsnorm(o, p.norm, z, cfg.rms_norm_eps, normalized, cuda);
     if (view_.collective != nullptr) {
         // Column-parallel, same residual rule as the attention output projection.
         std::array<Tensor, 2> partials = column_partials(tokens);
-        sharded_project_columns_add(normalized.view({extents_.value_width, tokens}),
+        sharded_project_columns_add(normalized.view({extents.value_width, tokens}),
                                     p.output, partials, residual_, *view_.collective, work, cuda);
     } else {
-        ops::linear_add(normalized.view({extents_.value_width, tokens}), p.output.weight,
+        ops::linear_add(normalized.view({extents.value_width, tokens}), p.output.weight,
                         residual_, p.output.policy, work, cuda);
     }
 }

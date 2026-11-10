@@ -1,5 +1,7 @@
 #include "models/qwen3_5/load.h"
 
+#include "artifact/encoded_slice.h"
+
 #include "models/common/bindings.h"
 
 namespace ninfer::models::qwen3_5 {
@@ -11,6 +13,46 @@ ResolvedLoadPlan::ResolvedLoadPlan(const artifact::Reader& reader,
     : reader_(&reader), definition_(std::move(definition)),
       materialization_(std::move(materialization)), devices_(std::move(devices)),
       bank_devices_(std::move(bank_devices)) {}
+
+
+namespace {
+
+// The slices a sharded reference describes. A whole-object reference keeps the `whole_tensor` form
+// (it is exactly one object, unsliced), so the single-device lane never enters this. A sharded one
+// gives parts that are contiguous element ranges of the parent: a row block is one slice, a column
+// prefix is one slice per row. Destination rows accumulate in part order over the rank's own shape.
+std::vector<artifact::MatrixSlice> matrix_slices(const artifact::Reader& reader,
+                                                 const artifact::ParameterReference& reference) {
+    std::vector<artifact::MatrixSlice> slices;
+    const auto k = reference.shape.back();
+    const auto n = weight_element_count(reference.shape) / k;
+    std::uint64_t destination_row = 0;
+    for (const auto& part : reference.binding.parts) {
+        const auto extent = part.end - part.begin;
+        if (extent == 0) { continue; }
+        const auto parent = reader.geometry(part.object).shape;
+        if (parent.size() != 2) {
+            throw artifact::ArtifactError(reference.name + ": a sharded weight must be a matrix");
+        }
+        const std::uint64_t columns = parent.back();
+        const std::uint64_t row     = part.begin / columns;
+        const std::uint64_t column  = part.begin % columns;
+        if (extent % columns == 0) {
+            const std::uint64_t rows = extent / columns;
+            slices.push_back({part.object, row, column, rows, columns, destination_row, 0});
+            destination_row += rows;
+        } else {
+            slices.push_back({part.object, row, column, 1, extent, destination_row, 0});
+            ++destination_row;
+        }
+    }
+    if (destination_row != n) {
+        throw artifact::ArtifactError(reference.name + ": shard slices do not cover its own rows");
+    }
+    return slices;
+}
+
+} // namespace
 
 ResolvedLoadPlan resolve_load(const artifact::Reader& reader,
                               std::shared_ptr<const ModelDefinition> definition, Device cuda,
@@ -31,12 +73,26 @@ ResolvedLoadPlan resolve_load(const artifact::Reader& reader,
                     devices[id.index] = expert_device;
         }
     }
-    std::vector<artifact::PlacementRequest> requests;
-    for (std::size_t i = 0; i < devices.size(); ++i)
-        for (const auto& part : definition->parameter({i}).binding.parts)
-            requests.push_back({part.object, devices[i],
-                                devices[i] == Device::cpu() ? artifact::HostAccess::CudaTransfer
-                                                            : artifact::HostAccess::CpuOnly});
+    // Place slices, not objects. A `PlacementRequest` names an object and the materializer places
+    // it whole (`placement.cpp:61`), so a rank would plan and allocate the entire artifact at any
+    // width; the reference's sliced binding has to reach the plan. A whole-object reference keeps
+    // `whole_tensor`, which is why width 1 takes exactly the path it took before.
+    std::vector<artifact::TensorRequest> requests;
+    for (std::size_t i = 0; i < devices.size(); ++i) {
+        const auto& reference = definition->parameter({i});
+        const auto access     = devices[i] == Device::cpu() ? artifact::HostAccess::CudaTransfer
+                                                            : artifact::HostAccess::CpuOnly;
+        if (reference.binding.whole_object) {
+            for (const auto& part : reference.binding.parts) {
+                requests.push_back({artifact::whole_tensor(reader, part.object), devices[i],
+                                    access});
+            }
+            continue;
+        }
+        requests.push_back({artifact::slice_tensor(reader, reference.shape,
+                                                   matrix_slices(reader, reference)),
+                            devices[i], access});
+    }
     auto storage = artifact::plan_materialization(reader, requests);
     return {reader, std::move(definition), std::move(storage), std::move(devices),
             std::move(banks)};

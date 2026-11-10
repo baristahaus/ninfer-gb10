@@ -26,9 +26,13 @@ The Qwen3.6-27B NVFP4 MTP3 phase table comes from a corpus C=1 point whose full 
 not published here. Qwen3.8 measurements use FP8 E4M3 row-256 KV; the Qwen3.6 measurements
 use INT8 group-64 KV. Each model page records its build and run conditions.
 
-Qwen3.8-Flash-Next is supported, but has no published result page in this campaign.
-The Qwen3.8-27B measurements above describe a different architecture and artifact.
-Flash Next's current execution scope is documented [here](maintainer/qwen4_exp-execution.md).
+Qwen3.8-Flash-Next 125B-A6B has a first end-to-end serving record on GB10,
+[run `gb10-125b-first`](performance/qwen3.8-flash-next-125b-a6b.md#first-end-to-end-text-serving-2026-11-10-run-gb10-125b-first):
+load, prefill, decode and two concurrent requests, with `--spec none`, a text-only artifact, 4,096
+tokens of context and one lane, measured on revision `33e79d81` rather than master. It is a smoke
+record, not a campaign point: it publishes no context profile, speculative decode, corpus makespan
+or saturation suite, and Vision, MTP/DFlash2, 8,192 context, concurrency above one and a soak are
+unmeasured. The Qwen3.8-27B measurements above describe a different architecture and artifact.
 
 ## Cross-engine parity
 

@@ -334,6 +334,107 @@ live under `profiles/bench/gb10/`.
 - **Synchronization:** `NINFER_CUDA_SYNC` unset selects `yield` on integrated devices. Blocking
   synchronization cost about 1.4 ms per wake-up on GB10.
 
+### First end-to-end text serving, 2026-11-10 (run `gb10-125b-first`)
+
+**Read the caveats before the numbers.** This is the first end-to-end inference of the 125B on a
+GB10 — load, prefill, decode, and two concurrent requests, all clean — but it is a **smoke record,
+not a campaign point**, and three conditions bound what it means:
+
+- **The binary was `33e79d81` (the `feat/tp2-program` tip), not current master.** The node's
+  canonical checkout was at that revision and no build tree could be created on the node (26 GB
+  free). Nothing in this record is a statement about master's serving path.
+- **Two reporting defects were found and are unfixed** (§Measurement defects): the OpenAI `timings`
+  block returned zeros, and `server_start.resources.total_allocations` returned zeros. A client
+  reading the advertised `timings` would have seen zero throughput for a run that was actually
+  serving at ~34 tok/s.
+- **One configuration only**: text-only artifact, `--spec none`, 4,096-token context, one lane. The
+  MTP/DFlash2, Vision, 8,192-context and concurrency>1 paths were **not measured** (§Not measured).
+
+Run record:
+
+| item | value |
+|---|---|
+| date and node | 2026-11-10 09:31–09:43 UTC; `twofour` (`aitopatom-0c82`), GB10, `aarch64` |
+| tested revision | **`33e79d81`** — the node's canonical `ninfer-serve` binary from its `/home/apollo11/ninfer-gb10` checkout (that checkout's build tree was configured without a preset), not master |
+| artifact | `qwen3_8_flash_next_125b_a6b_nvfp4_fp8_mtp.ninfer`, 4 volumes, **126,921,610,496 B** on disk, sha256 `3be54b07772d1876925755df84f81bacad3f6dbf1123c2110bb64ab004b833b2`, matching `tests/fixtures/artifacts/manifest.json` (`qwen3_8_flash_next_125b_a6b_fp8_mtp`) |
+| bytes actually read | **73,711,275,570 B (68.6 GiB)**, 58 % of the 126.9 GB on disk: the loader reads only the selected components, so the on-disk size is not the resident set |
+| architecture | `Qwen3_8FlashNextForCausalLM`; formats bf16, fp32, fp8_e4m3fn, fp8_e4m3fn_row_bf16, nvfp4 |
+| hardware | GB10 (Grace Blackwell), 121.6 GiB unified LPDDR5X; **95 GB used / 17 GB free** at rest before the load |
+| toolchain | driver 580.178.04; the CUDA runtime version of that checkout was not recorded for this run (the earlier GB10 campaign on this page used CUDA 13.0.88) |
+| load | **22.48 s** (`engine ready \| … \| total 22.5s`); 1,212 device objects, 4 host objects, 73,698,416,770 B host→device |
+| resident weights | **68.6 GiB** |
+| KV | 4,096 tokens, BF16, `--max-context 4096`, 1 active + 1 extra Device state |
+| runtime settings | `--spec none`, text-only artifact (no Vision, no MTP weights selected), `--max-concurrency 1`, `--kv-dtype` default BF16, `--host 127.0.0.1 --port 8099`, auth off, prefix reuse default |
+| sampling | server defaults: no sampling or `--greedy` flag was passed, so this run is not an identified greedy run and its token counts are not comparable with the greedy campaign points |
+| sample count | 7 serial requests tabulated above, 2 concurrent, and 10 HTTP requests in total over the 12-minute run (the tenth is an aborted client, see Stability) |
+
+Results. Every value comes from the JSONL `request_done` `timings_seconds`, not from the protocol
+`timings` block, which returned zeros. Prefill and decode use the published metric definitions
+(`prompt_tokens / prefill_seconds`, `(completion_tokens - 1) / decode_seconds`); the raw components
+are given so the rates can be recomputed.
+
+| Workload | Prompt tokens | Completion tokens | Server TTFT | Prefill | Decode phase | Prefill tok/s | Decode tok/s |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| arithmetic, short | 26 | 32 | 0.203 s | 0.199 s | 0.917 s | 130.7 | 33.8 |
+| short prompt | 17 | 105 | 0.142 s | 0.139 s | 3.041 s | 122.3 | 34.2 |
+| short prompt | 17 | 82 | 0.080 s | 0.076 s | 2.360 s | 223.7 | 34.3 |
+| short prompt | 17 | 102 | 0.081 s | 0.077 s | 2.970 s | 220.8 | 34.0 |
+| 418-token summary | 418 | 48 | 0.409 s | 0.405 s | 1.377 s | 1,032.1 | 34.1 |
+| sustained paragraph | 20 | 512 | 0.188 s | 0.185 s | 17.602 s | 108.1 | **29.0** |
+| near-limit prompt | 3,810 | 32 | 4.158 s | 4.146 s | 2.246 s | 919.0 | **13.8** |
+
+- **Prefill:** 1,032 tok/s at 418 prompt tokens; 919 tok/s at 3,810. Short prompts are dominated by
+  fixed overhead, so their rates (108–224 tok/s) are not a prefill measurement.
+- **Decode:** 34.0–34.3 tok/s on short runs, 29.0 tok/s over a sustained 512-token answer, 13.8 tok/s
+  with 3,810 tokens of context resident. The fall with context is the expected attention cost.
+  *Traceability note:* the phase note that reported this run quoted `completion_tokens /
+  decode_seconds`, which is 2–3 % higher on short completions (34.9, 34.5, 34.7, 34.3, 34.9, 29.1,
+  14.2). The table above uses the published definition; the difference is the excluded
+  prefill-produced first token, not a disagreement about the measurement.
+- **Queueing:** two simultaneous requests at `--max-concurrency 1` both returned HTTP 200 with 64
+  tokens each, at 2.03 s and 4.10 s — serialised FIFO, no failure, no preemption.
+- **Memory:** 105 GB used / 13 GB free after the 3,810-token request, i.e. ~13 GB of slack at the
+  4,096-token cap. The 121.6 GiB node holds the 68.6 GiB model with real headroom.
+- **Stability:** the server stayed up across ten requests including the two concurrent ones. The only
+  log anomaly is `req#2 response failed during transport | HTTP 499 | client disconnected`, an
+  aborted client `curl` from a shell-quoting mistake, not a server fault. Ten requests is not a soak.
+
+#### Measurement defects (open)
+
+1. **The OpenAI `timings` block reports zeros.** Every response carried `predicted_ms: 0.0,
+   predicted_per_second: 0.0, prompt_ms: 0.0, prompt_per_second: 0.0`, while the JSONL record for the
+   same request held the true `prefill`, `decode` and `ttft`. A client that reads the
+   llama.cpp-compatible `timings` — the advertised surface — sees zero throughput. This is a
+   reporting defect on this route, not a slow engine, and it is unfixed.
+2. **`server_start.resources.total_allocations` is all zeros, and `ranks: []`.** The startup record
+   therefore does not describe the GB10 unified allocation; the only machine-readable memory fact is
+   `artifact.host_to_device_bytes` plus the human `engine ready | … | weights 68.6 GiB` line. On a
+   node where memory is the binding constraint, that is a real gap in the record.
+
+#### Not measured
+
+| Not measured | Why | What it would take |
+|---|---|---|
+| Vision | the artifact used is text-only | the separate Vision artifact and an image request |
+| MTP / DFlash2 | ran `--spec none` to keep memory and complexity low | the artifact is `fp8_mtp`, so MTP weights are present; enabling it is the obvious next run |
+| `--max-context 8192` | 4,096 was the conservative setting | memory has ~13 GB slack at 4,096; 8,192 would consume much of it |
+| concurrency > 1 | one lane was the conservative setting | capacity exists (up to eight lanes) |
+| a soak beyond ~10 requests | out of scope | no leak signal in ten requests, but that is not a soak |
+| current master | no build tree allowed on the node (26 GB free; a tree is ~17 GB) | update the canonical checkout or rebuild elsewhere |
+
+#### Reproduce
+
+```bash
+ninfer-serve out/fp8mtp/qwen3_8_flash_next_125b_a6b_nvfp4_fp8_mtp.ninfer \
+  --host 127.0.0.1 --port 8099 --max-context 4096 --max-concurrency 1 \
+  --request-log-jsonl req.jsonl --stats-interval 10s
+```
+
+The serving binary in this run came from a checkout at `33e79d81`; a rerun on another revision or
+artifact does not promise identical timings. Raw reports for this run were not retained under
+`profiles/bench/` — the values above are transcribed from the run's JSONL, and that is a limitation
+of this record compared with the campaign points on this page.
+
 ### Results against DGPP, October 3
 
 Protocol: DGPP's `scripts/serve_load.py` with five prompt classes (prose, code, json, math, chat),

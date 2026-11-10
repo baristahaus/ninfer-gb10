@@ -1,10 +1,12 @@
 ninfer_add_test(ninfer_peer_mailbox_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_peer_mailbox.cpp"
   LIBRARIES ninfer_ops)
+set_tests_properties(ninfer_peer_mailbox_test PROPERTIES SKIP_RETURN_CODE 77)
 
 ninfer_add_test(ninfer_execution_context_cuda_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_execution_context_cuda.cpp"
   LIBRARIES ninfer_core)
+set_tests_properties(ninfer_execution_context_cuda_test PROPERTIES SKIP_RETURN_CODE 77)
 
 ninfer_add_test(ninfer_execution_context_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_execution_context.cpp"

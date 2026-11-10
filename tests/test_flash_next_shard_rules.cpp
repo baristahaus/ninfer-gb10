@@ -124,14 +124,21 @@ int test_qkv_segmentation() {
 // the row count for a Rows parameter and the column count for a Columns one.
 ninfer::artifact::ParameterReference synthetic(std::string name,
                                                std::vector<std::uint64_t> shape,
-                                               std::uint64_t extent) {
+                                               std::uint64_t /*extent*/) {
     ninfer::artifact::ParameterReference reference;
-    reference.name = std::move(name);
+    reference.name  = std::move(name);
     reference.shape = std::move(shape);
-    reference.binding.elements = extent;
+    // A Binding's element count is the product of the shape and its parts tile the whole
+    // parameter. Setting it to the sharded extent made this fixture agree with the old
+    // extent check's wrong assumption, which is why a real artifact found that bug and the
+    // test did not.
+    std::uint64_t elements = 1;
+    for (const auto dim : reference.shape) { elements *= dim; }
+    reference.binding.elements = elements;
     reference.binding.parts.push_back(
-        ninfer::artifact::Part{ninfer::artifact::ObjectHandle{0}, 0, extent});
+        ninfer::artifact::Part{ninfer::artifact::ObjectHandle{0}, 0, elements});
     return reference;
+
 }
 
 int test_shard_parameter() {
@@ -142,9 +149,9 @@ int test_shard_parameter() {
                                      2, 0);
     failures += check(key.shape[0] == 256 && key.shape[1] == 2560,
                       "the KV projection halves its rows and keeps its columns");
-    failures += check(key.binding.elements == 256, "the KV binding halves");
+    failures += check(key.binding.elements == 256 * 2560, "the KV binding halves");
     failures += check(key.binding.parts.size() == 1 && key.binding.parts[0].begin == 0 &&
-                          key.binding.parts[0].end == 256,
+                          key.binding.parts[0].end == 256 * 2560,
                       "rank 0 owns the first half of the KV projection");
 
     // A Columns parameter halves its second axis.
@@ -159,7 +166,7 @@ int test_shard_parameter() {
     failures += check(qkv.shape[0] == 5120 && qkv.shape[1] == 2560,
                       "the QKV projection keeps its rows' half and its columns");
     failures += check(qkv.binding.parts.size() == 3, "the QKV binding is three slices");
-    failures += check(qkv.binding.elements == 5120, "the QKV binding totals the rank's share");
+    failures += check(qkv.binding.elements == 5120 * 2560, "the QKV binding totals the rank's share");
 
     // A Replicated parameter is untouched.
     const auto norm = shard_parameter(
@@ -172,7 +179,7 @@ int test_shard_parameter() {
     // Width 1 returns the reference unchanged.
     const auto single = shard_parameter(
         synthetic("model.layers.3.self_attn.k_proj.weight", {512, 2560}, 512), 1, 0);
-    failures += check(single.shape[0] == 512 && single.binding.elements == 512,
+    failures += check(single.shape[0] == 512 && single.binding.elements == 512 * 2560,
                       "width 1 leaves the parameter whole");
 
     // A binding that disagrees with the table is rejected, not clipped.
@@ -205,11 +212,14 @@ int test_shard_transform_factory() {
     const auto transform1 = shard_transform(2, 1);
     const auto rank0      = transform0(reference);
     const auto rank1      = transform1(reference);
+    // The binding's offsets are FLAT elements, not rows: a [512, 2560] parameter's rank-1 rows
+    // [256, 512) are elements [256*2560, 512*2560). The earlier expectation compared row indices
+    // against element offsets, which only agreed while the fixture set `elements` to the row count.
     failures += check(rank0.shape[0] == 256 && rank0.binding.parts[0].begin == 0 &&
-                          rank0.binding.parts[0].end == 256,
+                          rank0.binding.parts[0].end == 256 * 2560,
                       "rank 0's transform owns the first half");
-    failures += check(rank1.shape[0] == 256 && rank1.binding.parts[0].begin == 256 &&
-                          rank1.binding.parts[0].end == 512,
+    failures += check(rank1.shape[0] == 256 && rank1.binding.parts[0].begin == 256 * 2560 &&
+                          rank1.binding.parts[0].end == 512 * 2560,
                       "rank 1's transform owns the second half");
     failures += check(rank0.shape[0] + rank1.shape[0] == reference.shape[0],
                       "the two ranks' transforms partition the parameter");
@@ -217,8 +227,8 @@ int test_shard_transform_factory() {
     // A parameter the table does not name is Replicated and the transform must not touch it.
     const auto whole = synthetic("model.layers.3.mlp.gate.weight", {513, 2560}, 513);
     const auto kept  = transform1(whole);
-    failures += check(kept.shape[0] == 513 && kept.binding.elements == 513 &&
-                          kept.binding.parts[0].end == 513,
+    failures += check(kept.shape[0] == 513 && kept.binding.elements == 513 * 2560 &&
+                          kept.binding.parts[0].end == 513 * 2560,
                       "an unlisted parameter passes through the transform unchanged");
 
     bool threw = false;

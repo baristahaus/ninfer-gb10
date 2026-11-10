@@ -136,18 +136,19 @@ artifact::ParameterReference shard_parameter(const artifact::ParameterReference&
     // always the TOTAL element count, so comparing it against a row count is a unit mismatch: for
     // text/output_head the binding is 248320 * 5120 elements against a declared 248320 rows. The
     // synthetic tests never caught it because they set `elements` to the extent by hand.
-    {
-        const std::uint64_t declared = static_cast<std::uint64_t>(total_extent(*shard));
-        std::uint64_t bound          = reference.binding.elements;
-        if (shard->axis == artifact::ShardAxis::Rows ||
-            shard->axis == artifact::ShardAxis::Columns) {
-            const std::size_t axis_index = shard->axis == artifact::ShardAxis::Rows ? 0 : 1;
-            if (reference.shape.size() <= axis_index) {
-                throw std::invalid_argument("sharding: " + std::string(reference.name) +
-                                            " has no axis to shard");
-            }
-            bound = reference.shape[axis_index];
+    // The check exists to catch a table/model mismatch for a parameter that actually SPLITS: the
+    // table declares the extent along the sharded axis, and `shape[axis]` must agree. A Replicated
+    // or PrimaryOnly placement never reads its extent — the ranges are the whole parameter — so
+    // validating it there would only police a number nothing uses, and the tables legitimately state
+    // the leading dimension for those rows.
+    if (shard->axis == artifact::ShardAxis::Rows || shard->axis == artifact::ShardAxis::Columns) {
+        const std::size_t axis_index = shard->axis == artifact::ShardAxis::Rows ? 0 : 1;
+        if (reference.shape.size() <= axis_index) {
+            throw std::invalid_argument("sharding: " + std::string(reference.name) +
+                                        " has no axis to shard");
         }
+        const std::uint64_t declared = static_cast<std::uint64_t>(total_extent(*shard));
+        const std::uint64_t bound    = reference.shape[axis_index];
         if (declared != bound) {
             throw std::invalid_argument("sharding: " + std::string(reference.name) + " binds " +
                                         std::to_string(bound) +
@@ -181,12 +182,23 @@ artifact::ParameterReference shard_parameter(const artifact::ParameterReference&
             }
         }
     } else {
+        // Replicated and PrimaryOnly do not split: a rank that holds the parameter holds ALL of it,
+        // whose size is the binding's element count and not the table's declared leading dimension.
+        // Using the declared extent here took only the first `extent` elements of a 2-D parameter —
+        // a silently truncated weight rather than a whole one.
+        const std::uint64_t whole = reference.binding.elements;
         for (const auto& range : ranges) {
-            logical.push_back({static_cast<std::uint64_t>(range.begin),
-                               static_cast<std::uint64_t>(range.extent)});
+            logical.push_back(range.extent == 0 ? artifact::ShardRange{0, 0}
+                                                : artifact::ShardRange{0, whole});
         }
     }
-    sharded.binding = artifact::shard_binding_ranges(reference.binding, logical);
+    try {
+        sharded.binding = artifact::shard_binding_ranges(reference.binding, logical);
+    } catch (const std::invalid_argument& error) {
+        // The resolver has no parameter name, so a range error there is anonymous. Name the
+        // parameter here: an error that says which weight is wrong is worth the two lines.
+        throw std::invalid_argument("sharding: " + std::string(reference.name) + ": " + error.what());
+    }
 
     std::uint64_t share = 0;
     for (const auto& range : ranges) { share += static_cast<std::uint64_t>(range.extent); }

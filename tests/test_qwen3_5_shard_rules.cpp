@@ -142,13 +142,18 @@ int test_convolution_segmentation() {
 // A reference whose binding covers `extent` elements — the parameter's sharded extent, which is the
 // row count for a Rows parameter and the column count for a Columns one.
 ninfer::artifact::ParameterReference synthetic(std::string name, std::vector<std::uint64_t> shape,
-                                               std::uint64_t extent) {
+                                               std::uint64_t /*extent*/) {
     ninfer::artifact::ParameterReference reference;
-    reference.name             = std::move(name);
-    reference.shape            = std::move(shape);
-    reference.binding.elements = extent;
+    reference.name  = std::move(name);
+    reference.shape = std::move(shape);
+    // A Binding's element count is the product of the shape, and its parts tile the whole
+    // parameter. Setting it to the sharded extent made this fixture agree with the extent check's
+    // old wrong assumption — which is why a real artifact found that bug and the test did not.
+    std::uint64_t elements = 1;
+    for (const auto dim : reference.shape) { elements *= dim; }
+    reference.binding.elements = elements;
     reference.binding.parts.push_back(
-        ninfer::artifact::Part{ninfer::artifact::ObjectHandle{0}, 0, extent});
+        ninfer::artifact::Part{ninfer::artifact::ObjectHandle{0}, 0, elements});
     return reference;
 }
 
@@ -160,17 +165,17 @@ int test_shard_parameter() {
         shard_parameter(synthetic("text/layers/3/attention/query", {6144, 5120}, 6144), 2, 0);
     failures += check(query.shape[0] == 3072 && query.shape[1] == 5120,
                       "the query projection halves its rows and keeps its columns");
-    failures += check(query.binding.elements == 3072, "the query binding halves");
+    failures += check(query.binding.elements == 3072 * 5120, "the query binding halves");
     failures += check(query.binding.parts.size() == 1 && query.binding.parts[0].begin == 0 &&
-                          query.binding.parts[0].end == 3072,
+                          query.binding.parts[0].end == 3072 * 5120,
                       "rank 0 owns the first 12 query heads");
 
     // The KV projection halves by KV heads: 4 become 2.
     const auto key =
         shard_parameter(synthetic("text/layers/3/attention/key", {1024, 5120}, 1024), 2, 1);
     failures += check(key.shape[0] == 512, "the KV projection halves to 2 heads");
-    failures += check(key.binding.parts.size() == 1 && key.binding.parts[0].begin == 512 &&
-                          key.binding.parts[0].end == 1024,
+    failures += check(key.binding.parts.size() == 1 && key.binding.parts[0].begin == 512 * 5120 &&
+                          key.binding.parts[0].end == 1024 * 5120,
                       "rank 1 owns the second pair of KV heads");
 
     // A Columns parameter halves its second axis.
@@ -184,8 +189,12 @@ int test_shard_parameter() {
         shard_parameter(synthetic("text/layers/4/gdn/convolution", {4, 10240}, 10240), 2, 0);
     failures += check(conv.shape[0] == 4 && conv.shape[1] == 5120,
                       "the convolution keeps its taps and halves its channels");
-    failures += check(conv.binding.parts.size() == 3, "the convolution binding is three slices");
-    failures += check(conv.binding.elements == 5120, "the convolution binding totals the share");
+    // A column shard is one short range PER ROW, so three segments over four taps give twelve
+    // slices rather than three. The row-major logical order is why: a block of columns is not
+    // contiguous, which is the defect the first real width-2 load found.
+    failures += check(conv.binding.parts.size() == 4 * 3,
+                      "the convolution binding is one slice per tap per segment");
+    failures += check(conv.binding.elements == 5120 * 4, "the convolution binding totals the share");
 
     // A Replicated parameter is untouched.
     const auto norm = shard_parameter(synthetic("text/layers/3/input_norm", {5120}, 5120), 2, 1);
@@ -208,7 +217,7 @@ int test_shard_parameter() {
     // Width 1 returns the reference unchanged.
     const auto single =
         shard_parameter(synthetic("text/layers/3/attention/key", {1024, 5120}, 1024), 1, 0);
-    failures += check(single.shape[0] == 1024 && single.binding.elements == 1024,
+    failures += check(single.shape[0] == 1024 && single.binding.elements == 1024 * 5120,
                       "width 1 leaves the parameter whole");
 
     // A binding that disagrees with the table is rejected, not clipped.
@@ -235,7 +244,7 @@ int test_scope_rule() {
 
     const auto draft =
         shard_parameter(synthetic("dflash/layers/0/attention/query", {4096, 5120}, 4096), 2, 0);
-    failures += check(draft.shape[0] == 4096 && draft.binding.elements == 4096,
+    failures += check(draft.shape[0] == 4096 && draft.binding.elements == 4096 * 5120,
                       "a draft parameter with a colliding suffix passes through unchanged");
     return failures;
 }
@@ -254,10 +263,10 @@ int test_shard_transform_factory() {
     const auto rank0     = shard_transform(2, 0)(reference);
     const auto rank1     = shard_transform(2, 1)(reference);
     failures += check(rank0.shape[0] == 512 && rank0.binding.parts[0].begin == 0 &&
-                          rank0.binding.parts[0].end == 512,
+                          rank0.binding.parts[0].end == 512 * 5120,
                       "rank 0's transform owns the first half");
-    failures += check(rank1.shape[0] == 512 && rank1.binding.parts[0].begin == 512 &&
-                          rank1.binding.parts[0].end == 1024,
+    failures += check(rank1.shape[0] == 512 && rank1.binding.parts[0].begin == 512 * 5120 &&
+                          rank1.binding.parts[0].end == 1024 * 5120,
                       "rank 1's transform owns the second half");
     failures += check(rank0.shape[0] + rank1.shape[0] == reference.shape[0],
                       "the two ranks' transforms partition the parameter");
@@ -265,7 +274,7 @@ int test_shard_transform_factory() {
     // An unlisted parameter is Replicated and the transform must not touch it.
     const auto whole = synthetic("text/layers/3/moe/router", {256, 5120}, 256);
     const auto kept  = shard_transform(2, 1)(whole);
-    failures += check(kept.shape[0] == 256 && kept.binding.elements == 256,
+    failures += check(kept.shape[0] == 256 && kept.binding.elements == 256 * 5120,
                       "an unlisted parameter passes through the transform unchanged");
 
     bool threw = false;

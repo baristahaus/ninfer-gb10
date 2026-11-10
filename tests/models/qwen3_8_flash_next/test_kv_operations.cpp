@@ -195,11 +195,17 @@ int exercise_capture_site_dispatch(ninfer::DeviceContext& device) {
                      : fail("funnelled zero_pages did not clear the page"));
 
     // The lease is owned by the funnel: releasing it releases the execution row, so the same row
-    // can be activated again.
-    if (!addresses.release(*allocation)) { return fail("address release failed"); }
+    // can be activated again. `release` is the inactive-only form and refuses an address that is
+    // still active or holds an execution row, so an active lease goes through
+    // release_after_deactivate — the form the Engine uses at program_impl.h:11374. Assert both
+    // halves: the refusal pins the contract, the deactivating release proves the row comes back.
+    failures += (addresses.release(*allocation) ? fail("release accepted an active address") : 0);
+    if (!addresses.release_after_deactivate(*allocation)) {
+        return fail("address release after deactivate failed");
+    }
     std::optional<detail::KVAddressSpaceHandle> again = addresses.create_active(1, 0);
     failures += (again.has_value() ? 0 : fail("funnelled lease did not release the execution row"));
-    if (again.has_value()) { (void)addresses.release(*again); }
+    if (again.has_value()) { (void)addresses.release_after_deactivate(*again); }
     return failures;
 }
 

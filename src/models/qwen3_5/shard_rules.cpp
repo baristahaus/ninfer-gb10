@@ -156,7 +156,36 @@ artifact::ParameterReference shard_parameter(const artifact::ParameterReference&
     }
 
     artifact::ParameterReference sharded = reference;
-    sharded.binding = artifact::shard_binding_ranges(reference.binding, ranges);
+
+    // `ranges_for` returns ranges along the SHARDED AXIS, but a Binding's parts are in the
+    // parameter's flat logical element order, which is row-major: a block of rows is one contiguous
+    // element range, while a block of columns is one short range per row. Passing an axis-space
+    // range straight to `shard_binding_ranges` therefore works for Rows and silently takes a
+    // contiguous slab of rows for Columns — the first real width-2 load failed its coverage check
+    // exactly there.
+    std::vector<artifact::ShardRange> logical;
+    if (shard->axis == artifact::ShardAxis::Rows) {
+        const std::uint64_t columns = reference.shape.size() > 1 ? reference.shape[1] : 1;
+        for (const auto& range : ranges) {
+            logical.push_back({static_cast<std::uint64_t>(range.begin) * columns,
+                               static_cast<std::uint64_t>(range.extent) * columns});
+        }
+    } else if (shard->axis == artifact::ShardAxis::Columns) {
+        const std::uint64_t rows    = reference.shape[0];
+        const std::uint64_t columns = reference.shape[1];
+        for (const auto& range : ranges) {
+            for (std::uint64_t row = 0; row < rows; ++row) {
+                logical.push_back({row * columns + static_cast<std::uint64_t>(range.begin),
+                                   static_cast<std::uint64_t>(range.extent)});
+            }
+        }
+    } else {
+        for (const auto& range : ranges) {
+            logical.push_back({static_cast<std::uint64_t>(range.begin),
+                               static_cast<std::uint64_t>(range.extent)});
+        }
+    }
+    sharded.binding = artifact::shard_binding_ranges(reference.binding, logical);
 
     std::uint64_t share = 0;
     for (const auto& range : ranges) { share += static_cast<std::uint64_t>(range.extent); }

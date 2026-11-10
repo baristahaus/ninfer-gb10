@@ -151,10 +151,13 @@ SingleProjectionWeight single(std::span<const WeightInput> inputs) {
 }
 
 LinearProfile describe_single(const WeightView& view, std::span<const WeightInput> inputs) {
-    const auto region = contiguous_weight_region(view);
+    // The plan runs before any gathered buffer exists, so it asks for the geometry the consumer
+    // will see rather than for a region: a column-sharded view answers with the rank's own matrix,
+    // which is what the load-time repack will produce. Both sides call `consumer_geometry`, so the
+    // profile described here and the buffer built there cannot disagree.
     require(view.shape.size() == 2 && view.shape[0] <= INT32_MAX && view.shape[1] <= INT32_MAX,
             "projection dimensions exceed int32");
-    const auto& geometry = region.parent->geometry;
+    const auto geometry = consumer_geometry(view);
     const auto layout    = geometry.layout == QuantLayout::BatchedBlockScaleK16M128x4
                                ? QuantLayout::BlockScaleK16M128x4
                                : geometry.layout;

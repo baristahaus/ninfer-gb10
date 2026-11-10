@@ -220,6 +220,25 @@ WeightRegion contiguous_weight_region(const WeightView& view) {
     return merged;
 }
 
+WeightGeometry consumer_geometry(const WeightView& view) {
+    if (view.parts.empty()) { throw std::invalid_argument("weight view has no regions"); }
+    const WeightParent& parent = *view.parts.front().parent;
+    std::uint64_t end          = view.parts.front().begin;
+    bool contiguous            = true;
+    for (const auto& part : view.parts) {
+        if (part.parent != &parent) {
+            throw std::invalid_argument("weight view spans more than one parent");
+        }
+        if (part.begin != end) { contiguous = false; }
+        end = part.end;
+    }
+    if (contiguous) { return parent.geometry; }
+    if (view.shape.size() != 2) {
+        throw std::invalid_argument("a sharded weight must be a matrix");
+    }
+    return weight_geometry(parent.geometry.format, parent.geometry.layout, view.shape);
+}
+
 bool is_complete_weight(const WeightView& view) {
     if (view.parts.empty()) { return false; }
     const auto* parent = view.parts.front().parent;

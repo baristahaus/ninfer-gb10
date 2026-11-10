@@ -108,6 +108,41 @@ struct DecoderStateLayout {
 [[nodiscard]] DecoderStateLayout plan_decoder_state(LayoutBuilder& builder,
                                                     const DecoderStateSpec& spec);
 
+// One rank's decoder geometry at tensor-parallel `width`: the spec the rank's own page pool and
+// execution tables are planned from, so a rank-1 pool exists to attach a mirror to.
+//
+// Exactly one field shards. `kv_heads` is the number of KV heads in every text and MTP layer, and
+// at tp 2 a rank owns half of them (2 -> 1): the placement table splits the K/V projections by KV
+// heads, so a rank's pool holds its own heads and nothing else. `kv_heads % width` must be 0; a
+// remainder would give the ranks different per-page plane extents, which no kernel or mirror can
+// reconcile, so it throws instead of rounding. Width 3 against the 125B's 2 KV heads is therefore
+// refused, which is the review's head-count finding reaching the decoder geometry.
+//
+// Everything else is deliberately whole on every rank:
+//   * `attention_head_dim` is per head, not per rank.
+//   * `capacity`, `text_physical_page_groups`, `mtp_physical_page_groups`, `kv_table_rows` and
+//     `kv_storage` must be equal on both ranks: the rank-1 mirror addresses the origin's physical
+//     pages by index, so equal page capacity is part of its contract, not a per-rank choice.
+//   * `full_attention_layers`, `mtp_layers`, `enable_mtp`: both ranks carry every layer; the shard
+//     is inside a layer, never across layers.
+//   * `auxiliary_planes` are shard-invariant. They are the QSA index planes, not GDN state: a
+//     BF16 `[128, 64, pages, 1]` index-key plane and an I32 `[3, 64, pages, 1]` control plane,
+//     appended to every layer's plane set (impl/state/decoder_state.cpp:46-48) and required at
+//     exactly that geometry by the QSA kernel (ops/softmax_attention/qsa/flash_next_qsa.cu:
+//     1687-1691). Neither carries a head axis — `head_extent` is 1 — so there is nothing to
+//     divide, and the indexer is replicated on every rank by the tp2 placement table because the
+//     shared TopK decision has to be identical on both.
+//
+// The GDN recurrent state is *not* here. It lives in the StateImage (`StateImageSpec::linear`,
+// which does carry `value_heads = 48`), so its shard belongs to a `shard_state_image_spec` that
+// does not exist yet — a different structure, and not a gap in this one.
+//
+// Width 1 returns `spec` unchanged, field for field, so the single-device lane is untouched.
+// Throws std::invalid_argument for a width below 1, a rank outside `[0, width)`, a non-positive
+// `kv_heads`, or a `kv_heads` that does not divide by `width`.
+[[nodiscard]] DecoderStateSpec shard_decoder_state_spec(const DecoderStateSpec& spec, int width,
+                                                       int rank);
+
 struct DecoderState {
     PagedKVCache text_kv;
     std::optional<PagedKVCache> mtp_kv;

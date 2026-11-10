@@ -29,6 +29,11 @@ add_test(NAME ninfer_flash_next_performance_report_test
   COMMAND ${Python3_EXECUTABLE} -m unittest tests/test_flash_next_performance.py)
 set_tests_properties(ninfer_flash_next_performance_report_test PROPERTIES WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
 
+# Per-rank decoder geometry: pure, so it runs without a GPU.
+ninfer_add_test(ninfer_qwen3_8_flash_next_decoder_geometry_test
+  SOURCES models/qwen3_8_flash_next/test_decoder_state_geometry.cpp
+  LIBRARIES ninfer_model_execution)
+
 ninfer_add_test(ninfer_qwen3_8_flash_next_ple_table_test
   SOURCES models/qwen3_8_flash_next/test_ple_table.cpp LIBRARIES ninfer_model_loading ninfer_model_control ninfer_model_execution)
 # The load-path qualification test reads the master MaterializationPlan surface; it registers

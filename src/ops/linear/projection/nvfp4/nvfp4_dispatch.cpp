@@ -4,6 +4,7 @@
 #include "core/platform.h"
 #include <array>
 #include <stdexcept>
+#include <string>
 
 namespace ninfer::ops::detail {
 namespace {
@@ -13,6 +14,9 @@ const std::array kShapes{
 #endif
     &kNvfp4N14336K5120, &kNvfp4N16384K5120, &kNvfp4N34816K5120,
     &kNvfp4N5120K6144,  &kNvfp4N5120K17408,
+    // The sharded 27B lane: the fused gate_up half and one gate/up role, both over the 5120 width.
+    // mlp/gate and mlp/up are NVFP4 in 56 of the 27B's 64 layers, so this is not an FP8-only path.
+    &kNvfp4N17408K5120, &kNvfp4N8704K5120,
 };
 
 const Nvfp4LinearShape& resolve_shape(std::int32_t n, std::int32_t k, LinearPolicy policy) {
@@ -20,7 +24,8 @@ const Nvfp4LinearShape& resolve_shape(std::int32_t n, std::int32_t k, LinearPoli
         throw std::invalid_argument("nvfp4 linear: unsupported policy");
     for (const auto* shape : kShapes)
         if (shape->n == n && shape->k == k) return *shape;
-    throw std::invalid_argument("nvfp4 linear: unsupported shape");
+    throw std::invalid_argument("nvfp4 linear: unsupported shape N" + std::to_string(n) + "K" +
+                                std::to_string(k));
 }
 } // namespace
 

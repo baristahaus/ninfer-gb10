@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdint>
 #include <stdexcept>
+#include <string>
 
 namespace ninfer::ops::detail {
 template <std::int32_t OutputRows, std::int32_t InputRows>
@@ -27,6 +28,10 @@ struct Nvfp4ActivationGeometry {
 };
 
 using Nvfp4N14336K5120 = Nvfp4Geometry<14336, 5120>;
+// The sharded 27B lane's MLP shapes: the fused gate_up half (17408 rows) and one gate or up role
+// (8704 rows), both over the 5120 hidden width.
+using Nvfp4N17408K5120 = Nvfp4Geometry<17408, 5120>;
+using Nvfp4N8704K5120  = Nvfp4Geometry<8704, 5120>;
 using Nvfp4N16384K5120 = Nvfp4Geometry<16384, 5120>;
 using Nvfp4N34816K5120 = Nvfp4Geometry<34816, 5120>;
 using Nvfp4N5120K6144  = Nvfp4Geometry<5120, 6144>;
@@ -42,6 +47,8 @@ enum class Nvfp4GeometryId : std::uint8_t {
     N34816K5120,
     N5120K6144,
     N5120K17408,
+    N17408K5120,
+    N8704K5120,
 };
 
 inline Nvfp4GeometryId resolve_nvfp4_geometry(std::int32_t output_rows, std::int32_t input_rows) {
@@ -64,7 +71,15 @@ inline Nvfp4GeometryId resolve_nvfp4_geometry(std::int32_t output_rows, std::int
         input_rows == Nvfp4N5120K17408::kInputRows) {
         return Nvfp4GeometryId::N5120K17408;
     }
-    throw std::invalid_argument("unsupported NVFP4 problem");
+    if (output_rows == Nvfp4N17408K5120::kOutputRows &&
+        input_rows == Nvfp4N17408K5120::kInputRows) {
+        return Nvfp4GeometryId::N17408K5120;
+    }
+    if (output_rows == Nvfp4N8704K5120::kOutputRows && input_rows == Nvfp4N8704K5120::kInputRows) {
+        return Nvfp4GeometryId::N8704K5120;
+    }
+    throw std::invalid_argument("unsupported NVFP4 problem N" + std::to_string(output_rows) + "K" +
+                                std::to_string(input_rows));
 }
 
 } // namespace ninfer::ops::detail

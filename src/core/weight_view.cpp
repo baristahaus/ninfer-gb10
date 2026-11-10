@@ -4,6 +4,7 @@
 #include <cmath>
 #include <limits>
 #include <stdexcept>
+#include <string>
 
 namespace ninfer {
 namespace {
@@ -210,7 +211,16 @@ WeightRegion contiguous_weight_region(const WeightView& view) {
         const auto& next = view.parts[i];
         validate_region(next);
         if (next.parent != merged.parent || next.begin != merged.end) {
-            throw std::invalid_argument("native input requires one contiguous parent region");
+            // Say WHICH kind of non-contiguity it is and where: multiple parents is a binding that
+            // never went through the plan's storage, while non-adjacent ranges in one parent is a
+            // shard that was never gathered. Those are different bugs in different layers.
+            std::string detail = "native input requires one contiguous parent region (parts=" +
+                                 std::to_string(view.parts.size()) + ", part " +
+                                 std::to_string(i) + " begins " + std::to_string(next.begin) +
+                                 " but part " + std::to_string(i - 1) + " ends " +
+                                 std::to_string(merged.end) +
+                                 (next.parent != merged.parent ? ", different parents" : "") + ")";
+            throw std::invalid_argument(detail);
         }
         merged.end = next.end;
     }

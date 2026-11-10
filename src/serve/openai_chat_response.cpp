@@ -90,12 +90,21 @@ Json timings_json(const CompletionTimings& timings) {
 }
 
 CompletionTimings outcome_timings(const GenerationOutcome& outcome) {
+    // The block advertises prompt wall time (admission to the first token) and generation wall time
+    // (first through last token). A route that recorded no wall bound would otherwise publish a
+    // structurally present but all-zero block, which reads as a broken or unusably slow server, so
+    // fall back to the phase measurement rather than reporting zero.
+    const auto& timings = outcome.stats.timings;
+    const double prompt_seconds =
+        timings.prompt_wall_seconds > 0.0 ? timings.prompt_wall_seconds : timings.prefill_seconds;
+    const double generation_seconds = timings.generation_wall_seconds > 0.0
+                                          ? timings.generation_wall_seconds
+                                          : timings.decode_seconds;
     return make_completion_timings(
         static_cast<std::uint32_t>(std::max(0, outcome.prompt_tokens)),
         outcome.stats.reused_prompt_tokens,
         static_cast<std::uint32_t>(std::max(0, outcome.completion_tokens)),
-        outcome.stats.timings.prompt_wall_seconds * 1000.0,
-        outcome.stats.timings.generation_wall_seconds * 1000.0,
+        prompt_seconds * 1000.0, generation_seconds * 1000.0,
         outcome.stats.speculative.drafted_tokens, outcome.stats.speculative.accepted_tokens);
 }
 

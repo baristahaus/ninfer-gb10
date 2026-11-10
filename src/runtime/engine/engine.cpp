@@ -12,6 +12,7 @@
 #include "runtime/engine/flash_next/causal_score_core.h"
 #include "runtime/engine/flash_next/engine_core.h"
 #include "runtime/engine/flash_next/instance.h"
+#include "runtime/engine/flash_next/memory_report.h"
 #include "runtime/engine/startup.h"
 
 #include <algorithm>
@@ -250,6 +251,16 @@ private:
                 using Instance = typename std::remove_cvref_t<decltype(instance)>::element_type;
                 if constexpr (std::is_same_v<Instance, FlashInstance>) {
                     description.kv_capacity = instance->kv_capacity_resolution.resolved_tokens;
+                    // This route has no executor observations, so the startup record used to
+                    // describe no device and no allocation. Report the one resident device.
+                    const MemorySummary memory = instance->program->memory_summary();
+                    description.device_state_capacity      = memory.host_state_capacity_slots;
+                    description.host_context_capacity_bytes = memory.host_kv_capacity_bytes;
+                    startup.ranks.push_back(flashnext_runtime::rank_memory_budget(memory));
+                    const DeviceMemorySnapshot physical =
+                        device_memory_snapshot(Device::cuda(options.device));
+                    description.ranks.push_back(
+                        {0, 0, options.device, {}, physical.shared_physical_memory});
                 } else {
                     const auto usage                  = instance->session->physical_usage();
                     description.device_state_capacity = usage.capacity.state_slots;

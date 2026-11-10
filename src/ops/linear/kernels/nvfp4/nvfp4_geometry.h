@@ -36,6 +36,8 @@ using Nvfp4N16384K5120 = Nvfp4Geometry<16384, 5120>;
 using Nvfp4N34816K5120 = Nvfp4Geometry<34816, 5120>;
 using Nvfp4N5120K6144  = Nvfp4Geometry<5120, 6144>;
 using Nvfp4N5120K17408 = Nvfp4Geometry<5120, 17408>;
+// mlp/down at tensor-parallel width 2: the Columns shard over 17408 halves K.
+using Nvfp4N5120K8704  = Nvfp4Geometry<5120, 8704>;
 
 using Nvfp4Activation5120Geometry  = Nvfp4ActivationGeometry<5120>;
 using Nvfp4Activation6144Geometry  = Nvfp4ActivationGeometry<6144>;
@@ -49,6 +51,7 @@ enum class Nvfp4GeometryId : std::uint8_t {
     N5120K17408,
     N17408K5120,
     N8704K5120,
+    N5120K8704,
 };
 
 inline Nvfp4GeometryId resolve_nvfp4_geometry(std::int32_t output_rows, std::int32_t input_rows) {
@@ -77,6 +80,10 @@ inline Nvfp4GeometryId resolve_nvfp4_geometry(std::int32_t output_rows, std::int
     }
     if (output_rows == Nvfp4N8704K5120::kOutputRows && input_rows == Nvfp4N8704K5120::kInputRows) {
         return Nvfp4GeometryId::N8704K5120;
+    }
+    if (output_rows == Nvfp4N5120K8704::kOutputRows &&
+        input_rows == Nvfp4N5120K8704::kInputRows) {
+        return Nvfp4GeometryId::N5120K8704;
     }
     throw std::invalid_argument("unsupported NVFP4 problem N" + std::to_string(output_rows) + "K" +
                                 std::to_string(input_rows));

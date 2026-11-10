@@ -35,6 +35,12 @@ void launch_nvfp4_a4_tma_linear(Nvfp4GeometryId problem, const Nvfp4A4Operands& 
     case Nvfp4GeometryId::N5120K17408:
         launch<17408>(p, output, stream);
         return;
+    // The width-2 mlp/down: the same projection at half K. The tile schedule is chosen by K, and
+    // 8704 is a whole number of 256-wide K tiles, so this is the parent's schedule over a shorter
+    // loop rather than a second schedule.
+    case Nvfp4GeometryId::N5120K8704:
+        launch<8704>(p, output, stream);
+        return;
     }
     throw std::invalid_argument("NVFP4 TMA linear: unsupported geometry");
 }

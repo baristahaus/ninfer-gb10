@@ -35,6 +35,10 @@ using Fp8N5120K5120              = Fp8Geometry<5120, 5120>;
 using Fp8N3072K5120              = Fp8Geometry<3072, 5120>;
 using Fp8N512K5120               = Fp8Geometry<512, 5120>;
 using Fp8N8704K5120              = Fp8Geometry<8704, 5120>;
+// The COLUMN-sharded outputs of the same lane. A Columns shard halves K, so the two 5120x6144
+// output projections become 5120x3072 and mlp/down becomes 5120x8704.
+using Fp8N5120K3072              = Fp8Geometry<5120, 3072>;
+using Fp8N5120K8704              = Fp8Geometry<5120, 8704>;
 using Fp8Activation5120Geometry  = Fp8ActivationGeometry<5120>;
 using Fp8Activation6144Geometry  = Fp8ActivationGeometry<6144>;
 using Fp8Activation17408Geometry = Fp8ActivationGeometry<17408>;
@@ -53,6 +57,8 @@ enum class Fp8GeometryId : std::uint8_t {
     N3072K5120,
     N512K5120,
     N8704K5120,
+    N5120K3072,
+    N5120K8704,
 };
 
 inline Fp8GeometryId resolve_fp8_geometry(std::int32_t output_rows, std::int32_t input_rows) {
@@ -94,6 +100,12 @@ inline Fp8GeometryId resolve_fp8_geometry(std::int32_t output_rows, std::int32_t
     }
     if (output_rows == Fp8N8704K5120::kOutputRows && input_rows == Fp8N8704K5120::kInputRows) {
         return Fp8GeometryId::N8704K5120;
+    }
+    if (output_rows == Fp8N5120K3072::kOutputRows && input_rows == Fp8N5120K3072::kInputRows) {
+        return Fp8GeometryId::N5120K3072;
+    }
+    if (output_rows == Fp8N5120K8704::kOutputRows && input_rows == Fp8N5120K8704::kInputRows) {
+        return Fp8GeometryId::N5120K8704;
     }
     throw std::invalid_argument("unsupported FP8 problem N" + std::to_string(output_rows) + "K" +
                                 std::to_string(input_rows));

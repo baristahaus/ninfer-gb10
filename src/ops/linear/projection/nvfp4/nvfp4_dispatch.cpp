@@ -17,6 +17,8 @@ const std::array kShapes{
     // The sharded 27B lane: the fused gate_up half and one gate/up role, both over the 5120 width.
     // mlp/gate and mlp/up are NVFP4 in 56 of the 27B's 64 layers, so this is not an FP8-only path.
     &kNvfp4N17408K5120, &kNvfp4N8704K5120,
+    // mlp/down at width 2: the Columns shard halves K.
+    &kNvfp4N5120K8704,
 };
 
 const Nvfp4LinearShape& resolve_shape(std::int32_t n, std::int32_t k, LinearPolicy policy) {

@@ -50,4 +50,11 @@ extern const Fp8LinearShape kFp8N512K5120;
 // The dense MLP role split (execution/profile.cpp:26-34): gate and up described individually when
 // their bindings are non-contiguous, which is the width-2 case. Each rank half is 8704 rows.
 extern const Fp8LinearShape kFp8N8704K5120;
+
+// The COLUMN-sharded outputs, which the fused-half shapes above do not cover. A Columns shard
+// halves K rather than the rows, so the two 5120x6144 output projections (attention/output and
+// gdn/output) present 5120x3072 and mlp/down presents 5120x8704. Width 1 never reaches these: its
+// output projections are whole and resolve as N5120K6144 and N5120K17408.
+extern const Fp8LinearShape kFp8N5120K3072;
+extern const Fp8LinearShape kFp8N5120K8704;
 } // namespace ninfer::ops::detail

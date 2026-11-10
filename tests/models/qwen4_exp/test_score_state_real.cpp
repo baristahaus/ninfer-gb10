@@ -161,6 +161,9 @@ struct ObservedTypes {
     using Profile        = q4::execution::ModelProfile;
     using RankProgram    = ObservedRank;
     using ExecutionTypes = q4::ExecutionTypes;
+    // RankWorker reaches the group-scoped collective through Types; these fixtures never
+    // run a sharded lane, so the family's own type is enough.
+    using ShardedGroup = q4::ShardedGroup;
 };
 
 q4::ScoreComplete finish_score(q4::Session& session, runtime::ExecutionTicket ticket) {
@@ -219,9 +222,11 @@ int main() {
         auto& rank = *instance->program;
         plan.context.pools[0].transfer =
             rank.implementation.resources.main->pages().transfer_profile();
-        auto worker = std::make_unique<runtime::RankWorker<ObservedTypes>>(std::move(device),
+        auto worker = std::make_unique<runtime::RankWorker<ObservedTypes>>(*device,
                                                                            std::move(instance));
-        runtime::LocalExecutor<ObservedTypes> executor(std::move(worker), {1});
+        std::vector<std::unique_ptr<runtime::RankWorker<ObservedTypes>>> workers;
+        workers.push_back(std::move(worker));
+        runtime::LocalExecutor<ObservedTypes> executor(std::move(workers), {1});
         q4::Session session(q4::prepare_session(definition, std::move(plan)), executor);
         const auto empty = session.physical_usage().occupied;
         models::qwen::FrontendOptions frontend_options;

@@ -99,6 +99,9 @@ struct ObservedTypes {
     using Profile        = q35::execution::ModelProfile;
     using RankProgram    = ObservedRank;
     using ExecutionTypes = q35::ExecutionTypes;
+    // RankWorker reaches the group-scoped collective through Types; these fixtures never
+    // run a sharded lane, so the family's own type is enough.
+    using ShardedGroup = q35::execution::ShardedGroup;
 };
 
 class NativeRankFixture {

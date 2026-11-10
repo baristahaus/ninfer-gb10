@@ -254,9 +254,11 @@ int main() {
             std::move(model), profile);
         instance->program =
             std::make_unique<q4::RankProgram>(instance->parameters, std::move(*execution), *device);
-        auto worker = std::make_unique<runtime::RankWorker<q4::RuntimeTypes>>(std::move(device),
+        auto worker = std::make_unique<runtime::RankWorker<q4::RuntimeTypes>>(*device,
                                                                               std::move(instance));
-        Executor executor(std::move(worker), {1});
+        std::vector<std::unique_ptr<runtime::RankWorker<q4::RuntimeTypes>>> workers;
+        workers.push_back(std::move(worker));
+        Executor executor(std::move(workers), {1});
         q4::detail::SessionImpl session(definition, std::move(session_plan));
         session.executor            = &executor;
         session.identity_generation = executor.epoch().value;

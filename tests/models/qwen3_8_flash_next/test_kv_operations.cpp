@@ -7,7 +7,7 @@
 // rejections are what the funnel surfaces. The two-device-free runtime half needs a GPU because a
 // KVExecutionTablePool allocates pinned host memory in its constructor.
 
-#include "models/qwen3_8_flash_next/impl/runtime/kv_operations.h"
+#include "core/tp2/kv_operations.h"
 #include "models/qwen3_8_flash_next/impl/runtime/logical_kv_store.h"
 
 #include "core/buffer.h"
@@ -52,14 +52,14 @@ int expect_throws(Fn&& fn, const std::string& label) {
 }
 
 // B3 supplies the mirrored pair; the funnel must accept either form without a call site changing.
-static_assert(std::is_constructible_v<detail::KVPageOperations, ninfer::DeviceKVPagePool&>);
-static_assert(std::is_constructible_v<detail::KVPageOperations, ninfer::tp2::MirroredKVPagePool&>);
-static_assert(std::is_constructible_v<detail::KVTableOperations, ninfer::KVExecutionTablePool&>);
+static_assert(std::is_constructible_v<ninfer::tp2::KVPageOperations, ninfer::DeviceKVPagePool&>);
+static_assert(std::is_constructible_v<ninfer::tp2::KVPageOperations, ninfer::tp2::MirroredKVPagePool&>);
+static_assert(std::is_constructible_v<ninfer::tp2::KVTableOperations, ninfer::KVExecutionTablePool&>);
 static_assert(
-    std::is_constructible_v<detail::KVTableOperations, ninfer::tp2::MirroredKVExecutionTables&>);
-static_assert(std::is_constructible_v<detail::KVTableRowLease>);
-static_assert(std::is_move_constructible_v<detail::KVTableRowLease>);
-static_assert(!std::is_copy_constructible_v<detail::KVTableRowLease>);
+    std::is_constructible_v<ninfer::tp2::KVTableOperations, ninfer::tp2::MirroredKVExecutionTables&>);
+static_assert(std::is_constructible_v<ninfer::tp2::KVTableRowLease>);
+static_assert(std::is_move_constructible_v<ninfer::tp2::KVTableRowLease>);
+static_assert(!std::is_copy_constructible_v<ninfer::tp2::KVTableRowLease>);
 
 struct PlannedPools {
     ninfer::DeviceKVPagePoolLayout pages;
@@ -98,7 +98,7 @@ int exercise_width_one_page_dispatch() {
     ninfer::DeviceKVPagePool pool(
         ninfer::MemorySpan{backing.get(), plan.bytes, ninfer::Device::cpu()}, plan.pages);
 
-    detail::KVPageOperations operations(pool);
+    ninfer::tp2::KVPageOperations operations(pool);
     failures += (operations.mirrored() ? fail("width-1 page handle reports mirrored") : 0);
 
     std::optional<ninfer::DeviceKVPageReservation> reservation = pool.reserve(2);

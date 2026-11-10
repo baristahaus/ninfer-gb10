@@ -58,6 +58,14 @@ public:
 
     std::shared_ptr<const execution::ModelProfile> profile;
 
+    // The rows of one column-parallel partial — the residual stream's width — or nullopt for a
+    // family with no two-GPU lane. The startup reads this to size the shared partial pair; the token
+    // capacity comes from the resolved plan, which every family has.
+    [[nodiscard]] std::optional<std::int32_t> sharded_partial_rows() const {
+        return profile != nullptr ? std::optional<std::int32_t>(profile->config.text.hidden_size)
+                                  : std::nullopt;
+    }
+
 private:
     std::vector<WeightCandidate> placements_;
     std::shared_ptr<const moe::Plan> offload_;

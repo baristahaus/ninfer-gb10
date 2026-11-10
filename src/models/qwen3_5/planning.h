@@ -3,6 +3,7 @@
 #include "core/layout.h"
 
 #include "models/common/context/directory.h"
+#include "models/common/sharded_group.h"
 #include "models/qwen3_5/execution/profile.h"
 #include "models/common/qwen/vision/vision.h"
 #include "ninfer/types.h"
@@ -99,7 +100,7 @@ private:
     friend std::unique_ptr<RankProgram> create_rank_program(const execution::Parameters&,
                                                             SequencePlan&&, DeviceContext&,
                                                             const StartupObserver&,
-                                                            const execution::ShardedGroup*);
+                                                            const models::ShardedGroup*);
     friend void attach_rank_mirrors(RankProgram&, RankProgram&, DeviceContext&,
                                     PreparedSession*);
 };
@@ -137,7 +138,7 @@ private:
 // rendezvous and a partial pair per Program would diverge silently.
 [[nodiscard]] std::unique_ptr<RankProgram> create_rank_program(
     const execution::Parameters&, SequencePlan&&, DeviceContext&, const StartupObserver&,
-    const execution::ShardedGroup* sharded = nullptr);
+    const models::ShardedGroup* sharded = nullptr);
 
 // tp 2: attach `peer`'s KV page pool and execution tables to `origin`'s, so every physical mutation
 // rank 0 issues is replayed on rank 1's stream. Called once, after both Programs exist and before

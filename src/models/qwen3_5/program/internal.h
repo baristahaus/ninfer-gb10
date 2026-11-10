@@ -96,7 +96,7 @@ public:
     // per-rank collective from it here, before any graph capture, and refuses to run at width > 1
     // without it: a mailbox per Program would never rendezvous.
     RankProgramImpl(const execution::Parameters&, const SequencePlanImpl&, DeviceContext&,
-                    const StartupObserver&, const execution::ShardedGroup* sharded = nullptr);
+                    const StartupObserver&, const models::ShardedGroup* sharded = nullptr);
     ~RankProgramImpl();
 
     void validate_work(const Work&, runtime::FrameKind) const;
@@ -177,7 +177,7 @@ public:
     const std::size_t kv_payload_bytes;
     const WorkspaceSpec workspace_plan;
     // Borrowed from the group's owner; outlives the Program. Null on the single-device lane.
-    const execution::ShardedGroup* sharded_ = nullptr;
+    const models::ShardedGroup* sharded_ = nullptr;
     // This rank's view of the shared collective: the group's mailbox plus this Program's rank.
     std::optional<execution::ShardedCollective> collective_;
     Resources resources;

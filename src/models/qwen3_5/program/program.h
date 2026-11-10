@@ -42,7 +42,7 @@ private:
     friend std::unique_ptr<RankProgram> create_rank_program(const execution::Parameters&,
                                                             SequencePlan&&, DeviceContext&,
                                                             const StartupObserver&,
-                                                            const execution::ShardedGroup*);
+                                                            const models::ShardedGroup*);
     friend void attach_rank_mirrors(RankProgram&, RankProgram&, DeviceContext&,
                                     PreparedSession*);
 };

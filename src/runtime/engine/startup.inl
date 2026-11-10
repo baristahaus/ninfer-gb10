@@ -8,6 +8,7 @@
 #include "artifact/formats.h"
 #include "models/registry.h"
 #include "models/common/startup.h"
+#include "models/common/sharded_group.h"
 #include "core/startup.h"
 #include "core/platform.h"
 
@@ -173,6 +174,12 @@ template <class Types>
 struct BuiltModel {
     // The group is declared first so it is destroyed last: every worker borrows its rank's device.
     std::unique_ptr<ExecutionContext> execution;
+    // The two-GPU lane's group-scoped resources: the ONE mailbox and the ONE partial pair both
+    // Programs share. Declared after the devices and before the Programs, so it is destroyed AFTER
+    // the Programs and BEFORE the devices — the mailbox's pinned slab, its per-device words and the
+    // partial addresses are baked into every captured exchange, so nothing that uses them may
+    // outlive them. Null at width 1, where nothing is constructed.
+    std::unique_ptr<models::ShardedGroupOwner> sharded;
     std::unique_ptr<InferenceInstance<Types>> instance;
     LoadSummary load;
     ContextMachineCostModel context_cost;
@@ -249,6 +256,8 @@ BuiltModel<typename Setup::Types> build_local_model(const artifact::Reader& read
             "Device budget cannot hold model weights and required execution resources");
     binding.complete();
     using Types = typename Setup::Types;
+    // Declared before the instance so it is destroyed AFTER the Program that borrows it.
+    std::unique_ptr<models::ShardedGroupOwner> sharded_owner;
     std::unique_ptr<RankModelInstance<Types>> instance;
     std::optional<typename Types::PreparedSession> prepared_session;
     StartupMemorySummary memory;
@@ -279,6 +288,33 @@ BuiltModel<typename Setup::Types> build_local_model(const artifact::Reader& read
             // The group outlives the instance (BuiltModel declares it first). The two-GPU lane's
             // shared mailbox and partial pair are owned by the executor that builds both ranks and
             // are installed here; null until then, which the Program refuses at width > 1.
+            // The two-GPU lane's group-scoped resources, built once per attempt from this plan's
+            // geometry: one mailbox for the whole group, one full-width BF16 partial per rank. Width
+            // 1 constructs nothing, so the single-device lane pays no pinned memory and no device
+            // words. Rebuilt only when the plan is retried at a smaller capacity; the old owner is
+            // released after the instance (see the retry below), never before it.
+            //
+            // The rows are the one family-specific extent (the residual stream's width); the token
+            // capacity is the resolved plan's, which every family has. A family without the hook has
+            // no two-GPU lane and never reaches this branch at width 2 (its per-rank materialization
+            // is refused below).
+            if (execution->width() > 1) {
+                if constexpr (requires(Setup& s) { s.sharded_partial_rows(); }) {
+                    const auto rows = setup.sharded_partial_rows();
+                    if (rows) {
+                        sharded_owner = std::make_unique<models::ShardedGroupOwner>(
+                            *execution, *rows,
+                            static_cast<std::int32_t>(candidate->capacity.resolved_tokens));
+                        instance->sharded = &sharded_owner->group();
+                    }
+                }
+            }
+            // The refusal lives here, in the one place that knows the width: a two-GPU lane without
+            // the bundle would otherwise run the unsharded projections through sharded weights,
+            // which produces plausible wrong numbers rather than an error.
+            if (execution->width() > 1 && instance->sharded == nullptr) {
+                throw std::logic_error("two-GPU lane: the sharded group bundle was not built");
+            }
             calibrated = initialize_program(setup, *instance, prepared_session, memory, device,
                                             options, budget, std::move(*candidate));
         } catch (const DeviceAllocationError&) {
@@ -286,7 +322,10 @@ BuiltModel<typename Setup::Types> build_local_model(const artifact::Reader& read
             calibrated.reset();
         }
         if (calibrated) break;
+        // The Program borrows the owner, so it is released first; the owner is rebuilt from the next
+        // attempt's capacity.
         instance.reset();
+        sharded_owner.reset();
         device.synchronize();
         if (++selected == choices.size())
             throw std::invalid_argument(
@@ -340,6 +379,9 @@ BuiltModel<typename Setup::Types> build_local_model(const artifact::Reader& read
                                            options.startup_observer, rank);
             peers.push_back(
                 std::make_unique<RankModelInstance<Types>>(std::move(shard), setup.profile));
+            // The same bundle as rank 0: one mailbox for the group and one partial per rank, shared
+            // by both Programs. A per-Program bundle would never rendezvous.
+            peers.back()->sharded = instance->sharded;
         }
     } else if (execution->width() > 1) {
         throw std::invalid_argument("this model's local route has no per-rank materialization");
@@ -380,7 +422,7 @@ BuiltModel<typename Setup::Types> build_local_model(const artifact::Reader& read
             }
             peers.front()->program = create_rank_program(
                 peers.front()->parameters, std::move(peer_plan->sequence), peer_device,
-                options.startup_observer);
+                options.startup_observer, peers.front()->sharded);
             // Both Programs exist and neither has run a round: the mirror contract's window.
             attach_rank_mirrors(*instance->program, *peers.front()->program, peer_device,
                                 &*prepared_session);
@@ -399,8 +441,8 @@ BuiltModel<typename Setup::Types> build_local_model(const artifact::Reader& read
     auto inference = std::make_unique<InferenceInstance<Types>>(
         setup.definition(), std::move(frontend), std::move(executor), std::move(*prepared_session),
         std::move(memory));
-    return {std::move(execution), std::move(inference), std::move(summary),
-            std::move(context_cost.model), std::move(peers)};
+    return {std::move(execution), std::move(sharded_owner), std::move(inference),
+            std::move(summary), std::move(context_cost.model), std::move(peers)};
 }
 
 } // namespace ninfer::runtime::detail

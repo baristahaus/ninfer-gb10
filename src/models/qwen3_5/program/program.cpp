@@ -69,7 +69,7 @@ std::vector<context::KVTransferProfile> RankProgram::context_transfer_profiles()
 std::unique_ptr<RankProgram> create_rank_program(const execution::Parameters& parameters,
                                                  SequencePlan&& plan, DeviceContext& device,
                                                  const StartupObserver& observer,
-                                                 const execution::ShardedGroup* sharded) {
+                                                 const models::ShardedGroup* sharded) {
     if (!plan.impl_) throw std::invalid_argument("Qwen3.5 rank requires a sequence plan");
     auto impl = std::make_unique<detail::RankProgramImpl>(parameters, *plan.impl_, device, observer,
                                                           sharded);

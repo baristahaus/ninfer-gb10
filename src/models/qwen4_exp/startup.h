@@ -1,6 +1,7 @@
 #pragma once
 
 #include "models/common/startup.h"
+#include "models/common/sharded_group.h"
 #include "models/qwen4_exp/load.h"
 #include "models/qwen4_exp/runtime_types.h"
 #include "models/qwen4_exp/program/graph_preparation.h"
@@ -58,7 +59,7 @@ private:
 [[nodiscard]] std::unique_ptr<RankProgram> create_rank_program(const execution::Parameters&,
                                                                ExecutionPlan&&, DeviceContext&,
                                                                const StartupObserver&,
-                                                               const ShardedGroup* = nullptr);
+                                                               const models::ShardedGroup* = nullptr);
 [[nodiscard]] std::string prefill_signature(const ModelDefinition&, const moe::Plan*,
                                             std::uint32_t chunk);
 

@@ -269,6 +269,8 @@ int exercise_page_and_row_replay(ninfer::DeviceContext& rank0, ninfer::DeviceCon
     std::optional<ninfer::DeviceKVPageReservation> reservation = origin.reserve(2);
     if (!reservation.has_value()) { return fail("two-page reservation failed"); }
     std::vector<ninfer::DeviceKVPageLease> leases;
+    // materialize() refuses to grow the destination past its capacity, so the caller reserves it.
+    leases.reserve(2);
     origin.materialize(*reservation, 2, leases);
     std::vector<ninfer::DeviceKVPageHandle> handles;
     for (const auto& lease : leases) { handles.push_back(lease.handle()); }
@@ -374,9 +376,12 @@ int exercise_state_image_replay(ninfer::DeviceContext& rank0, ninfer::DeviceCont
     for (std::size_t index = 0; index < pattern.size(); ++index) {
         pattern[index] = static_cast<std::byte>(0xa5);
     }
-    if (cudaMemcpy(origin.image(0).data, pattern.data(), image_bytes, cudaMemcpyHostToDevice) !=
-        cudaSuccess) {
-        return fail("StateImage pattern upload failed");
+    // Same contract as the KV copy: the source content must exist on both ranks, because the
+    // replayed copy reads rank 1's own source slot.
+    for (void* arena : {origin.image(0).data, mirror.image(0).data}) {
+        if (cudaMemcpy(arena, pattern.data(), image_bytes, cudaMemcpyHostToDevice) != cudaSuccess) {
+            return fail("StateImage pattern upload failed");
+        }
     }
 
     mirrored.copy(0, 1, rank0.execution_view());

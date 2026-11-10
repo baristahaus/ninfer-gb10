@@ -920,13 +920,46 @@ ProgramImplCore::ProgramImplCore(const LoadedModelData& model_in, const Sequence
     };
 
     decoder = std::make_unique<qwen3_8_flash_next::DecoderState>(backing, plan.persistent.decoder);
+    // tp 2: rank 1's storage and the KV mirrors that replay rank 0's page and row mutations into it.
+    // Built here, before the logical stores, because those stores own the funnels that choose
+    // between the plain pool and the mirrored pair at construction. Both arenas exist by now (rank
+    // 0's decoder a line above, rank 1's inside make_peer_rank) and nothing has been mutated yet.
+    // The StateImage mirror is attached below, once rank 0's state_images exists.
+    if (peer_device != nullptr && plan.width > 1) {
+        peer = make_peer_rank(plan, *peer_device);
+        const tp2::MirrorTarget where{.device          = peer_device,
+                                      .stream          = peer_device->stream(),
+                                      .transfer_stream = peer_device->transfer_stream()};
+        peer->text_kv = std::make_unique<tp2::MirroredKVPagePool>(
+            decoder->text_kv.page_pool(), peer->decoder->text_kv.page_pool(), where);
+        peer->text_kv_tables = std::make_unique<tp2::MirroredKVExecutionTables>(
+            *peer->text_kv, decoder->text_kv.execution_tables(),
+            peer->decoder->text_kv.execution_tables());
+        // MTP's KV is the second PagedKVCache inside the decoder state, so it has a peer too. The
+        // masked-draft backends keep theirs in `dflash->full`, which the peer arena does not build
+        // yet: their mirror is a separate item and is deliberately not attached here, so the
+        // backend funnel below falls back to the plain pool for them.
+        if (speculative_backend == SpeculativeBackend::Mtp) {
+            qwen3_8_flash_next::PagedKVCache& backend = *decoder->mtp_cache();
+            qwen3_8_flash_next::PagedKVCache& peer_backend = *peer->decoder->mtp_cache();
+            peer->backend_kv = std::make_unique<tp2::MirroredKVPagePool>(
+                backend.page_pool(), peer_backend.page_pool(), where);
+            peer->backend_kv_tables = std::make_unique<tp2::MirroredKVExecutionTables>(
+                *peer->backend_kv, backend.execution_tables(), peer_backend.execution_tables());
+        }
+    }
     text_host_kv_page_stride =
         plan_host_kv_page_layout(decoder->text_kv.page_pool().geometry()).page_stride;
     text_kv_pages = std::make_unique<LogicalKVPageStore>(
-        decoder->text_kv.page_pool(), logical_page_capacity(decoder->text_kv.page_pool()));
+        decoder->text_kv.page_pool(),
+        peer ? KVPageOperations(*peer->text_kv)
+             : KVPageOperations(decoder->text_kv.page_pool()),
+        logical_page_capacity(decoder->text_kv.page_pool()));
     text_kv_addresses = std::make_unique<KVAddressSpaceStore>(
-        *text_kv_pages, decoder->text_kv.execution_tables(), address_capacity,
-        decoder->text_kv.execution_tables().logical_page_capacity());
+        *text_kv_pages,
+        peer ? KVTableOperations(*peer->text_kv_tables)
+             : KVTableOperations(decoder->text_kv.execution_tables()),
+        address_capacity, decoder->text_kv.execution_tables().logical_page_capacity());
     state_images = std::make_unique<qwen3_8_flash_next::StateImageDevicePool>(
         backing, plan.persistent.state_images);
     if (plan.context_cache.host_state_slots != 0) {
@@ -957,34 +990,14 @@ ProgramImplCore::ProgramImplCore(const LoadedModelData& model_in, const Sequence
     }
     pressure_state_scratch_.reserve(static_cast<std::size_t>(logical_state_capacity));
 
-    // tp 2: rank 1's storage and the mirrors that replay into it, attached here — after both ranks'
-    // arenas exist and before any page or slot is mutated, which is the only window in which the
-    // two replicas provably start from the same empty addressing. The Program's own mutations are
-    // routed through these wrappers by the routing item; constructing them here is what makes that
-    // routing possible.
-    if (peer_device != nullptr && plan.width > 1) {
-        peer = make_peer_rank(plan, *peer_device);
+    // The StateImage mirror needs rank 0's state_images, so it is attached here rather than with the
+    // KV mirrors above. Still before the first slot mutation.
+    if (peer) {
         const tp2::MirrorTarget where{.device          = peer_device,
                                       .stream          = peer_device->stream(),
                                       .transfer_stream = peer_device->transfer_stream()};
-        peer->text_kv = std::make_unique<tp2::MirroredKVPagePool>(
-            decoder->text_kv.page_pool(), peer->decoder->text_kv.page_pool(), where);
-        peer->text_kv_tables = std::make_unique<tp2::MirroredKVExecutionTables>(
-            *peer->text_kv, decoder->text_kv.execution_tables(),
-            peer->decoder->text_kv.execution_tables());
         peer->state_image = std::make_unique<qwen3_8_flash_next::MirroredStateImageDevicePool>(
             *state_images, *peer->state_images, where);
-        // MTP's KV is the second PagedKVCache inside the decoder state, so it has a peer too. The
-        // masked-draft backends keep theirs in `dflash->full`, which the peer arena does not build
-        // yet: their mirror is a separate item and is deliberately not attached here.
-        if (speculative_backend == SpeculativeBackend::Mtp) {
-            qwen3_8_flash_next::PagedKVCache& backend = *decoder->mtp_cache();
-            qwen3_8_flash_next::PagedKVCache& peer_backend = *peer->decoder->mtp_cache();
-            peer->backend_kv = std::make_unique<tp2::MirroredKVPagePool>(
-                backend.page_pool(), peer_backend.page_pool(), where);
-            peer->backend_kv_tables = std::make_unique<tp2::MirroredKVExecutionTables>(
-                *peer->backend_kv, backend.execution_tables(), peer_backend.execution_tables());
-        }
     }
     if (plan.persistent.replay_records) {
         replay_records.emplace(backing, *plan.persistent.replay_records);
@@ -1011,11 +1024,21 @@ ProgramImplCore::ProgramImplCore(const LoadedModelData& model_in, const Sequence
     if (qwen3_8_flash_next::PagedKVCache* backend = backend_kv_cache()) {
         backend_host_kv_page_stride =
             plan_host_kv_page_layout(backend->page_pool().geometry()).page_stride;
+        // The masked-draft backends keep their KV in `dflash->full`, which rank 1 does not have yet,
+        // so the backend funnel falls back to the plain pool for them: `backend_kv_cache()` returns
+        // that cache while the MTP mirror is null. Gating on `backend_kv_cache()` instead of on the
+        // mirror would dereference a null `mtp_cache()`.
+        const bool mirrored_backend = peer != nullptr && peer->backend_kv != nullptr;
         backend_kv_pages = std::make_unique<LogicalKVPageStore>(
-            backend->page_pool(), logical_page_capacity(backend->page_pool()));
+            backend->page_pool(),
+            mirrored_backend ? KVPageOperations(*peer->backend_kv)
+                             : KVPageOperations(backend->page_pool()),
+            logical_page_capacity(backend->page_pool()));
         backend_kv_addresses = std::make_unique<KVAddressSpaceStore>(
-            *backend_kv_pages, backend->execution_tables(), address_capacity,
-            backend->execution_tables().logical_page_capacity());
+            *backend_kv_pages,
+            mirrored_backend ? KVTableOperations(*peer->backend_kv_tables)
+                             : KVTableOperations(backend->execution_tables()),
+            address_capacity, backend->execution_tables().logical_page_capacity());
     }
     pressure_text_page_scratch_.resize(text_kv_pages->capacity());
     pressure_text_selected_pages_.reserve(text_kv_pages->capacity());

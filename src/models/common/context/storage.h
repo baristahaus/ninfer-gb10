@@ -3,6 +3,8 @@
 #include "core/device.h"
 #include "core/paged_kv_geometry.h"
 #include "core/paged_kv_cache.h"
+#include "core/device_kv_page_pool.h"
+#include "core/tp2/kv_mirror.h"
 #include "core/state_image.h"
 #include "models/common/context/contract.h"
 #include "runtime/contract/resources.h"
@@ -46,6 +48,14 @@ public:
     void zero_pages(std::span<const std::int32_t> pages, CudaExecutionView execution) const;
     TransferWork copy_page(std::int32_t source, std::int32_t destination,
                            CudaExecutionView execution) const;
+
+    // tp 2: replay this storage's page mutations on rank 1. The mirror's origin side is a
+    // `DeviceKVPagePool` view over this storage's own backing, built here from the same span and
+    // layout the storage was constructed with, so the wrapper replays exactly the bytes this
+    // storage owns. Unattached (the default, and the only state a family with no peer ever reaches)
+    // every mutation takes the original path unchanged.
+    void attach_mirror(tp2::MirroredKVPagePool& mirror);
+    [[nodiscard]] bool mirrored() const noexcept { return mirror_ != nullptr; }
 
     // Host runs are packed records in the canonical layout. Work excludes record padding.
     [[nodiscard]] TransferWork host_transfer_run_work(std::uint32_t pages) const;
@@ -94,6 +104,11 @@ private:
                                  CudaExecutionView execution) const;
 
     DeviceKVPagePoolSpec spec_;
+    // The span the storage borrows, kept so the mirror's origin view can be built over it.
+    MemorySpan backing_;
+    // tp 2: the origin view pool and the attached mirror. Both null/empty unless a rank 1 exists.
+    std::unique_ptr<DeviceKVPagePool> mirror_origin_;
+    tp2::MirroredKVPagePool* mirror_ = nullptr;
     std::vector<Tensor> planes_;
     HostKVPageLayout host_layout_;
     std::vector<HostTransferPlane> host_transfer_planes_;
@@ -127,10 +142,16 @@ public:
     void publish(std::int32_t row, std::uint32_t logical_begin, std::span<const std::int32_t> pages,
                  MemorySpan pinned_staging, CudaExecutionView execution) const;
 
+    // tp 2: replay this table's row publications on rank 1. Unattached (the default) keeps the
+    // original path, so a family with no peer is unchanged.
+    void attach_mirror(tp2::MirroredKVExecutionTables& mirror);
+    [[nodiscard]] bool mirrored() const noexcept { return mirror_ != nullptr; }
+
 private:
     KVExecutionTableSpec spec_;
     Tensor block_tables_;
     std::uint32_t page_capacity_ = 0;
+    tp2::MirroredKVExecutionTables* mirror_ = nullptr;
 };
 
 struct ContextPoolStorage {

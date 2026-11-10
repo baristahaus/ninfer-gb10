@@ -161,6 +161,10 @@ public:
                        std::uint32_t count, cudaStream_t stream = nullptr) const;
     // The physical page a handle names, after validating the handle.
     [[nodiscard]] std::int32_t physical_page(DeviceKVPageHandle handle) const;
+    // The inverse: the handle addressing physical page `index`, minted at the page's current
+    // generation so a stale index is refused exactly like a stale handle. Owners that address pages
+    // by index (the Qwen3.5 context storage) use this to hand the mirror the handles it speaks.
+    [[nodiscard]] DeviceKVPageHandle page_handle(std::int32_t index) const;
 
 private:
     friend class DeviceKVPageLease;

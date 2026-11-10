@@ -79,6 +79,13 @@ public:
     void copy_page(DeviceKVPageHandle source, DeviceKVPageHandle destination,
                    cudaStream_t stream = nullptr) const;
 
+    // The same two mutations in the origin pool's own index coordinates, for an owner that
+    // addresses pages by index rather than by handle (the Qwen3.5 context storage). Index-identical
+    // replay is the whole contract, so these are the run forms applied to both pools.
+    void zero_page_run(std::int32_t first, std::uint32_t count, cudaStream_t stream = nullptr);
+    void copy_page_run(std::int32_t source_first, std::int32_t destination_first,
+                       std::uint32_t count, cudaStream_t stream = nullptr);
+
     // tp 2 has no Host KV tier: rank 1 has no Host copy of KV, so a spill or restore would leave
     // the ranks' addressing divergent. These throw std::logic_error instead of half-copying.
     void copy_to_host(std::span<const DeviceKVPageHandle> source, HostKVAllocationView destination,
@@ -119,6 +126,12 @@ public:
                  std::span<const DeviceKVPageHandle> pages, cudaStream_t stream = nullptr);
     void publish_repeated(KVExecutionRowHandle row, DeviceKVPageHandle page, std::uint32_t count,
                           cudaStream_t stream = nullptr);
+
+    // The physical publication in the origin pool's own index coordinates, for an owner that
+    // already holds the row's physical page ids (the Qwen3.5 context storage). `row` must have been
+    // acquired through this wrapper, because that is where rank 1's lease lives.
+    void publish_physical(std::int32_t row, std::uint32_t logical_begin,
+                          std::span<const std::int32_t> indices, cudaStream_t stream = nullptr);
 
     // Rank 1's lease of `row`; the caller reads rank 1's row view through the mirror pool.
     [[nodiscard]] const KVExecutionRowLease& mirror_row(std::int32_t row) const;

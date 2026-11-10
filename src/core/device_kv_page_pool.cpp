@@ -543,6 +543,13 @@ std::int32_t DeviceKVPagePool::physical_page(DeviceKVPageHandle handle) const {
     return physical_index(handle);
 }
 
+DeviceKVPageHandle DeviceKVPagePool::page_handle(std::int32_t index) const {
+    if (index < 0 || static_cast<std::uint32_t>(index) >= capacity_pages()) {
+        throw std::out_of_range("Paged KV page index is outside the pool");
+    }
+    return DeviceKVPageHandle(this, index, page_generations_[static_cast<std::size_t>(index)]);
+}
+
 void DeviceKVPagePool::copy_to_host(std::span<const DeviceKVPageHandle> source,
                                     HostKVAllocationView destination, cudaStream_t stream) const {
     if (!destination.valid() || destination.page_count() != source.size() ||

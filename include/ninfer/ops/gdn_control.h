@@ -111,6 +111,13 @@ void gdn_norm_control_proj(const Tensor& x, const Tensor& norm_weight, float eps
 gdn_norm_control_proj_workspace_capacity_bytes(const ProjectionProfile& weights, std::int32_t first,
                                                std::int32_t last);
 
+// The number of value heads these control weights describe -- the row count of g and beta, and the
+// length of a_log and dt_bias. It is derived from the weights, once, because the two forms differ:
+// a paired parent is one row per head, a fused a|b parent is two rows per head. A caller that
+// re-derives it from the profile's `n` gets double the answer for the fused form, which is exactly
+// the shape mismatch this accessor exists to prevent.
+[[nodiscard]] std::int32_t gdn_control_heads(const ProjectionWeights& weights);
+
 [[nodiscard]] inline std::size_t
 gdn_control_proj_workspace_capacity_bytes(const ProjectionWeights& weights, std::int32_t first,
                                           std::int32_t last) {

@@ -30,10 +30,18 @@ void describe_matrix(const Weight& weight, std::int32_t rows, std::int32_t colum
 
 void matrix(const Tensor& tensor, DType type, int rows, int columns, bool allow_empty = false,
             std::size_t bf16_alignment = 16) {
-    require((columns > 0 || (allow_empty && columns == 0)) && tensor.dtype == type &&
-                tensor.ne[0] == rows && tensor.ne[1] == columns && tensor.ne[2] == 1 &&
-                tensor.ne[3] == 1,
-            "invalid matrix shape or dtype");
+    if (!((columns > 0 || (allow_empty && columns == 0)) && tensor.dtype == type &&
+          tensor.ne[0] == rows && tensor.ne[1] == columns && tensor.ne[2] == 1 &&
+          tensor.ne[3] == 1)) {
+        // Name both numbers: a refusal that says only "invalid" cost three runs on the GDN
+        // workspace, and the two values were the whole diagnosis.
+        throw std::invalid_argument(std::string(kOp) + ": invalid matrix shape or dtype: expected [" +
+                                    std::to_string(rows) + ", " + std::to_string(columns) +
+                                    "], got [" + std::to_string(tensor.ne[0]) + ", " +
+                                    std::to_string(tensor.ne[1]) + "] dtype " +
+                                    std::to_string(static_cast<int>(tensor.dtype)) + " vs " +
+                                    std::to_string(static_cast<int>(type)));
+    }
     if (columns == 0) return;
     require(tensor.is_contiguous() &&
                 common::operand::aligned(tensor.data, type == DType::BF16 ? bf16_alignment : 4),

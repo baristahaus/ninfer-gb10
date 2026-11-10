@@ -71,9 +71,11 @@ void gdn_projection(const Tensor& hidden, const GdnParameters& parameters, Tenso
 workspace::GdnExtents gdn_extents(const GdnParameters& parameters) {
     workspace::GdnExtents out;
     const auto control_profile = ops::projection_profile(parameters.control);
-    out.value_heads            = control_profile.first.n;
+    // The op validates g and beta against the geometry's heads, which is NOT the profile's `n` for
+    // the fused a|b form (two rows per head). Ask the same function the op asks.
+    out.value_heads = ops::gdn_control_heads(parameters.control);
     // The control projection's input rows are the residual width, which every rank holds whole.
-    out.hidden_size            = control_profile.first.k;
+    out.hidden_size = control_profile.first.k;
     std::int32_t qkv_rows = 0;
     if (parameters.role_rows) {
         qkv_rows          = ops::projection_profile(parameters.role_rows->at(0)).first.n;

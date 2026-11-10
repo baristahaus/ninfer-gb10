@@ -2,10 +2,10 @@
 // message: a sharded-lane Engine must construct (the load milestone) and its first round must
 // refuse, while a single-device Engine must not carry the refusal at all.
 //
-// Why the refusal exists: the sharded forward helpers have no caller in the layer loop, so a round
-// at width 2 would project each rank's sharded weights through the unsharded path and produce
-// plausible-looking wrong numbers. A silent wrong answer is the one failure mode this lane must not
-// have, so the round entry throws.
+// Why the refusal exists: both ranks now take the sharded call sites, but no width-2 round has ever
+// been compared against a width-1 round, and a sharded projection that is subtly wrong produces
+// plausible numbers rather than an error. A silent wrong answer is the one failure mode this lane
+// must not have, so the round entry throws until the comparison passes.
 //
 // Needs two GPUs and a 27B artifact; skips otherwise.
 
@@ -27,7 +27,7 @@ int fail(const std::string& message) {
 
 bool mentions_refusal(const std::exception& error) {
     const std::string what = error.what();
-    return what.find("sharded forward is not wired") != std::string::npos;
+    return what.find("sharded forward has no validated round") != std::string::npos;
 }
 
 } // namespace

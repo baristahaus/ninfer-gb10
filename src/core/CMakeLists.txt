@@ -35,6 +35,7 @@ add_library(ninfer_core SHARED
   device_kv_page_pool.cpp
   host_kv_arena.cpp
   spill_kv_store.cpp
+  disk_kv_cache.cpp
   state_image.cpp
   layout.cpp
   tensor.cpp

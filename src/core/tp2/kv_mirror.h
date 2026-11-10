@@ -74,9 +74,10 @@ public:
     [[nodiscard]] DeviceKVPagePool& origin_pool() noexcept { return origin_; }
     [[nodiscard]] DeviceKVPagePool& mirror_pool() noexcept { return mirror_; }
 
-    void zero_pages(std::span<const DeviceKVPageHandle> pages, cudaStream_t stream = nullptr);
+    void zero_pages(std::span<const DeviceKVPageHandle> pages,
+                    cudaStream_t stream = nullptr) const;
     void copy_page(DeviceKVPageHandle source, DeviceKVPageHandle destination,
-                   cudaStream_t stream = nullptr);
+                   cudaStream_t stream = nullptr) const;
 
     // tp 2 has no Host KV tier: rank 1 has no Host copy of KV, so a spill or restore would leave
     // the ranks' addressing divergent. These throw std::logic_error instead of half-copying.
@@ -106,8 +107,13 @@ public:
     // pools unchanged and returns no lease.
     [[nodiscard]] KVExecutionRowLease acquire(std::int32_t row);
     // Drops rank 0's lease and the paired rank-1 lease. False when the lease was already stale, in
-    // which case the paired row was dropped with the earlier release.
-    bool release(KVExecutionRowLease lease);
+    // which case the paired row was dropped with the earlier release. Noexcept: a lease from this
+    // pool always names a row in range, and a lease wrapper's destructor must not throw.
+    bool release(KVExecutionRowLease lease) noexcept;
+
+    // Rank 0's geometry, which rank 1 shares: the mirror addresses the same rows and logical pages.
+    [[nodiscard]] std::uint32_t logical_page_capacity() const noexcept;
+    [[nodiscard]] std::int32_t row_count() const noexcept;
 
     void publish(KVExecutionRowHandle row, std::uint32_t logical_begin,
                  std::span<const DeviceKVPageHandle> pages, cudaStream_t stream = nullptr);

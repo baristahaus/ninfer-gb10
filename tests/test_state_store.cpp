@@ -41,7 +41,9 @@ int fail(const char* message) {
 }
 
 bool cuda_unavailable(cudaError_t err) {
-    return err == cudaErrorNoDevice || err == cudaErrorInsufficientDriver;
+    // The stub-library case matters: it is how a GPU-less builder links at all.
+    return err == cudaErrorNoDevice || err == cudaErrorInsufficientDriver ||
+           err == cudaErrorStubLibrary;
 }
 
 int expect_size(std::size_t actual, std::size_t expected, const char* label) {

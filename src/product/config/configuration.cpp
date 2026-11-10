@@ -138,6 +138,13 @@ StartupConfigurationView view(const LaunchOptions& launch, EntryPoint entry, con
             else
                 value = std::uint64_t{e.prefill_chunk};
             break;
+        case Field::RopeYarnFactor:
+            if (e.rope_yarn_factor > 1.0F) {
+                value = static_cast<double>(e.rope_yarn_factor);
+            } else {
+                value = std::string("off");
+            }
+            break;
         case Field::GpuTiming:
             value = e.observability.gpu_timing;
             break;

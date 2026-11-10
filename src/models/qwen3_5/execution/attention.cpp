@@ -65,16 +65,33 @@ void attention_projection(const Tensor& hidden, const AttentionParameters& param
     ops::linear_split(hidden, parameters.projection, outputs, workspace, execution);
 }
 
+namespace {
+
+// The Op-level YaRN value of one model. Disabled whenever the config was not overridden, and the
+// Op then takes exactly the plain-RoPE path.
+ops::RopeYarn yarn_of(const RopeConfig& config) {
+    ops::RopeYarn out;
+    out.factor                = config.yarn_factor;
+    out.original_max_position = static_cast<std::int32_t>(config.yarn_original_max_position);
+    out.beta_fast             = config.yarn_beta_fast;
+    out.beta_slow             = config.yarn_beta_slow;
+    return out;
+}
+
+} // namespace
+
 void text_rope(const Tensor& positions, const RopeConfig& config, Tensor& query,
                CudaExecutionView execution) {
     require_rope_axes(positions, config);
-    ops::rope(positions, dimension(config.rotary_dim), config.rope_theta, query, execution);
+    ops::rope(positions, dimension(config.rotary_dim), config.rope_theta, yarn_of(config), query,
+              execution);
 }
 
 void text_rope(const Tensor& positions, const RopeConfig& config, Tensor& query, Tensor& key,
                CudaExecutionView execution) {
     require_rope_axes(positions, config);
-    ops::rope(positions, dimension(config.rotary_dim), config.rope_theta, query, key, execution);
+    ops::rope(positions, dimension(config.rotary_dim), config.rope_theta, yarn_of(config), query,
+              key, execution);
 }
 
 } // namespace ninfer::models::qwen3_5::execution

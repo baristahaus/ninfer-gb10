@@ -264,6 +264,11 @@ struct EngineOptions {
     std::uint32_t pending_timeout_ms   = 30000;
     // Zero uses 4096 for Qwen4Exp or CPU expert offload, otherwise 1024.
     std::uint32_t prefill_chunk = 0;
+    // Opt-in YaRN NTK-by-parts RoPE scaling. 0 (or 1) disables it and the engine is bit-identical
+    // to a build without YaRN; a value above 1 scales the Text frequencies by the reference's
+    // YaRN table and raises the addressable context to the model's native window times this
+    // factor. Vision and the DFlash drafter are not affected.
+    float rope_yarn_factor = 0.0F;
     MoeOptions moe;
     KvCacheStorage kv_cache = KvCacheStorage::BFloat16;
     SpeculativeOptions speculative;

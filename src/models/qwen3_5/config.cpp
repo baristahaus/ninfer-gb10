@@ -310,6 +310,27 @@ Config parse_config(const artifact::Directory& directory, const LoadOptions& opt
         Config out;
         out.mtp  = options.speculative == SpeculativeBackend::Mtp;
         out.text = text(directory.component("text").config, out.mtp);
+        // YaRN is an engine opt-in over the artifact's rope configuration, so it is resolved here
+        // rather than stored in the artifact. Factor 0 and 1 both leave the config untouched, which
+        // is what keeps the default path bit-identical.
+        if (options.rope_yarn_factor > 1.0F) {
+            if (!std::isfinite(options.rope_yarn_factor)) {
+                throw ArtifactError("rope_yarn_factor must be finite");
+            }
+            auto& rope = out.text.rope_parameters;
+            if (!rope) { throw ArtifactError("YaRN needs a text RoPE configuration"); }
+            // The NTK-by-parts table is the 32 pairs of the D256R64 text geometry. A wider or
+            // narrower rotary width would need its own table and its own beta bounds, so refuse
+            // rather than silently run plain RoPE while the caller believes YaRN is on.
+            if (rope->rotary_dim != 64) {
+                throw ArtifactError("YaRN requires a text rotary dimension of 64");
+            }
+            rope->yarn_factor                = options.rope_yarn_factor;
+            rope->yarn_original_max_position = out.text.max_position_embeddings;
+            if (rope->yarn_original_max_position == 0) {
+                throw ArtifactError("YaRN needs the model's native position window");
+            }
+        }
         if (options.vision) { out.vision = vision(companion(directory, "vision").config); }
         if (out.mtp) {
             const auto& config = companion(directory, "mtp").config;

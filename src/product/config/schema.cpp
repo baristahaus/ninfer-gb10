@@ -23,6 +23,9 @@ constexpr FieldSpec kFields[] = {
      "Shared Main KV capacity; context follows --max-context."},
     {Field::PrefillChunk, "engine.prefill_chunk", "--prefill-chunk", "", "N|default",
      "Positive multiple of 128; default is resolved by the model."},
+    {Field::RopeYarnFactor, "engine.rope_yarn_factor", "--rope-yarn-factor", "", "F|default",
+     "Opt-in YaRN NTK-by-parts RoPE scaling; >1 extends the addressable context to the native "
+     "window times this factor. Default 0 disables it."},
     {Field::CudaGraph, "engine.cuda_graph", "--cuda-graph", "--no-cuda-graph", "",
      "Enable CUDA Graph execution."},
     {Field::GpuTiming, "observability.gpu_timing", "--gpu-timing", "--no-gpu-timing", "",
@@ -365,6 +368,9 @@ FieldValue parse_field_value(Field field, const RawValue& value, bool command_li
         return std::uint64_t{parse_duration_ms(value, true)};
     case Field::StatsInterval:
         return std::uint64_t{parse_duration_ms(value, false)};
+    case Field::RopeYarnFactor:
+        // 0 and 1 both mean off; 4 is the supported maximum (native window x 4).
+        return real(value, command_line, 0, 4);
     case Field::Temperature:
         return real(value, command_line, 0, 2);
     case Field::TopP:

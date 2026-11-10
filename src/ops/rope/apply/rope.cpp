@@ -1,5 +1,6 @@
 #include "ninfer/ops/rope.h"
 #include "ops/rope/apply/dispatch.h"
+#include "ops/rope/apply/yarn_resolve.h"
 #include "ops/common/host/operands.h"
 
 #include <cuda_runtime.h>
@@ -85,8 +86,9 @@ int current_multiprocessor_count() {
     return multiprocessors;
 }
 
-void rope_qk_impl(const Tensor& positions, int rotary_dim, float theta, Tensor& q, Tensor& k,
-                  Device device, int multiprocessor_count, cudaStream_t stream) {
+void rope_qk_impl(const Tensor& positions, int rotary_dim, float theta, const RopeYarn& yarn,
+                  Tensor& q, Tensor& k, Device device, int multiprocessor_count,
+                  cudaStream_t stream) {
     require_common(positions, rotary_dim, theta);
     if (q.dtype != DType::BF16 || k.dtype != DType::BF16) {
         throw std::invalid_argument("rope: q/k must be BF16");
@@ -110,27 +112,39 @@ void rope_qk_impl(const Tensor& positions, int rotary_dim, float theta, Tensor& 
     if (q.data == nullptr || k.data == nullptr) {
         throw std::invalid_argument("rope: q/k data must be non-null");
     }
-    detail::rope_dispatch(positions, rotary_dim, theta, q, k, multiprocessor_count, stream);
+    detail::rope_dispatch(positions, rotary_dim, theta, q, k, multiprocessor_count, stream,
+                          detail::resolve_yarn(yarn.factor, yarn.original_max_position, yarn.beta_fast,
+                               yarn.beta_slow, theta, axes, rotary_dim));
 }
 
 } // namespace
 
 void rope(const Tensor& positions, int rotary_dim, float theta, Tensor& q, Tensor& k,
           CudaExecutionView execution) {
-    rope_qk_impl(positions, rotary_dim, theta, q, k, execution.device(),
+    rope(positions, rotary_dim, theta, RopeYarn{}, q, k, execution);
+}
+
+void rope(const Tensor& positions, int rotary_dim, float theta, const RopeYarn& yarn, Tensor& q,
+          Tensor& k, CudaExecutionView execution) {
+    rope_qk_impl(positions, rotary_dim, theta, yarn, q, k, execution.device(),
                  execution.multiprocessor_count(), execution.stream());
 }
 
 void rope(const Tensor& positions, int rotary_dim, float theta, Tensor& q, Tensor& k,
           cudaStream_t stream) {
-    rope_qk_impl(positions, rotary_dim, theta, q, k, q.device, current_multiprocessor_count(),
+    rope(positions, rotary_dim, theta, RopeYarn{}, q, k, stream);
+}
+
+void rope(const Tensor& positions, int rotary_dim, float theta, const RopeYarn& yarn, Tensor& q,
+          Tensor& k, cudaStream_t stream) {
+    rope_qk_impl(positions, rotary_dim, theta, yarn, q, k, q.device, current_multiprocessor_count(),
                  stream);
 }
 
 namespace {
 
-void rope_single_impl(const Tensor& positions, int rotary_dim, float theta, Tensor& x,
-                      Device device, int multiprocessor_count, cudaStream_t stream) {
+void rope_single_impl(const Tensor& positions, int rotary_dim, float theta, const RopeYarn& yarn,
+                      Tensor& x, Device device, int multiprocessor_count, cudaStream_t stream) {
     require_common(positions, rotary_dim, theta);
     if (x.dtype != DType::BF16) { throw std::invalid_argument("rope: tensor must be BF16"); }
     (void)common::operand::numel(positions, "rope");
@@ -146,20 +160,32 @@ void rope_single_impl(const Tensor& positions, int rotary_dim, float theta, Tens
     require_positions_storage(positions);
     common::operand::device(x.device, device, "rope", "input");
     if (x.data == nullptr) { throw std::invalid_argument("rope: tensor data must be non-null"); }
-    detail::rope_dispatch(positions, rotary_dim, theta, x, multiprocessor_count, stream);
+    detail::rope_dispatch(positions, rotary_dim, theta, x, multiprocessor_count, stream,
+                          detail::resolve_yarn(yarn.factor, yarn.original_max_position, yarn.beta_fast,
+                               yarn.beta_slow, theta, axes, rotary_dim));
 }
 
 } // namespace
 
 void rope(const Tensor& positions, int rotary_dim, float theta, Tensor& x,
           CudaExecutionView execution) {
-    rope_single_impl(positions, rotary_dim, theta, x, execution.device(),
+    rope(positions, rotary_dim, theta, RopeYarn{}, x, execution);
+}
+
+void rope(const Tensor& positions, int rotary_dim, float theta, const RopeYarn& yarn, Tensor& x,
+          CudaExecutionView execution) {
+    rope_single_impl(positions, rotary_dim, theta, yarn, x, execution.device(),
                      execution.multiprocessor_count(), execution.stream());
 }
 
 void rope(const Tensor& positions, int rotary_dim, float theta, Tensor& x, cudaStream_t stream) {
-    rope_single_impl(positions, rotary_dim, theta, x, x.device, current_multiprocessor_count(),
-                     stream);
+    rope(positions, rotary_dim, theta, RopeYarn{}, x, stream);
+}
+
+void rope(const Tensor& positions, int rotary_dim, float theta, const RopeYarn& yarn, Tensor& x,
+          cudaStream_t stream) {
+    rope_single_impl(positions, rotary_dim, theta, yarn, x, x.device,
+                     current_multiprocessor_count(), stream);
 }
 
 } // namespace ninfer::ops

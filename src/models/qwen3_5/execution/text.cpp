@@ -179,8 +179,17 @@ void TextRun::attention(const BlockParameters& block, std::uint32_t compact_laye
         {dim, heads, kv}, static_cast<float>(1.0 / std::sqrt(double(attn.head_dim))),
         view_.cache.batch_layer_view(compact_layer), envelope_, work, ab, cuda);
     ops::sigmoid_mul(gate, a, cuda);
-    ops::linear_add(a.view({dimension(attn.query_width()), tokens}), p.output.weight, residual_,
-                    p.output.policy, work, cuda);
+    if (view_.collective != nullptr) {
+        // Column-parallel: the residual is replicated, so it is added ONCE after the cross-rank sum.
+        // `linear_add` here would count it once per rank. The reduce is this rank's own exchange on
+        // this rank's stream, so the projection above is already ordered before it.
+        std::array<Tensor, 2> partials = column_partials(tokens);
+        sharded_project_columns_add(a.view({dimension(attn.query_width()), tokens}), p.output,
+                                    partials, residual_, *view_.collective, work, cuda);
+    } else {
+        ops::linear_add(a.view({dimension(attn.query_width()), tokens}), p.output.weight, residual_,
+                        p.output.policy, work, cuda);
+    }
 }
 
 void TextRun::gdn(const BlockParameters& block, std::uint32_t compact_layer) {
@@ -341,8 +350,15 @@ void TextRun::gdn(const BlockParameters& block, std::uint32_t compact_layer) {
 
     Tensor normalized = workspace::gdn_normalized_output(work, cfg, tokens).view({dv, vh, tokens});
     ops::silu_gated_rmsnorm(o, p.norm, z, cfg.rms_norm_eps, normalized, cuda);
-    ops::linear_add(normalized.view({dimension(gdn.value_width()), tokens}), p.output.weight,
-                    residual_, p.output.policy, work, cuda);
+    if (view_.collective != nullptr) {
+        // Column-parallel, same residual rule as the attention output projection.
+        std::array<Tensor, 2> partials = column_partials(tokens);
+        sharded_project_columns_add(normalized.view({dimension(gdn.value_width()), tokens}),
+                                    p.output, partials, residual_, *view_.collective, work, cuda);
+    } else {
+        ops::linear_add(normalized.view({dimension(gdn.value_width()), tokens}), p.output.weight,
+                        residual_, p.output.policy, work, cuda);
+    }
 }
 
 ops::MoeExecutionHints TextRun::next_projection_hints(std::uint32_t layer) const {
@@ -381,7 +397,13 @@ void TextRun::post_mixer(std::uint32_t layer, const moe::GpuCall* call) {
                  view_.execution);
     if (const auto* dense = std::get_if<DenseParameters>(&block.ffn)) {
         if (call) throw std::invalid_argument("GPU MoE body supplied for a dense layer");
-        dense_mlp(h, *dense, residual_, DenseMlpUse::Text, view_.workspace, view_.execution);
+        if (view_.collective != nullptr) {
+            std::array<Tensor, 2> partials = column_partials(residual_.ne[1]);
+            sharded_dense_mlp(h, *dense, residual_, partials, *view_.collective, view_.workspace,
+                              view_.execution, DenseMlpUse::Text);
+        } else {
+            dense_mlp(h, *dense, residual_, DenseMlpUse::Text, view_.workspace, view_.execution);
+        }
     } else if (call) {
         (*call)(h, residual_, view_.workspace, next_projection_hints(layer));
     } else {

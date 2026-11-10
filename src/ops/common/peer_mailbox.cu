@@ -204,6 +204,14 @@ int PeerMailbox::take_capture_slot(std::size_t bytes) noexcept {
     return slot;
 }
 
+int PeerMailbox::slot_for(std::size_t index, std::size_t bytes) const noexcept {
+    // The set is chosen for its slot width, and both sets have the same slot count, so the index
+    // alone decides the slot; the parameter is accepted so a caller reads it as the same question
+    // take_capture_slot() answers.
+    (void)bytes;
+    return static_cast<int>(index % static_cast<std::size_t>(slots_));
+}
+
 namespace {
 detail::PeerPipelinedTuning pipelined_tuning(bool release_dependents) {
     detail::PeerPipelinedTuning tuning{};

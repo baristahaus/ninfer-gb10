@@ -13,6 +13,10 @@ struct RankModelInstance {
     std::unique_ptr<typename Types::ModelShard> model;
     const typename Types::Parameters parameters;
     std::unique_ptr<typename Types::RankProgram> program;
+    // The group-scoped resources of a two-GPU lane (the shared mailbox and the partial pair),
+    // borrowed from the owner that declared them — they outlive every instance. Null on the
+    // single-device lane and on any family without a two-GPU lane.
+    const typename Types::ShardedGroup* sharded = nullptr;
 
     RankModelInstance(std::unique_ptr<typename Types::ModelShard> model,
                       std::shared_ptr<const typename Types::Profile> profile)

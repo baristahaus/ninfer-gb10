@@ -11,13 +11,15 @@
 namespace ninfer::models::qwen3_5::detail {
 
 RankProgramImpl::RankProgramImpl(const execution::Parameters& values, const SequencePlanImpl& plan,
-                                 DeviceContext& context, const StartupObserver& observer)
+                                 DeviceContext& context, const StartupObserver& observer,
+                                 const execution::ShardedGroup* sharded)
     : parameters(values), device(context), capacity(plan.capacity), kv_capacity(plan.kv_capacity),
       max_concurrency(plan.max_concurrency), prefill_chunk(plan.prefill_chunk),
       draft_window(plan.draft_window), backend(plan.speculative_backend),
       proposal_head(plan.proposal_head), use_cuda_graph(plan.use_cuda_graph),
       kv_storage(plan.kv_storage), kv_payload_bytes(plan.persistent.kv_payload_bytes),
-      workspace_plan(plan.workspace), resources(context, plan.persistent, plan.workspace, observer),
+      workspace_plan(plan.workspace), sharded_(sharded),
+      resources(context, plan.persistent, plan.workspace, observer),
       context_counts(plan.causal_scoring ? 0
                                          : std::size_t(values.profile->public_tokens) *
                                                plan.max_concurrency * sizeof(std::int32_t)),
@@ -25,6 +27,30 @@ RankProgramImpl::RankProgramImpl(const execution::Parameters& values, const Sequ
       context_ready(context), prefill_timer(context), gpu_timer(context, plan.gpu_timing) {
     if (parameters.profile != plan.profile || parameters.profile->options != plan.features)
         throw std::invalid_argument("Qwen3.5 rank parameters differ from the prepared plan");
+    // The per-rank view of the group's collective. The mailbox and the partial pair are owned by
+    // whoever builds both ranks — one mailbox for the whole group, because two would never
+    // rendezvous — and this Program only derives its own rank from them. The 27B plan does not carry
+    // the group width yet, so "width 2 without the bundle" cannot be detected here; the executor
+    // that owns the group is the place that must always hand it over.
+    if (sharded_ != nullptr) {
+        const ExecutionContext& group = sharded_->execution;
+        if (group.width() != 2) {
+            throw std::invalid_argument(
+                "Qwen3.5 rank: the sharded group requires an execution group of exactly two ranks");
+        }
+        // This Program's rank is the group member whose device is this Program's device. A Program
+        // that is not in the group is a wiring error, and it must fail here rather than in a
+        // reduce: the rank decides which stream the exchange lands on.
+        int rank = -1;
+        for (int member = 0; member < group.width(); ++member) {
+            if (group.device(member).device() == device.device()) { rank = member; }
+        }
+        if (rank < 0) {
+            throw std::logic_error(
+                "Qwen3.5 rank: the Program's device is not a member of its execution group");
+        }
+        collective_.emplace(execution::ShardedCollective{group, sharded_->mailbox, rank});
+    }
     std::vector<context::ContextPoolStorage> pools{
         {0, &resources.decoder.text_kv.pages(), &resources.decoder.text_kv.tables()}};
     if (auto* cache = resources.backend_kv())

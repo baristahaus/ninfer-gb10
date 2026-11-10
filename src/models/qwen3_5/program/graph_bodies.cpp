@@ -45,7 +45,8 @@ void RankProgramImpl::initialize_graphs() {
         return std::make_unique<execution::TextRun>(
             execution::TextExecutionView{parameters, resources.work, device.execution_view(),
                                          resources.decoder.text_kv, resources.state_images.linear(),
-                                         resources.moe.get()},
+                                         resources.moe.get(), sharded_collective(),
+                                         sharded_partials()},
             std::move(inputs), update, call.envelope, input.hidden, feature ? &*feature : nullptr);
     };
     bodies.project = [this](const GraphInvocation& call) {

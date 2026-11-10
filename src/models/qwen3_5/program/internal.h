@@ -12,6 +12,8 @@
 #include "models/qwen3_5/program/resources.h"
 #include "models/qwen3_5/program/graphs.h"
 #include "models/qwen3_5/program/planning/startup.h"
+#include "models/qwen3_5/execution/sharded.h"
+#include "ninfer/ops/peer_mailbox.h"
 
 #include <array>
 #include <chrono>
@@ -89,8 +91,12 @@ struct ContextOperation {
 
 class RankProgramImpl {
 public:
+    // `sharded` is the group-scoped resource bundle of a two-GPU lane — the ONE mailbox and the
+    // ONE partial pair the whole group shares — borrowed from its owner. The Program builds its
+    // per-rank collective from it here, before any graph capture, and refuses to run at width > 1
+    // without it: a mailbox per Program would never rendezvous.
     RankProgramImpl(const execution::Parameters&, const SequencePlanImpl&, DeviceContext&,
-                    const StartupObserver&);
+                    const StartupObserver&, const execution::ShardedGroup* sharded = nullptr);
     ~RankProgramImpl();
 
     void validate_work(const Work&, runtime::FrameKind) const;
@@ -144,6 +150,19 @@ public:
     [[nodiscard]] ops::SamplingConfig sampling_config(const ExecutionRow&, const SamplingInput&,
                                                       std::size_t compact_row) const;
 
+    // The two-GPU collective, or null at width 1. The sharded forward takes it; a caller that has
+    // none keeps the single-device path, which is what makes width 1 unchanged by construction.
+    [[nodiscard]] const execution::ShardedCollective* sharded_collective() const noexcept {
+        return collective_ ? &*collective_ : nullptr;
+    }
+
+    // The full-width partial pair the collective reduces over, one buffer per rank's device, from
+    // the group bundle: BOTH Programs pass the SAME pair, because the combine reads and writes both.
+    [[nodiscard]] const std::array<Tensor, 2>& sharded_partials() const noexcept {
+        static const std::array<Tensor, 2> none{};
+        return sharded_ != nullptr ? sharded_->partials : none;
+    }
+
     const execution::Parameters& parameters;
     DeviceContext& device;
     const std::uint32_t capacity;
@@ -157,6 +176,10 @@ public:
     const KvCacheStorage kv_storage;
     const std::size_t kv_payload_bytes;
     const WorkspaceSpec workspace_plan;
+    // Borrowed from the group's owner; outlives the Program. Null on the single-device lane.
+    const execution::ShardedGroup* sharded_ = nullptr;
+    // This rank's view of the shared collective: the group's mailbox plus this Program's rank.
+    std::optional<execution::ShardedCollective> collective_;
     Resources resources;
     std::unique_ptr<context::ContextStorage> storage;
     // tp 2: rank 1's mirrors, owned here so they outlive every mutation they replay. Null on the

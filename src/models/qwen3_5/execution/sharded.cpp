@@ -12,12 +12,12 @@ namespace {
 // The two-rank lane is the adopted scope (include/ninfer/ops/allreduce.h), so a width other than 2
 // is a caller error rather than something to fall back from: silently running an unsharded
 // projection at width 2 would give a plausible-looking wrong answer.
-void require_two_ranks(const ShardedCollective& collective, int rank) {
+void require_two_ranks(const ShardedCollective& collective) {
     if (collective.execution.width() != 2) {
         throw std::invalid_argument("sharded forward: the collective requires exactly two ranks");
     }
-    if (rank < 0 || rank >= 2) {
-        throw std::invalid_argument("sharded forward: rank outside [0,2)");
+    if (collective.rank < 0 || collective.rank >= 2) {
+        throw std::invalid_argument("sharded forward: the collective's rank is outside [0,2)");
     }
 }
 
@@ -43,8 +43,9 @@ void require_partial_pair(std::array<Tensor, 2>& partials, const ExecutionContex
     }
 }
 
-// The cross-rank sum of the two full-width partials. Both ranks call this together; the mailbox
-// takes a capture slot per call, so the two calls must correspond.
+// This rank's half of the cross-rank sum of the two full-width partials, through the collective's
+// per-rank form: one slot and one exchange, on this rank's own stream, after the projection that
+// feeds it. The peer's half is enqueued by the peer's own Program on its own stream.
 void reduce_partials(std::array<Tensor, 2>& partials, const ShardedCollective& collective) {
     std::array<void*, 2> data{partials[0].data, partials[1].data};
     const std::size_t bytes = partials[0].bytes();
@@ -58,16 +59,17 @@ void reduce_partials(std::array<Tensor, 2>& partials, const ShardedCollective& c
     if (bytes > collective.mailbox.max_bytes()) {
         throw std::invalid_argument("sharded forward: the partial exceeds the mailbox slot");
     }
-    ops::allreduce_sum(collective.execution, collective.mailbox, data, bytes);
+    collective.reduce(data, bytes);
 }
 
 } // namespace
 
 void sharded_project_columns(const Tensor& input, const LinearParameters& p,
-                             std::array<Tensor, 2>& partials, int rank,
+                             std::array<Tensor, 2>& partials,
                              const ShardedCollective& collective, MemoryArena& workspace,
                              CudaExecutionView execution) {
-    require_two_ranks(collective, rank);
+    require_two_ranks(collective);
+    const int rank = collective.rank;
     require_partial_pair(partials, collective.execution, p.weight.n, input.ne[1]);
     if (execution.device() != collective.execution.device(rank).device()) {
         throw std::invalid_argument("sharded forward: the view is not this rank's device");
@@ -85,18 +87,17 @@ void sharded_project_columns(const Tensor& input, const LinearParameters& p,
 
 void sharded_project_columns_add(const Tensor& input, const LinearParameters& p,
                                  std::array<Tensor, 2>& partials, Tensor& residual,
-                                 int rank, const ShardedCollective& collective,
-                                 MemoryArena& workspace, CudaExecutionView execution) {
-    sharded_project_columns(input, p, partials, rank, collective, workspace, execution);
+                                 const ShardedCollective& collective, MemoryArena& workspace,
+                                 CudaExecutionView execution) {
+    sharded_project_columns(input, p, partials, collective, workspace, execution);
     // The sum is complete on this rank's stream, so the residual is added exactly once, after it.
-    ops::residual_add(partials[static_cast<std::size_t>(rank)], residual, execution);
+    ops::residual_add(partials[static_cast<std::size_t>(collective.rank)], residual, execution);
 }
 
 void sharded_dense_mlp(const Tensor& hidden, const DenseParameters& parameters, Tensor& residual,
-                       std::array<Tensor, 2>& partials, int rank,
-                       const ShardedCollective& collective, MemoryArena& workspace,
-                       CudaExecutionView execution, DenseMlpUse use) {
-    require_two_ranks(collective, rank);
+                       std::array<Tensor, 2>& partials, const ShardedCollective& collective,
+                       MemoryArena& workspace, CudaExecutionView execution, DenseMlpUse use) {
+    require_two_ranks(collective);
     const std::int32_t columns = hidden.ne[1];
 
     // Row-parallel gate and up: each rank owns a contiguous block of the intermediate rows, so the
@@ -121,8 +122,8 @@ void sharded_dense_mlp(const Tensor& hidden, const DenseParameters& parameters, 
         // applied to the same values the unsharded pass would apply it to.
         Tensor activation = workspace.alloc(DType::BF16, {intermediate_rows(gate), columns});
         ops::silu_mul(gate_out, up_out, activation, execution);
-        sharded_project_columns_add(activation, parameters.down, partials, residual, rank,
-                                    collective, workspace, execution);
+        sharded_project_columns_add(activation, parameters.down, partials, residual, collective,
+                                    workspace, execution);
         return;
     }
 
@@ -139,8 +140,8 @@ void sharded_dense_mlp(const Tensor& hidden, const DenseParameters& parameters, 
         Tensor activation = workspace.alloc(DType::BF16, {gu.n / 2, columns});
         ops::silu_mul(gate_up.slice(0, 0, gu.n / 2), gate_up.slice(0, gu.n / 2, gu.n / 2),
                       activation, execution);
-        sharded_project_columns_add(activation, parameters.down, partials, residual, rank,
-                                    collective, workspace, execution);
+        sharded_project_columns_add(activation, parameters.down, partials, residual, collective,
+                                    workspace, execution);
         return;
     }
     // The fused gate_up parent keeps gate rows first and then up rows, so a rank's block of output
@@ -152,7 +153,7 @@ void sharded_dense_mlp(const Tensor& hidden, const DenseParameters& parameters, 
         auto call = workspace.scope();
         ops::linear_swiglu(hidden, gu, activation, parameters.gate_up.policy, workspace, execution);
     }
-    sharded_project_columns_add(activation, parameters.down, partials, residual, rank, collective,
+    sharded_project_columns_add(activation, parameters.down, partials, residual, collective,
                                 workspace, execution);
 }
 

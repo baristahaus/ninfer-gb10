@@ -153,6 +153,52 @@ int test_allreduce_sum() {
     return failures;
 }
 
+// The per-rank form: each rank's Program calls it once for its own rank, in a slot both ranks
+// derive the same way. This is the form the two-Program lane uses, and it must produce the same
+// bytes as the single-owner form.
+int test_allreduce_sum_rank() {
+    ExecutionContext context(std::vector<int>{0, 1});
+    PeerMailbox mailbox(context, kBytes);
+    int failures = 0;
+
+    void* payload[2] = {nullptr, nullptr};
+    const std::uint16_t fill[2] = {kBf16One, kBf16Two};
+    std::vector<std::uint16_t> host(kBytes / sizeof(std::uint16_t));
+    for (int rank = 0; rank < 2; ++rank) {
+        const CudaDeviceScope scope(Device::cuda(rank));
+        std::fill(host.begin(), host.end(), fill[rank]);
+        if (cudaMalloc(&payload[rank], kBytes) != cudaSuccess) {
+            return check(false, "per-rank allreduce payload allocation failed");
+        }
+        (void)cudaMemcpy(payload[rank], host.data(), kBytes, cudaMemcpyHostToDevice);
+    }
+
+    // Both ranks derive the same slot from the same index; neither advances a shared counter.
+    const int slot = mailbox.slot_for(0, kBytes);
+    ninfer::ops::allreduce_sum_rank(context, mailbox, 0, slot,
+                                    std::span<void* const>(payload, 2), kBytes);
+    ninfer::ops::allreduce_sum_rank(context, mailbox, 1, slot,
+                                    std::span<void* const>(payload, 2), kBytes);
+    for (int rank = 0; rank < 2; ++rank) {
+        const CudaDeviceScope scope(Device::cuda(rank));
+        failures += check(cudaDeviceSynchronize() == cudaSuccess,
+                          "per-rank allreduce rank " + std::to_string(rank) + " synchronized");
+    }
+    failures += check(!mailbox.hang_reported(), "per-rank allreduce: no poller gave up");
+
+    for (int rank = 0; rank < 2; ++rank) {
+        const CudaDeviceScope scope(Device::cuda(rank));
+        std::fill(host.begin(), host.end(), 0);
+        (void)cudaMemcpy(host.data(), payload[rank], kBytes, cudaMemcpyDeviceToHost);
+        std::size_t wrong = 0;
+        for (const std::uint16_t value : host) { if (value != kBf16Three) { ++wrong; } }
+        failures += check(wrong == 0, "per-rank allreduce rank " + std::to_string(rank) +
+                                          " holds the elementwise sum");
+        (void)cudaFree(payload[rank]);
+    }
+    return failures;
+}
+
 } // namespace
 
 int main() {
@@ -165,6 +211,7 @@ int main() {
     try {
         failures += test_exchange_sum();
         failures += test_allreduce_sum();
+        failures += test_allreduce_sum_rank();
     } catch (const std::exception& e) {
         std::cerr << "FAIL: threw: " << e.what() << '\n';
         return 1;

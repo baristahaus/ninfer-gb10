@@ -1,3 +1,4 @@
+#include "models/qwen3_5/host_tier_guard.h"
 #include "ninfer/engine.h"
 #include <nlohmann/json.hpp>
 
@@ -536,6 +537,7 @@ int main() {
         std::cout << "skip: NINFER_TEST_ARTIFACT is not set\n";
         return 77;
     }
+    if (ninfer::test::skip_without_host_tier("test_engine_preemption_real")) { return 77; }
     const std::filesystem::path artifact(configured_artifact);
     try {
         require(std::filesystem::is_regular_file(artifact),

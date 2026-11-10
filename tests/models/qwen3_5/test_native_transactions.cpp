@@ -1,3 +1,4 @@
+#include "models/qwen3_5/host_tier_guard.h"
 #include "core/device.h"
 #include "models/common/qwen/frontend/frontend.h"
 #include "models/common/qwen/frontend/prepared_prompt.h"
@@ -2391,6 +2392,7 @@ int main(int argc, char** argv) {
         std::cout << "SKIP: set NINFER_TEST_ARTIFACT to an explicit .ninfer artifact\n";
         return 77;
     }
+    if (ninfer::test::skip_without_host_tier("test_native_transactions")) { return 77; }
     try {
         require(argc <= 2,
                 "usage: ninfer_qwen3_5_native_transactions_test [none|mtp|dflash|dflash2]");

@@ -1,3 +1,4 @@
+#include "models/qwen3_5/host_tier_guard.h"
 #include "ninfer/engine.h"
 #include "kv_cache_storage.h"
 #include "artifact/reader.h"
@@ -1999,6 +2000,7 @@ int main() {
         std::cout << "skip: NINFER_TEST_ARTIFACT is not set\n";
         return 77;
     }
+    if (ninfer::test::skip_without_host_tier("test_engine_prefix_real")) { return 77; }
     const char* selected            = std::getenv("NINFER_PREFIX_REAL_SCENARIO");
     const std::string_view scenario = selected ? selected : "all";
     int result                      = 0;

@@ -20,6 +20,18 @@
 
 namespace {
 
+// A test that needs a component or a model class the artifact does not carry must skip, not fail:
+// the artifact is a local prerequisite, and its contents are not a defect of the engine.
+bool artifact_has_component(const char* artifact, const char* name) {
+    ninfer::artifact::Reader reader(artifact);
+    return reader.directory().components.count(name) != 0;
+}
+
+bool artifact_is_moe(const char* artifact) {
+    ninfer::artifact::Reader reader(artifact);
+    return reader.directory().component("text").config.contains("num_experts");
+}
+
 using namespace ninfer;
 namespace qwen      = models::qwen3_5;
 namespace execution = qwen::execution;
@@ -275,6 +287,10 @@ int main(int argc, char** argv) {
     const char* artifact = std::getenv("NINFER_TEST_ARTIFACT");
     if (!artifact || !*artifact) {
         std::cout << "skip: NINFER_TEST_ARTIFACT is not set\n";
+        return 77;
+    }
+    if (!artifact_has_component(artifact, "dflash2")) {
+        std::cout << "skip: this artifact carries no dflash2 component\n";
         return 77;
     }
     try {

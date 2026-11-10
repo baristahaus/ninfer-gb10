@@ -1,3 +1,4 @@
+#include "models/qwen3_5/host_tier_guard.h"
 #include "ninfer/engine.h"
 
 #include <nlohmann/json.hpp>
@@ -145,6 +146,7 @@ int main(int argc, char** argv) {
         std::cout << "skip: NINFER_TEST_ARTIFACT is not set\n";
         return 77;
     }
+    if (ninfer::test::skip_without_host_tier("test_engine_grammar_real")) { return 77; }
     try {
         const std::string backend = argc > 1 ? argv[1] : "none";
         ninfer::EngineOptions options;

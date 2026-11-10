@@ -20,6 +20,7 @@ target_sources(ninfer_model_execution PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/impl/runtime/visual_scatter.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/impl/state/decoder_state.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/impl/state/state_image.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/impl/state/state_image_mirror.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/impl/state/round_state.cpp)
 
 foreach(_target IN ITEMS ninfer_model_control ninfer_model_loading ninfer_model_execution)

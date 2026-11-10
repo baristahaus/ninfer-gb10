@@ -201,22 +201,36 @@ int exercise_page_and_row_replay(ninfer::DeviceContext& rank0, ninfer::DeviceCon
                      ? fail("mirror pages are not zero after a replayed zero")
                      : 0);
 
-    // A pattern into rank 0's first page, then the pool's own copy to the second page: the mirror
-    // must hold the same bytes after the replay.
-    std::vector<std::byte> pattern(page_bytes);
-    for (std::size_t index = 0; index < pattern.size(); ++index) {
-        pattern[index] = static_cast<std::byte>((index * 7 + 3) & 0xff);
-    }
-    if (cudaMemcpy(origin.plane(0).data, pattern.data(), page_bytes, cudaMemcpyHostToDevice) !=
-        cudaSuccess) {
+    // The contract is index-identical, not byte-identical: each rank copies its OWN page 0 into its
+    // page 1. Seeding only rank 0 and then comparing rank 1 to rank 0's pattern is the mistake the
+    // first two-GPU run made, so each rank gets a different pattern and each destination is compared
+    // to its own rank's source.
+    const auto fill_pattern = [page_bytes](unsigned char seed) {
+        std::vector<std::byte> bytes(page_bytes);
+        for (std::size_t index = 0; index < bytes.size(); ++index) {
+            bytes[index] = static_cast<std::byte>((seed + index * 7U) & 0xffU);
+        }
+        return bytes;
+    };
+    const std::vector<std::byte> pattern_rank0 = fill_pattern(0x11);
+    const std::vector<std::byte> pattern_rank1 = fill_pattern(0x93);
+    if (cudaMemcpy(origin.plane(0).data, pattern_rank0.data(), page_bytes,
+                   cudaMemcpyHostToDevice) != cudaSuccess ||
+        cudaMemcpy(mirror.plane(0).data, pattern_rank1.data(), page_bytes,
+                   cudaMemcpyHostToDevice) != cudaSuccess) {
         return fail("pattern upload failed");
     }
     mirrored.copy_page(handles[0], handles[1], rank0.stream());
     rank0.synchronize();
     rank1.synchronize();
-    const std::vector<std::byte> copied =
-        read_bytes(static_cast<const std::byte*>(mirror.plane(0).data) + page_bytes, page_bytes);
-    failures += (copied == pattern ? 0 : fail("replayed page copy differs on rank 1"));
+    const std::vector<std::byte> copied_rank0 = read_bytes(
+        static_cast<const std::byte*>(origin.plane(0).data) + page_bytes, page_bytes);
+    const std::vector<std::byte> copied_rank1 = read_bytes(
+        static_cast<const std::byte*>(mirror.plane(0).data) + page_bytes, page_bytes);
+    failures += (copied_rank0 == pattern_rank0 ? 0 : fail("replayed page copy differs on rank 0"));
+    failures += (copied_rank1 == pattern_rank1 ? 0 : fail("replayed page copy differs on rank 1"));
+    // A cross-rank copy would make the two destinations equal; the contract forbids it.
+    failures += (copied_rank0 == copied_rank1 ? fail("replayed page copy crossed ranks") : 0);
 
     // Execution-row publication replays the same physical indices into rank 1's row.
     ninfer::DeviceBuffer origin_tables_arena(rank0.device(), plan.bytes);

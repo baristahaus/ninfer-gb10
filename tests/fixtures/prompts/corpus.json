@@ -1,0 +1,68 @@
+{
+  "schema": 1,
+  "comment": [
+    "A fixed prompt set for GPU tests that must run from a clean checkout without inventing their",
+    "own strings. Each prompt is deterministic, model-agnostic, and short enough to keep a test's",
+    "prefill cheap. `max_tokens` is the budget a test should request; `expect` is a coarse sanity",
+    "check a test may assert on the greedy output, never an exact-text requirement (the artifacts",
+    "differ). Nothing here is a benchmark: use bench/fixtures/ for measurement."
+  ],
+  "prompts": [
+    {
+      "id": "factual-short",
+      "category": "factual",
+      "text": "The primary gas in Earth's atmosphere is",
+      "max_tokens": 32,
+      "expect": "contains 'nitrogen'"
+    },
+    {
+      "id": "arithmetic",
+      "category": "math",
+      "text": "What is 17 times 23? Reply with the number only.",
+      "max_tokens": 16,
+      "expect": "contains '391'"
+    },
+    {
+      "id": "code-snippet",
+      "category": "code",
+      "text": "Write a Python function `add(a, b)` that returns the sum. Reply with code only.",
+      "max_tokens": 48,
+      "expect": "contains 'def add'"
+    },
+    {
+      "id": "multilingual",
+      "category": "multilingual",
+      "text": "Translate 'good morning' into French and Spanish, one per line.",
+      "max_tokens": 32,
+      "expect": "contains 'bonjour' or 'buenos'"
+    },
+    {
+      "id": "structured-json",
+      "category": "structured",
+      "text": "Return a JSON object with keys 'name' and 'age' for a person named Ada aged 36. JSON only.",
+      "max_tokens": 48,
+      "expect": "parses as JSON"
+    },
+    {
+      "id": "long-context-marker",
+      "category": "retrieval",
+      "text": "Read the following and answer with the code word only.\n\nThe code word is ORCHID-7. It appears once.\n\nWhat is the code word?",
+      "max_tokens": 16,
+      "expect": "contains 'ORCHID-7'"
+    },
+    {
+      "id": "reasoning-short",
+      "category": "reasoning",
+      "text": "A box has 3 red and 2 blue balls. One ball is drawn without looking. What is the probability it is red? Reply as a fraction.",
+      "max_tokens": 24,
+      "expect": "contains '3/5'"
+    },
+    {
+      "id": "instruction-follow",
+      "category": "instruction",
+      "text": "List exactly three prime numbers between 10 and 20, comma-separated, no other text.",
+      "max_tokens": 24,
+      "expect": "contains three of 11, 13, 17, 19"
+    }
+  ]
+}

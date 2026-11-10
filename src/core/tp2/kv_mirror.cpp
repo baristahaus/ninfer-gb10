@@ -47,7 +47,18 @@ void require_matching_kv_mirror(const DeviceKVPagePool& origin, const DeviceKVPa
         throw std::invalid_argument("Paged KV mirror pool geometry differs");
     }
     // Per-page addressing must agree; the planes' total bytes may differ because rank 1 carries its
-    // own KV-head shard.
+    // own KV-head shard. Which tensor fact *is* the per-page address depends on the plane order, so
+    // the two branches compare different fields:
+    //
+    //   PageMajor: [leading, page tokens, heads, physical pages]. `nb[3]` is the page stride, the
+    //   address of page p is base + p * nb[3]; the head extent (`ne[2]`) and the head stride
+    //   (`nb[2]`) shrink with the shard and must not be compared.
+    //
+    //   HeadMajor: [leading, page tokens, physical pages, heads]. Page p starts at
+    //   base + p * nb[2] and spans `ne[3]` rows of `nb[3]` bytes, so `nb[2]` (the page stride) and
+    //   `ne[3]` (the head count) both follow the shard and are exactly the two facts that may
+    //   differ. What must agree is the row stride `nb[3]` and the leading extent `ne[0]`; `ne[2]`
+    //   is the physical page count, already required equal by capacity_pages() above.
     for (std::size_t index = 0; index < origin.plane_count(); ++index) {
         const Tensor& source  = origin.plane(index);
         const Tensor& replica = mirror.plane(index);
@@ -55,8 +66,7 @@ void require_matching_kv_mirror(const DeviceKVPagePool& origin, const DeviceKVPa
             if (source.nb[3] != replica.nb[3]) {
                 throw std::invalid_argument("Paged KV mirror pool plane page stride differs");
             }
-        } else if (source.nb[2] != replica.nb[2] || source.nb[3] != replica.nb[3] ||
-                   source.ne[3] != replica.ne[3]) {
+        } else if (source.nb[3] != replica.nb[3] || source.ne[0] != replica.ne[0]) {
             throw std::invalid_argument("Paged KV mirror pool head-major plane geometry differs");
         }
     }

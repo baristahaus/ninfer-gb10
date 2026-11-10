@@ -87,6 +87,8 @@ struct GdnExtents {
     std::int32_t value_heads = 0;
     std::int32_t key_width   = 0;
     std::int32_t value_width = 0;
+    // Q | K | V, the convolution's channel axis. It is the input projection's row count.
+    [[nodiscard]] std::int32_t conv_channels() const { return 2 * key_width + value_width; }
 };
 
 struct GdnControlRoots {
@@ -143,6 +145,22 @@ GdnProjectionRoots gdn_projection(Allocator& allocator, const TextConfig& config
     };
 }
 
+template <class Allocator>
+Tensor gdn_prefill_conv(Allocator& allocator, GdnExtents extents, std::int32_t tokens) {
+    return matrix(allocator, DType::BF16, dimension(extents.conv_channels()), tokens);
+}
+
+template <class Allocator>
+Tensor gdn_recurrent_output(Allocator& allocator, GdnExtents extents, std::int32_t tokens) {
+    return matrix(allocator, DType::BF16, dimension(extents.value_width), tokens);
+}
+
+template <class Allocator>
+Tensor gdn_normalized_output(Allocator& allocator, GdnExtents extents, std::int32_t tokens) {
+    return matrix(allocator, DType::BF16, dimension(extents.value_width), tokens);
+}
+
+// The config-wide forms: planning sizes the arena for the largest shape any rank can hold.
 template <class Allocator>
 Tensor gdn_prefill_conv(Allocator& allocator, const TextConfig& config, std::int32_t tokens) {
     return matrix(allocator, DType::BF16, dimension(config.gdn->conv_channels()), tokens);

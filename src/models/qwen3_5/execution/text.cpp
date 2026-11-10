@@ -201,17 +201,18 @@ void TextRun::gdn(const BlockParameters& block, std::uint32_t compact_layer) {
     const auto tokens    = residual_.ne[1];
     const auto width     = inputs_.ids.ne[0];
     const auto batch     = inputs_.ids.ne[1];
-    const auto qh        = dimension(gdn.linear_num_key_heads);
-    const auto vh        = dimension(gdn.linear_num_value_heads);
-    const auto dk        = dimension(gdn.linear_key_head_dim);
-    const auto dv        = dimension(gdn.linear_value_head_dim);
-    const auto scale     = static_cast<float>(1.0 / std::sqrt(double(gdn.linear_key_head_dim)));
+    const auto dk    = dimension(gdn.linear_key_head_dim);
+    const auto dv    = dimension(gdn.linear_value_head_dim);
+    const auto scale = static_cast<float>(1.0 / std::sqrt(double(gdn.linear_key_head_dim)));
     const auto* sequence = std::get_if<SequenceUpdate>(&update_);
     const auto* replay   = std::get_if<ReplayRecords>(&update_);
 
     // The rank's own extents, not the config's: at width 2 the ops validate against the rank's
-    // sharded heads and widths, so a workspace sized from the model description is rejected.
+    // sharded heads and widths, so a workspace sized from the model description is rejected. The
+    // head counts follow from the widths, so the two cannot disagree with the tensors they shape.
     const auto extents = gdn_extents(p);
+    const auto qh      = static_cast<std::uint32_t>(extents.key_width / dk);
+    const auto vh      = static_cast<std::uint32_t>(extents.value_heads);
     const auto control = workspace::gdn_control(work, extents, tokens);
     Tensor h           = control.hidden;
     Tensor g           = control.g;
@@ -224,7 +225,7 @@ void TextRun::gdn(const BlockParameters& block, std::uint32_t compact_layer) {
     Tensor kc             = projection.key;
     Tensor vc             = projection.value;
     if (sequence) {
-        Tensor qkv    = workspace::gdn_prefill_conv(work, cfg, tokens);
+        Tensor qkv    = workspace::gdn_prefill_conv(work, extents, tokens);
         Tensor z_flat = z.view({dimension(gdn.value_width()), tokens});
         gdn_projection(h, p, qkv, z_flat, work, cuda);
         Tensor source      = view_.states.conv_slot(compact_layer, sequence->source_slot);
@@ -244,11 +245,11 @@ void TextRun::gdn(const BlockParameters& block, std::uint32_t compact_layer) {
             // over the qkv rows. The conv preserves the projection's row order, so
             // each split output is a contiguous row range of its result.
             const std::int32_t kColumns = width * batch;
-            Tensor qkv       = workspace::gdn_prefill_conv(work, cfg, kColumns);
+            Tensor qkv       = workspace::gdn_prefill_conv(work, extents, kColumns);
             Tensor z_flat    = z.view({dimension(gdn.value_width()), kColumns});
             Tensor hidden_2d = h.view({dimension(cfg.hidden_size), kColumns});
             gdn_projection(hidden_2d, p, qkv, z_flat, work, cuda);
-            Tensor conv_out    = workspace::gdn_prefill_conv(work, cfg, kColumns);
+            Tensor conv_out    = workspace::gdn_prefill_conv(work, extents, kColumns);
             Tensor conv_input  = qkv.view({dimension(gdn.conv_channels()), width, batch});
             Tensor conv_result = conv_out.view({dimension(gdn.conv_channels()), width, batch});
             if (replay) {
@@ -326,7 +327,7 @@ void TextRun::gdn(const BlockParameters& block, std::uint32_t compact_layer) {
     Tensor q = qc.view({dk, qh, tokens});
     Tensor k = kc.view({dk, qh, tokens});
     Tensor v = vc.view({dv, vh, tokens});
-    Tensor o = workspace::gdn_recurrent_output(work, cfg, tokens).view({dv, vh, tokens});
+    Tensor o = workspace::gdn_recurrent_output(work, extents, tokens).view({dv, vh, tokens});
     if (sequence && !replay) {
         Tensor source      = view_.states.recurrent_slot(compact_layer, sequence->source_slot);
         Tensor destination = view_.states.recurrent_slot(compact_layer, sequence->destination_slot);
@@ -351,7 +352,7 @@ void TextRun::gdn(const BlockParameters& block, std::uint32_t compact_layer) {
         }
     }
 
-    Tensor normalized = workspace::gdn_normalized_output(work, cfg, tokens).view({dv, vh, tokens});
+    Tensor normalized = workspace::gdn_normalized_output(work, extents, tokens).view({dv, vh, tokens});
     ops::silu_gated_rmsnorm(o, p.norm, z, cfg.rms_norm_eps, normalized, cuda);
     if (view_.collective != nullptr) {
         // Column-parallel, same residual rule as the attention output projection.

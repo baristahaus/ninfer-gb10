@@ -160,6 +160,133 @@ struct DumpDifference {
     return result;
 }
 
+// Reports every differing component and layer of two dumps of the same frontier, with the count
+// and the largest delta. The caller has already established that the two dumps are comparable.
+void report_dump_differences(const std::filesystem::path& directory, const std::string& reused_stem,
+                             const std::string& cold_stem, const nlohmann::json& reused_meta,
+                             const nlohmann::json& cold_meta) {
+    const auto layers        = reused_meta.value("layers", 0U);
+    const auto conv_width    = reused_meta.value("conv_width", 0);
+    const auto dflash_layers = reused_meta.value("dflash_local_layers", 0U);
+    std::size_t differing_components = 0;
+    std::size_t differing_elements   = 0;
+    std::size_t compared_elements    = 0;
+    std::uint32_t differing_layers   = 0;
+    const auto report = [&](const std::string& label, const DumpDifference& difference) {
+        if (!difference.differs) { return; }
+        ++differing_components;
+        differing_elements += difference.count;
+        compared_elements += difference.total;
+        std::cerr << "prefix state dump: " << label << ": " << difference.count << " of "
+                  << difference.total << " elements differ; first element "
+                  << difference.first_element << " reused " << difference.first_reused << " cold "
+                  << difference.first_cold << "; max |delta| " << difference.max_delta
+                  << " at element " << difference.max_element << " (reused "
+                  << difference.max_reused << ", cold " << difference.max_cold << ")";
+        if (conv_width > 0 && label.rfind("conv layer", 0) == 0) {
+            std::cerr << "; that element is channel " << difference.max_element / conv_width
+                      << ", tap " << difference.max_element % conv_width;
+        }
+        std::cerr << '\n';
+    };
+    for (std::uint32_t layer = 0; layer < layers; ++layer) {
+        const DumpDifference conv = compare_dump_file(
+            directory, reused_stem, cold_stem, ".conv." + std::to_string(layer) + ".bf16", 2);
+        if (conv.differs) { ++differing_layers; }
+        report("conv layer " + std::to_string(layer), conv);
+        const DumpDifference recurrent = compare_dump_file(
+            directory, reused_stem, cold_stem, ".recurrent." + std::to_string(layer) + ".fp32", 4);
+        if (recurrent.differs) { ++differing_layers; }
+        report("recurrent layer " + std::to_string(layer), recurrent);
+    }
+    const std::vector<std::string> reused_components =
+        reused_meta.value("components", std::vector<std::string>{});
+    const std::vector<std::string> cold_components =
+        cold_meta.value("components", std::vector<std::string>{});
+    const auto has_component = [](const std::vector<std::string>& list, const char* name) {
+        return std::find(list.begin(), list.end(), name) != list.end();
+    };
+    const auto compare_single = [&](const char* component, const std::string& suffix) {
+        if (!has_component(reused_components, component) ||
+            !has_component(cold_components, component)) {
+            std::cerr << "prefix state dump: " << component << " is absent from a run; skipped\n";
+            return;
+        }
+        report(component, compare_dump_file(directory, reused_stem, cold_stem, suffix, 2));
+    };
+    compare_single("continuation_hidden", ".continuation_hidden.bf16");
+    compare_single("mtp_hidden", ".mtp_hidden.bf16");
+    compare_single("ple", ".ple.bf16");
+    for (std::uint32_t layer = 0; layer < dflash_layers; ++layer) {
+        const std::string suffix = std::to_string(layer) + ".bf16";
+        compare_single("dflash_local_k", ".dflash_local_k." + suffix);
+        compare_single("dflash_local_v", ".dflash_local_v." + suffix);
+    }
+    std::cerr << "prefix state dump: " << differing_components << " component/layer files differ, "
+              << differing_layers << " layer components, " << differing_elements << " of "
+              << compared_elements << " compared elements\n";
+    if (differing_components == 0) {
+        std::cerr << "prefix state dump: every component of the committed slot is bitwise identical\n";
+    }
+}
+struct DumpMetadata {
+    std::string stem;
+    std::string phase;
+    int slot               = -1;
+    std::uint32_t frontier = 0;
+};
+
+[[nodiscard]] std::optional<DumpMetadata> read_dump_metadata(const std::filesystem::path& directory,
+                                                            const std::string& stem) {
+    std::ifstream file(directory / (stem + ".json"));
+    if (!file) { return std::nullopt; }
+    nlohmann::json meta;
+    file >> meta;
+    return DumpMetadata{.stem     = stem,
+                        .phase    = meta.value("phase", std::string("commit")),
+                        .slot     = meta.value("physical_slot", -1),
+                        .frontier = meta.value("frontier", 0U)};
+}
+
+// The copy-identity test. A Fork's restore is a device-to-device copy of one slot, so the
+// "materialization" dump of the source must be bitwise identical to the "commit" dump of that same
+// slot at that same frontier. This is the clean test of the restore: it compares the same bytes,
+// not two runs that reached the same mathematical state along different kernel paths.
+void compare_copy_identity(const std::filesystem::path& directory,
+                           const DumpMetadata& materialization) {
+    if (materialization.phase != "materialization") { return; }
+    std::optional<DumpMetadata> commit;
+    for (const auto& stem : dump_stems(directory)) {
+        const auto meta = read_dump_metadata(directory, stem);
+        if (!meta || meta->phase != "commit" || meta->slot != materialization.slot ||
+            meta->frontier != materialization.frontier) {
+            continue;
+        }
+        if (!commit) { commit = meta; }
+    }
+    if (!commit) {
+        std::cerr << "prefix state dump: copy identity: no commit dump of slot "
+                  << materialization.slot << " at frontier " << materialization.frontier
+                  << "; the slot was not dumped when it was produced\n";
+        return;
+    }
+    std::cerr << "prefix state dump: copy identity: slot " << materialization.slot << " frontier "
+              << materialization.frontier << " (commit " << commit->stem
+              << " vs materialization " << materialization.stem << ")\n";
+    nlohmann::json commit_meta;
+    nlohmann::json materialization_meta;
+    {
+        std::ifstream file(directory / (commit->stem + ".json"));
+        file >> commit_meta;
+    }
+    {
+        std::ifstream file(directory / (materialization.stem + ".json"));
+        file >> materialization_meta;
+    }
+    report_dump_differences(directory, commit->stem, materialization.stem, commit_meta,
+                            materialization_meta);
+}
+
 void compare_prefix_state_dumps(const std::filesystem::path& directory,
                                 const std::set<std::string>& reused_stems,
                                 const std::set<std::string>& cold_stems) {
@@ -211,67 +338,7 @@ void compare_prefix_state_dumps(const std::filesystem::path& directory,
         }
         std::cerr << "; comparing by content at the same frontier\n";
     }
-    std::size_t differing_components = 0;
-    std::size_t differing_elements   = 0;
-    std::size_t compared_elements    = 0;
-    std::uint32_t differing_layers   = 0;
-    const auto report = [&](const std::string& label, const DumpDifference& difference) {
-        if (!difference.differs) { return; }
-        ++differing_components;
-        differing_elements += difference.count;
-        compared_elements += difference.total;
-        std::cerr << "prefix state dump: " << label << ": " << difference.count << " of "
-                  << difference.total << " elements differ; first element "
-                  << difference.first_element << " reused " << difference.first_reused << " cold "
-                  << difference.first_cold << "; max |delta| " << difference.max_delta
-                  << " at element " << difference.max_element << " (reused "
-                  << difference.max_reused << ", cold " << difference.max_cold << ")";
-        if (conv_width > 0 && label.rfind("conv layer", 0) == 0) {
-            std::cerr << "; that element is channel " << difference.max_element / conv_width
-                      << ", tap " << difference.max_element % conv_width;
-        }
-        std::cerr << '\n';
-    };
-    for (std::uint32_t layer = 0; layer < layers; ++layer) {
-        const DumpDifference conv = compare_dump_file(
-            directory, reused_stem, cold_stem, ".conv." + std::to_string(layer) + ".bf16", 2);
-        if (conv.differs) { ++differing_layers; }
-        report("conv layer " + std::to_string(layer), conv);
-        const DumpDifference recurrent = compare_dump_file(
-            directory, reused_stem, cold_stem, ".recurrent." + std::to_string(layer) + ".fp32", 4);
-        if (recurrent.differs) { ++differing_layers; }
-        report("recurrent layer " + std::to_string(layer), recurrent);
-    }
-    const std::vector<std::string> reused_components =
-        reused_meta.value("components", std::vector<std::string>{});
-    const std::vector<std::string> cold_components =
-        cold_meta.value("components", std::vector<std::string>{});
-    const auto has_component = [](const std::vector<std::string>& list, const char* name) {
-        return std::find(list.begin(), list.end(), name) != list.end();
-    };
-    const auto compare_single = [&](const char* component, const std::string& suffix) {
-        if (!has_component(reused_components, component) ||
-            !has_component(cold_components, component)) {
-            std::cerr << "prefix state dump: " << component << " is absent from a run; skipped\n";
-            return;
-        }
-        report(component, compare_dump_file(directory, reused_stem, cold_stem, suffix, 2));
-    };
-    compare_single("continuation_hidden", ".continuation_hidden.bf16");
-    compare_single("mtp_hidden", ".mtp_hidden.bf16");
-    compare_single("ple", ".ple.bf16");
-    const auto dflash_layers = reused_meta.value("dflash_local_layers", 0U);
-    for (std::uint32_t layer = 0; layer < dflash_layers; ++layer) {
-        const std::string suffix = std::to_string(layer) + ".bf16";
-        compare_single("dflash_local_k", ".dflash_local_k." + suffix);
-        compare_single("dflash_local_v", ".dflash_local_v." + suffix);
-    }
-    std::cerr << "prefix state dump: " << differing_components << " component/layer files differ, "
-              << differing_layers << " layer components, " << differing_elements << " of "
-              << compared_elements << " compared elements\n";
-    if (differing_components == 0) {
-        std::cerr << "prefix state dump: every component of the committed slot is bitwise identical\n";
-    }
+    report_dump_differences(directory, reused_stem, cold_stem, reused_meta, cold_meta);
 }
 
 
@@ -464,8 +531,18 @@ int exercise_mtp_and_prefix(ninfer::Engine& engine,
     const ninfer::GenerationResult cold =
         engine.generate(engine.prepare_tokens(continuation), greedy_options(2, false));
     if (dump_directory) {
-        compare_prefix_state_dumps(*dump_directory, reused_dump_stems,
-                                   new_dump_stems(*dump_directory, dump_before_cold));
+        const std::set<std::string> cold_dump_stems =
+            new_dump_stems(*dump_directory, dump_before_cold);
+        std::optional<DumpMetadata> materialization;
+        for (const auto& stem : reused_dump_stems) {
+            const auto meta = read_dump_metadata(*dump_directory, stem);
+            if (meta && meta->phase == "materialization") { materialization = meta; }
+        }
+        if (materialization) {
+            compare_copy_identity(*dump_directory, *materialization);
+        } else {
+            compare_prefix_state_dumps(*dump_directory, reused_dump_stems, cold_dump_stems);
+        }
     }
     const std::uint32_t expected_reuse =
         static_cast<std::uint32_t>(prompt.size() + first.generated_token_ids.size() - 1);

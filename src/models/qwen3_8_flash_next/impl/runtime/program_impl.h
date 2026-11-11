@@ -9948,6 +9948,11 @@ void ProgramImplCore::start_sequence(std::uint32_t lane, SequenceState& sequence
                 sequence.state = ActiveStateBinding{.read = current, .write = current};
             } else {
                 const StateImageSelectors selectors = state_store->begin_fork(selected, current);
+                // Copy-identity seam: the restored source, dumped at the reuse frontier, must be
+                // bitwise identical to the commit dump of the same slot that produced it.
+                qwen3_8_flash_next::detail::capture_committed_state(
+                    "fork", *state_images, selectors.source, sequence.lane, base, sequence.ledger,
+                    device.stream(), "materialization");
                 if (ninfer::models::is_masked_draft_backend(speculative_backend)) {
                     state_images->copy_dflash_local(selectors.source, selectors.destination,
                                                     device.stream());

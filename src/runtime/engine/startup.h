@@ -1,5 +1,6 @@
 #pragma once
 
+#include "models/common/sharded_group.h"
 #include "runtime/engine/instance.h"
 #include "runtime/executor/rank_worker.h"
 #include "runtime/engine/context_cache/context_cost.h"
@@ -29,6 +30,18 @@ struct ConstructedModel {
     // device rather than owning it: the Qwen3.5 worker holds a reference, and the Flash-Next
     // Program holds references to the pools it built on it.
     std::unique_ptr<ExecutionContext> execution;
+    // The two-GPU lane's group-scoped resources: the ONE mailbox and the ONE partial pair (plus the
+    // logits pair) that both Programs share. Declared BEFORE `instance` so it is destroyed AFTER the
+    // Programs that borrow it: the mailbox's pinned slab, its per-device words and the partial
+    // addresses are baked into every exchange, so nothing that uses them may outlive them. Null at
+    // width 1, where nothing is constructed.
+    //
+    // THIS FIELD IS THE OWNER. `build_local_model` builds it in a local `BuiltModel`, and before
+    // this field existed the local's destructor freed it at the end of `construct_model` — during
+    // startup — while both Programs kept raw pointers into it. The first column-parallel projection
+    // then wrote into freed device memory (cudaErrorIllegalAddress, Xid 31). Carrying the owner
+    // across the boundary is what keeps it alive for the Engine's lifetime.
+    std::unique_ptr<models::ShardedGroupOwner> sharded;
     ActiveModel instance;
     LoadSummary load;
     ContextMachineCostModel context_cost;

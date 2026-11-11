@@ -269,19 +269,34 @@ ConstructedModel construct_model(EngineOptions& options) {
         if (options.deployment && options.deployment->ranks.size() > 1) {
             auto built = detail::build_distributed_model<models::qwen4_exp::ParallelStartup>(
                 reader, options, start);
-            return {nullptr, std::move(built.instance), std::move(built.load),
-                    std::move(built.context_cost)};
+            ConstructedModel constructed;
+            constructed.instance    = std::move(built.instance);
+            constructed.load        = std::move(built.load);
+            constructed.context_cost = std::move(built.context_cost);
+            return constructed;
         }
 #endif
         auto built = detail::build_local_model<models::qwen4_exp::Startup>(reader, options, start);
-        return {std::move(built.execution), std::move(built.instance), std::move(built.load),
-                std::move(built.context_cost)};
+        ConstructedModel constructed;
+        constructed.execution    = std::move(built.execution);
+        constructed.sharded      = std::move(built.sharded);
+        constructed.instance     = std::move(built.instance);
+        constructed.load         = std::move(built.load);
+        constructed.context_cost = std::move(built.context_cost);
+        return constructed;
     }
     case models::Architecture::Qwen3_5:
     case models::Architecture::Qwen3_5Moe: {
         auto built = detail::build_local_model<models::qwen3_5::Startup>(reader, options, start);
-        ConstructedModel constructed{std::move(built.execution), std::move(built.instance),
-                                     std::move(built.load), std::move(built.context_cost)};
+        ConstructedModel constructed;
+        constructed.execution    = std::move(built.execution);
+        // The owner must cross this boundary. `built` is a local, so leaving `sharded` in it frees
+        // the mailbox and the partial pair here — during startup — while both Programs keep raw
+        // pointers into the group.
+        constructed.sharded      = std::move(built.sharded);
+        constructed.instance     = std::move(built.instance);
+        constructed.load         = std::move(built.load);
+        constructed.context_cost = std::move(built.context_cost);
         constructed.qwen3_5_peers = std::move(built.peers);
         return constructed;
     }

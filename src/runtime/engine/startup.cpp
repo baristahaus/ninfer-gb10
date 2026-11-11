@@ -120,8 +120,9 @@ constexpr WidthTwoOption kWidthTwoOptions[] = {
     {"--spec mtp",
      [](const EngineOptions& o) { return o.speculative.backend == SpeculativeBackend::Mtp; },
      false, "",
-     "the MTP drafter's proposal logits are row-sharded and no two-rank round has been compared "
-     "against width 1"},
+     "the MTP drafter's proposal logits are row-sharded and its linear_pair call rejects the "
+     "sharded profile at width 2: measured, a width-2 round throws 'linear_pair: invalid matrix "
+     "profile or token interval'"},
     {"--spec dflash",
      [](const EngineOptions& o) { return o.speculative.backend == SpeculativeBackend::DFlash; },
      false, "",

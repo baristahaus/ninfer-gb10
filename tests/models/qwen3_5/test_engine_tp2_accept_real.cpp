@@ -44,7 +44,15 @@ std::vector<ninfer::TokenId> run_round(const char* artifact, int width, int devi
     // instead of inheriting defaults that the gate would refuse. Each of those combinations gets
     // its own row in that table, and its own comparison, when it is validated.
     options.context_cache.enabled = false;
-    options.speculative.backend   = ninfer::SpeculativeBackend::None;
+    // NINFER_TP2_SPEC selects a speculative backend so one binary can run each option-gate
+    // comparison. Unset means the plain lane, which is the configuration this test validated first.
+    const char* spec = std::getenv("NINFER_TP2_SPEC");
+    if (spec != nullptr && std::string_view(spec) == "mtp") {
+        options.speculative.backend        = ninfer::SpeculativeBackend::Mtp;
+        options.speculative.draft_tokens   = 3;
+    } else {
+        options.speculative.backend = ninfer::SpeculativeBackend::None;
+    }
     options.max_context           = 2048;
     // The default capacity is 8192 tokens, outside the usable range for a 2048 context; without this
     // the engine refuses at option validation before either round runs.

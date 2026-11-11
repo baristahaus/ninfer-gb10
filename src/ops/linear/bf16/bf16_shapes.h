@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ops/linear/bf16/bf16_launch.h"
+#include "ops/linear/kernels/bf16/bf16_launch.h"
 
 namespace ninfer::ops::detail {
 

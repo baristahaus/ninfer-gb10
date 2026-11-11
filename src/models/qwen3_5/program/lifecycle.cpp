@@ -168,29 +168,10 @@ void RankProgramImpl::start_frame(runtime::ExecutionRequest<ExecutionTypes>&& re
             compute ? "occupied" : "free", context_operation ? "occupied" : "free",
             trace_reduces_before);
     }
-    // The lane loads but has never produced a validated round at width 2. Both ranks now take the
-    // sharded call sites -- the three column-parallel projections branch on the collective, and
-    // both Programs are handed the same ShardedGroup -- but no two-GPU round has been compared
-    // against a single-GPU one, and every defect this lane has found produced numbers that looked
-    // plausible.
-    // So the refusal stands until the tokens match, and it names that reason rather than claiming
-    // the loop is unwired.
-    // The comparison that must justify removing this refusal cannot run while it stands, so there is
-    // exactly one escape, it must be set explicitly, and it says so on stderr. An escape that is
-    // quiet is an escape that becomes the default.
-    const bool experiment = std::getenv("NINFER_TP2_UNVALIDATED") != nullptr;
-    if (experiment) {
-        std::fprintf(stderr,
-                     "WARNING: NINFER_TP2_UNVALIDATED is set. The sharded forward has no validated "
-                     "round; any numbers this process produces are unverified.\n");
-    }
-    if (peer_text_kv != nullptr && !experiment) {
-        throw std::logic_error(
-            "the sharded forward has no validated round yet: this lane loads but cannot infer. A "
-            "width-2 round has never been compared token for token against a width-1 round, and "
-            "a sharded projection that is subtly wrong produces plausible numbers rather than an "
-            "error. Remove this refusal only with that comparison passing");
-    }
+    // The sharded lane is validated: a width-2 round on two GPUs produces the same 32 tokens, in the
+    // same order, as the width-1 round on one GPU with the same artifact and prompt (df3495c6). The
+    // refusal that stood here until that comparison passed has been removed with its escape, because
+    // a validated path guarded by a variable that must be set is a path that is off by default.
     if (request.ticket.frame.kind == runtime::FrameKind::Context) {
         if (context_operation) throw std::logic_error("Qwen3.5 context frame is occupied");
         context_operation =

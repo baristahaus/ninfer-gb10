@@ -64,7 +64,7 @@ say "   host     $HOST"
 say "   source   $SRC -> $DST"
 say "   build    $DST/$BUILD"
 say "   artifact $ARTIFACT"
-say "   variables NINFER_TP2_ACCEPT=1 NINFER_TP2_ARM=$ARM NINFER_TP2_UNVALIDATED=1"
+say "   variables NINFER_TP2_ACCEPT=1 NINFER_TP2_ARM=$ARM"
 
 # The dry run stops here: it is the mode that works on a machine that cannot reach the lane host,
 # so it must not depend on the host being reachable.
@@ -96,5 +96,5 @@ say "== build $BUILD on $HOST"
 remote "cd $DST && cmake --build $BUILD -j 16 2>&1 | tail -5"
 
 say "== arm $ARM"
-remote "cd $DST && NINFER_TP2_ACCEPT=1 NINFER_TP2_ARM=$ARM NINFER_TP2_UNVALIDATED=1 \
+remote "cd $DST && NINFER_TP2_ACCEPT=1 NINFER_TP2_ARM=$ARM \
         NINFER_TEST_ARTIFACT=$ARTIFACT ./$BUILD/tests/ninfer_qwen3_5_tp2_accept_real_test 2>&1 | tail -40"

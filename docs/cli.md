@@ -297,9 +297,10 @@ Run `./build/rtx5090-release/apps/ninfer --help` for the exact option contract.
 
 ## Two-GPU lane validation
 
-`NINFER_TP2_UNVALIDATED=1` lets a width-above-one round run before the sharded forward has a validated
-token-for-token comparison against a single-device round. It prints a warning to stderr and exists only so
-that comparison can be made; without it the lane refuses to infer. Do not set it for serving.
+The sharded lane is validated. A width-2 round on two devices produces the same tokens, in the same
+order, as a width-1 round on one device with the same artifact and prompt; the lane therefore runs
+without an opt-in, and there is no variable that lifts a refusal. `tools/lane/run-tp2-arm.sh` is the
+procedure that made the comparison, kept so it can be repeated against a new artifact.
 
 ## Shard-slice debugging
 

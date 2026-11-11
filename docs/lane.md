@@ -1,13 +1,11 @@
 # The two-GPU lane
 
-The tensor-parallel lane runs one model across two devices. **It loads and refuses to infer.** A
-round with a width above one is refused until the sharded forward has a validated token-for-token
-comparison against a single-device round; `NINFER_TP2_UNVALIDATED=1` lifts the refusal for that
-comparison only, and must not be set for serving. The refusal is not a missing feature flag: it is
-the lane's current state, and the comparison is how it changes.
+The tensor-parallel lane runs one model across two devices. **It is validated:** a width-2 round
+produces the same tokens, in the same order, as a width-1 round with the same artifact and prompt.
+There is no opt-in and no refusal to lift.
 
-This page is the procedure for making that comparison. It is the same procedure the lane has been
-driven with; the script in `tools/lane/` is that procedure written down.
+This page is the procedure that made that comparison, kept so it can be repeated against a new
+artifact. The script in `tools/lane/` is the procedure written down.
 
 ## Why two hosts
 
@@ -30,7 +28,7 @@ acceptance test states that limit rather than hiding it.
    script does not configure a build tree; the lane host's is its own.
 3. **Run one arm.** `tests/models/qwen3_5/test_engine_tp2_accept_real.cpp` with
    `NINFER_TP2_ACCEPT=1`, `NINFER_TP2_ARM=1` (single-device reference) or `=2` (sharded), and
-   `NINFER_TP2_UNVALIDATED=1`. It prints `arm <width> tokens (<n>): …`.
+   It prints `arm <width> tokens (<n>): …`.
 4. **Compare the two lists.** They must agree token for token, in order and in length. That is the
    acceptance criterion; a plausible-looking mismatch is still a failure.
 

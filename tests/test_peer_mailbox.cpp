@@ -21,6 +21,7 @@
 #include <string>
 #include <span>
 #include <vector>
+#include <cstring>
 
 namespace {
 
@@ -199,6 +200,139 @@ int test_allreduce_sum_rank() {
     return failures;
 }
 
+
+// ---- stress: the lane's reduce pattern, with self-describing payloads ---------------------------
+//
+// One 27B round issues 4096 column-parallel reduces back to back with NO synchronization between
+// them, alternating two slots, each carrying a different payload. The three tests above cannot see a
+// race in that pattern: each synchronizes after a single exchange and carries a constant fill, so a
+// stale or half-received payload still produces the expected sum. This test reproduces the pattern
+// and makes every received vector self-describing, so a mismatch NAMES the exchange the payload
+// actually came from instead of only failing a comparison.
+//
+// Tag: value = (exchange % 32) * 2 + (vector index & 1) + 1, plus 100 for rank 1. Every value is a
+// small integer, exact in BF16, and exact through the FP32 combine and its one round-to-nearest
+// store, so the expected sum 2 * tag + 100 is exact too. Consecutive exchanges differ by 2, so a
+// payload that is one exchange stale is identifiable from the value alone.
+constexpr std::size_t kStressBytes   = 60 * 1024; // the width-2 decode projection reduce payload
+constexpr int kStressExchanges       = 1024;      // raise for a longer window; 4096 is one round
+constexpr int kStressRankOffset      = 100;
+
+int stress_tag(int exchange, int vector_index) {
+    return (exchange % 32) * 2 + (vector_index & 1) + 1;
+}
+
+std::uint16_t bf16_bits_of(float value) {
+    std::uint32_t bits = 0;
+    std::memcpy(&bits, &value, sizeof(bits));
+    return static_cast<std::uint16_t>(bits >> 16);
+}
+
+float bf16_value_of(std::uint16_t bits) {
+    const std::uint32_t wide = static_cast<std::uint32_t>(bits) << 16;
+    float value              = 0.0f;
+    std::memcpy(&value, &wide, sizeof(value));
+    return value;
+}
+
+int test_exchange_stress() {
+    ExecutionContext context(std::vector<int>{0, 1});
+    PeerMailbox mailbox(context, kStressBytes);
+    int failures = 0;
+    const int vectors = static_cast<int>(kStressBytes / sizeof(uint4));
+
+    std::vector<void*> payload[2];
+    std::vector<std::uint16_t> host(kStressBytes / sizeof(std::uint16_t));
+    for (int rank = 0; rank < 2; ++rank) {
+        const CudaDeviceScope scope(Device::cuda(rank));
+        payload[rank].resize(kStressExchanges);
+        for (int k = 0; k < kStressExchanges; ++k) {
+            if (cudaMalloc(&payload[rank][k], kStressBytes) != cudaSuccess) {
+                return check(false, "stress payload allocation failed");
+            }
+            for (int i = 0; i < vectors * 8; ++i) {
+                const int tag = stress_tag(k, i / 8) + rank * kStressRankOffset;
+                host[static_cast<std::size_t>(i)] = bf16_bits_of(static_cast<float>(tag));
+            }
+            (void)cudaMemcpy(payload[rank][k], host.data(), kStressBytes, cudaMemcpyHostToDevice);
+        }
+    }
+
+    // No synchronization between exchanges: this is the ordering the lane relies on, and the point of
+    // the test is that the transport must not need one.
+    for (int k = 0; k < kStressExchanges; ++k) {
+        const int slot = mailbox.slot_for(static_cast<std::size_t>(k), kStressBytes);
+        for (int rank = 0; rank < 2; ++rank) {
+            const CudaDeviceScope scope(Device::cuda(rank));
+            mailbox.enqueue_exchange_sum(rank, slot, payload[rank][k], kStressBytes,
+                                         context.device(rank).stream());
+        }
+    }
+    for (int rank = 0; rank < 2; ++rank) {
+        const CudaDeviceScope scope(Device::cuda(rank));
+        failures += check(cudaDeviceSynchronize() == cudaSuccess,
+                          "stress rank " + std::to_string(rank) + " synchronized");
+    }
+    failures += check(!mailbox.hang_reported(), "stress: no poller gave up");
+
+    // Verify every vector of every exchange, and diagnose the first few mismatches by asking which
+    // exchange the value actually came from.
+    std::size_t mismatches = 0;
+    int reported           = 0;
+    for (int rank = 0; rank < 2; ++rank) {
+        const CudaDeviceScope scope(Device::cuda(rank));
+        for (int k = 0; k < kStressExchanges; ++k) {
+            std::fill(host.begin(), host.end(), 0);
+            if (cudaMemcpy(host.data(), payload[rank][k], kStressBytes,
+                           cudaMemcpyDeviceToHost) != cudaSuccess) {
+                failures += check(false, "stress read back failed");
+                return failures;
+            }
+            for (int i = 0; i < vectors * 8; ++i) {
+                const int vector_index = i / 8;
+                const int expected =
+                    2 * stress_tag(k, vector_index) + kStressRankOffset;
+                const float actual_value = bf16_value_of(host[static_cast<std::size_t>(i)]);
+                if (static_cast<int>(actual_value) == expected) { continue; }
+                ++mismatches;
+                if (reported >= 8) { continue; }
+                ++reported;
+                // Which exchange could this value have come from? A stale payload is the common
+                // failure and it is worth naming rather than leaving as a number.
+                std::string origin = "unrecognised";
+                for (int candidate = k - 4; candidate <= k + 4; ++candidate) {
+                    if (candidate < 0 || candidate == k) { continue; }
+                    const int tag = stress_tag(candidate, vector_index);
+                    if (static_cast<int>(actual_value) == 2 * tag + kStressRankOffset) {
+                        origin = "exchange " + std::to_string(candidate) + " (stale by " +
+                                 std::to_string(k - candidate) + ")";
+                        break;
+                    }
+                    if (static_cast<int>(actual_value) == tag + rank * kStressRankOffset) {
+                        origin = "the rank's OWN unpublished payload from exchange " +
+                                 std::to_string(candidate);
+                        break;
+                    }
+                }
+                std::cerr << "  stress mismatch: rank " << rank << " exchange " << k << " vector "
+                          << vector_index << " element " << i << " expected " << expected
+                          << " got " << actual_value << " -> " << origin << '\n';
+            }
+        }
+    }
+    failures += check(mismatches == 0,
+                      "the mailbox carried every vector of every exchange (" +
+                          std::to_string(mismatches) + " mismatched of " +
+                          std::to_string(std::size_t{2} * kStressExchanges * kStressBytes / 2) +
+                          " elements)");
+
+    for (int rank = 0; rank < 2; ++rank) {
+        const CudaDeviceScope scope(Device::cuda(rank));
+        for (void* buffer : payload[rank]) { (void)cudaFree(buffer); }
+    }
+    return failures;
+}
+
 } // namespace
 
 int main() {
@@ -214,6 +348,7 @@ int main() {
         failures += test_exchange_sum();
         failures += test_allreduce_sum();
         failures += test_allreduce_sum_rank();
+        failures += test_exchange_stress();
     } catch (const std::exception& e) {
         std::cerr << "FAIL: threw: " << e.what() << '\n';
         return 1;

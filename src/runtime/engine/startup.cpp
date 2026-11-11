@@ -95,6 +95,75 @@ void validate_options(const EngineOptions& options) {
 
 } // namespace
 
+namespace {
+
+// Width > 1 option combinations: one row per option this engine has that touches the sharded lane.
+// A row is either validated — a two-rank round has been compared token for token against width 1 —
+// or it refuses. Promotion means adding the evidence to a row, never deleting a refusal, and a row
+// whose option disappears is deleted with the option: this is a register of what exists, not a
+// framework.
+//
+// The sharded path's own checks ("the collective requires exactly two ranks") guard the collective's
+// SHAPE; they say nothing about whether an option's semantics were ever compared at width 2. That is
+// the gap this table closes.
+struct WidthTwoOption {
+    std::string_view option;
+    bool (*requested)(const EngineOptions&);
+    bool validated;
+    // The two-rank round that validated it, or empty while it is unvalidated.
+    std::string_view evidence;
+    // Why it is unvalidated, and therefore what the refusal is protecting.
+    std::string_view reason;
+};
+
+constexpr WidthTwoOption kWidthTwoOptions[] = {
+    {"--spec mtp",
+     [](const EngineOptions& o) { return o.speculative.backend == SpeculativeBackend::Mtp; },
+     false, "",
+     "the MTP drafter's proposal logits are row-sharded and no two-rank round has been compared "
+     "against width 1"},
+    {"--spec dflash",
+     [](const EngineOptions& o) { return o.speculative.backend == SpeculativeBackend::DFlash; },
+     false, "",
+     "the DFlash drafter has no two-rank round compared against width 1"},
+    {"--spec dflash2",
+     [](const EngineOptions& o) { return o.speculative.backend == SpeculativeBackend::DFlash2; },
+     false, "",
+     "the DFlash2 drafter has no two-rank round compared against width 1"},
+    {"--causal-scoring",
+     [](const EngineOptions& o) { return o.purpose == EnginePurpose::CausalScoring; },
+     false, "",
+     "the scoring purpose runs a different frame kind and its sharded path has never been "
+     "exercised"},
+    {"prefix reuse / context cache",
+     [](const EngineOptions& o) { return o.context_cache.enabled; },
+     false, "",
+     "the context cache's slot ownership and reuse accounting are per Program and no two-rank round "
+     "has compared them"},
+    {"--kv-dtype (any quantized KV)",
+     [](const EngineOptions& o) {
+         return o.kv_cache != KvCacheStorage::BFloat16 &&
+                o.kv_cache != KvCacheStorage::BFloat16KeyValue;
+     },
+     false, "",
+     "the sharded KV mirror has only been exercised with bf16; no two-rank round has compared a "
+     "quantized pool against width 1"},
+    {"--vision",
+     [](const EngineOptions& o) { return o.enable_vision; },
+     false, "",
+     "the Vision tower is not sharded and no two-rank round has run a vision request"},
+};
+
+[[noreturn]] void refuse_unvalidated_width_two(const WidthTwoOption& row) {
+    throw std::invalid_argument(
+        std::string(row.option) +
+        " has no validated two-rank round: " + std::string(row.reason) +
+        ". The refusal is removed by a two-rank round compared token for token against width 1; "
+        "until then pass a single device with --device");
+}
+
+} // namespace
+
 EngineOptions normalize_engine_options(EngineOptions options) {
     switch (options.purpose) {
     case EnginePurpose::Generation:
@@ -145,6 +214,13 @@ EngineOptions normalize_engine_options(EngineOptions options) {
                 "tensor parallelism cannot capture CUDA graphs yet: each rank captures its own "
                 "graph and a round with a cross-rank exchange needs one joint capture. Pass "
                 "--no-cuda-graph; the lane runs eager until joint capture lands");
+        }
+        // Every other option that reaches the sharded lane must be validated before it can run at
+        // width > 1. The rows are the register: an unvalidated combination refuses here, in the one
+        // place that knows the width, instead of loading and producing plausible wrong numbers
+        // under the inference escape.
+        for (const auto& row : kWidthTwoOptions) {
+            if (row.requested(options) && !row.validated) { refuse_unvalidated_width_two(row); }
         }
     }
 

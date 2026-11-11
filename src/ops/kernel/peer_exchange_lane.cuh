@@ -20,10 +20,26 @@
 namespace ninfer::ops::detail {
 
 // Probes of __nanosleep(100) polling before the poller gives up and reports. One probe costs about
-// 0.8 us (4M probes measured 3.25 s on two RTX 5070 Ti), so the limit is ~0.8 s: long enough for
-// any legitimate skew between the two ranks' schedules, short enough to surface a missing peer
-// before a 2 s display watchdog would reset the device (test_allreduce checks the bound).
+// 0.8 us (4M probes measured 3.25 s on two RTX 5070 Ti), so the limit is ~0.8 s.
+//
+// This budget is a DEAD-PEER DETECTOR, not a latency bound: it answers "will the peer ever publish?"
+// and must not answer "was the peer fast enough?". A poller that gives up does not merely wait
+// longer or shorter -- it abandons the exchange, leaves the partial holding only its own operand,
+// and sets the sticky hang word, after which every later poller in the round bails immediately. A
+// budget that is too small therefore converts host jitter into silent garbage, which is the worst
+// trade in the lane.
 inline constexpr std::uint32_t kPeerSpinLimit = 1000000u;
+
+// The FIRST exchange of a rank gets a budget two orders of magnitude larger, because it is the one
+// place where a healthy peer can be legitimately late: the two Programs are built and started
+// independently, so one rank can reach its first reduce seconds before the other has started its
+// round at all. Measured on the two-GPU lane: rank 1 was 0.74 s behind rank 0 at the first exchange
+// (rank 0 spun 925,696 of 1,000,000 probes and gave up), and because the hang word is sticky, that
+// single timeout produced every later symptom -- a rank that never waits again, runs ahead, and
+// satisfies the peer's waits with payloads from the wrong exchange. The steady-state budget above
+// still applies from the second exchange on, where the two ranks are in the same loop and the skew
+// is bounded by one exchange's work.
+inline constexpr std::uint32_t kPeerFirstSpinLimit = 100u * kPeerSpinLimit;
 
 // A poller re-reads the pinned hang word once every this many probes, so a round that already
 // reported a hang does not spin the full limit again at every later exchange.
@@ -65,6 +81,10 @@ peer_exchange_lane(int warp, int lane, const PeerVec (&mine)[G], PeerVec (&peer)
         const int v = base + j * 32;
         if (v < vecs) { mine_payload[v] = mine[j]; }
     }
+    // Every lane fences its own publish stores before the warp meets; see the same fence in
+    // peer_exchange.cuh's pipelined kernel, where the reason is spelled out. The flag release below
+    // is lane 0's, so only a per-lane fence makes the other lanes' host writes visible first.
+    __threadfence_system();
     __syncwarp();
     int published = 1;
     if (lane == 0) {
@@ -79,8 +99,16 @@ peer_exchange_lane(int warp, int lane, const PeerVec (&mine)[G], PeerVec (&peer)
             ++spins;
             if (spins % kPeerHangProbe == 0u &&
                 (spins > spin_limit || fault.load(cuda::memory_order_relaxed) != 0u)) {
+                // The FIRST poller to give up names itself; the sticky word explains every later
+                // one. A poller that gives up has abandoned its exchange, and the caller turns that
+                // into a failed round rather than a wrong number.
+                const bool first = fault.load(cuda::memory_order_relaxed) == 0u;
                 fault.store(1u, cuda::memory_order_relaxed);
                 published = 0;
+                if (first) {
+                    printf("[mailbox] GAVE UP: warp=%d saw=%u target=%u spins=%u limit=%u\n", warp,
+                           seen, target, spins, spin_limit);
+                }
                 break;
             }
             seen = flag.load(cuda::memory_order_acquire);

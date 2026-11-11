@@ -302,6 +302,13 @@ struct PeerPipelinedTuning {
     unsigned long long* stamps = nullptr; // kTimed only: kPeerStampCount words per warp
     // Release the next kernel in the stream at entry (PeerMailbox::set_release_dependents, T45).
     bool release_dependents = false;
+    // DIAGNOSTIC (PeerMailbox with NINFER_MAILBOX_TRACE=1): print the kernel's own view of the FIRST
+    // exchange of a rank -- what the host log cannot show, because it records the arguments passed
+    // rather than the values the kernel computed from them. Off in production.
+    bool trace      = false;
+    // Which exchange this launch is, for the give-up line below and for the trace dump.
+    int rank        = -1;
+    int slot        = -1;
     // Weight ranges the blocks after the exchange's own prefetch into L2 (L2 PREFETCH above).
     PeerL2Prefetch prefetch{};
 };
@@ -379,6 +386,14 @@ __global__ __launch_bounds__(256) void peer_exchange_pipelined_kernel(
         const int v = base + j * 32;
         if (v < vecs) { mine_payload[v].raw = mine[j]; }
     }
+    // Every lane fences its OWN publish stores before the warp meets. The flag release below is
+    // executed by lane 0 alone and its system-scope fence orders lane 0's stores only, so without
+    // this a peer that observes the flag can still read a lane's host payload before that lane's
+    // PCIe write has landed. The original kernel does exactly this at its publish (:137
+    // __threadfence_system() by every thread, then the barrier); the pipelined path dropped it and
+    // relied on the release store's fence being "cumulative over the warp barrier", which it is not
+    // for stores issued by the other lanes.
+    __threadfence_system();
     __syncwarp();
     if (timed) { stamp[2] = clock64(); }
 
@@ -395,8 +410,17 @@ __global__ __launch_bounds__(256) void peer_exchange_pipelined_kernel(
             ++spins;
             if (spins % kPeerHangProbe == 0u &&
                 (spins > tuning.spin_limit || fault.load(cuda::memory_order_relaxed) != 0u)) {
+                // The FIRST poller to give up names itself; the sticky word explains every later
+                // one. This exchange is abandoned, the partial will hold only this rank's operand,
+                // and the caller turns the word into a failed round.
+                const bool first = fault.load(cuda::memory_order_relaxed) == 0u;
                 fault.store(1u, cuda::memory_order_relaxed);
                 published = 0;
+                if (first) {
+                    printf("[mailbox] GAVE UP: rank=%d slot=%d warp=%d saw=%u target=%u spins=%u "
+                           "limit=%u\n",
+                           tuning.rank, tuning.slot, warp, seen, target, spins, tuning.spin_limit);
+                }
                 break;
             }
             seen = peer.load(kPoll == kPeerPollAcquire ? cuda::memory_order_acquire
@@ -408,6 +432,22 @@ __global__ __launch_bounds__(256) void peer_exchange_pipelined_kernel(
         }
         epochs[warp] = target;
         if (timed) { stamp[4] = clock64(); }
+        if (tuning.trace && blockIdx.x == 0 && warp == 0) {
+            const int warps = (vecs + 32 * G - 1) / (32 * G);
+            printf("[mailbox] rank=%d slot=%d vecs=%d G=%d warps=%d blocks=%d grid=%d "
+                   "partial=%llx mine_payload=%llx peer_payload=%llx mine_flag=%llx "
+                   "peer_flag=%llx target=%u seen=%u spins=%u epoch=%u published=%d\n",
+                   tuning.rank, tuning.slot, vecs, G, warps,
+                   tuning.prefetch.first_block, static_cast<int>(gridDim.x),
+                   static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(partial)),
+                   static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(mine_payload)),
+                   static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(peer_payload)),
+                   static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(
+                       mine_flags + warp * kPeerFlagStride)),
+                   static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(
+                       peer_flags + warp * kPeerFlagStride)),
+                   target, seen, spins, epochs[warp], published);
+        }
     }
     __syncwarp();
     if (__shfl_sync(0xffffffffu, published, 0) == 0) { return; }

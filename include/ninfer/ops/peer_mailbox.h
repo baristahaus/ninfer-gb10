@@ -175,6 +175,11 @@ public:
     // diverged, so the owner must not trust any later round.
     [[nodiscard]] bool hang_reported() const noexcept;
 
+    // DIAGNOSTIC: the base of `rank`'s pinned host payload slab. A device buffer that aliased this
+    // would be written by a kernel as if it were VRAM; the group dump asserts it does not.
+    [[nodiscard]] const void* payload_base(int rank) const noexcept;
+
+
     // When true, the pipelined exchange kernels (BF16 and FP32) release the next kernel of their
     // stream at entry (griddepcontrol.launch_dependents): a programmatic dependent may then start
     // while the exchange waits on the peer, so it must not read the exchanged data before its
@@ -227,11 +232,22 @@ private:
     void release() noexcept;
 
     SlotSet sets_[2]; // ordinary, wide (slot_bytes 0: absent)
+    // Throws when the hang word is set, naming the call that refused to continue. Every entry point
+    // that can enqueue an exchange calls it first: a poller that gave up leaves the round's results
+    // diverged, and the lane must fail loudly rather than sample them.
+    void require_no_hang(const char* call) const;
     std::uint32_t* hang_            = nullptr;
     int slots_                      = 0;
     PeerExchangeKernel kernel_      = PeerExchangeKernel::Pipelined;
     int devices_[2]                 = {0, 0};
     bool release_dependents_        = false;
+    // DIAGNOSTIC: NINFER_MAILBOX_TRACE=1 makes each rank's FIRST exchange print the kernel's own
+    // view of its arguments and its peer flag (see PeerPipelinedTuning::trace). Read once at
+    // construction; unset in production.
+    bool trace_                     = false;
+    // Per rank: has this rank issued its first exchange yet? The first one carries the larger
+    // dead-peer budget (kPeerFirstSpinLimit).
+    mutable bool started_[2]        = {false, false};
     std::size_t l2_prefetch_budget_ = 0;
 
     // Per rank: the hint the next enqueue consumes. Mutable: enqueueing is const (it changes no

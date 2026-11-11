@@ -24,8 +24,13 @@ public:
 
     [[nodiscard]] Architecture architecture() const noexcept { return Architecture::Qwen4Exp; }
 
-    [[nodiscard]] std::optional<ExecutionPlan> plan(DeviceContext&, const EngineOptions&,
-                                                    WeightPlacement, std::size_t available) const;
+    // `published_tokens` pins the capacity to a group decision instead of resolving one here.
+    [[nodiscard]] std::optional<ExecutionPlan>
+    plan(DeviceContext&, const EngineOptions&, WeightPlacement, std::size_t available,
+         std::optional<std::uint32_t> published_tokens = std::nullopt) const;
+    [[nodiscard]] runtime::SequenceCapacityCurve capacity_curve(DeviceContext&,
+                                                                const EngineOptions&,
+                                                                WeightPlacement) const;
     [[nodiscard]] std::unique_ptr<ModelShard> materialize(DeviceContext&, WeightPlacement,
                                                           const StartupObserver&);
     [[nodiscard]] qwen::Frontend frontend(const EngineOptions&) const;

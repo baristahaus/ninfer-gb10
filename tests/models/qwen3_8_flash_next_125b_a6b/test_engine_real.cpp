@@ -53,12 +53,15 @@ void configure_prefix_state_dump(const std::vector<ninfer::TokenId>& prompt,
     if (!directory) { return; }
     std::error_code error;
     std::filesystem::create_directories(*directory, error);
-    const std::uint32_t frontier =
-        static_cast<std::uint32_t>(prompt.size() + generated.size() + 1);
-    const char* override_frontier = std::getenv("NINFER_PREFIX_STATE_DUMP_FRONTIER");
+    // The reuse base is where the checkpoint that gets restored was committed; the continuation's
+    // end is where both comparison runs commit. One process cannot be re-run at a second frontier,
+    // so the default selects both; the capture accepts a comma-separated list.
+    const std::uint32_t reuse_base  = static_cast<std::uint32_t>(prompt.size() + generated.size() - 1);
+    const std::uint32_t prefill_end = static_cast<std::uint32_t>(prompt.size() + generated.size() + 1);
+    const char* override_frontier   = std::getenv("NINFER_PREFIX_STATE_DUMP_FRONTIER");
     const std::string value = override_frontier != nullptr && *override_frontier != '\0'
                                   ? std::string(override_frontier)
-                                  : std::to_string(frontier);
+                                  : std::to_string(reuse_base) + "," + std::to_string(prefill_end);
     ::setenv("NINFER_FLASH_NEXT_STATE_DIR", directory->string().c_str(), 1);
     ::setenv("NINFER_FLASH_NEXT_STATE_FRONTIER", value.c_str(), 1);
 }
@@ -291,9 +294,8 @@ void compare_prefix_state_dumps(const std::filesystem::path& directory,
                                 const std::set<std::string>& reused_stems,
                                 const std::set<std::string>& cold_stems) {
     if (reused_stems.empty() || cold_stems.empty()) {
-        std::cerr << "prefix state dump: no dump at the requested frontier (reused "
-                  << reused_stems.size() << ", cold " << cold_stems.size()
-                  << "); the commit did not reach it\n";
+        std::cerr << "prefix state dump: no comparable pair at the requested frontier (reused "
+                  << reused_stems.size() << " dumps, cold " << cold_stems.size() << ")\n";
         return;
     }
     const std::string reused_stem = *reused_stems.begin();
@@ -533,15 +535,25 @@ int exercise_mtp_and_prefix(ninfer::Engine& engine,
     if (dump_directory) {
         const std::set<std::string> cold_dump_stems =
             new_dump_stems(*dump_directory, dump_before_cold);
+        // Pairing is by metadata, not by which run wrote the file: the checkpoint's own commit
+        // happens before this exercise, so a run-scoped snapshot cannot see it.
         std::optional<DumpMetadata> materialization;
-        for (const auto& stem : reused_dump_stems) {
+        for (const auto& stem : dump_stems(*dump_directory)) {
             const auto meta = read_dump_metadata(*dump_directory, stem);
             if (meta && meta->phase == "materialization") { materialization = meta; }
         }
         if (materialization) {
             compare_copy_identity(*dump_directory, *materialization);
-        } else {
+        } else if (!reused_dump_stems.empty() && !cold_dump_stems.empty()) {
             compare_prefix_state_dumps(*dump_directory, reused_dump_stems, cold_dump_stems);
+        } else {
+            std::cerr << "prefix state dump: no comparable pair; inventory:\n";
+            for (const auto& stem : dump_stems(*dump_directory)) {
+                const auto meta = read_dump_metadata(*dump_directory, stem);
+                if (!meta) { continue; }
+                std::cerr << "prefix state dump:   " << meta->stem << " phase " << meta->phase
+                          << " slot " << meta->slot << " frontier " << meta->frontier << '\n';
+            }
         }
     }
     const std::uint32_t expected_reuse =

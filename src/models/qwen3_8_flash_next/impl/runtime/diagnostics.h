@@ -86,7 +86,21 @@ inline void capture_committed_state(const char* route, const StateImageDevicePoo
     static const char* directory = std::getenv("NINFER_FLASH_NEXT_STATE_DIR");
     static const char* selected  = std::getenv("NINFER_FLASH_NEXT_STATE_FRONTIER");
     if (directory == nullptr || selected == nullptr || *directory == '\0') { return; }
-    if (frontier != std::stoul(selected)) { return; }
+    // A comma-separated list selects several frontiers in one process: a comparison needs dumps of
+    // the same state at more than one point, and one process cannot be re-run at a second frontier.
+    bool wanted = false;
+    for (std::string_view rest(selected); !rest.empty() && !wanted;) {
+        const auto comma              = rest.find(',');
+        const std::string_view token  = rest.substr(0, comma);
+        try {
+            if (!token.empty() && frontier == std::stoul(std::string(token))) { wanted = true; }
+        } catch (const std::exception&) {
+            throw std::invalid_argument("Flash-Next state capture frontier is not a number list");
+        }
+        if (comma == std::string_view::npos) { break; }
+        rest.remove_prefix(comma + 1);
+    }
+    if (!wanted) { return; }
     static std::atomic<std::uint64_t> serial{0};
     const auto stem = std::filesystem::path(directory) / std::to_string(serial.fetch_add(1));
     std::filesystem::create_directories(directory);

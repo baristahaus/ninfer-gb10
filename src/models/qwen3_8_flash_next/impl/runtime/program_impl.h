@@ -12032,6 +12032,14 @@ ProgramImplCore::advance_prefill(SequenceState& sequence, RequestControl& reques
             };
         }
         StateImageSelectors selectors = state_selectors(sequence);
+        // Copy-identity seam, at the one point a suffix reuse reaches: the Fork is still pending
+        // here — this prefill carries the state from the source into the destination — so the
+        // source holds the restored copy of the checkpoint, before any chunk has run.
+        if (sequence.state.fork_pending) {
+            qwen3_8_flash_next::detail::capture_committed_state(
+                "prefill", *state_images, selectors.source, sequence.lane,
+                sequence.execution_frontier, sequence.ledger, device.stream(), "materialization");
+        }
         Tensor rewrite_capture_hidden;
         Tensor* rewrite_capture_hidden_ptr = nullptr;
         Tensor rewrite_capture_mtp_hidden;

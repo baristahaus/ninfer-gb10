@@ -36,6 +36,7 @@ Flash-Next 125B-A6B NVFP4 is available through [local conversion or v2 upgrade](
 - [Tests](../tests/README.md)
 - [Tools](../tools/README.md)
 - [Two-GPU lane](lane.md)
+- [Test-artifact inventory](test-artifacts.md)
 - [Capability evaluation](../eval/README.md)
 
 ## Project records

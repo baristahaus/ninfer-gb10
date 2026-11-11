@@ -48,6 +48,9 @@ function(ninfer_register_test_artifacts)
   _ninfer_test_artifact_cache_dir(cache)
   set(absent 0)
   set(configured 0)
+  # The tests that will skip, not just the artifacts that are absent: a green run and a run where
+  # nothing ran must not look the same, and the count is what tells them apart.
+  set(skipping "")
 
   math(EXPR last "${count} - 1")
   foreach(index RANGE 0 ${last})
@@ -102,6 +105,7 @@ function(ninfer_register_test_artifacts)
 
     if(chosen STREQUAL "")
       math(EXPR absent "${absent} + 1")
+      list(APPEND skipping ${registered})
       message(STATUS "Test artifact ${name}: absent (${path}); ${env} left unset, "
                      "${test_count} test(s) will skip")
     else()
@@ -111,8 +115,14 @@ function(ninfer_register_test_artifacts)
     endif()
   endforeach()
 
-  message(STATUS "Test artifacts: ${configured} resolved, ${absent} absent "
-                 "(cache ${cache})")
+  if(skipping)
+    list(REMOVE_DUPLICATES skipping)
+    list(LENGTH skipping skipping_count)
+  else()
+    set(skipping_count 0)
+  endif()
+  message(STATUS "Test artifacts: ${configured} resolved, ${absent} absent, "
+                 "${skipping_count} test(s) will skip (cache ${cache})")
 
   # The manifest is checked in and must stay consistent with the tests and sources.
   if(Python3_EXECUTABLE)

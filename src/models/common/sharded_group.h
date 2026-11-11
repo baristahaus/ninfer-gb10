@@ -40,7 +40,24 @@ struct ShardedGroup {
     ops::PeerMailbox* mailbox         = nullptr;
     // Full-width BF16 [rows, columns], one buffer per rank's device, in rank order.
     std::array<Tensor, 2> partials{};
+    // Full-vocabulary BF16 [output_rows, columns], one buffer per rank's device, in rank order.
+    // A logits gather writes BOTH: each rank zero-fills its buffer, copies its own half of the
+    // vocabulary into it, and the cross-rank sum then leaves the whole vocabulary in both. The pair
+    // therefore belongs to the group for the same reason the partial pair does — the combine reads
+    // and writes the peer's buffer, which no single Program can reach.
+    //
+    // Empty (data == nullptr) when the owner was built without a logits extent, which is what the
+    // single-device lane and any lane that does not sample from a row-sharded head want.
+    std::array<Tensor, 2> logits{};
 };
+
+// The widest column count one logits gather is sized for beyond decode. Causal scoring projects a
+// tile of score targets per call rather than a decode round's columns; the tile is the frame's
+// `kScoreTile` (models/qwen3_5/program/frames.cpp). It is named here because the owner sizes ONE
+// buffer for both callers, and a scoring call has to stay a single projection: slicing it to the
+// one-column width a scoring lane's frame declares would re-read the whole 124160x5120 head once per
+// column. If the frame's tile changes, this must change with it.
+inline constexpr std::int32_t kShardedScoreTile = 1024;
 
 // The rank of `device_index` in a group whose members are `device_indices`, or -1 when it is not a
 // member. Pure — no CUDA, no allocation — so the rule is testable without a device. It is the one
@@ -51,9 +68,14 @@ struct ShardedGroup {
 class ShardedGroupOwner {
 public:
     // `rows` x `columns` is one full-width BF16 partial (for the 27B: hidden_size x the plan's token
-    // capacity). Throws std::invalid_argument for a group that is not exactly two ranks and
-    // propagates the mailbox's allocation errors.
-    ShardedGroupOwner(const ExecutionContext& execution, std::int32_t rows, std::int32_t columns);
+    // capacity). `output_rows` x `logits_columns` is one full-vocabulary BF16 logits buffer (for the
+    // 27B: vocab_size x the widest round's columns). The logits pair is built only when both extents
+    // are positive; zero for both builds none, and the Program refuses to gather without it rather
+    // than gathering into an absent buffer. Throws std::invalid_argument for a group that is not
+    // exactly two ranks, for one logits extent given without the other, and propagates the mailbox's
+    // allocation errors.
+    ShardedGroupOwner(const ExecutionContext& execution, std::int32_t rows, std::int32_t columns,
+                      std::int32_t output_rows = 0, std::int32_t logits_columns = 0);
     ~ShardedGroupOwner();
 
     ShardedGroupOwner(const ShardedGroupOwner&)            = delete;
@@ -73,8 +95,10 @@ private:
     const ExecutionContext& execution_;
     ops::PeerMailbox mailbox_;
     std::array<DeviceBuffer, 2> buffers_;
+    std::array<DeviceBuffer, 2> logits_buffers_;
     std::array<Tensor, 2> partials_;
-    // Declared last: it references the three members above, and the owner is constructed in
+    std::array<Tensor, 2> logits_;
+    // Declared last: it references the members above, and the owner is constructed in
     // declaration order.
     ShardedGroup group_;
 };

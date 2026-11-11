@@ -357,9 +357,28 @@ BuiltModel<typename Setup::Types> build_local_model(const artifact::Reader& read
                 if constexpr (requires(Setup& s) { s.sharded_partial_rows(); }) {
                     const auto rows = setup.sharded_partial_rows();
                     if (rows) {
+                        // The logits pair is the second group-scoped pair: one full-vocabulary BF16
+                        // buffer per rank, because the head is row-sharded and the gather writes
+                        // both. Its rows are the vocabulary the frame's logits carry; its columns
+                        // are the widest round the plan can present — (draft_window + 1) * batch for
+                        // a decode/verify round, and one score tile for a causal-scoring lane, whose
+                        // frame is one column wide but projects a tile of targets per call.
+                        const std::int32_t vocabulary =
+                            static_cast<std::int32_t>(setup.profile->config.text.vocab_size);
+                        const std::uint32_t width =
+                            options.speculative.backend == SpeculativeBackend::None
+                                ? 1U
+                                : options.speculative.draft_tokens + 1U;
+                        const std::int32_t logits_columns = static_cast<std::int32_t>(
+                            std::max<std::uint32_t>(
+                                width * candidate->sequence.max_concurrency(),
+                                options.purpose == EnginePurpose::CausalScoring
+                                    ? static_cast<std::uint32_t>(models::kShardedScoreTile)
+                                    : 0U));
                         sharded_owner = std::make_unique<models::ShardedGroupOwner>(
                             *execution, *rows,
-                            static_cast<std::int32_t>(candidate->capacity.resolved_tokens));
+                            static_cast<std::int32_t>(candidate->capacity.resolved_tokens),
+                            vocabulary, logits_columns);
                         instance->sharded = &sharded_owner->group();
                     }
                 }

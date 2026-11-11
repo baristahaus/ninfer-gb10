@@ -51,11 +51,32 @@ void RankProgramImpl::project_decode(std::uint32_t batch_value, std::uint32_t wi
     const int batch = static_cast<int>(batch_value), width = static_cast<int>(width_value);
     const int rows       = frame.spec.output_rows;
     const int vocabulary = execution::dimension(parameters.profile->public_tokens);
+    const int columns    = width * batch;
     Tensor hidden        = frame.input_view(width, batch).hidden;
-    Tensor logits        = prefix(frame.logits, {rows, width, batch});
-    Tensor flat_logits   = logits.view({rows, width * batch});
-    execution::project(hidden.view({hidden.ne[0], width * batch}), parameters.text.output_head,
-                       flat_logits, resources.work, device.execution_view());
+    Tensor flat_hidden   = hidden.view({hidden.ne[0], columns});
+    Tensor flat_logits;
+    if (sharded_ == nullptr) {
+        // Width 1: the head is whole, so the projection's output extent is the frame's, and the
+        // frame's buffer is where it lands. Unchanged by construction.
+        flat_logits = prefix(frame.logits, {rows, columns});
+        execution::project(flat_hidden, parameters.text.output_head, flat_logits, resources.work,
+                           device.execution_view());
+    } else {
+        // Width 2: the head holds only this rank's block of the vocabulary (a Rows shard), so the
+        // projection's output extent is the WEIGHT's row count, not the frame's. Project into a
+        // rank-sized scratch and gather both ranks' halves into the group's full-vocabulary pair;
+        // afterwards this rank's member holds the whole vocabulary, bit-identical to width 1's
+        // logits, and sampling is the width-1 call over it.
+        const int rank_rows = parameters.text.output_head.weight.n;
+        auto scope          = resources.work.scope();
+        Tensor scratch      = resources.work.alloc(DType::BF16, {rank_rows, columns});
+        execution::project(flat_hidden, parameters.text.output_head, scratch, resources.work,
+                           device.execution_view());
+        Tensor full = (*sharded_).logits[static_cast<std::size_t>(collective_->rank)];
+        execution::all_gather_logits(*sharded_, collective_->rank, collective_->reduce_index,
+                                     scratch, full, device.execution_view());
+        flat_logits = execution::sharded_logits_view(*sharded_, collective_->rank, rows, columns);
+    }
     if (width == 1) return;
     Tensor argmax      = prefix(frame.target_argmax, {width, batch});
     Tensor flat_argmax = argmax.view({width * batch});
@@ -68,7 +89,10 @@ void RankProgramImpl::decide_decode(std::uint32_t batch_value, std::uint32_t wid
     const int rows       = frame.spec.output_rows;
     const int vocabulary = execution::dimension(parameters.profile->public_tokens);
     if (width > 1) {
-        Tensor logits = prefix(frame.logits, {rows, width, batch});
+        Tensor logits = sharded_ != nullptr
+                            ? execution::sharded_logits_view(*sharded_, collective_->rank, rows,
+                                                             width * batch)
+                            : prefix(frame.logits, {rows, width, batch});
         Tensor argmax = prefix(frame.target_argmax, {width, batch});
         auto drafts =
             prefix(backend == SpeculativeBackend::Mtp ? frame.mtp->drafts : frame.dflash->drafts,
@@ -98,8 +122,7 @@ void RankProgramImpl::decide_decode(std::uint32_t batch_value, std::uint32_t wid
         Tensor logits = prefix(frame.logits, {rows, batch});
         Tensor tokens = prefix(frame.output_tokens, {batch});
         ops::sample(logits, tokens, vocabulary, frame.sampling, frame.frontiers.slice(0, 0, batch),
-                    ops::kSamplePurposeDecode, resources.work, device.execution_view());
-        for (int row = 0; row < batch; ++row) {
+                    ops::kSamplePurposeDecode, resources.work, device.execution_view());        for (int row = 0; row < batch; ++row) {
             auto count = frame.output_counts.slice(0, row, 1);
             ops::set_i32_scalar(count, 1, device.execution_view());
         }
@@ -187,9 +210,24 @@ void RankProgramImpl::launch_decision(ComputeOperation& operation) {
         } else {
             hidden = frame.input_view(1, batch).hidden.view({frame.spec.hidden, batch});
         }
-        Tensor logits = prefix(frame.logits, {rows, batch});
-        execution::project(hidden, parameters.text.output_head, logits, resources.work,
-                           device.execution_view());
+        Tensor logits;
+        if (sharded_ == nullptr) {
+            logits = prefix(frame.logits, {rows, batch});
+            execution::project(hidden, parameters.text.output_head, logits, resources.work,
+                               device.execution_view());
+        } else {
+            // The same row-sharded head as project_decode, for the one-column call: project into the
+            // rank's rows, gather, then sample the whole vocabulary.
+            const int rank_rows = parameters.text.output_head.weight.n;
+            auto scope          = resources.work.scope();
+            Tensor scratch      = resources.work.alloc(DType::BF16, {rank_rows, batch});
+            execution::project(hidden, parameters.text.output_head, scratch, resources.work,
+                               device.execution_view());
+            Tensor full = (*sharded_).logits[static_cast<std::size_t>(collective_->rank)];
+            execution::all_gather_logits(*sharded_, collective_->rank, collective_->reduce_index,
+                                         scratch, full, device.execution_view());
+            logits = execution::sharded_logits_view(*sharded_, collective_->rank, rows, batch);
+        }
         Tensor tokens = prefix(frame.output_tokens, {batch});
         ops::sample(logits, tokens, vocabulary, frame.sampling, frame.frontiers.slice(0, 0, batch),
                     purpose, resources.work, device.execution_view());

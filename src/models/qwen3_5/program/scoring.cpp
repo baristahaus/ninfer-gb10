@@ -30,9 +30,25 @@ void RankProgramImpl::launch_score(ComputeOperation& operation) {
         frame.input_view(static_cast<int>(operation.width), 1)
             .hidden.slice(1, static_cast<int>(work.first_column + operation.score_cursor), count)
             .view({frame.spec.hidden, count});
-    Tensor logits = resources.work.alloc(DType::BF16, {frame.spec.output_rows, count});
-    execution::project(hidden, parameters.text.output_head, logits, resources.work,
-                       device.execution_view());
+    Tensor logits;
+    if (sharded_ == nullptr) {
+        logits = resources.work.alloc(DType::BF16, {frame.spec.output_rows, count});
+        execution::project(hidden, parameters.text.output_head, logits, resources.work,
+                           device.execution_view());
+    } else {
+        // The head is row-sharded here too: project this rank's block of the vocabulary, gather the
+        // two blocks into the group's full-vocabulary pair, then take the target log probabilities
+        // over the whole vocabulary exactly as width 1 does.
+        const int rank_rows = parameters.text.output_head.weight.n;
+        Tensor scratch      = resources.work.alloc(DType::BF16, {rank_rows, count});
+        execution::project(hidden, parameters.text.output_head, scratch, resources.work,
+                           device.execution_view());
+        Tensor full = (*sharded_).logits[static_cast<std::size_t>(collective_->rank)];
+        execution::all_gather_logits(*sharded_, collective_->rank, collective_->reduce_index,
+                                     scratch, full, device.execution_view());
+        logits = execution::sharded_logits_view(*sharded_, collective_->rank,
+                                                frame.spec.output_rows, count);
+    }
     Tensor scores = frame.score_logprobs.slice(0, 0, count);
     ops::target_logprobs(logits, targets, execution::dimension(parameters.profile->public_tokens),
                          scores, device.execution_view());

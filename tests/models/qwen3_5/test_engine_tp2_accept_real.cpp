@@ -38,7 +38,14 @@ std::vector<ninfer::TokenId> run_round(const char* artifact, int width, int devi
     ninfer::EngineOptions options;
     options.artifact_path  = artifact;
     options.use_cuda_graph = false; // width > 1 refuses capture (caf91488)
-    options.max_context    = 2048;
+    // The round this test validates is the plain text lane. Prefix reuse/context cache and every
+    // speculative backend are refused at width > 1 by the option gate (2529e77c) because no
+    // two-rank round has been compared for them, so the test states the configuration it exercises
+    // instead of inheriting defaults that the gate would refuse. Each of those combinations gets
+    // its own row in that table, and its own comparison, when it is validated.
+    options.context_cache.enabled = false;
+    options.speculative.backend   = ninfer::SpeculativeBackend::None;
+    options.max_context           = 2048;
     // The default capacity is 8192 tokens, outside the usable range for a 2048 context; without this
     // the engine refuses at option validation before either round runs.
     options.kv_capacity    = ninfer::KvCapacityPolicy::explicit_capacity(2048);

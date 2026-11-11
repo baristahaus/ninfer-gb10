@@ -132,6 +132,8 @@ inline void capture_committed_state(const char* route, const StateImageDevicePoo
         }
     }
     metadata["layers"]              = pool.layer_count();
+    metadata["conv_channels"]       = pool.spec().conv_channels;
+    metadata["conv_width"]          = pool.spec().conv_width;
     metadata["dflash_local_layers"] = dflash_layers;
     metadata["components"]          = components;
     std::ofstream file(stem.string() + ".json");

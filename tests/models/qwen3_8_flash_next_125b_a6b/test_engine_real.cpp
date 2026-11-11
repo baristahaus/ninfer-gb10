@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
+#include <cmath>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -86,12 +87,40 @@ new_dump_stems(const std::filesystem::path& directory, const std::set<std::strin
 }
 
 struct DumpDifference {
-    bool differs = false;
-    std::string report;
+    bool differs      = false;
+    std::size_t total = 0;
+    std::size_t count = 0;
+    std::size_t first_element = 0;
+    char first_reused[24] = {};
+    char first_cold[24]   = {};
+    double max_delta      = 0.0;
+    std::size_t max_element = 0;
+    char max_reused[24]     = {};
+    char max_cold[24]       = {};
+    std::string report; // sizes differ, or empty
 };
 
-// One component file of one layer, byte for byte. The first differing byte names the element; a
-// size mismatch is reported as such rather than compared past its end.
+// The element as a float, for the magnitude summary: BF16 is the high half of an FP32, so its bits
+// shifted up are exactly its value.
+[[nodiscard]] double element_value(const char* bytes, std::size_t element_bytes) {
+    if (element_bytes == 2) {
+        const auto raw = static_cast<std::uint16_t>(
+            static_cast<unsigned char>(bytes[0]) |
+            (static_cast<std::uint16_t>(static_cast<unsigned char>(bytes[1])) << 8));
+        const std::uint32_t wide = static_cast<std::uint32_t>(raw) << 16;
+        float value = 0.0F;
+        std::memcpy(&value, &wide, sizeof(value));
+        return static_cast<double>(value);
+    }
+    float value = 0.0F;
+    std::memcpy(&value, bytes, sizeof(value));
+    return static_cast<double>(value);
+}
+
+// One component file, compared element by element. It reports the FIRST difference — which may be a
+// benign one-ulp kernel-path artifact — and the LARGEST, because a single ulp at element 2882 must
+// not stand in for the whole comparison: the defect this instrument hunts is a state that is wrong
+// in a way that moves a token, and that shows up in the magnitude, not in who differs first.
 [[nodiscard]] DumpDifference compare_dump_file(const std::filesystem::path& directory,
                                                const std::string& reused_stem,
                                                const std::string& cold_stem,
@@ -104,22 +133,33 @@ struct DumpDifference {
                 .report  = suffix + " sizes differ: reused " + std::to_string(reused.size()) +
                           " bytes, cold " + std::to_string(cold.size()) + " bytes"};
     }
-    for (std::size_t byte = 0; byte < reused.size(); ++byte) {
-        if (reused[byte] == cold[byte]) { continue; }
-        char reused_value[32];
-        char cold_value[32];
-        std::snprintf(reused_value, sizeof(reused_value), "%02x", static_cast<unsigned>(static_cast<unsigned char>(reused[byte])));
-        std::snprintf(cold_value, sizeof(cold_value), "%02x", static_cast<unsigned>(static_cast<unsigned char>(cold[byte])));
-        return {.differs = true,
-                .report  = suffix + " first differs at element " + std::to_string(byte / element_bytes) +
-                          " (byte " + std::to_string(byte) + "): reused 0x" + reused_value +
-                          ", cold 0x" + cold_value};
+    DumpDifference result;
+    result.total = reused.size() / element_bytes;
+    for (std::size_t element = 0; element < result.total; ++element) {
+        const std::size_t offset = element * element_bytes;
+        if (std::memcmp(reused.data() + offset, cold.data() + offset, element_bytes) == 0) {
+            continue;
+        }
+        const double reused_value = element_value(reused.data() + offset, element_bytes);
+        const double cold_value   = element_value(cold.data() + offset, element_bytes);
+        const double delta        = std::abs(reused_value - cold_value);
+        if (result.count == 0) {
+            result.first_element = element;
+            std::snprintf(result.first_reused, sizeof(result.first_reused), "%.6g", reused_value);
+            std::snprintf(result.first_cold, sizeof(result.first_cold), "%.6g", cold_value);
+        }
+        ++result.count;
+        if (delta > result.max_delta || result.count == 1) {
+            result.max_delta   = delta;
+            result.max_element = element;
+            std::snprintf(result.max_reused, sizeof(result.max_reused), "%.6g", reused_value);
+            std::snprintf(result.max_cold, sizeof(result.max_cold), "%.6g", cold_value);
+        }
     }
-    return {};
+    result.differs = result.count != 0;
+    return result;
 }
 
-// Compares the reused run's dump against the cold run's, layer by layer, conv then recurrent, and
-// reports the first difference. Prints one line either way; the token comparison stays the verdict.
 void compare_prefix_state_dumps(const std::filesystem::path& directory,
                                 const std::set<std::string>& reused_stems,
                                 const std::set<std::string>& cold_stems) {
@@ -141,14 +181,16 @@ void compare_prefix_state_dumps(const std::filesystem::path& directory,
         std::ifstream file(directory / (cold_stem + ".json"));
         file >> cold_meta;
     }
-    const auto reused_slot    = reused_meta.value("physical_slot", -1);
-    const auto cold_slot      = cold_meta.value("physical_slot", -1);
+    const auto reused_slot     = reused_meta.value("physical_slot", -1);
+    const auto cold_slot       = cold_meta.value("physical_slot", -1);
     const auto reused_frontier = reused_meta.value("frontier", -1U);
     const auto cold_frontier   = cold_meta.value("frontier", -1U);
     const auto layers          = reused_meta.value("layers", 0U);
+    const auto conv_channels   = reused_meta.value("conv_channels", 0);
+    const auto conv_width      = reused_meta.value("conv_width", 0);
     std::cerr << "prefix state dump: reused slot " << reused_slot << " frontier " << reused_frontier
               << ", cold slot " << cold_slot << " frontier " << cold_frontier << ", layers "
-              << layers << '\n';
+              << layers << ", conv " << conv_channels << "x" << conv_width << '\n';
     if (reused_frontier != cold_frontier) {
         std::cerr << "prefix state dump: the two runs did not commit at the same frontier; the "
                      "comparison would prove nothing\n";
@@ -169,25 +211,37 @@ void compare_prefix_state_dumps(const std::filesystem::path& directory,
         }
         std::cerr << "; comparing by content at the same frontier\n";
     }
+    std::size_t differing_components = 0;
+    std::size_t differing_elements   = 0;
+    std::size_t compared_elements    = 0;
+    std::uint32_t differing_layers   = 0;
+    const auto report = [&](const std::string& label, const DumpDifference& difference) {
+        if (!difference.differs) { return; }
+        ++differing_components;
+        differing_elements += difference.count;
+        compared_elements += difference.total;
+        std::cerr << "prefix state dump: " << label << ": " << difference.count << " of "
+                  << difference.total << " elements differ; first element "
+                  << difference.first_element << " reused " << difference.first_reused << " cold "
+                  << difference.first_cold << "; max |delta| " << difference.max_delta
+                  << " at element " << difference.max_element << " (reused "
+                  << difference.max_reused << ", cold " << difference.max_cold << ")";
+        if (conv_width > 0 && label.rfind("conv layer", 0) == 0) {
+            std::cerr << "; that element is channel " << difference.max_element / conv_width
+                      << ", tap " << difference.max_element % conv_width;
+        }
+        std::cerr << '\n';
+    };
     for (std::uint32_t layer = 0; layer < layers; ++layer) {
-        const std::string conv = ".conv." + std::to_string(layer) + ".bf16";
-        const DumpDifference conv_difference =
-            compare_dump_file(directory, reused_stem, cold_stem, conv, 2);
-        if (conv_difference.differs) {
-            std::cerr << "prefix state dump: conv layer " << layer << ": "
-                      << conv_difference.report << '\n';
-            return;
-        }
-        const std::string recurrent = ".recurrent." + std::to_string(layer) + ".fp32";
-        const DumpDifference recurrent_difference =
-            compare_dump_file(directory, reused_stem, cold_stem, recurrent, 4);
-        if (recurrent_difference.differs) {
-            std::cerr << "prefix state dump: recurrent layer " << layer << ": "
-                      << recurrent_difference.report << '\n';
-            return;
-        }
+        const DumpDifference conv = compare_dump_file(
+            directory, reused_stem, cold_stem, ".conv." + std::to_string(layer) + ".bf16", 2);
+        if (conv.differs) { ++differing_layers; }
+        report("conv layer " + std::to_string(layer), conv);
+        const DumpDifference recurrent = compare_dump_file(
+            directory, reused_stem, cold_stem, ".recurrent." + std::to_string(layer) + ".fp32", 4);
+        if (recurrent.differs) { ++differing_layers; }
+        report("recurrent layer " + std::to_string(layer), recurrent);
     }
-    // The components that are one file per slot, in the order the capture wrote them.
     const std::vector<std::string> reused_components =
         reused_meta.value("components", std::vector<std::string>{});
     const std::vector<std::string> cold_components =
@@ -198,36 +252,26 @@ void compare_prefix_state_dumps(const std::filesystem::path& directory,
     const auto compare_single = [&](const char* component, const std::string& suffix) {
         if (!has_component(reused_components, component) ||
             !has_component(cold_components, component)) {
-            std::cerr << "prefix state dump: " << component
-                      << " is absent from a run; skipped\n";
-            return false;
+            std::cerr << "prefix state dump: " << component << " is absent from a run; skipped\n";
+            return;
         }
-        const DumpDifference difference =
-            compare_dump_file(directory, reused_stem, cold_stem, suffix, 2);
-        if (difference.differs) {
-            std::cerr << "prefix state dump: " << component << ": " << difference.report << '\n';
-            return true;
-        }
-        return false;
+        report(component, compare_dump_file(directory, reused_stem, cold_stem, suffix, 2));
     };
-    if (compare_single("continuation_hidden", ".continuation_hidden.bf16") ||
-        compare_single("mtp_hidden", ".mtp_hidden.bf16") ||
-        compare_single("ple", ".ple.bf16")) {
-        return;
-    }
+    compare_single("continuation_hidden", ".continuation_hidden.bf16");
+    compare_single("mtp_hidden", ".mtp_hidden.bf16");
+    compare_single("ple", ".ple.bf16");
     const auto dflash_layers = reused_meta.value("dflash_local_layers", 0U);
     for (std::uint32_t layer = 0; layer < dflash_layers; ++layer) {
         const std::string suffix = std::to_string(layer) + ".bf16";
-        if (compare_single("dflash_local_k", ".dflash_local_k." + suffix) ||
-            compare_single("dflash_local_v", ".dflash_local_v." + suffix)) {
-            return;
-        }
+        compare_single("dflash_local_k", ".dflash_local_k." + suffix);
+        compare_single("dflash_local_v", ".dflash_local_v." + suffix);
     }
-    std::cerr << "prefix state dump: every component of the committed slot is bitwise identical "
-                 "(conv and recurrent for all "
-              << layers << " layers";
-    if (dflash_layers != 0) { std::cerr << ", dflash local for " << dflash_layers << " layers"; }
-    std::cerr << ")\n";
+    std::cerr << "prefix state dump: " << differing_components << " component/layer files differ, "
+              << differing_layers << " layer components, " << differing_elements << " of "
+              << compared_elements << " compared elements\n";
+    if (differing_components == 0) {
+        std::cerr << "prefix state dump: every component of the committed slot is bitwise identical\n";
+    }
 }
 
 

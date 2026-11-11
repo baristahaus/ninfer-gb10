@@ -481,7 +481,7 @@ std::optional<AdmissionCandidate> ProgramImplCore::inspect_lane(
         if (!base.allow_prefix_reuse || !prompt.identity.reusable) { return std::nullopt; }
         const auto* shared_identity = shared_source->identity->prefix_identity();
         if (shared_identity == nullptr ||
-            !qwen3_8_flash_next::detail::prefix_matches(prompt, shared_source->identity->ledger(),
+            !qwen::prefix_matches(prompt, shared_source->identity->ledger(),
                                                         *shared_identity, selected.frontier)) {
             return std::nullopt;
         }
@@ -502,7 +502,7 @@ std::optional<AdmissionCandidate> ProgramImplCore::inspect_lane(
             if (selected.frontier == 0 || selected.frontier != source->execution_frontier) {
                 throw std::logic_error("catalog endpoint summary disagrees with Program state");
             }
-            if (!qwen3_8_flash_next::detail::prefix_matches(
+            if (!qwen::prefix_matches(
                     prompt, source->ledger, source->prefix_identity, selected.frontier)) {
                 return std::nullopt;
             }
@@ -518,7 +518,7 @@ std::optional<AdmissionCandidate> ProgramImplCore::inspect_lane(
             if (anchor == source->long_anchors.end() || selected.frontier == 0) {
                 throw std::logic_error("catalog long-anchor summary disagrees with Program state");
             }
-            if (!qwen3_8_flash_next::detail::prefix_matches(
+            if (!qwen::prefix_matches(
                     prompt, source->ledger, source->prefix_identity, selected.frontier)) {
                 return std::nullopt;
             }
@@ -535,7 +535,7 @@ std::optional<AdmissionCandidate> ProgramImplCore::inspect_lane(
                 selected.frontier != source->rewrite_checkpoint.frontier) {
                 throw std::logic_error("catalog rewrite summary disagrees with Program state");
             }
-            if (!qwen3_8_flash_next::detail::prefix_matches(
+            if (!qwen::prefix_matches(
                     prompt, source->ledger, source->prefix_identity, selected.frontier)) {
                 return std::nullopt;
             }

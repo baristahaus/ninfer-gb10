@@ -5,9 +5,9 @@
 
 #include "models/qwen3_8_flash_next/impl/frontend/chat_template.h"
 #include "models/qwen3_8_flash_next/impl/frontend/media_cache.h"
-#include "models/qwen3_8_flash_next/impl/frontend/processor.h"
+#include "models/qwen3_8_flash_next/impl/frontend/processor_family.h"
+#include "models/qwen3_8_flash_next/impl/frontend/processor_types.h"
 #include "models/qwen3_8_flash_next/impl/frontend/test_access.h"
-#include "models/qwen3_8_flash_next/impl/frontend/tokenizer.h"
 #include "models/qwen3_8_flash_next/impl/frontend/tool_call_parser.h"
 #include "text/unicode.h"
 
@@ -36,6 +36,8 @@ namespace {
 using Json   = nlohmann::json;
 using Clock  = std::chrono::steady_clock;
 namespace fi = frontend_internal;
+namespace qf = ninfer::models::qwen::frontend;
+using FrontendProcessor = qf::Processor<fi::FlashNextProcessorFamily>;
 
 constexpr std::size_t kPatchFeatures        = 1536;
 constexpr std::string_view kThinkClose      = "</think>";
@@ -152,7 +154,7 @@ void validate_pixel_pipeline(const Json& config, std::string_view resource) {
     }
 }
 
-fi::ProcessorOptions processor_options(const FrontendResources& resources) {
+qf::ProcessorOptions processor_options(const FrontendResources& resources) {
     const Json image =
         parse_resource_json(resources.preprocessor_config_json, "preprocessor_config.json");
     const Json video = parse_resource_json(resources.video_preprocessor_config_json,
@@ -163,7 +165,7 @@ fi::ProcessorOptions processor_options(const FrontendResources& resources) {
     const Json& image_size = require_object(image, "size", "preprocessor_config.json");
     const Json& video_size = require_object(video, "size", "video_preprocessor_config.json");
 
-    fi::ProcessorOptions options;
+    qf::ProcessorOptions options;
     options.image_min_pixels =
         positive_u64(require_integer(image_size, "shortest_edge", "preprocessor_config.json.size"),
                      "image shortest_edge");
@@ -191,7 +193,7 @@ fi::ProcessorOptions processor_options(const FrontendResources& resources) {
     return options;
 }
 
-void validate_registered_processor(const fi::ProcessorOptions& options) {
+void validate_registered_processor(const qf::ProcessorOptions& options) {
     if (options.image_min_pixels != kRegisteredImageMinimumPixels ||
         options.image_max_pixels != kRegisteredImageMaximumPixels ||
         options.video_min_pixels != kRegisteredVideoMinimumPixels ||
@@ -231,13 +233,13 @@ fi::CompiledChatTemplate compile_chat_template(const FrontendResources& resource
     return fi::CompiledChatTemplate::resolve(resources.chat_template_jinja);
 }
 
-[[noreturn]] void throw_processor_error(const fi::ProcessorError& error) {
+[[noreturn]] void throw_processor_error(const qf::ProcessorError& error) {
     switch (error.kind()) {
-    case fi::ProcessorErrorKind::BudgetExceeded:
+    case qf::ProcessorErrorKind::BudgetExceeded:
         throw RequestError(RequestErrorKind::MediaBudgetExceeded, error.what());
-    case fi::ProcessorErrorKind::ContextLengthExceeded:
+    case qf::ProcessorErrorKind::ContextLengthExceeded:
         throw RequestError(RequestErrorKind::ContextLengthExceeded, error.what());
-    case fi::ProcessorErrorKind::InvalidMedia:
+    case qf::ProcessorErrorKind::InvalidMedia:
         throw RequestError(RequestErrorKind::InvalidMedia, error.what());
     }
     throw std::logic_error("unknown Qwen3.8 processor error kind");
@@ -248,7 +250,7 @@ fi::CompiledChatTemplate compile_chat_template(const FrontendResources& resource
                        "prepared prompt exceeds Engine max_context " + std::to_string(max_context));
 }
 
-void validate_registered_tokenizer(const fi::Tokenizer& tokenizer) {
+void validate_registered_tokenizer(const qf::Tokenizer& tokenizer) {
     if (!tokenizer.has_exact_token_domain(kTokenDomain)) {
         throw std::invalid_argument(
             "artifact tokenizer does not expose the registered 248077-token domain");
@@ -362,7 +364,7 @@ VisionItem convert_vision_item(fi::VisionItem item) {
     VisionItem result;
     result.modality =
         item.modality == fi::Modality::Image ? PromptModality::Image : PromptModality::Video;
-    result.grid = VisionGrid{.temporal = item.grid.t, .height = item.grid.h, .width = item.grid.w};
+    result.grid = VisionGrid{.temporal = item.grid.temporal, .height = item.grid.height, .width = item.grid.width};
     result.patch_begin    = item.patch_begin;
     result.patch_count    = item.patch_count;
     result.content_digest = item.content_digest;
@@ -374,7 +376,7 @@ VisionItem convert_vision_item(fi::VisionItem item) {
     return result;
 }
 
-StopPolicy merge_stop_policy(const fi::Tokenizer& tokenizer, const StopPolicy& caller) {
+StopPolicy merge_stop_policy(const qf::Tokenizer& tokenizer, const StopPolicy& caller) {
     StopPolicy result;
     result.publish_stop_token = caller.publish_stop_token;
     const auto append_token   = [&](TokenId token) {
@@ -923,11 +925,11 @@ class Frontend::Impl {
 public:
     Impl(const FrontendResources& resources, bool registered_checkpoint, FrontendOptions options)
         : chat_template(compile_chat_template(resources)),
-          tokenizer(std::make_shared<const fi::Tokenizer>(
-              fi::TokenizerResources{.tokenizer_json         = resources.tokenizer_json,
+          tokenizer(std::make_shared<const qf::Tokenizer>(
+              qf::TokenizerResources{.tokenizer_json         = resources.tokenizer_json,
                                      .tokenizer_config_json  = resources.tokenizer_config_json,
                                      .generation_config_json = resources.generation_config_json})),
-          processor(options.vision_enabled ? processor_options(resources) : fi::ProcessorOptions{}),
+          processor(options.vision_enabled ? processor_options(resources) : qf::ProcessorOptions{}),
           vision_enabled(options.vision_enabled),
           max_context(options.max_context) {
         if (options.max_context == 0) {
@@ -965,9 +967,9 @@ public:
                 "Qwen tokenizer cannot encode the canonical thinking control suffix");
         }
         const std::string exact =
-            tokenizer->decode(encoded, fi::DecodeOptions{.skip_special_tokens = false});
+            tokenizer->decode(encoded, qf::DecodeOptions{.skip_special_tokens = false});
         const std::string presented =
-            tokenizer->decode(encoded, fi::DecodeOptions{.skip_special_tokens = true});
+            tokenizer->decode(encoded, qf::DecodeOptions{.skip_special_tokens = true});
         if (exact != kThinkingControl || presented.find(kThinkClose) == std::string::npos) {
             throw std::invalid_argument(
                 "Qwen tokenizer cannot present the canonical thinking control suffix");
@@ -983,8 +985,8 @@ public:
     }
 
     fi::CompiledChatTemplate chat_template;
-    std::shared_ptr<const fi::Tokenizer> tokenizer;
-    fi::ProcessorOptions processor;
+    std::shared_ptr<const qf::Tokenizer> tokenizer;
+    qf::ProcessorOptions processor;
     std::shared_ptr<fi::MediaPreprocessCache> media_cache;
     StopPolicy defaults;
     std::shared_ptr<const std::vector<TokenId>> thinking_control_tokens;
@@ -994,7 +996,7 @@ public:
 
 class OutputSession::Impl {
 public:
-    Impl(std::shared_ptr<const fi::Tokenizer> tokenizer_, StopPolicy policy_, OutputOptions output,
+    Impl(std::shared_ptr<const qf::Tokenizer> tokenizer_, StopPolicy policy_, OutputOptions output,
          bool starts_in_reasoning, ThinkingControlOptions thinking,
          std::shared_ptr<const std::vector<TokenId>> thinking_control_tokens_,
          std::shared_ptr<const fi::ToolCallOutputContract> tool_call_output_)
@@ -1016,7 +1018,7 @@ public:
         semantic.in_reasoning = starts_in_reasoning && thinking.budget.has_value();
     }
 
-    std::shared_ptr<const fi::Tokenizer> tokenizer;
+    std::shared_ptr<const qf::Tokenizer> tokenizer;
     StopPolicy policy;
     std::shared_ptr<const std::vector<TokenId>> thinking_control_tokens;
     bool preserve_special = false;
@@ -1212,7 +1214,7 @@ runtime::OutputDecision OutputSession::preview_model(std::span<const TokenId> to
     for (std::size_t index = 0; index < tokens.size(); ++index) {
         const std::uint32_t count          = static_cast<std::uint32_t>(index + 1);
         const TokenId token                = tokens[index];
-        const fi::DecodedTokenView decoded = impl_->tokenizer->decoded_token(token);
+        const qf::DecodedTokenView decoded = impl_->tokenizer->decoded_token(token);
 
         if (const auto boundary = impl_->preview_prefix_execution.feed(decoded.bytes);
             boundary && *boundary == decoded.bytes.size()) {
@@ -1317,7 +1319,7 @@ runtime::OutputDecision OutputSession::preview_control(std::span<const TokenId> 
     impl_->preview_output.clear();
     for (std::size_t index = 0; index < tokens.size(); ++index) {
         const TokenId token                = tokens[index];
-        const fi::DecodedTokenView decoded = impl_->tokenizer->decoded_token(token);
+        const qf::DecodedTokenView decoded = impl_->tokenizer->decoded_token(token);
         if (const auto boundary = impl_->preview_prefix_execution.feed(decoded.bytes);
             boundary && *boundary == decoded.bytes.size()) {
             impl_->preview_execution_split_after = static_cast<std::uint32_t>(index + 1U);
@@ -1529,14 +1531,14 @@ PreparedPrompt Frontend::prepare(PromptInput input, const PreparationControl& co
     std::vector<std::optional<std::uint32_t>> message_boundaries;
     std::vector<std::optional<std::uint32_t>> cache_boundaries;
     if (has_media) {
-        fi::Processor processor(*impl_->tokenizer, impl_->chat_template, impl_->processor,
+        FrontendProcessor processor(*impl_->tokenizer, impl_->chat_template, impl_->processor,
                                 impl_->media_cache);
         fi::ProcessedInput processed;
         try {
             processed =
                 processor.process(std::move(messages), render_options(options, rendered_markers),
                                   control, impl_->max_context);
-        } catch (const fi::ProcessorError& error) { throw_processor_error(error); }
+        } catch (const qf::ProcessorError& error) { throw_processor_error(error); }
         result.token_ids.assign(processed.input_ids.begin(), processed.input_ids.end());
         result.token_types    = std::move(processed.token_types);
         result.positions      = std::move(processed.positions);
@@ -1570,7 +1572,7 @@ PreparedPrompt Frontend::prepare(PromptInput input, const PreparationControl& co
         const fi::RenderedChat rendered =
             impl_->chat_template.render(messages, render_options(options, rendered_markers));
         const auto tokenize_started = Clock::now();
-        fi::EncodedChat encoded     = fi::encode_rendered_chat(
+        fi::EncodedChat encoded     = FrontendProcessor::encode_rendered_chat(
             *impl_->tokenizer, rendered, static_cast<std::size_t>(impl_->max_context) + 1U);
         result.prepare.tokenize_seconds =
             std::chrono::duration<double>(Clock::now() - tokenize_started).count();
@@ -1613,17 +1615,17 @@ std::uint32_t Frontend::count_tokens(PromptInput input, const PreparationControl
         const fi::RenderedChat rendered =
             impl_->chat_template.render(messages, render_options(options));
         const std::uint32_t count = checked_token_count(
-            fi::encode_rendered_chat(*impl_->tokenizer, rendered).input_ids.size());
+            FrontendProcessor::encode_rendered_chat(*impl_->tokenizer, rendered).input_ids.size());
         fi::check_preparation_control(control, "tokenization");
         return count;
     }
 
-    fi::Processor processor(*impl_->tokenizer, impl_->chat_template, impl_->processor,
+    FrontendProcessor processor(*impl_->tokenizer, impl_->chat_template, impl_->processor,
                             impl_->media_cache);
     try {
         return checked_token_count(
             processor.count_tokens(std::move(messages), render_options(options), control));
-    } catch (const fi::ProcessorError& error) { throw_processor_error(error); }
+    } catch (const qf::ProcessorError& error) { throw_processor_error(error); }
 }
 
 

@@ -6,6 +6,7 @@
 #include "models/common/qwen/frontend/chat_template.h"
 #include "models/common/qwen/frontend/media_cache.h"
 #include "models/common/qwen/frontend/processor.h"
+#include "models/common/qwen/frontend/processor_family.h"
 #include "models/common/qwen/frontend/test_access.h"
 #include "models/common/qwen/frontend/tokenizer.h"
 #include "models/common/qwen/frontend/tool_contract.h"
@@ -36,9 +37,10 @@
 namespace ninfer::models::qwen {
 namespace {
 
-using Json   = nlohmann::json;
-using Clock  = std::chrono::steady_clock;
-namespace fi = frontend;
+using Json              = nlohmann::json;
+using Clock             = std::chrono::steady_clock;
+namespace fi            = frontend;
+using FrontendProcessor = fi::Processor<fi::CommonProcessorFamily>;
 
 constexpr std::string_view kThinkClose = "</think>";
 constexpr std::string_view kThinkingControl =
@@ -723,8 +725,8 @@ PreparedPrompt Frontend::prepare(PromptInput input, const PreparationControl& co
     std::vector<std::optional<std::uint32_t>> message_boundaries;
     std::vector<std::optional<std::uint32_t>> cache_boundaries;
     if (has_media) {
-        fi::Processor processor(*impl_->tokenizer, impl_->chat_template, impl_->processor,
-                                impl_->media_cache);
+        FrontendProcessor processor(*impl_->tokenizer, impl_->chat_template, impl_->processor,
+                                    impl_->media_cache);
         fi::ProcessedInput processed;
         try {
             processed =
@@ -765,7 +767,7 @@ PreparedPrompt Frontend::prepare(PromptInput input, const PreparationControl& co
         result.starts_in_reasoning  = rendered.starts_in_reasoning;
         result.continuation_content = rendered.continuation_content;
         const auto tokenize_started = Clock::now();
-        fi::EncodedChat encoded     = fi::encode_rendered_chat(
+        fi::EncodedChat encoded     = FrontendProcessor::encode_rendered_chat(
             *impl_->tokenizer, rendered, static_cast<std::size_t>(impl_->max_context) + 1U);
         result.prepare.tokenize_seconds =
             std::chrono::duration<double>(Clock::now() - tokenize_started).count();
@@ -804,13 +806,13 @@ std::uint32_t Frontend::count_tokens(PromptInput input, const PreparationControl
         const fi::RenderedChat rendered =
             impl_->chat_template.render(messages, render_options(options), control);
         const std::uint32_t count = checked_token_count(
-            fi::encode_rendered_chat(*impl_->tokenizer, rendered).input_ids.size());
+            FrontendProcessor::encode_rendered_chat(*impl_->tokenizer, rendered).input_ids.size());
         fi::check_preparation_control(control, "tokenization");
         return count;
     }
 
-    fi::Processor processor(*impl_->tokenizer, impl_->chat_template, impl_->processor,
-                            impl_->media_cache);
+    FrontendProcessor processor(*impl_->tokenizer, impl_->chat_template, impl_->processor,
+                                impl_->media_cache);
     try {
         return checked_token_count(
             processor.count_tokens(std::move(messages), render_options(options), control));

@@ -1,6 +1,7 @@
 #pragma once
 
-#include "models/qwen3_8_flash_next/impl/frontend/tokenizer.h"
+#include "models/common/qwen/frontend/tokenizer.h"
+#include "text/byte_span.h"
 
 #include <ninfer/models/qwen3_8_flash_next/prepared_prompt.h>
 #include <ninfer/types.h>
@@ -35,13 +36,13 @@ enum class Modality : std::uint8_t {
 };
 
 struct MediaPlaceholderByteSpec {
-    ByteSpan bytes;
+    text::ByteSpan bytes;
     Modality modality      = Modality::Image;
     std::size_t item_index = 0;
 };
 
 struct MediaTokenRunByteSpec {
-    ByteSpan bytes;
+    text::ByteSpan bytes;
     Modality modality       = Modality::Image;
     std::size_t item_index  = 0;
     std::size_t frame_index = 0;
@@ -49,7 +50,7 @@ struct MediaTokenRunByteSpec {
 
 struct RenderedFragment {
     std::string text;
-    std::vector<ByteSpan> literal_spans;
+    std::vector<text::ByteSpan> literal_spans;
     std::vector<MediaPlaceholderByteSpec> media_placeholders;
 };
 
@@ -120,7 +121,7 @@ struct RewriteCheckpointByteSpec {
 
 struct RenderedChat {
     std::string text;
-    std::vector<ByteSpan> literal_spans;
+    std::vector<text::ByteSpan> literal_spans;
     std::vector<MediaPlaceholderByteSpec> media_placeholders;
     std::vector<MediaTokenRunByteSpec> media_token_runs;
     std::optional<RewriteCheckpointByteSpec> rewrite_checkpoint;

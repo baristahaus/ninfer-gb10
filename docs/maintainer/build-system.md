@@ -41,7 +41,9 @@ The checked-in `CMakePresets.json` provides three configure presets for each tar
 - `<target>-ops`: Core, Artifact and Ops development only, with apps and the Engine disabled.
 
 Each preset has a matching build preset, and `<target>-dev` also has a test preset with failure
-output enabled. `<target>` is `rtx5090` or `dgx-spark`, matching `NINFER_TARGET`. Each configure
+output enabled. The preset prefix is `rtx5090` or `dgx-spark`, while the cache value it sets is
+`NINFER_TARGET=rtx5090` or `NINFER_TARGET=dgx_spark` — the hyphen is the preset's, the underscore
+is the cache variable's, and the two are deliberately not the same string. Each configure
 preset uses `build/<preset>/` as its binary directory, so the products of `rtx5090-dev` are under
 `build/rtx5090-dev/apps/`. Switching between presets explicitly resets all three build options; it
 does not create independent build trees. Build with `cmake --build build/<preset> -j`.

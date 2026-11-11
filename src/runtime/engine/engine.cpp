@@ -176,6 +176,8 @@ public:
         active            = std::move(constructed.instance);
         startup.load      = std::move(constructed.load);
         flash_execution   = std::move(constructed.execution);
+        // Take the owner out of the local, or its destructor frees it here.
+        sharded           = std::move(constructed.sharded);
         std::visit(
             [&](const auto& instance) {
                 using Instance = typename std::remove_cvref_t<decltype(instance)>::element_type;
@@ -232,6 +234,16 @@ public:
 
     EngineOptions options;
     std::unique_ptr<ExecutionContext> flash_execution;
+    // The two-GPU lane's group-scoped resources: the ONE mailbox and the ONE partial pair (plus the
+    // logits pair) both Programs share. Declared after the devices and BEFORE the Programs, so it is
+    // destroyed after the Programs that borrow it and before the devices it is allocated on.
+    //
+    // THIS MEMBER IS THE OWNER, and the boundary matters. `construct_model` returns the owner inside
+    // `ConstructedModel`; a local of that type dies at the end of this constructor, so a route that
+    // moves `instance` out and leaves `sharded` behind frees the mailbox and the partial pair while
+    // both Programs keep raw pointers into it — the first column-parallel projection then writes
+    // into freed device memory (cudaErrorIllegalAddress, Xid 31).
+    std::unique_ptr<models::ShardedGroupOwner> sharded;
     runtime::ActiveModel active;
     EngineDescription description;
     StartupReport startup;

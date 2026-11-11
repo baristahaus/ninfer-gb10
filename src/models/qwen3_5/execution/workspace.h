@@ -43,6 +43,27 @@ TextPrefillRoots text_prefill_roots(Allocator& allocator, const TextConfig& conf
     return out;
 }
 
+// The attention extents this rank actually holds. At width 1 they equal the config's; at width 2
+// they are the rank's shards. They come from the prepared weights -- the same quantities the ops
+// validate against -- rather than from the model description, because a quantity taken from the
+// description describes the whole model, not this rank.
+//
+// The widths are storage: each root below is allocated at them and handed straight to `ops::linear`,
+// which rejects a strided operand. A row-slice of a config-sized {6144, tokens} root is strided, so
+// the roots themselves must be rank-sized rather than the config's shape sliced afterwards.
+struct AttentionExtents {
+    std::int32_t query_width = 0;
+    std::int32_t key_width   = 0;
+    std::int32_t value_width = 0;
+    std::int32_t gate_width  = 0;
+    std::int32_t query_heads = 0;
+    std::int32_t kv_heads    = 0;
+    // Neither of these is sharded: every rank holds the whole head vector and the whole residual,
+    // so both are the model's numbers at every width.
+    std::int32_t head_dim    = 0;
+    std::int32_t hidden_size = 0;
+};
+
 struct TextAttentionProjectionRoots {
     Tensor hidden;
     Tensor query;
@@ -51,6 +72,20 @@ struct TextAttentionProjectionRoots {
     Tensor value;
 };
 
+template <class Allocator>
+TextAttentionProjectionRoots
+text_attention_projection(Allocator& allocator, AttentionExtents extents, std::int32_t tokens) {
+    return {
+        matrix(allocator, DType::BF16, dimension(extents.hidden_size), tokens),
+        matrix(allocator, DType::BF16, dimension(extents.query_width), tokens),
+        matrix(allocator, DType::BF16, dimension(extents.gate_width), tokens),
+        matrix(allocator, DType::BF16, dimension(extents.key_width), tokens),
+        matrix(allocator, DType::BF16, dimension(extents.value_width), tokens),
+    };
+}
+
+// The config-wide form: planning sizes the workspace for the largest shape any rank can hold, so it
+// uses the model's own extents. Correctness never uses this one.
 template <class Allocator>
 TextAttentionProjectionRoots
 text_attention_projection(Allocator& allocator, const TextConfig& config, std::int32_t tokens) {
@@ -69,6 +104,17 @@ struct TextAttentionResultRoots {
     Tensor attention;
 };
 
+template <class Allocator>
+TextAttentionResultRoots text_attention_results(Allocator& allocator, AttentionExtents extents,
+                                                std::int32_t tokens) {
+    return {
+        matrix(allocator, DType::BF16, dimension(extents.query_width), tokens),
+        matrix(allocator, DType::BF16, dimension(extents.key_width), tokens),
+        matrix(allocator, DType::BF16, dimension(extents.query_width), tokens),
+    };
+}
+
+// The config-wide form, for planning only.
 template <class Allocator>
 TextAttentionResultRoots text_attention_results(Allocator& allocator, const TextConfig& config,
                                                 std::int32_t tokens) {

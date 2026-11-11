@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <stdexcept>
+#include <string>
 
 namespace ninfer::models::qwen3_5::execution {
 namespace {
@@ -20,6 +21,40 @@ void require_rope_axes(const Tensor& positions, const RopeConfig& config) {
 }
 
 } // namespace
+
+workspace::AttentionExtents attention_extents(const AttentionParameters& parameters,
+                                             const TextConfig& config) {
+    workspace::AttentionExtents out;
+    if (parameters.role_rows) {
+        const auto& roles = *parameters.role_rows;
+        out.query_width   = roles[0].weight.n;
+        out.key_width     = roles[1].weight.n;
+        out.gate_width    = roles[2].weight.n;
+        out.value_width   = roles[3].weight.n;
+    } else {
+        // The segmented form has four segments, and `projection_rows` is filled in the order the
+        // projection writes them: query, key, gate, value (profile.cpp, parameters.cpp, and the
+        // `role_rows` comment above). The gate is segment 2, NOT the query's rows -- the two are
+        // equal on this model (6144/6144), which is exactly the kind of coincidence that would
+        // hide the mistake until a model where they differ.
+        out.query_width = parameters.projection_rows[0];
+        out.key_width   = parameters.projection_rows[1];
+        out.gate_width  = parameters.projection_rows[2];
+        out.value_width = parameters.projection_rows[3];
+    }
+    out.head_dim    = static_cast<std::int32_t>(config.attention->head_dim);
+    out.hidden_size = static_cast<std::int32_t>(config.hidden_size);
+    if (out.head_dim <= 0 || out.query_width % out.head_dim != 0 ||
+        out.key_width % out.head_dim != 0) {
+        throw std::invalid_argument(
+            "attention extents are not a whole number of heads: head_dim " +
+            std::to_string(out.head_dim) + ", query width " + std::to_string(out.query_width) +
+            ", key width " + std::to_string(out.key_width));
+    }
+    out.query_heads = out.query_width / out.head_dim;
+    out.kv_heads    = out.key_width / out.head_dim;
+    return out;
+}
 
 std::size_t attention_projection_workspace_bytes(const AttentionProfile& parameters,
                                                  std::int32_t first, std::int32_t last) {

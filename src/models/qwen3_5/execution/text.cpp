@@ -146,11 +146,16 @@ void TextRun::attention(const BlockParameters& block, std::uint32_t compact_laye
     const auto tokens = residual_.ne[1];
     const auto width  = inputs_.ids.ne[0];
     const auto batch  = inputs_.ids.ne[1];
-    const auto dim    = dimension(attn.head_dim);
-    const auto heads  = dimension(attn.num_attention_heads);
-    const auto kv     = dimension(attn.num_key_value_heads);
+    // The rank's own extents, not the config's: at width 2 the widths and head counts are the
+    // rank's shards, and every root below is allocated at them because a row-slice of a
+    // config-sized root is strided and cannot be handed to `ops::linear`. At width 1 these equal
+    // the config's numbers, so the unsharded lane allocates exactly what it did before.
+    const auto extents = attention_extents(p, cfg);
+    const auto dim     = dimension(extents.head_dim);
+    const auto heads   = dimension(extents.query_heads);
+    const auto kv      = dimension(extents.kv_heads);
 
-    const auto projection = workspace::text_attention_projection(work, cfg, tokens);
+    const auto projection = workspace::text_attention_projection(work, extents, tokens);
     Tensor normalized     = projection.hidden;
     ops::rmsnorm(residual_, block.input_norm, cfg.rms_norm_eps, true, normalized, cuda);
     Tensor query = projection.query;
@@ -163,7 +168,7 @@ void TextRun::attention(const BlockParameters& block, std::uint32_t compact_laye
     key   = key.view({dim, kv, tokens});
     value = value.view({dim, kv, tokens});
 
-    const auto results = workspace::text_attention_results(work, cfg, tokens);
+    const auto results = workspace::text_attention_results(work, extents, tokens);
     Tensor q           = results.normalized_query.view({dim, heads, tokens});
     Tensor k           = results.normalized_key.view({dim, kv, tokens});
     Tensor a           = results.attention.view({dim, heads, tokens});
@@ -176,7 +181,7 @@ void TextRun::attention(const BlockParameters& block, std::uint32_t compact_laye
     Tensor ab = a.view({dim, heads, width, batch});
     ops::causal_softmax_attention(
         qb, kb, vb, inputs_.cache_positions, inputs_.valid_columns, inputs_.kv_table_rows,
-        {dim, heads, kv}, static_cast<float>(1.0 / std::sqrt(double(attn.head_dim))),
+        {dim, heads, kv}, static_cast<float>(1.0 / std::sqrt(double(extents.head_dim))),
         view_.cache.batch_layer_view(compact_layer), envelope_, work, ab, cuda);
     ops::sigmoid_mul(gate, a, cuda);
     if (view_.collective != nullptr) {
@@ -184,10 +189,10 @@ void TextRun::attention(const BlockParameters& block, std::uint32_t compact_laye
         // `linear_add` here would count it once per rank. The reduce is this rank's own exchange on
         // this rank's stream, so the projection above is already ordered before it.
         std::array<Tensor, 2> partials = column_partials(tokens);
-        sharded_project_columns_add(a.view({dimension(attn.query_width()), tokens}), p.output,
+        sharded_project_columns_add(a.view({dimension(extents.query_width), tokens}), p.output,
                                     partials, residual_, *view_.collective, work, cuda);
     } else {
-        ops::linear_add(a.view({dimension(attn.query_width()), tokens}), p.output.weight, residual_,
+        ops::linear_add(a.view({dimension(extents.query_width), tokens}), p.output.weight, residual_,
                         p.output.policy, work, cuda);
     }
 }

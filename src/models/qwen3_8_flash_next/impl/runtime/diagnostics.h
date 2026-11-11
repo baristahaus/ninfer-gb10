@@ -76,9 +76,13 @@ inline void capture_target_logits(const char* route, const Tensor& ids, const Te
 // recurrent, every layer), the continuation hidden, the MTP hidden, the PLE state and, for a
 // masked-draft Program, the local cyclic K/V. The files are raw little-endian bytes with no
 // header; the suffix names the component, the layer and the element format.
+// `phase` names the point in the sequence's life the dump was taken at: "commit" after a resolved
+// round, "materialization" right after a Fork bound the restored source. A copy-identity test
+// compares a "materialization" dump against the "commit" dump of the slot it was copied from.
 inline void capture_committed_state(const char* route, const StateImageDevicePool& images, int slot,
                                     std::uint32_t lane, std::uint32_t frontier,
-                                    std::span<const std::int32_t> ledger, cudaStream_t stream) {
+                                    std::span<const std::int32_t> ledger, cudaStream_t stream,
+                                    const char* phase = "commit") {
     static const char* directory = std::getenv("NINFER_FLASH_NEXT_STATE_DIR");
     static const char* selected  = std::getenv("NINFER_FLASH_NEXT_STATE_FRONTIER");
     if (directory == nullptr || selected == nullptr || *directory == '\0') { return; }
@@ -87,6 +91,7 @@ inline void capture_committed_state(const char* route, const StateImageDevicePoo
     const auto stem = std::filesystem::path(directory) / std::to_string(serial.fetch_add(1));
     std::filesystem::create_directories(directory);
     nlohmann::json metadata{{"route", route},
+                            {"phase", phase},
                             {"lane", lane},
                             {"physical_slot", slot},
                             {"frontier", frontier},
@@ -132,6 +137,8 @@ inline void capture_committed_state(const char* route, const StateImageDevicePoo
         }
     }
     metadata["layers"]              = pool.layer_count();
+    metadata["conv_channels"]       = pool.spec().conv_channels;
+    metadata["conv_width"]          = pool.spec().conv_width;
     metadata["dflash_local_layers"] = dflash_layers;
     metadata["components"]          = components;
     std::ofstream file(stem.string() + ".json");

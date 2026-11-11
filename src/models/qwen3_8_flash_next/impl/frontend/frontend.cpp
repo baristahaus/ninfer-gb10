@@ -4,7 +4,7 @@
 #include <ninfer/models/qwen3_8_flash_next/prepared_prompt.h>
 
 #include "models/qwen3_8_flash_next/impl/frontend/chat_template.h"
-#include "models/qwen3_8_flash_next/impl/frontend/media_cache.h"
+#include "models/qwen3_8_flash_next/impl/frontend/media_cache_family.h"
 #include "models/qwen3_8_flash_next/impl/frontend/processor_family.h"
 #include "models/qwen3_8_flash_next/impl/frontend/processor_types.h"
 #include "models/qwen3_8_flash_next/impl/frontend/test_access.h"
@@ -38,6 +38,7 @@ using Clock  = std::chrono::steady_clock;
 namespace fi = frontend_internal;
 namespace qf = ninfer::models::qwen::frontend;
 using FrontendProcessor = qf::Processor<fi::FlashNextProcessorFamily>;
+using MediaCache        = qf::MediaCache<fi::FlashNextMediaCacheFamily>;
 
 constexpr std::size_t kPatchFeatures        = 1536;
 constexpr std::string_view kThinkClose      = "</think>";
@@ -946,7 +947,7 @@ public:
                 throw std::invalid_argument(
                     "media live-byte capacity cannot hold the maximum supported Vision prompt");
             }
-            media_cache = std::make_shared<fi::MediaPreprocessCache>(
+            media_cache = std::make_shared<MediaCache>(
                 options.media_cache_bytes, options.media_live_bytes,
                 options.media_preprocess_threads, static_cast<std::size_t>(minimum_live));
         }
@@ -987,7 +988,7 @@ public:
     fi::CompiledChatTemplate chat_template;
     std::shared_ptr<const qf::Tokenizer> tokenizer;
     qf::ProcessorOptions processor;
-    std::shared_ptr<fi::MediaPreprocessCache> media_cache;
+    std::shared_ptr<MediaCache> media_cache;
     StopPolicy defaults;
     std::shared_ptr<const std::vector<TokenId>> thinking_control_tokens;
     bool vision_enabled       = true;
@@ -1491,7 +1492,7 @@ const PreparedPromptData& FrontendTestAccess::inspect(const PreparedPrompt& prom
 }
 
 PreparedPrompt Frontend::prepare(PromptInput input, const PreparationControl& control) const {
-    fi::check_preparation_control(control);
+    qf::check_preparation_control(control);
     const auto start              = Clock::now();
     const PromptOptions options   = input.options;
     ContextCacheHints cache_hints = std::move(input.context_cache);
@@ -1576,7 +1577,7 @@ PreparedPrompt Frontend::prepare(PromptInput input, const PreparationControl& co
             *impl_->tokenizer, rendered, static_cast<std::size_t>(impl_->max_context) + 1U);
         result.prepare.tokenize_seconds =
             std::chrono::duration<double>(Clock::now() - tokenize_started).count();
-        fi::check_preparation_control(control, "tokenization");
+        qf::check_preparation_control(control, "tokenization");
         if (encoded.input_ids.size() > impl_->max_context) {
             throw_context_length_exceeded(impl_->max_context);
         }
@@ -1602,7 +1603,7 @@ PreparedPrompt Frontend::prepare(PromptInput input, const PreparationControl& co
 }
 
 std::uint32_t Frontend::count_tokens(PromptInput input, const PreparationControl& control) const {
-    fi::check_preparation_control(control);
+    qf::check_preparation_control(control);
     const PromptOptions options           = input.options;
     std::vector<fi::ChatMessage> messages = convert_messages(std::move(input.messages));
     const bool has_media =
@@ -1616,7 +1617,7 @@ std::uint32_t Frontend::count_tokens(PromptInput input, const PreparationControl
             impl_->chat_template.render(messages, render_options(options));
         const std::uint32_t count = checked_token_count(
             FrontendProcessor::encode_rendered_chat(*impl_->tokenizer, rendered).input_ids.size());
-        fi::check_preparation_control(control, "tokenization");
+        qf::check_preparation_control(control, "tokenization");
         return count;
     }
 
@@ -1632,7 +1633,7 @@ std::uint32_t Frontend::count_tokens(PromptInput input, const PreparationControl
 
 MediaCacheSummary Frontend::media_cache_summary() const {
     if (impl_ == nullptr || !impl_->media_cache) { return {}; }
-    const fi::MediaCacheStats stats = impl_->media_cache->stats();
+    const qf::MediaCacheStats stats = impl_->media_cache->stats();
     return MediaCacheSummary{
         .capacity_bytes      = stats.capacity_bytes,
         .live_capacity_bytes = stats.live_capacity_bytes,

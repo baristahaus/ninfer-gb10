@@ -4,7 +4,7 @@
 #include "models/common/qwen/frontend/tokenizer.h"
 
 #include "models/qwen3_8_flash_next/impl/frontend/chat_template.h"
-#include "models/qwen3_8_flash_next/impl/frontend/media_cache.h"
+#include "models/qwen3_8_flash_next/impl/frontend/media_cache_family.h"
 #include "models/qwen3_8_flash_next/impl/frontend/processor_types.h"
 
 #include <ninfer/models/qwen3_8_flash_next/prepared_prompt.h>
@@ -29,12 +29,11 @@ struct FlashNextProcessorFamily {
     using TokenSpan            = ninfer::models::qwen3_8_flash_next::frontend_internal::TokenSpan;
     using PreparedMediaPayload = qwen3_8_flash_next::PreparedMediaPayload;
     using MediaPreprocessCache =
-        ninfer::models::qwen3_8_flash_next::frontend_internal::MediaPreprocessCache;
-    using MediaCacheKey = ninfer::models::qwen3_8_flash_next::frontend_internal::MediaCacheKey;
-    using PreparedMedia = ninfer::models::qwen3_8_flash_next::frontend_internal::PreparedMedia;
-    using PendingMedia  = ninfer::models::qwen3_8_flash_next::frontend_internal::PendingMedia;
-    using MediaCacheRequestStats =
-        ninfer::models::qwen3_8_flash_next::frontend_internal::MediaCacheRequestStats;
+        ninfer::models::qwen::frontend::MediaCache<FlashNextMediaCacheFamily>;
+    using MediaCacheKey          = typename FlashNextMediaCacheFamily::Key;
+    using PreparedMedia          = typename FlashNextMediaCacheFamily::Media;
+    using PendingMedia           = typename FlashNextMediaCacheFamily::Pending;
+    using MediaCacheRequestStats = ninfer::models::qwen::frontend::MediaCacheRequestStats;
     using RenderedChat = ninfer::models::qwen3_8_flash_next::frontend_internal::RenderedChat;
     using MediaTokenRunByteSpec =
         ninfer::models::qwen3_8_flash_next::frontend_internal::MediaTokenRunByteSpec;

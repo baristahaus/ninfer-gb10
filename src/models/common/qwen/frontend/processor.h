@@ -20,8 +20,6 @@
 
 namespace ninfer::models::qwen::frontend {
 
-class MediaPreprocessCache;
-
 enum class ProcessorErrorKind {
     BudgetExceeded,
     ContextLengthExceeded,

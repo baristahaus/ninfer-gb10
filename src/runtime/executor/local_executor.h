@@ -124,13 +124,17 @@ public:
         flight.phase   = Phase::Retiring;
         try {
             observe_host_call(host_.commit_ns, [&] {
+                // EVERY rank must receive the SAME commit, so the move happens on the LAST rank
+                // only and every earlier rank takes a copy. Moving on rank 0 emptied the object
+                // before rank 1 was handed it, and rank 1 then committed a commit with no rows —
+                // which `prepare_commit` could not catch because it runs on rank 0 only, and which
+                // `launch_commit` caught as a segfault before it learned to refuse.
                 for (std::size_t rank = 0; rank < workers_.size(); ++rank) {
                     auto& program = workers_[rank]->program();
-                    if (rank == 0) {
+                    if (rank + 1 == workers_.size()) {
                         program.commit(ticket, flight.command, std::move(commit));
                     } else {
-                        auto copy = commit;
-                        program.commit(ticket, flight.command, std::move(copy));
+                        program.commit(ticket, flight.command, typename Protocol::Commit{commit});
                     }
                 }
             });

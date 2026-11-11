@@ -3,9 +3,10 @@
 // DIAGNOSTIC (NINFER_ROUND_TRACE=1): the round-dispatch trace.
 //
 // The two-GPU lane hands one round to two Programs from one coordinator thread. This trace makes
-// that handoff visible: every executor submit (ticket, frame kind, and the rank each `start` is
-// actually called on), every per-rank poll result, every per-rank commit, and one-time gate lines
-// that name where a single rank's return or result releases the next round.
+// that handoff visible: every executor submit (ticket, frame kind, the rank each frame-enqueue
+// `start_frame` is actually called on, and the concurrent stage-machine progress that follows),
+// every per-rank poll result, every per-rank commit, and one-time gate lines that name where a
+// single rank's return or result releases the next round.
 //
 // UNSET, EVERY CALL BELOW IS INERT. `round_trace_enabled()` is one cached getenv; callers guard
 // their formatting with it, and no CUDA or Program state is touched. SET, the lines go to stderr as
@@ -19,8 +20,8 @@
 //
 // RANK. Where both are available, a line prints `rank` (the Program's rank in the group) and `dev`
 // (that rank's CUDA device index). Where only a device is available, the device index IS the rank
-// on this lane: LocalExecutor drives its workers in rank order and the two-GPU lane's device list
-// is {0, 1}.
+// on this lane: LocalExecutor enqueues its workers' frames in rank order and the two-GPU lane's
+// device list is {0, 1}.
 
 #include "runtime/executor/contract.h"
 

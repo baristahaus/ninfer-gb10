@@ -102,6 +102,10 @@ public:
     void validate_work(const Work&, runtime::FrameKind) const;
     void validate_decision(runtime::ExecutionTicket, const runtime::DecisionInput&) const;
     void prepare_commit(runtime::ExecutionTicket, Commit&) const;
+    // Two-phase dispatch. `start_frame` enqueues the frame, its actions and its inputs and returns
+    // without running the stage machine; `progress` then advances that machine until it must wait.
+    // `start` is the single-rank entry point (WorkerLoop): start_frame + progress.
+    void start_frame(runtime::ExecutionRequest<ExecutionTypes>&&);
     void start(runtime::ExecutionRequest<ExecutionTypes>&&);
     void supply(runtime::ExecutionTicket, runtime::CommandSequence, runtime::DecisionInput&&);
     void commit(runtime::ExecutionTicket, runtime::CommandSequence, Commit&&);

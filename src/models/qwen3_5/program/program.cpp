@@ -28,9 +28,15 @@ void RankProgram::prepare_commit(runtime::ExecutionTicket ticket, Commit& commit
     impl_->prepare_commit(ticket, commit);
 }
 
+void RankProgram::start_frame(runtime::ExecutionRequest<ExecutionTypes>&& request) {
+    impl_->start_frame(std::move(request));
+}
+
 void RankProgram::start(runtime::ExecutionRequest<ExecutionTypes>&& request) {
     impl_->start(std::move(request));
 }
+
+void RankProgram::progress() { impl_->progress(); }
 
 void RankProgram::supply(runtime::ExecutionTicket ticket, runtime::CommandSequence command,
                          runtime::DecisionInput&& input) {

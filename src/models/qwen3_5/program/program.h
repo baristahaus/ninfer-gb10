@@ -23,7 +23,15 @@ public:
     void validate_decision(runtime::ExecutionTicket, const runtime::DecisionInput&) const;
     void prepare_commit(runtime::ExecutionTicket, Commit&) const;
 
+    // Two-phase dispatch for a local group. `start_frame` enqueues the frame and its inputs but
+    // does not run the stage machine; `progress` then advances it. The executor enqueues every
+    // rank's frame before any rank progresses, and then drives the ranks' progress concurrently,
+    // so no rank can block on a collective before every rank has been dispatched and the peer can
+    // keep enqueueing while one rank's host is blocked. `start` is the single-rank entry point
+    // (the distributed WorkerLoop): start_frame followed by progress.
+    void start_frame(runtime::ExecutionRequest<ExecutionTypes>&&);
     void start(runtime::ExecutionRequest<ExecutionTypes>&&);
+    void progress();
     void supply(runtime::ExecutionTicket, runtime::CommandSequence, runtime::DecisionInput&&);
     void commit(runtime::ExecutionTicket, runtime::CommandSequence, Commit&&);
     void discard(runtime::ExecutionTicket, runtime::CommandSequence);

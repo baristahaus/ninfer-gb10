@@ -50,7 +50,7 @@ public:
         implementation.prepare_commit(ticket, commit);
     }
 
-    void start(runtime::ExecutionRequest<q4::ExecutionTypes>&& request) {
+    void start_frame(runtime::ExecutionRequest<q4::ExecutionTypes>&& request) {
         if (const auto* score = std::get_if<q4::ScoreWork>(&request.work.operation)) {
             const auto& row = score->row;
             require(starts < 2 && starts == results, "unexpected scoring continuation");
@@ -85,8 +85,15 @@ public:
                     "fresh scoring inherited nonzero GDN, QSA or PLE state");
             ++starts;
         }
-        implementation.start(std::move(request));
+        implementation.start_frame(std::move(request));
     }
+
+    void start(runtime::ExecutionRequest<q4::ExecutionTypes>&& request) {
+        start_frame(std::move(request));
+        progress();
+    }
+
+    void progress() { implementation.progress(); }
 
     void supply(runtime::ExecutionTicket ticket, runtime::CommandSequence command,
                 runtime::DecisionInput&& input) {

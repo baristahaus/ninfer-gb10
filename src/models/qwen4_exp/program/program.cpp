@@ -177,9 +177,15 @@ void RankProgram::validate_work(const Work& work, runtime::FrameKind kind) const
     impl_->validate_work(work, kind);
 }
 
+void RankProgram::start_frame(runtime::ExecutionRequest<ExecutionTypes>&& request) {
+    impl_->start_frame(std::move(request));
+}
+
 void RankProgram::start(runtime::ExecutionRequest<ExecutionTypes>&& request) {
     impl_->start(std::move(request));
 }
+
+void RankProgram::progress() { impl_->progress(); }
 
 void RankProgram::validate_decision(runtime::ExecutionTicket ticket,
                                     const runtime::DecisionInput& input) const {

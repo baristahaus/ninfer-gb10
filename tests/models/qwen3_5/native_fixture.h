@@ -44,10 +44,17 @@ public:
         implementation.prepare_commit(ticket, commit);
     }
 
-    void start(runtime::ExecutionRequest<q35::ExecutionTypes>&& request) {
+    void start_frame(runtime::ExecutionRequest<q35::ExecutionTypes>&& request) {
         if (submitted) submitted(request);
-        implementation.start(std::move(request));
+        implementation.start_frame(std::move(request));
     }
+
+    void start(runtime::ExecutionRequest<q35::ExecutionTypes>&& request) {
+        start_frame(std::move(request));
+        progress();
+    }
+
+    void progress() { implementation.progress(); }
 
     void supply(runtime::ExecutionTicket ticket, runtime::CommandSequence command,
                 runtime::DecisionInput&& input) {

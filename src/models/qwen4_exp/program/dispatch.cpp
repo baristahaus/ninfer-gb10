@@ -5,12 +5,11 @@
 
 namespace ninfer::models::qwen4_exp::detail {
 
-void RankProgramImpl::start(runtime::ExecutionRequest<ExecutionTypes>&& request) {
+void RankProgramImpl::start_frame(runtime::ExecutionRequest<ExecutionTypes>&& request) {
     if (request.ticket.frame.kind == runtime::FrameKind::Context) {
         if (context) throw std::logic_error("Qwen4Exp context frame is occupied");
         context.emplace(ContextFrame{std::move(request), false});
         resources.context_actions->submit(context->request.work.actions);
-        advance_context();
         return;
     }
     if (compute) throw std::logic_error("Qwen4Exp compute frame is occupied");
@@ -29,6 +28,17 @@ void RankProgramImpl::start(runtime::ExecutionRequest<ExecutionTypes>&& request)
         },
         f.request.work.operation);
     resources.compute_actions->submit(f.request.work.actions);
+}
+
+void RankProgramImpl::start(runtime::ExecutionRequest<ExecutionTypes>&& request) {
+    // The single-rank entry point: the distributed WorkerLoop drives one Program in this process,
+    // so there is no peer start to order against. The local executor uses start_frame + progress.
+    start_frame(std::move(request));
+    progress();
+}
+
+void RankProgramImpl::progress() {
+    advance_context();
     advance_compute();
 }
 

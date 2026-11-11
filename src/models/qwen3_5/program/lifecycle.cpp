@@ -146,16 +146,15 @@ void RankProgramImpl::install_residencies(const ContextWork& work) {
     }
 }
 
-void RankProgramImpl::start(runtime::ExecutionRequest<ExecutionTypes>&& request) {
+void RankProgramImpl::start_frame(runtime::ExecutionRequest<ExecutionTypes>&& request) {
     // DIAGNOSTIC (NINFER_ROUND_TRACE=1): `rank` is the Program's rank in the group and `dev` is
-    // the CUDA device index. This is the first statement in start, so a refusal or an early throw
-    // is still visible as a start that WAS called.
+    // the CUDA device index. This is the first statement in start_frame, so a refusal or an early
+    // throw is still visible as a start that WAS called.
     const bool trace             = runtime::round_trace_enabled();
     const int rank               = collective_ ? collective_->rank : device.device().index();
     const int dev                = device.device().index();
     const auto trace_ticket      = request.ticket;
     const auto trace_command     = request.command;
-    const auto trace_began       = runtime::round_trace_now_ns();
     const std::size_t trace_reduces_before = collective_ ? collective_->reduce_index : 0;
     if (trace) {
         runtime::round_trace(
@@ -234,6 +233,28 @@ void RankProgramImpl::start(runtime::ExecutionRequest<ExecutionTypes>&& request)
                 static_cast<int>(compute->stage));
         }
     }
+    if (trace) {
+        runtime::round_trace(
+            "start.frame.enqueued rank=%d dev=%d ticket=%llu kind=%s reduces=%zu (the frame and "
+            "its inputs exist; the stage machine has not run, so no forward kernel and no "
+            "collective has been enqueued)",
+            rank, dev, static_cast<unsigned long long>(trace_ticket.id),
+            runtime::round_trace_frame_kind_name(trace_ticket.frame.kind), trace_reduces_before);
+    }
+}
+
+void RankProgramImpl::start(runtime::ExecutionRequest<ExecutionTypes>&& request) {
+    // The single-rank entry point: the distributed WorkerLoop drives one Program in this process,
+    // so there is no peer start to order against and start_frame + progress to completion is the
+    // whole dispatch. The local two-rank executor uses start_frame on every rank and then runs
+    // the ranks' progress concurrently; see LocalExecutor::submit.
+    const bool trace        = runtime::round_trace_enabled();
+    const int rank          = collective_ ? collective_->rank : device.device().index();
+    const int dev           = device.device().index();
+    const auto trace_ticket = request.ticket;
+    const auto trace_began  = runtime::round_trace_now_ns();
+    const std::size_t trace_reduces_before = collective_ ? collective_->reduce_index : 0;
+    start_frame(std::move(request));
     if (trace) {
         runtime::round_trace("start.progress.begin rank=%d dev=%d ticket=%llu", rank, dev,
                              static_cast<unsigned long long>(trace_ticket.id));

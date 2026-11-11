@@ -7,7 +7,9 @@
 
 #include <array>
 #include <exception>
+#include <thread>
 #include <type_traits>
+#include <vector>
 
 namespace ninfer::runtime {
 
@@ -20,7 +22,9 @@ public:
     // `workers` are the group's ranks in rank order. Width 1 is a one-element vector and every
     // call below takes exactly the path it took when the executor held one worker; width 2 adds
     // rank 1 to the same loops, in the same order, which is the ordering argument the rank-1
-    // mirrors rely on.
+    // mirrors rely on. `submit` is the one loop that is phased rather than run to completion per
+    // rank: every rank's frame is enqueued before any rank's stage machine advances. See the
+    // invariant at its dispatch.
     LocalExecutor(std::vector<std::unique_ptr<RankWorker<Types>>> workers, SessionEpoch epoch)
         : workers_(std::move(workers)), epoch_(epoch),
           pool_(workers_.front()->program().capacity()),
@@ -96,10 +100,12 @@ public:
             if (!trace_gate_printed_) {
                 trace_gate_printed_ = true;
                 round_trace(
-                    "gate=submit.serial ranks=%zu: LocalExecutor::submit calls start rank 0 first "
-                    "and does not issue rank 1's start until rank 0's start returns "
-                    "(for_each_program). A block or throw in rank 0's start is a block or throw "
-                    "before rank 1's start is called.",
+                    "gate=submit.phased ranks=%zu: LocalExecutor::submit enqueues every rank's "
+                    "frame first (start_frame) and only then runs the stage machines "
+                    "(progress), concurrently. A serial start over ranks would let the first "
+                    "rank's forward block on a collective before the second rank exists; a "
+                    "serial progress would let it block again before the second rank enqueues "
+                    "the matching exchange.",
                     workers_.size());
                 round_trace(
                     "gate=executor.poll rank=0-only: LocalExecutor::poll returns rank 0's event and "
@@ -117,14 +123,38 @@ public:
         }
         try {
             observe_host_call(host_.submit_ns, [&] {
-                // The trace needs the rank and the frame kind at each start, so this is
-                // for_each_program written out: same rank order, same per-rank bind, same call.
+                // INVARIANT: no rank may block on a collective before every rank has been
+                // dispatched.
+                //
+                // The eager forward enqueues its whole layer chain from the Program's stage
+                // machine, and its first column-parallel projection is a mailbox exchange that
+                // spins on the peer rank's flag. A serial start over ranks -- rank 0's whole
+                // start, including its progress(), and only then rank 1's start -- lets rank 0's
+                // spinning exchange hold its stream while rank 0's host keeps enqueueing; the
+                // CUDA pending-launch queue fills, cudaLaunchKernel blocks, and rank 1's start is
+                // never issued. Rank 1 then cannot publish the flag rank 0 waits for. That is the
+                // measured 65-second mailbox give-up with no rank-1 start.
+                //
+                // So dispatch is phased, and neither phase runs one rank to completion first:
+                //   1. start_frame() on every rank, in rank order. It enqueues the frame and its
+                //      inputs and returns before the stage machine runs, so no forward kernel --
+                //      and no collective -- exists yet.
+                //   2. progress() on every rank, concurrently, one thread per rank. The eager
+                //      forward is longer than the CUDA pending-launch queue, so even after phase 1
+                //      a rank's progress eventually blocks in cudaLaunchKernel while its stream
+                //      waits on a collective. A serial phase 2 would block the only thread there
+                //      and never issue the peer's progress; the peer would never enqueue the
+                //      matching exchange, and the block would become permanent. Concurrent
+                //      progress keeps the peer enqueueing while one rank's host waits: the
+                //      exchange completes, the queue drains, and the blocked call returns.
+                // The trace needs the rank and the frame kind at each start, so the phase-1 loop
+                // is written out rather than using for_each_program.
                 for (std::size_t rank = 0; rank < workers_.size(); ++rank) {
                     bind_rank(rank);
                     trace_start_enter(rank, ticket, flight.command);
                     const auto began = round_trace_now_ns();
                     try {
-                        workers_[rank]->program().start({ticket, flight.command, work});
+                        workers_[rank]->program().start_frame({ticket, flight.command, work});
                     } catch (const std::exception& error) {
                         trace_start_throw(rank, ticket, flight.command, began, error.what());
                         throw;
@@ -134,6 +164,21 @@ public:
                         throw;
                     }
                     trace_start_return(rank, ticket, flight.command, began);
+                }
+                if (round_trace_enabled()) {
+                    round_trace("submit.progress.begin ranks=%zu (every rank's frame is enqueued; "
+                                "the stage machines now run concurrently so the peer keeps "
+                                "enqueueing while one rank's host blocks on a full launch queue)",
+                                workers_.size());
+                }
+                const auto progress_began = round_trace_now_ns();
+                progress_each_rank();
+                if (round_trace_enabled()) {
+                    round_trace("submit.progress.end ranks=%zu elapsed-us=%llu (every rank's "
+                                "stage machine has run to its first wait)",
+                                workers_.size(),
+                                static_cast<unsigned long long>(
+                                    (round_trace_now_ns() - progress_began) / 1000ULL));
                 }
             });
         } catch (...) { record_failure(ticket); }
@@ -410,6 +455,39 @@ private:
     // device so the caller can touch that rank's Program; see bind_to_current_thread above.
     void bind_rank(std::size_t rank) { workers_[rank]->bind_to_current_thread(); }
 
+    // Runs every rank's stage machine concurrently. This is the second phase of submit's
+    // dispatch; see the invariant there for why a serial loop is not enough. Width 1 runs inline:
+    // one rank, no peer to keep enqueueing, and no ordering to establish.
+    void progress_each_rank() {
+        if (workers_.size() == 1) {
+            bind_rank(0);
+            workers_.front()->program().progress();
+            return;
+        }
+        std::vector<std::exception_ptr> errors(workers_.size());
+        std::vector<std::thread> threads;
+        threads.reserve(workers_.size());
+        try {
+            for (std::size_t rank = 0; rank < workers_.size(); ++rank) {
+                threads.emplace_back([&, rank] {
+                    try {
+                        bind_rank(rank);
+                        workers_[rank]->program().progress();
+                    } catch (...) { errors[rank] = std::current_exception(); }
+                });
+            }
+        } catch (...) {
+            // A thread that could not be created must not leave an earlier one joinable in a
+            // vector whose destructor would call std::terminate. Join what exists, then report the
+            // spawn failure; the ticket fails either way.
+            for (auto& thread : threads) thread.join();
+            throw;
+        }
+        for (auto& thread : threads) thread.join();
+        for (auto& error : errors)
+            if (error) std::rethrow_exception(error);
+    }
+
     void sample_resources(bool force) {
         bind_rank(0);
         auto& snapshot = this->observations_[0];
@@ -486,7 +564,8 @@ private:
                            CommandSequence command) {
         if (!round_trace_enabled()) return;
         round_trace("submit.start.enter rank=%zu dev=%d ticket=%llu kind=%s frame=%u gen=%llu "
-                    "command=%llu (LocalExecutor::submit -> program.start)",
+                    "command=%llu (LocalExecutor::submit -> program.start_frame: enqueue the "
+                    "frame only; the stage machine has not run)",
                     rank, static_cast<int>(workers_[rank]->device().index()),
                     static_cast<unsigned long long>(ticket.id),
                     round_trace_frame_kind_name(ticket.frame.kind), ticket.frame.index,
@@ -498,7 +577,7 @@ private:
                             CommandSequence command, std::uint64_t began) {
         if (!round_trace_enabled()) return;
         round_trace("submit.start.return rank=%zu dev=%d ticket=%llu kind=%s command=%llu "
-                    "elapsed-us=%llu",
+                    "elapsed-us=%llu (frame enqueued; progress follows for every rank)",
                     rank, static_cast<int>(workers_[rank]->device().index()),
                     static_cast<unsigned long long>(ticket.id),
                     round_trace_frame_kind_name(ticket.frame.kind),

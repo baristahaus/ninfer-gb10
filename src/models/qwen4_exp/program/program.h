@@ -30,7 +30,12 @@ public:
     void release_execution();
     [[nodiscard]] std::vector<context::KVTransferProfile> context_transfer_profiles() const;
     void validate_work(const Work&, runtime::FrameKind) const;
+    // Two-phase dispatch for the local executor: start_frame enqueues the frame and its actions;
+    // progress advances the stage machine. start is start_frame + progress, the single-rank entry
+    // the distributed WorkerLoop uses.
+    void start_frame(runtime::ExecutionRequest<ExecutionTypes>&&);
     void start(runtime::ExecutionRequest<ExecutionTypes>&&);
+    void progress();
     void validate_decision(runtime::ExecutionTicket, const runtime::DecisionInput&) const;
     void supply(runtime::ExecutionTicket, runtime::CommandSequence, runtime::DecisionInput&&);
     void prepare_commit(runtime::ExecutionTicket, Commit&) const;

@@ -97,7 +97,9 @@ public:
     void initialize_graphs();
     void release_graphs();
     void validate_work(const Work&, runtime::FrameKind) const;
+    void start_frame(runtime::ExecutionRequest<ExecutionTypes>&&);
     void start(runtime::ExecutionRequest<ExecutionTypes>&&);
+    void progress();
     void validate_decision(runtime::ExecutionTicket, const runtime::DecisionInput&) const;
     void supply(runtime::ExecutionTicket, runtime::CommandSequence, runtime::DecisionInput&&);
     void prepare_commit(runtime::ExecutionTicket, const Commit&) const;

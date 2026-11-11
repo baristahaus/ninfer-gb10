@@ -68,4 +68,9 @@ extern const Fp8LinearShape kFp8N6144K5120;
 // The width-1 attention key and value roles (4 KV heads of width 256). Width 2 presents the halved
 // 512-row N512K5120 and never reaches this; width 1 does, which the reference arm found.
 extern const Fp8LinearShape kFp8N1024K5120;
+
+// The width-1 dense MLP gate and up roles, 17408 rows each. The engine presents them as two
+// `ops::linear` calls rather than one fused `linear_swiglu` on the 34816-row parent, because a
+// row-scaled weight's scale plane makes neither role a contiguous parent region.
+extern const Fp8LinearShape kFp8N17408K5120;
 } // namespace ninfer::ops::detail

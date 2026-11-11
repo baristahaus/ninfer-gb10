@@ -130,6 +130,15 @@ if(Python3_EXECUTABLE)
   add_test(NAME ninfer_docs_guard_self_test
     COMMAND ${Python3_EXECUTABLE} -B ${PROJECT_SOURCE_DIR}/tools/check_docs.py --self-test)
   set_tests_properties(ninfer_docs_guard_self_test PROPERTIES LABELS "host")
+
+  # The repository-weight guard: a tracked file above the per-file limit without an allowlist entry,
+  # any tracked profiler trace, or a tracked tree above the total ceiling fails the suite. It exists
+  # because a large blob that reaches history cannot be removed without rewriting every commit, so
+  # the rule has to fire before the commit rather than after it.
+  add_test(NAME ninfer_repo_weight_guard_test
+    COMMAND ${Python3_EXECUTABLE} -B ${PROJECT_SOURCE_DIR}/tools/check_repo_weight.py
+            ${PROJECT_SOURCE_DIR})
+  set_tests_properties(ninfer_repo_weight_guard_test PROPERTIES LABELS "host")
 endif()
 
 # The test-skip guard: a skip must carry a message on stderr and must not be counted as a pass.

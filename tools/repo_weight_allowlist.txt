@@ -1,0 +1,18 @@
+# Tracked files above the per-file size limit, each with the reason it stays.
+#
+# A profiler trace never belongs here: those are excluded by extension and by the ignore rules,
+# and one that reaches history cannot be removed without rewriting every commit.
+#
+# Generated count matrices: teacher-forced model argmax over a committed corpus. Expensive to
+# regenerate and cheap to keep; each carries a manifest naming its corpus, mode and layout.
+tools/freq_corpus/fixtures/ranking/ranking.train.counts.i64
+tools/freq_corpus/fixtures/ranking/ranking.heldout.counts.i64
+tools/freq_corpus/fixtures/ranking/accept.heldout.counts.i64
+# Vendored sources we do not author or edit.
+third_party/utf8proc/utf8proc_data.c
+# Third-party reference data pinned at an exact version for a conformance fixture.
+tests/fixtures/exl3/exllamav3-1.6.1.json
+# Token-id fixtures that a GPU benchmark slices; regenerating them would change the workload.
+bench/fixtures/
+# A long-context prompt fixture that the CLI examples consume directly.
+examples/cli/messages/

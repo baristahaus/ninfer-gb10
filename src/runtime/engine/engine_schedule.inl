@@ -834,7 +834,15 @@ template <class Instance>
             }
             if (!selected.empty()) {
                 set_host_work_class(HostWorkClass::Control);
+                if (round_trace_enabled()) {
+                    round_trace("engine.dispatch.attempt kind=control rows=%zu "
+                                "(advance_cycle -> start_control -> session -> executor.submit)",
+                                selected.size);
+                }
                 if (!start_control(selected)) return submitted;
+                if (round_trace_enabled()) {
+                    round_trace("engine.dispatch.submitted kind=control rows=%zu", selected.size);
+                }
                 submitted = true;
             }
             cycle_step_ = CycleStep::Decode;
@@ -851,7 +859,15 @@ template <class Instance>
             }
             if (!selected.empty()) {
                 set_host_work_class(HostWorkClass::Decode, selected.lane_span());
+                if (round_trace_enabled()) {
+                    round_trace("engine.dispatch.attempt kind=decode rows=%zu "
+                                "(advance_cycle -> start_decode -> session -> executor.submit)",
+                                selected.size);
+                }
                 if (!start_decode(selected)) return submitted;
+                if (round_trace_enabled()) {
+                    round_trace("engine.dispatch.submitted kind=decode rows=%zu", selected.size);
+                }
                 submitted = true;
             }
             cycle_step_ = CycleStep::Prefill;
@@ -870,7 +886,15 @@ template <class Instance>
             }
             if (const auto lane = scheduler_.next_prefill(eligible, max_concurrency_)) {
                 set_host_work_class(HostWorkClass::Prefill);
+                if (round_trace_enabled()) {
+                    round_trace("engine.dispatch.attempt kind=prefill lane=%u "
+                                "(advance_cycle -> start_prefill -> session -> executor.submit)",
+                                *lane);
+                }
                 if (!start_prefill(*lane)) return submitted;
+                if (round_trace_enabled()) {
+                    round_trace("engine.dispatch.submitted kind=prefill lane=%u", *lane);
+                }
                 submitted = true;
             }
             cycle_step_ = CycleStep::Complete;

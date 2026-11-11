@@ -1,6 +1,7 @@
 #include "models/qwen3_5/program/internal.h"
 #include "models/qwen3_5/session/session.h"
 #include "models/qwen3_5/execution/text.h"
+#include "runtime/executor/round_trace.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -11,6 +12,25 @@
 #include <vector>
 
 namespace ninfer::models::qwen3_5::detail {
+namespace {
+
+// DIAGNOSTIC (NINFER_ROUND_TRACE=1): the stage names in `start.return`; the integer stage is also
+// printed so a mismatch between the name and the enum is visible.
+const char* compute_stage_name(ComputeStage stage) {
+    switch (stage) {
+    case ComputeStage::Inputs: return "inputs";
+    case ComputeStage::Forward: return "forward";
+    case ComputeStage::History: return "history";
+    case ComputeStage::AwaitDecision: return "await-decision";
+    case ComputeStage::Readback: return "readback";
+    case ComputeStage::AwaitCommit: return "await-commit";
+    case ComputeStage::Commit: return "commit";
+    case ComputeStage::Retiring: return "retiring";
+    }
+    return "unknown";
+}
+
+} // namespace
 
 RankProgramImpl::RankProgramImpl(const execution::Parameters& values, const SequencePlanImpl& plan,
                                  DeviceContext& context, const StartupObserver& observer,
@@ -127,6 +147,28 @@ void RankProgramImpl::install_residencies(const ContextWork& work) {
 }
 
 void RankProgramImpl::start(runtime::ExecutionRequest<ExecutionTypes>&& request) {
+    // DIAGNOSTIC (NINFER_ROUND_TRACE=1): `rank` is the Program's rank in the group and `dev` is
+    // the CUDA device index. This is the first statement in start, so a refusal or an early throw
+    // is still visible as a start that WAS called.
+    const bool trace             = runtime::round_trace_enabled();
+    const int rank               = collective_ ? collective_->rank : device.device().index();
+    const int dev                = device.device().index();
+    const auto trace_ticket      = request.ticket;
+    const auto trace_command     = request.command;
+    const auto trace_began       = runtime::round_trace_now_ns();
+    const std::size_t trace_reduces_before = collective_ ? collective_->reduce_index : 0;
+    if (trace) {
+        runtime::round_trace(
+            "start.enter rank=%d dev=%d ticket=%llu kind=%s frame=%u gen=%llu command=%llu "
+            "compute-slot=%s context-slot=%s reduces=%zu",
+            rank, dev, static_cast<unsigned long long>(trace_ticket.id),
+            runtime::round_trace_frame_kind_name(trace_ticket.frame.kind),
+            trace_ticket.frame.index,
+            static_cast<unsigned long long>(trace_ticket.frame.generation),
+            static_cast<unsigned long long>(trace_command.value),
+            compute ? "occupied" : "free", context_operation ? "occupied" : "free",
+            trace_reduces_before);
+    }
     // The lane loads but has never produced a validated round at width 2. Both ranks now take the
     // sharded call sites -- the three column-parallel projections branch on the collective, and
     // both Programs are handed the same ShardedGroup -- but no two-GPU round has been compared
@@ -158,14 +200,72 @@ void RankProgramImpl::start(runtime::ExecutionRequest<ExecutionTypes>&& request)
         context_actions->submit(context_operation->request.work.context);
         install_residencies(std::get<ContextWork>(context_operation->request.work.operation));
         context_ready.record(device.transfer_stream());
+        if (trace) {
+            runtime::round_trace(
+                "start.context.enqueued rank=%d dev=%d ticket=%llu actions=%zu "
+                "transfer-stream=%p",
+                rank, dev, static_cast<unsigned long long>(trace_ticket.id),
+                context_operation->request.work.context.operations.size(),
+                static_cast<const void*>(device.transfer_stream()));
+        }
     } else {
         if (compute) throw std::logic_error("Qwen3.5 compute frame is occupied");
         gpu_timer.begin();
         compute = std::make_unique<ComputeOperation>(std::move(request));
+        if (trace) {
+            runtime::round_trace("start.compute.created rank=%d dev=%d ticket=%llu", rank, dev,
+                                 static_cast<unsigned long long>(trace_ticket.id));
+        }
         compute_actions->submit(compute->request.work.context);
+        if (trace) {
+            runtime::round_trace("start.compute.actions rank=%d dev=%d ticket=%llu actions=%zu "
+                                 "execution-stream=%p",
+                                 rank, dev, static_cast<unsigned long long>(trace_ticket.id),
+                                 compute->request.work.context.operations.size(),
+                                 static_cast<const void*>(device.stream()));
+        }
         initialize_inputs(*compute);
+        if (trace) {
+            runtime::round_trace(
+                "start.compute.inputs rank=%d dev=%d ticket=%llu width=%u batch=%u rows=%zu "
+                "stage=%s(%d)",
+                rank, dev, static_cast<unsigned long long>(trace_ticket.id), compute->width,
+                compute->batch, compute->rows.size(), compute_stage_name(compute->stage),
+                static_cast<int>(compute->stage));
+        }
+    }
+    if (trace) {
+        runtime::round_trace("start.progress.begin rank=%d dev=%d ticket=%llu", rank, dev,
+                             static_cast<unsigned long long>(trace_ticket.id));
     }
     progress();
+    const std::size_t trace_reduces_after = collective_ ? collective_->reduce_index : 0;
+    if (trace) {
+        runtime::round_trace("start.progress.end rank=%d dev=%d ticket=%llu reduces=%zu->%zu",
+                             rank, dev, static_cast<unsigned long long>(trace_ticket.id),
+                             trace_reduces_before, trace_reduces_after);
+        const auto elapsed_us =
+            static_cast<unsigned long long>((runtime::round_trace_now_ns() - trace_began) / 1000ULL);
+        if (compute) {
+            runtime::round_trace(
+                "start.return rank=%d dev=%d ticket=%llu kind=%s elapsed-us=%llu compute=present "
+                "stage=%s(%d) width=%u batch=%u rows=%zu text=%s graph=%s reduces=%zu->%zu",
+                rank, dev, static_cast<unsigned long long>(trace_ticket.id),
+                runtime::round_trace_frame_kind_name(trace_ticket.frame.kind), elapsed_us,
+                compute_stage_name(compute->stage), static_cast<int>(compute->stage),
+                compute->width, compute->batch, compute->rows.size(),
+                compute->text ? "yes" : "no", compute->graph_started ? "yes" : "no",
+                trace_reduces_before, trace_reduces_after);
+        } else {
+            runtime::round_trace(
+                "start.return rank=%d dev=%d ticket=%llu kind=%s elapsed-us=%llu compute=absent "
+                "context=%s reduces=%zu->%zu",
+                rank, dev, static_cast<unsigned long long>(trace_ticket.id),
+                runtime::round_trace_frame_kind_name(trace_ticket.frame.kind), elapsed_us,
+                context_operation ? "present" : "retired", trace_reduces_before,
+                trace_reduces_after);
+        }
+    }
 }
 
 void RankProgramImpl::supply(runtime::ExecutionTicket ticket, runtime::CommandSequence command,

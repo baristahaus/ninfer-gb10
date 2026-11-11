@@ -2,8 +2,10 @@
 
 #include "runtime/executor/executor.h"
 #include "runtime/executor/rank_worker.h"
+#include "runtime/executor/round_trace.h"
 #include "runtime/observability/snapshot.h"
 
+#include <array>
 #include <exception>
 #include <type_traits>
 
@@ -90,11 +92,49 @@ public:
         auto& flight = slot(ticket.frame);
         flight       = {ticket, next_command(), Phase::Running, {}};
         flight.clock.start(Protocol::describe_work(work), observation_time_ns());
+        if (round_trace_enabled()) {
+            if (!trace_gate_printed_) {
+                trace_gate_printed_ = true;
+                round_trace(
+                    "gate=submit.serial ranks=%zu: LocalExecutor::submit calls start rank 0 first "
+                    "and does not issue rank 1's start until rank 0's start returns "
+                    "(for_each_program). A block or throw in rank 0's start is a block or throw "
+                    "before rank 1's start is called.",
+                    workers_.size());
+                round_trace(
+                    "gate=executor.poll rank=0-only: LocalExecutor::poll returns rank 0's event and "
+                    "polls-then-discards every rank>=1 event; EngineCore::poll_execution consumes "
+                    "that one event, clears compute_/retiring_ and releases the next round "
+                    "(engine_execution.inl poll_execution; engine_schedule.inl worker_loop).");
+            }
+            round_trace("submit ticket=%llu round=%llu kind=%s frame=%u gen=%llu command=%llu "
+                        "ranks=%zu",
+                        static_cast<unsigned long long>(ticket.id),
+                        static_cast<unsigned long long>(ticket.id),
+                        round_trace_frame_kind_name(ticket.frame.kind), ticket.frame.index,
+                        static_cast<unsigned long long>(ticket.frame.generation),
+                        static_cast<unsigned long long>(flight.command.value), workers_.size());
+        }
         try {
             observe_host_call(host_.submit_ns, [&] {
-                for_each_program([&](auto& program) {
-                    program.start({ticket, flight.command, work});
-                });
+                // The trace needs the rank and the frame kind at each start, so this is
+                // for_each_program written out: same rank order, same per-rank bind, same call.
+                for (std::size_t rank = 0; rank < workers_.size(); ++rank) {
+                    bind_rank(rank);
+                    trace_start_enter(rank, ticket, flight.command);
+                    const auto began = round_trace_now_ns();
+                    try {
+                        workers_[rank]->program().start({ticket, flight.command, work});
+                    } catch (const std::exception& error) {
+                        trace_start_throw(rank, ticket, flight.command, began, error.what());
+                        throw;
+                    } catch (...) {
+                        trace_start_throw(rank, ticket, flight.command, began,
+                                          "non-std exception");
+                        throw;
+                    }
+                    trace_start_return(rank, ticket, flight.command, began);
+                }
             });
         } catch (...) { record_failure(ticket); }
         return ticket;
@@ -148,11 +188,46 @@ public:
                 // `launch_commit` caught as a segfault before it learned to refuse.
                 for (std::size_t rank = 0; rank < workers_.size(); ++rank) {
                     bind_rank(rank);
-                    auto& program = workers_[rank]->program();
-                    if (rank + 1 == workers_.size()) {
-                        program.commit(ticket, flight.command, std::move(commit));
-                    } else {
-                        program.commit(ticket, flight.command, typename Protocol::Commit{commit});
+                    if (round_trace_enabled()) {
+                        round_trace("commit.enter rank=%zu dev=%d ticket=%llu kind=%s command=%llu",
+                                    rank,
+                                    static_cast<int>(workers_[rank]->device().index()),
+                                    static_cast<unsigned long long>(ticket.id),
+                                    round_trace_frame_kind_name(ticket.frame.kind),
+                                    static_cast<unsigned long long>(flight.command.value));
+                    }
+                    const auto began = round_trace_now_ns();
+                    auto& program    = workers_[rank]->program();
+                    try {
+                        if (rank + 1 == workers_.size()) {
+                            program.commit(ticket, flight.command, std::move(commit));
+                        } else {
+                            program.commit(ticket, flight.command,
+                                           typename Protocol::Commit{commit});
+                        }
+                    } catch (const std::exception& error) {
+                        if (round_trace_enabled()) {
+                            round_trace("commit.throw rank=%zu dev=%d ticket=%llu kind=%s "
+                                        "elapsed-us=%llu what=\"%s\"",
+                                        rank,
+                                        static_cast<int>(workers_[rank]->device().index()),
+                                        static_cast<unsigned long long>(ticket.id),
+                                        round_trace_frame_kind_name(ticket.frame.kind),
+                                        static_cast<unsigned long long>(
+                                            (round_trace_now_ns() - began) / 1000ULL),
+                                        error.what());
+                        }
+                        throw;
+                    }
+                    if (round_trace_enabled()) {
+                        round_trace("commit.return rank=%zu dev=%d ticket=%llu kind=%s "
+                                    "elapsed-us=%llu",
+                                    rank,
+                                    static_cast<int>(workers_[rank]->device().index()),
+                                    static_cast<unsigned long long>(ticket.id),
+                                    round_trace_frame_kind_name(ticket.frame.kind),
+                                    static_cast<unsigned long long>(
+                                        (round_trace_now_ns() - began) / 1000ULL));
                     }
                 }
             });
@@ -183,8 +258,21 @@ public:
     }
 
     [[nodiscard]] std::optional<Event> poll() override {
-        if (failure_) return Event{std::exchange(failure_, {}).value()};
-        if (failed_ || closed_) return {};
+        if (failure_) {
+            if (round_trace_enabled()) {
+                round_trace("poll.failure pending=yes ticket=%llu message=\"%s\"",
+                            static_cast<unsigned long long>(failure_->ticket.id),
+                            failure_->message.c_str());
+            }
+            return Event{std::exchange(failure_, {}).value()};
+        }
+        if (failed_ || closed_) {
+            if (round_trace_enabled()) {
+                round_trace("poll.stop failed=%s closed=%s (no event returned)",
+                            failed_ ? "yes" : "no", closed_ ? "yes" : "no");
+            }
+            return {};
+        }
         sample_resources(false);
         std::optional<Event> event;
         try {
@@ -199,12 +287,17 @@ public:
                     // ticket must wait for every rank's event instead.
                     observe_host_call(host_.progress_ns, [&] {
                         bind_rank(0);
-                        auto event = program().poll();
+                        auto rank0_event = program().poll();
+                        trace_poll_result(0, rank0_event);
                         for (std::size_t rank = 1; rank < workers_.size(); ++rank) {
                             bind_rank(rank);
-                            (void)workers_[rank]->program().poll();
+                            auto peer_event = workers_[rank]->program().poll();
+                            // Rank 1's event is polled and discarded: only rank 0's is returned.
+                            // The trace prints it because a failure on the peer would otherwise
+                            // be invisible here.
+                            trace_poll_result(rank, peer_event);
                         }
-                        return event;
+                        return rank0_event;
                     });
                 if (!event) return {};
                 if (std::holds_alternative<ExecutionFailed>(*event)) {
@@ -218,6 +311,12 @@ public:
                     (!std::holds_alternative<DecisionNeeded>(*event) &&
                      !std::holds_alternative<ResultReady<Protocol>>(*event)))
                     break;
+            }
+            if (round_trace_enabled()) {
+                round_trace("poll.return rank=0 ticket=%llu event=%s (the only event returned; "
+                            "rank>=1 events above were discarded)",
+                            static_cast<unsigned long long>(trace_event_ticket(*event)),
+                            trace_event_name(*event));
             }
             std::visit(
                 [&](auto& value) {
@@ -262,6 +361,10 @@ public:
                 },
                 *event);
         } catch (...) {
+            if (round_trace_enabled()) {
+                round_trace("poll.throw (a per-rank poll or event handler threw; the failure is "
+                            "recorded and returned immediately)");
+            }
             record_failure(event
                                ? std::visit([](const auto& value) { return value.ticket; }, *event)
                                : ExecutionTicket{});
@@ -350,6 +453,118 @@ private:
         if (failed_) throw std::runtime_error("executor is unavailable after an execution failure");
     }
 
+    // DIAGNOSTIC (NINFER_ROUND_TRACE=1). The poll counters are members indexed by rank, not
+    // process-wide statics: a shared counter merges the two ranks, which has already produced a
+    // false result in this investigation. The line itself states the throttle.
+    static constexpr std::uint64_t kTracePollFirst    = 8;
+    static constexpr std::uint64_t kTracePollPeriodNs = 500'000'000ULL;
+
+    static const char* trace_event_name(const Event& event) {
+        return std::visit(
+            [](const auto& value) -> const char* {
+                using Value = std::decay_t<decltype(value)>;
+                if constexpr (std::is_same_v<Value, DecisionNeeded>) {
+                    return "decision-needed";
+                } else if constexpr (std::is_same_v<Value, DecisionConsumed>) {
+                    return "decision-consumed";
+                } else if constexpr (std::is_same_v<Value, ResultReady<Protocol>>) {
+                    return "result-ready";
+                } else if constexpr (std::is_same_v<Value, DeviceRetired>) {
+                    return "device-retired";
+                } else {
+                    return "execution-failed";
+                }
+            },
+            event);
+    }
+
+    static std::uint64_t trace_event_ticket(const Event& event) {
+        return std::visit([](const auto& value) { return value.ticket.id; }, event);
+    }
+
+    void trace_start_enter(std::size_t rank, const ExecutionTicket& ticket,
+                           CommandSequence command) {
+        if (!round_trace_enabled()) return;
+        round_trace("submit.start.enter rank=%zu dev=%d ticket=%llu kind=%s frame=%u gen=%llu "
+                    "command=%llu (LocalExecutor::submit -> program.start)",
+                    rank, static_cast<int>(workers_[rank]->device().index()),
+                    static_cast<unsigned long long>(ticket.id),
+                    round_trace_frame_kind_name(ticket.frame.kind), ticket.frame.index,
+                    static_cast<unsigned long long>(ticket.frame.generation),
+                    static_cast<unsigned long long>(command.value));
+    }
+
+    void trace_start_return(std::size_t rank, const ExecutionTicket& ticket,
+                            CommandSequence command, std::uint64_t began) {
+        if (!round_trace_enabled()) return;
+        round_trace("submit.start.return rank=%zu dev=%d ticket=%llu kind=%s command=%llu "
+                    "elapsed-us=%llu",
+                    rank, static_cast<int>(workers_[rank]->device().index()),
+                    static_cast<unsigned long long>(ticket.id),
+                    round_trace_frame_kind_name(ticket.frame.kind),
+                    static_cast<unsigned long long>(command.value),
+                    static_cast<unsigned long long>((round_trace_now_ns() - began) / 1000ULL));
+    }
+
+    void trace_start_throw(std::size_t rank, const ExecutionTicket& ticket,
+                           CommandSequence command, std::uint64_t began, const char* what) {
+        if (!round_trace_enabled()) return;
+        round_trace("submit.start.throw rank=%zu dev=%d ticket=%llu kind=%s command=%llu "
+                    "elapsed-us=%llu what=\"%s\"",
+                    rank, static_cast<int>(workers_[rank]->device().index()),
+                    static_cast<unsigned long long>(ticket.id),
+                    round_trace_frame_kind_name(ticket.frame.kind),
+                    static_cast<unsigned long long>(command.value),
+                    static_cast<unsigned long long>((round_trace_now_ns() - began) / 1000ULL),
+                    what);
+    }
+
+    void trace_poll_result(std::size_t rank, const std::optional<Event>& event) {
+        if (!round_trace_enabled()) return;
+        const int dev  = static_cast<int>(workers_[rank]->device().index());
+        const auto now = round_trace_now_ns();
+        const bool has_event     = event.has_value();
+        const bool event_failure = has_event && std::holds_alternative<ExecutionFailed>(*event);
+        const char* failure_state = failure_.has_value() ? "pending" : "no";
+        if (rank < trace_poll_calls_.size()) {
+            const std::uint64_t call = ++trace_poll_calls_[rank];
+            const bool first         = call <= kTracePollFirst;
+            const bool periodic      = now - trace_poll_last_ns_[rank] >= kTracePollPeriodNs;
+            if (!has_event && !event_failure && !first && !periodic) return;
+            trace_poll_last_ns_[rank] = now;
+            if (has_event) {
+                round_trace("poll rank=%zu dev=%d n=%llu event=%s ticket=%llu failure=%s "
+                            "failed=%s",
+                            rank, dev, static_cast<unsigned long long>(call),
+                            trace_event_name(*event),
+                            static_cast<unsigned long long>(trace_event_ticket(*event)),
+                            failure_state, failed_ ? "yes" : "no");
+            } else {
+                round_trace("poll rank=%zu dev=%d n=%llu event=none failure=%s failed=%s "
+                            "(throttle: first %llu polls per rank then at most one per %llu ms; "
+                            "an event or a recorded failure always prints)",
+                            rank, dev, static_cast<unsigned long long>(call), failure_state,
+                            failed_ ? "yes" : "no",
+                            static_cast<unsigned long long>(kTracePollFirst),
+                            static_cast<unsigned long long>(kTracePollPeriodNs / 1'000'000ULL));
+            }
+            return;
+        }
+        // Width above two: this trace's per-rank arrays cover the two-rank lane. Print without a
+        // throttle rather than silently dropping a rank.
+        if (has_event) {
+            round_trace("poll rank=%zu dev=%d event=%s ticket=%llu failure=%s failed=%s "
+                        "(width>2: no throttle)",
+                        rank, dev, trace_event_name(*event),
+                        static_cast<unsigned long long>(trace_event_ticket(*event)),
+                        failure_state, failed_ ? "yes" : "no");
+        } else {
+            round_trace("poll rank=%zu dev=%d event=none failure=%s failed=%s "
+                        "(width>2: no throttle)",
+                        rank, dev, failure_state, failed_ ? "yes" : "no");
+        }
+    }
+
     void record_failure(ExecutionTicket ticket) {
         std::string message;
         try {
@@ -369,6 +584,11 @@ private:
     bool failed_ = false, closed_ = false;
     RankHostStatistics host_;
     std::optional<ExecutionFailed> failure_;
+    // DIAGNOSTIC (NINFER_ROUND_TRACE=1): per-rank poll counters and throttle stamps. The rank is
+    // the index into these arrays; there is no process-wide counter.
+    std::array<std::uint64_t, 2> trace_poll_calls_{};
+    std::array<std::uint64_t, 2> trace_poll_last_ns_{};
+    bool trace_gate_printed_ = false;
 };
 
 } // namespace ninfer::runtime

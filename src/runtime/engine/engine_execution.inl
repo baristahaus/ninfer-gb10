@@ -516,6 +516,21 @@ template <class Instance>
         auto event = instance_.session->poll();
         call.finish();
         if (!event) break;
+        if (round_trace_enabled()) {
+            if (!round_trace_gate_printed_) {
+                round_trace_gate_printed_ = true;
+                round_trace(
+                    "gate=engine.next-round: EngineCore::poll_execution consumes only the event "
+                    "LocalExecutor::poll returns (rank 0's); the event below updates compute_/"
+                    "retiring_/context state and is what lets worker_loop -> advance_cycle dispatch "
+                    "the next round (engine_execution.inl poll_execution; engine_schedule.inl "
+                    "worker_loop/advance_cycle).");
+            }
+            round_trace("engine.poll ticket=%llu members=%zu result-index=%zu "
+                        "(rank 0's event only)",
+                        static_cast<unsigned long long>(event->ticket.id), event->members.size(),
+                        event->result.index());
+        }
         progressed = true;
         if (auto* decision = std::get_if<DecisionRequest>(&event->result)) {
             supply_decision(event->ticket, *decision);

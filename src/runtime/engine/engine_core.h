@@ -9,6 +9,7 @@
 #include "runtime/engine/scheduler.h"
 #include "runtime/engine/generation_budget.h"
 #include "runtime/executor/contract.h"
+#include "runtime/executor/round_trace.h"
 #include "runtime/observability/snapshot.h"
 
 #include <algorithm>
@@ -626,6 +627,8 @@ private:
     EngineSnapshot published_snapshot_;
     bool stopping_ = false;
     bool failed_   = false;
+    // DIAGNOSTIC (NINFER_ROUND_TRACE=1): one-time gate line; the event lines are per event.
+    bool round_trace_gate_printed_ = false;
     std::thread worker_;
 };
 

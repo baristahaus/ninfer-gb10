@@ -3,6 +3,8 @@
 #include "core/transfer.h"
 
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <limits>
 #include <stdexcept>
 
@@ -10,6 +12,46 @@ namespace ninfer {
 namespace {
 
 constexpr std::size_t kAlignment = 256;
+
+// DIAGNOSTIC (NINFER_STATE_CLEAR_TRACE=1): report what a state-image clear hands to the stream.
+// cudaPointerGetAttributes reads allocation metadata, not device memory, so it needs no stream
+// ordering; cudaStreamQuery is a point-in-time observation and changes no scheduling. Unset, the
+// clear path below is unchanged.
+bool state_clear_trace_enabled() {
+    static const bool enabled = std::getenv("NINFER_STATE_CLEAR_TRACE") != nullptr;
+    return enabled;
+}
+
+const char* memory_type_name(cudaMemoryType type) {
+    if (type == cudaMemoryTypeDevice) return "device";
+    if (type == cudaMemoryTypeHost) return "host";
+    if (type == cudaMemoryTypeManaged) return "managed";
+    if (type == cudaMemoryTypeUnregistered) return "unregistered";
+    return "other";
+}
+
+const char* stream_state_name(cudaError_t status) {
+    if (status == cudaSuccess) return "idle";
+    if (status == cudaErrorNotReady) return "busy";
+    return cudaGetErrorName(status);
+}
+
+struct PointerFacts {
+    cudaError_t status = cudaSuccess;
+    cudaPointerAttributes attributes{};
+};
+
+PointerFacts query_pointer(const void* pointer) {
+    PointerFacts facts;
+    if (pointer == nullptr) {
+        facts.status = cudaErrorInvalidValue;
+        return facts;
+    }
+    facts.status = cudaPointerGetAttributes(&facts.attributes, pointer);
+    // A diagnostic query must not leave its own failure for a later CUDA_CHECK(cudaGetLastError()).
+    (void)cudaGetLastError();
+    return facts;
+}
 
 std::size_t product(std::size_t a, std::size_t b) {
     if (b != 0 && a > static_cast<std::size_t>(INT64_MAX) / b) {
@@ -123,7 +165,45 @@ MemorySpan StateImageStorage::image(std::int32_t slot) const {
 }
 
 void StateImageStorage::clear(std::int32_t slot, CudaExecutionView execution) const {
-    clear_memory(image(slot), execution);
+    const auto memory = image(slot);
+    if (!state_clear_trace_enabled()) {
+        clear_memory(memory, execution);
+        return;
+    }
+    const int rank    = execution.device().index();
+    const auto facts  = query_pointer(memory.data);
+    const auto before = cudaStreamQuery(execution.stream());
+    (void)cudaGetLastError();
+    int current_device = -1;
+    if (cudaGetDevice(&current_device) != cudaSuccess) current_device = -1;
+    (void)cudaGetLastError();
+    const auto offset = static_cast<std::size_t>(static_cast<const std::byte*>(memory.data) -
+                                                 static_cast<const std::byte*>(storage_.data));
+    char attribute[64];
+    char device_pointer[32];
+    if (facts.status == cudaSuccess) {
+        std::snprintf(attribute, sizeof attribute, "valid");
+        std::snprintf(device_pointer, sizeof device_pointer, "%p", facts.attributes.devicePointer);
+    } else {
+        std::snprintf(attribute, sizeof attribute, "invalid(%s)", cudaGetErrorName(facts.status));
+        std::snprintf(device_pointer, sizeof device_pointer, "unknown");
+    }
+    const bool owner_match = facts.status == cudaSuccess && facts.attributes.device == rank;
+    std::fprintf(stderr,
+                 "[state-clear] rank=%d slot=%d stage=enqueue ptr=%p attr=%s owner=%d type=%s "
+                 "device-pointer=%s span-device=%d owner-match=%s storage=%p storage-bytes=%zu "
+                 "slot-offset=%zu bytes=%zu stream=%p stream-before=%s current-device=%d\n",
+                 rank, slot, memory.data, attribute,
+                 facts.status == cudaSuccess ? facts.attributes.device : -1,
+                 facts.status == cudaSuccess ? memory_type_name(facts.attributes.type) : "none",
+                 device_pointer, memory.device.index(), owner_match ? "yes" : "no", storage_.data,
+                 storage_.bytes, offset, memory.bytes, static_cast<const void*>(execution.stream()),
+                 stream_state_name(before), current_device);
+    clear_memory(memory, execution);
+    const auto after = cudaStreamQuery(execution.stream());
+    (void)cudaGetLastError();
+    std::fprintf(stderr, "[state-clear] rank=%d slot=%d stage=enqueued stream-after=%s\n", rank,
+                 slot, stream_state_name(after));
 }
 
 void StateImageStorage::clear_all(CudaExecutionView execution) const {

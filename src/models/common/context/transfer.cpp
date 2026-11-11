@@ -1,6 +1,7 @@
 #include "models/common/context/transfer.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cinttypes>
 #include <cstdio>
@@ -10,6 +11,7 @@
 #include <limits>
 #include <optional>
 #include <stdexcept>
+#include <thread>
 #include <type_traits>
 
 namespace ninfer::models::context {
@@ -29,6 +31,58 @@ std::size_t mapping_bytes(const ContextStorage& storage, std::size_t requested) 
 bool segments_trace_enabled() {
     static const bool enabled = std::getenv("NINFER_CTX_SEGMENTS") != nullptr;
     return enabled;
+}
+
+// DIAGNOSTIC (NINFER_STATE_CLEAR_TRACE=1): report the fence a StateClear action inherits on the
+// transfer stream. The clear itself is traced where the memset is enqueued (core/state_image.cpp),
+// which cannot see this event. A bounded poll separates a record the device has not processed yet
+// from one that never signals; the clear's own trace then reads the same stream before and after
+// its enqueue.
+bool state_clear_trace_enabled() {
+    static const bool enabled = std::getenv("NINFER_STATE_CLEAR_TRACE") != nullptr;
+    return enabled;
+}
+
+struct EventObservation {
+    const char* state = "none";
+    long wait_us      = 0;
+    std::string error;
+};
+
+EventObservation observe_event(const CudaCompletionEvent& event, bool fenced) {
+    EventObservation result;
+    if (!fenced) { return result; }
+    const auto started   = std::chrono::steady_clock::now();
+    constexpr auto limit = std::chrono::milliseconds(20);
+    for (;;) {
+        try {
+            if (event.ready()) {
+                result.state = "ready";
+                break;
+            }
+        } catch (const std::exception& failure) {
+            result.state = "error";
+            result.error = failure.what();
+            break;
+        }
+        if (std::chrono::steady_clock::now() - started >= limit) {
+            result.state = "pending";
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::microseconds(200));
+    }
+    result.wait_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                         std::chrono::steady_clock::now() - started)
+                         .count();
+    // cudaEventQuery leaves cudaErrorNotReady as the last error; do not hand it to a later check.
+    (void)cudaGetLastError();
+    return result;
+}
+
+const char* stream_query_name(cudaError_t status) {
+    if (status == cudaSuccess) return "idle";
+    if (status == cudaErrorNotReady) return "busy";
+    return cudaGetErrorName(status);
 }
 
 const char* resource_class_name(runtime::ContextResourceClass value) {
@@ -329,6 +383,24 @@ void ContextMigration::enqueue(const ContextActions& actions, CudaExecutionView 
                     rank, i, actions.operations.size(), action_kind_name(actions.operations[i]),
                     action_stream_work(actions.operations[i], *storage_).c_str(),
                     describe_action(actions.operations[i]).c_str());
+            }
+        }
+        if (state_clear_trace_enabled()) {
+            if (const auto* clear = std::get_if<StateClear>(&actions.operations[i])) {
+                const bool fenced        = execution.stream() != device_->stream();
+                const auto event         = observe_event(source_ready_, fenced);
+                const auto compute_state = cudaStreamQuery(device_->stream());
+                (void)cudaGetLastError();
+                std::fprintf(stderr,
+                             "[state-clear] rank=%d slot=%d stage=fence fence=%s event=%s "
+                             "wait-us=%ld compute-stream=%s\n",
+                             rank, clear->slot, fenced ? "enqueued" : "none", event.state,
+                             event.wait_us, stream_query_name(compute_state));
+                if (!event.error.empty()) {
+                    std::fprintf(stderr,
+                                 "[state-clear] rank=%d slot=%d stage=fence event-error=%s\n", rank,
+                                 clear->slot, event.error.c_str());
+                }
             }
         }
         if (segment < segments_.size() && segments_[segment].begin == i) timers_[segment].start();

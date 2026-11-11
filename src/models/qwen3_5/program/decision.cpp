@@ -119,7 +119,15 @@ void RankProgramImpl::decide_decode(std::uint32_t batch_value, std::uint32_t wid
                 device.execution_view());
         }
     } else {
-        Tensor logits = prefix(frame.logits, {rows, batch});
+        // The plain decode round samples the GATHERED full-vocabulary logits when the head is
+        // row-sharded. `project_decode` has already run for this operation and put the whole
+        // vocabulary in this rank's member of the group's logits pair; `frame.logits` is the
+        // per-Program buffer the sharded projection never writes, so sampling from it argmaxes
+        // zeros and emits token 0 every round. Width 1 keeps the frame buffer, unchanged.
+        Tensor logits = sharded_ != nullptr
+                            ? execution::sharded_logits_view(*sharded_, collective_->rank, rows,
+                                                             batch)
+                            : prefix(frame.logits, {rows, batch});
         Tensor tokens = prefix(frame.output_tokens, {batch});
         ops::sample(logits, tokens, vocabulary, frame.sampling, frame.frontiers.slice(0, 0, batch),
                     ops::kSamplePurposeDecode, resources.work, device.execution_view());        for (int row = 0; row < batch; ++row) {

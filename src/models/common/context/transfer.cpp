@@ -2,11 +2,15 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cinttypes>
+#include <cstdio>
+#include <cstdlib>
 #include <exception>
 #include <string>
 #include <limits>
 #include <optional>
 #include <stdexcept>
+#include <type_traits>
 
 namespace ninfer::models::context {
 namespace {
@@ -15,6 +19,187 @@ std::size_t mapping_bytes(const ContextStorage& storage, std::size_t requested) 
     if (elements > SIZE_MAX / sizeof(std::int32_t))
         throw std::overflow_error("context mapping staging size overflow");
     return elements * sizeof(std::int32_t);
+}
+
+// DIAGNOSTIC (NINFER_CTX_SEGMENTS=1): name every transfer segment a context migration enqueues,
+// before it is executed. A segment is the enqueue unit the migration's own bookkeeping already
+// defines (same resource class and direction, contiguous actions), so this prints the work the
+// transfer stream is about to carry without reading device memory or waiting for completion.
+// Unset, the enqueue path below is unchanged.
+bool segments_trace_enabled() {
+    static const bool enabled = std::getenv("NINFER_CTX_SEGMENTS") != nullptr;
+    return enabled;
+}
+
+const char* resource_class_name(runtime::ContextResourceClass value) {
+    switch (value) {
+    case runtime::ContextResourceClass::State: return "state";
+    case runtime::ContextResourceClass::MainKV: return "main-kv";
+    case runtime::ContextResourceClass::BackendKV: return "backend-kv";
+    }
+    return "unknown";
+}
+
+const char* transfer_direction_name(runtime::ContextTransferDirection value) {
+    switch (value) {
+    case runtime::ContextTransferDirection::DeviceToHost: return "d2h";
+    case runtime::ContextTransferDirection::HostToDevice: return "h2d";
+    case runtime::ContextTransferDirection::DeviceToDevice: return "d2d";
+    case runtime::ContextTransferDirection::HostToSpill: return "host-to-spill";
+    case runtime::ContextTransferDirection::SpillToHost: return "spill-to-host";
+    }
+    return "unknown";
+}
+
+const char* state_direction_name(StateCopyDirection value) {
+    return value == StateCopyDirection::DeviceToHost ? "d2h" : "h2d";
+}
+
+void append_page_slot(std::string& out, const char* label, const PageSlot& slot) {
+    out += label;
+    out += "=pool";
+    out += std::to_string(slot.pool_id);
+    out += ":page";
+    out += std::to_string(slot.index);
+    out += ":gen";
+    out += std::to_string(slot.generation);
+}
+
+void append_host_extent(std::string& out, const HostExtent& host) {
+    out += " host-pool";
+    out += std::to_string(host.pool_id);
+    out += ":off";
+    out += std::to_string(host.offset);
+    out += ":bytes";
+    out += std::to_string(host.bytes);
+}
+
+// One action's identity: the slot, page or host extent it reads and writes. Kept compact because a
+// segment may hold several actions and every identity stays on the segment's one line.
+std::string describe_action(const ContextAction& action) {
+    std::string out;
+    std::visit(
+        [&](const auto& value) {
+            using T = std::decay_t<decltype(value)>;
+            if constexpr (std::is_same_v<T, StateClear>) {
+                out = "state-clear slot=" + std::to_string(value.slot);
+            } else if constexpr (std::is_same_v<T, StateCopy>) {
+                out = "state-copy src-slot=" + std::to_string(value.source) +
+                      " dst-slot=" + std::to_string(value.destination) +
+                      " offset=" + std::to_string(value.offset) +
+                      (value.bytes ? " bytes=" + std::to_string(value.bytes)
+                                   : std::string(" bytes=whole-image"));
+            } else if constexpr (std::is_same_v<T, StateTransferDescription>) {
+                out = "state-transfer ";
+                out += state_direction_name(value.direction);
+                out += " src-slot=";
+                out += std::to_string(value.slots.source);
+                out += " dst-slot=";
+                out += std::to_string(value.slots.destination);
+                out += " bytes=";
+                out += std::to_string(value.bytes);
+                append_host_extent(out, value.host);
+            } else if constexpr (std::is_same_v<T, PageCopy>) {
+                out = "page-copy";
+                append_page_slot(out, " src", value.source);
+                append_page_slot(out, " dst", value.destination);
+            } else if constexpr (std::is_same_v<T, PageTransfer>) {
+                out = "page-transfer ";
+                out += state_direction_name(value.direction);
+                out += " pages=";
+                out += std::to_string(value.pages.size());
+                if (!value.pages.empty()) {
+                    append_page_slot(out, " first", value.pages.front());
+                    append_page_slot(out, " last", value.pages.back());
+                }
+                append_host_extent(out, value.host);
+            } else if constexpr (std::is_same_v<T, MappingUpdate>) {
+                out = "mapping row-pool" + std::to_string(value.row.pool_id) + ":row" +
+                      std::to_string(value.row.index) + ":gen" +
+                      std::to_string(value.row.generation) + " logical-begin=" +
+                      std::to_string(value.logical_begin) + " pages=" +
+                      std::to_string(value.pages.size());
+                if (!value.pages.empty()) {
+                    append_page_slot(out, " first", value.pages.front());
+                    append_page_slot(out, " last", value.pages.back());
+                }
+            } else if constexpr (std::is_same_v<T, StateSpillOut>) {
+                out = "spill-out spill-off=" + std::to_string(value.spill.offset) +
+                      " spill-bytes=" + std::to_string(value.spill.bytes) + " spill-gen=" +
+                      std::to_string(value.spill.generation);
+                append_host_extent(out, value.host);
+            } else if constexpr (std::is_same_v<T, StateSpillIn>) {
+                out = "spill-in spill-off=" + std::to_string(value.spill.offset) +
+                      " spill-bytes=" + std::to_string(value.spill.bytes) + " spill-gen=" +
+                      std::to_string(value.spill.generation);
+                append_host_extent(out, value.host);
+            }
+        },
+        action);
+    return out;
+}
+
+const char* action_kind_name(const ContextAction& action) {
+    return std::visit(
+        [](const auto& value) -> const char* {
+            using T = std::decay_t<decltype(value)>;
+            if constexpr (std::is_same_v<T, StateClear>) return "state-clear";
+            else if constexpr (std::is_same_v<T, StateCopy>) return "state-copy";
+            else if constexpr (std::is_same_v<T, StateTransferDescription>) return "state-transfer";
+            else if constexpr (std::is_same_v<T, PageCopy>) return "page-copy";
+            else if constexpr (std::is_same_v<T, PageTransfer>) return "page-transfer";
+            else if constexpr (std::is_same_v<T, MappingUpdate>) return "mapping-update";
+            else if constexpr (std::is_same_v<T, StateSpillOut>) return "spill-out";
+            else if constexpr (std::is_same_v<T, StateSpillIn>) return "spill-in";
+            else return "unknown";
+        },
+        action);
+}
+
+// What an action puts on the transfer stream. Actions with copy work are covered by a segment
+// line; this exists for the actions the segment bookkeeping deliberately skips because
+// ContextStorage::describe reports no copy operations for them (a clear is a memset and a mapping
+// publication is an H2D copy, so "no copy operations" is not "no stream work").
+std::string action_stream_work(const ContextAction& action, const ContextStorage& storage) {
+    return std::visit(
+        [&](const auto& value) -> std::string {
+            using T = std::decay_t<decltype(value)>;
+            if constexpr (std::is_same_v<T, StateClear>) {
+                return "memset:" + std::to_string(storage.state().image_bytes()) + "B";
+            } else if constexpr (std::is_same_v<T, MappingUpdate>) {
+                if (value.pages.empty()) return "none";
+                return "h2d:" + std::to_string(value.pages.size() * sizeof(std::int32_t)) + "B";
+            } else if constexpr (std::is_same_v<T, StateSpillOut> ||
+                                 std::is_same_v<T, StateSpillIn>) {
+                return "file-io";
+            } else {
+                return "copy";
+            }
+        },
+        action);
+}
+
+// The device pool a segment addresses; a State segment has no device pool id, only the state image
+// pool. The per-action identity carries the Host pool id for host transfers.
+std::string segment_pool(const ContextActions& actions, std::size_t begin, std::size_t end) {
+    for (auto i = begin; i < end; ++i) {
+        std::string result;
+        std::visit(
+            [&](const auto& value) {
+                using T = std::decay_t<decltype(value)>;
+                if constexpr (std::is_same_v<T, PageCopy>) {
+                    result = std::to_string(value.source.pool_id);
+                } else if constexpr (std::is_same_v<T, PageTransfer>) {
+                    if (!value.pages.empty())
+                        result = std::to_string(value.pages.front().pool_id);
+                } else if constexpr (std::is_same_v<T, MappingUpdate>) {
+                    result = std::to_string(value.row.pool_id);
+                }
+            },
+            actions.operations[i]);
+        if (!result.empty()) return result;
+    }
+    return "state";
 }
 } // namespace
 
@@ -104,7 +289,48 @@ void ContextMigration::enqueue(const ContextActions& actions, CudaExecutionView 
     }
     auto staging        = mapping_.span();
     std::size_t segment = 0;
+    // DIAGNOSTIC (NINFER_CTX_SEGMENTS=1). The local two-device lane's rank is its device index:
+    // LocalExecutor drives its workers in rank order and that lane's device list is {0, 1}.
+    // ContextMigration is not handed a rank, so the device index is the only rank fact available
+    // here. A segment line prints once, at its first action, so the lines follow enqueue order and
+    // the last line before the stall names the last segment the transfer stream received. Actions
+    // the segment bookkeeping skips (no copy operations in ContextStorage::describe) get their own
+    // line: a StateClear is a memset and a MappingUpdate is an H2D publication, and both are stream
+    // work even though neither is a copy segment.
+    const bool trace = segments_trace_enabled();
+    const int rank    = device_->device().index();
+    if (trace && segments_.empty())
+        std::fprintf(stderr, "[ctx-seg] rank=%d no-copy-segments actions=%zu\n", rank,
+                     actions.operations.size());
     for (std::size_t i = 0; i < actions.operations.size(); ++i) {
+        const bool segmented = segment < segments_.size() && i >= segments_[segment].begin &&
+                               i < segments_[segment].end;
+        if (trace) {
+            if (segmented && segments_[segment].begin == i) {
+                const auto& part     = segments_[segment];
+                const auto& observed = part.observed;
+                std::string identity;
+                for (auto j = part.begin; j < part.end; ++j) {
+                    if (!identity.empty()) identity += "; ";
+                    identity += describe_action(actions.operations[j]);
+                }
+                std::fprintf(
+                    stderr,
+                    "[ctx-seg] rank=%d segment=%zu/%zu resource=%s direction=%s units=%" PRIu64
+                    " pages=%u payload=%" PRIu64 " ops=%u pool=%s identity=%s\n",
+                    rank, segment, segments_.size(), resource_class_name(observed.resource),
+                    transfer_direction_name(observed.direction), observed.units,
+                    observed.page_count, observed.work.payload_bytes,
+                    observed.work.copy_operations,
+                    segment_pool(actions, part.begin, part.end).c_str(), identity.c_str());
+            } else if (!segmented) {
+                std::fprintf(
+                    stderr, "[ctx-seg] rank=%d action=%zu/%zu kind=%s stream=%s identity=%s\n",
+                    rank, i, actions.operations.size(), action_kind_name(actions.operations[i]),
+                    action_stream_work(actions.operations[i], *storage_).c_str(),
+                    describe_action(actions.operations[i]).c_str());
+            }
+        }
         if (segment < segments_.size() && segments_[segment].begin == i) timers_[segment].start();
         const auto consumed =
             storage_->execute(actions.operations[i], actions.spill_store, staging, execution);

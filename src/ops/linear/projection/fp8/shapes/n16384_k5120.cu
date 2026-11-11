@@ -53,7 +53,12 @@ void launch_a8(const Tensor& x, const Weight& weight, Tensor& out, Fp8A8Workspac
 bool uses_a8(std::int32_t, std::int32_t max_tokens) { return max_tokens >= 17; }
 
 std::size_t partial_capacity_bytes(std::int32_t max_tokens) {
-    return max_tokens > 256 ? Bulk::kPartialBytes : 0;
+    // The boundary is the dispatch's, not a tile-count estimate: `launch_a8` selects Bulk from 193
+    // tokens (the 385..512 window is MidBulk, whose partial is narrower), so the whole band above the
+    // boundary takes Bulk's bytes. No token in 193..256 splits today — the tail stays above the
+    // 85-CTA threshold at this row count — which is why this was latent rather than live; it is still
+    // the same defect the six failing shapes had, and a schedule change would make it fire.
+    return max_tokens > 192 ? Bulk::kPartialBytes : 0;
 }
 } // namespace
 

@@ -104,6 +104,17 @@ public:
             !options.context_cache.max_shared_prefixes) {
             throw std::logic_error("target admission capacity does not match the Engine");
         }
+        reuse_trace_line(
+            0,
+            "engine: max_context=%u max_concurrency=%u cache_enabled=%d device_state_slots=%u "
+            "(total state images=%u) max_private_continuations=%u max_shared_prefixes=%u "
+            "max_long_anchors_per_continuation=%u",
+            options.max_context, options.max_concurrency, options.context_cache.enabled ? 1 : 0,
+            options.context_cache.device_state_slots.value_or(0),
+            options.max_concurrency + options.context_cache.device_state_slots.value_or(0),
+            options.context_cache.max_private_continuations.value_or(0),
+            options.context_cache.max_shared_prefixes.value_or(0),
+            options.context_cache.max_long_anchors_per_continuation.value_or(0));
         std::promise<void> startup;
         std::future<void> started = startup.get_future();
         worker_                   = std::thread([this, startup = std::move(startup)]() mutable {
@@ -961,6 +972,13 @@ private:
         cumulative_stats_.reused_prompt_tokens += summary.reusable_prompt_tokens;
         cumulative_stats_.prompt_tokens += summary.prompt_tokens;
         cumulative_stats_.last_selected_frontier_tokens = summary.reusable_prompt_tokens;
+        reuse_trace_line(
+            0,
+            "admitted: prompt_tokens=%u reused_prompt_tokens=%u path=%d (reported hit) "
+            "cumulative_reused=%llu",
+            summary.prompt_tokens, summary.reusable_prompt_tokens,
+            static_cast<int>(summary.prefix_reuse_path),
+            static_cast<unsigned long long>(cumulative_stats_.reused_prompt_tokens));
     }
 
     GenerationResult wait_for_request(std::shared_ptr<Request> request, OutputSink* sink,

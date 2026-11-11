@@ -12704,9 +12704,21 @@ ProgramImplCore::decode_mtp_batch(std::span<const std::uint32_t> lanes,
                 for (std::uint32_t page = 0; page < pages; ++page) {
                     const LogicalKVPageHandle logical =
                         text_kv_addresses->logical_page(probe_sequence.kv->text, page);
-                    std::fprintf(stderr, "prefix kv probe:   page %u committed %u protected %u\n",
+                    // `protected` is the columns of this page that lie inside some address's
+                    // checkpoint frontier: a page range a fork reads must not be written in place.
+                    // Zero is correct for a page this request owns as its writer, because a shared
+                    // page cannot become a writer (can_set_writer requires one reference) — so the
+                    // fork must have branched it into a fresh physical page. The physical identity
+                    // is what distinguishes "branched" from "shared and being overwritten".
+                    std::fprintf(stderr,
+                                 "prefix kv probe:   page %u committed %u protected %u refs %u "
+                                 "writers %u physical %d\n",
                                  page, text_kv_pages->committed_columns(logical),
-                                 text_kv_pages->protected_columns(logical));
+                                 text_kv_pages->protected_columns(logical),
+                                 text_kv_pages->address_references(logical),
+                                 text_kv_pages->writer_references(logical),
+                                 text_kv_addresses->physical_page(probe_sequence.kv->text, page)
+                                     .index());
                 }
             }
         }

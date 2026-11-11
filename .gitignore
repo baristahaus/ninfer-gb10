@@ -81,3 +81,6 @@ runs/
 # CTest scratch and the beads gate lock are machine-local state.
 Testing/
 .beads.gate.lock
+
+# Beads / Dolt files (added by bd init)
+*.db

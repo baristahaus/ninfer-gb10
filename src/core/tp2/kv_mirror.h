@@ -66,6 +66,7 @@ void require_matching_state_image_mirror(const StateImageStorage& origin,
 class MirroredKVPagePool {
 public:
     MirroredKVPagePool(DeviceKVPagePool& origin, DeviceKVPagePool& mirror, MirrorTarget where);
+    ~MirroredKVPagePool();
 
     MirroredKVPagePool(const MirroredKVPagePool&)            = delete;
     MirroredKVPagePool& operator=(const MirroredKVPagePool&) = delete;
@@ -95,9 +96,16 @@ public:
                         cudaStream_t stream = nullptr) const;
 
 private:
+    // The origin's write and the mirror's replay are on two streams. Without an event between them
+    // the replay reads whatever the origin's page held at that moment, which is stale on some runs
+    // and fresh on others -- run-to-run non-determinism rather than a fixed wrong answer. Recorded
+    // on the origin's stream after its write, waited on by the mirror's stream before the replay.
+    void order_after_origin(cudaStream_t origin_stream) const;
+
     DeviceKVPagePool& origin_;
     DeviceKVPagePool& mirror_;
     MirrorTarget where_;
+    mutable cudaEvent_t ready_ = nullptr;
 };
 
 // Rank 0's KV execution tables with rank 1's attached. Rank 1 never acquires on its own: its lease

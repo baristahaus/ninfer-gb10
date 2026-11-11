@@ -106,12 +106,31 @@ MirroredKVPagePool::MirroredKVPagePool(DeviceKVPagePool& origin, DeviceKVPagePoo
     : origin_(origin), mirror_(mirror), where_(where) {
     require_target(where_, "Paged KV mirror");
     require_matching_kv_mirror(origin_, mirror_);
+    // Created once, before any page is touched: a per-replay event would cost an allocation on
+    // every token of every layer.
+    CUDA_CHECK(cudaEventCreateWithFlags(&ready_, cudaEventDisableTiming));
+}
+
+MirroredKVPagePool::~MirroredKVPagePool() {
+    if (ready_ != nullptr) { cudaEventDestroy(ready_); }
+}
+
+void MirroredKVPagePool::order_after_origin(cudaStream_t origin_stream) const {
+    // The origin's mutation and the mirror's replay run on two streams. The replay must not read a
+    // page before the origin has written it, or the ranks' KV differs from run to run. A null
+    // origin stream is CUDA's default stream, which orders against every blocking stream already,
+    // so there is nothing to add.
+    if (origin_stream == nullptr || origin_stream == where_.stream) { return; }
+    const CudaDeviceScope scope(where_.device->device());
+    CUDA_CHECK(cudaEventRecord(ready_, origin_stream));
+    CUDA_CHECK(cudaStreamWaitEvent(where_.stream, ready_, 0));
 }
 
 void MirroredKVPagePool::zero_pages(std::span<const DeviceKVPageHandle> pages,
                                     cudaStream_t stream) const {
     origin_.zero_pages(pages, stream);
     if (pages.empty()) { return; }
+    order_after_origin(stream);
     // The same contiguous physical runs on rank 1, in the origin's order.
     std::size_t begin = 0;
     while (begin < pages.size()) {
@@ -131,6 +150,7 @@ void MirroredKVPagePool::zero_pages(std::span<const DeviceKVPageHandle> pages,
 void MirroredKVPagePool::copy_page(DeviceKVPageHandle source, DeviceKVPageHandle destination,
                                    cudaStream_t stream) const {
     origin_.copy_page(source, destination, stream);
+    order_after_origin(stream);
     const std::int32_t source_index      = origin_.physical_page(source);
     const std::int32_t destination_index = origin_.physical_page(destination);
     if (source_index == destination_index) { return; }
@@ -143,6 +163,7 @@ void MirroredKVPagePool::zero_page_run(std::int32_t first, std::uint32_t count,
                                        cudaStream_t stream) {
     origin_.zero_page_run(first, count, stream);
     if (count == 0) { return; }
+    order_after_origin(stream);
     // The same run at the same physical indices on rank 1, on rank 1's stream.
     on_mirror_device(where_, [&] { mirror_.zero_page_run(first, count, where_.stream); });
 }

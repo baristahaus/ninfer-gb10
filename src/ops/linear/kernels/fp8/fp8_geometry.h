@@ -47,6 +47,10 @@ using Fp8N6144K5120              = Fp8Geometry<6144, 5120>;
 // The width-1 attention key and value roles: 4 KV heads of width 256. Width 2 halves them to the
 // 512-row N512K5120; width 1 presents them at full width.
 using Fp8N1024K5120              = Fp8Geometry<1024, 5120>;
+// The width-1 dense MLP gate and up roles: half of the fused 34816-row object. The engine takes the
+// two-role form because a row-scaled weight's scale plane makes neither role a contiguous parent
+// region, so `linear_swiglu` on the fused parent is refused.
+using Fp8N17408K5120             = Fp8Geometry<17408, 5120>;
 using Fp8Activation5120Geometry  = Fp8ActivationGeometry<5120>;
 using Fp8Activation6144Geometry  = Fp8ActivationGeometry<6144>;
 using Fp8Activation17408Geometry = Fp8ActivationGeometry<17408>;
@@ -75,6 +79,7 @@ enum class Fp8GeometryId : std::uint8_t {
     N10240K5120,
     N6144K5120,
     N1024K5120,
+    N17408K5120,
 };
 
 inline Fp8GeometryId resolve_fp8_geometry(std::int32_t output_rows, std::int32_t input_rows) {
@@ -131,6 +136,9 @@ inline Fp8GeometryId resolve_fp8_geometry(std::int32_t output_rows, std::int32_t
     }
     if (output_rows == Fp8N1024K5120::kOutputRows && input_rows == Fp8N1024K5120::kInputRows) {
         return Fp8GeometryId::N1024K5120;
+    }
+    if (output_rows == Fp8N17408K5120::kOutputRows && input_rows == Fp8N17408K5120::kInputRows) {
+        return Fp8GeometryId::N17408K5120;
     }
     throw std::invalid_argument("unsupported FP8 problem N" + std::to_string(output_rows) + "K" +
                                 std::to_string(input_rows));

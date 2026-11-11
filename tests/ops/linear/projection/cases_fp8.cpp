@@ -65,11 +65,16 @@ constexpr std::array kWidthTwoFp8Shapes{
 // parent; the attention input projection is one 14336-row object whose four parts are also
 // contiguous, but the packed form still hands the model one weight per role, so width 1 consumes it
 // as 6144 / 1024 / 6144 / 1024. N6144K5120 serves both the GDN z parent and the attention query and
-// gate roles, because the FP8 table is keyed by (n, k) and not by role.
+// gate roles, because the FP8 table is keyed by (n, k) and not by role. The MLP roles are the one
+// entry whose presentation the binding parts did NOT predict: the two parts are adjacent, but a
+// row-scaled payload's scale plane sits after the whole code plane, so neither role is a contiguous
+// parent region and the engine takes the two-role form (`ops::projection_region_count` counts byte
+// regions, not element ranges). The NVFP4 table has served the same 17408-row shape all along.
 constexpr std::array kWidthOneFp8Shapes{
     WidthTwoShape{10240, 5120, 891U},  // GDN qkv parent: query 2048 + key 2048 + value 6144
     WidthTwoShape{6144, 5120, 893U},   // GDN z parent; also the attention query and gate roles
     WidthTwoShape{1024, 5120, 895U},   // attention key and value roles: 4 KV heads of width 256
+    WidthTwoShape{17408, 5120, 897U},  // dense MLP gate and up roles: half of the 34816-row parent
 };
 
 // The token extents that cross every band boundary of the width-2 shapes' A8 schedules: the A8

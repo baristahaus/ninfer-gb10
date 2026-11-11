@@ -28,6 +28,20 @@ std::size_t partial_bytes(std::int32_t rows, std::int32_t columns) {
     return static_cast<std::size_t>(cells) * sizeof(std::uint16_t);
 }
 
+// The mailbox slot is sized for the widest payload the group exchanges. That is normally one
+// column-parallel partial, but a logits gather exchanges whole columns of the full vocabulary, and
+// the gather cannot run at all unless the slot carries one: the slot's extent comes from the KV
+// capacity, which has nothing to do with the vocabulary. One column is the floor, so a lane whose
+// partial slot is smaller than a logits column still gathers (in as many exchanges as the payload
+// needs) instead of refusing.
+std::size_t exchange_slot_bytes(std::int32_t rows, std::int32_t columns, std::int32_t output_rows,
+                                std::int32_t logits_columns) {
+    const std::size_t partial = partial_bytes(rows, columns);
+    if (output_rows <= 0 || logits_columns <= 0) { return partial; }
+    const std::size_t column = static_cast<std::size_t>(output_rows) * sizeof(std::uint16_t);
+    return column > partial ? column : partial;
+}
+
 } // namespace
 
 int sharded_rank_of(std::span<const int> device_indices, int device_index) noexcept {
@@ -38,9 +52,11 @@ int sharded_rank_of(std::span<const int> device_indices, int device_index) noexc
 }
 
 ShardedGroupOwner::ShardedGroupOwner(const ExecutionContext& execution, std::int32_t rows,
-                                     std::int32_t columns)
+                                     std::int32_t columns, std::int32_t output_rows,
+                                     std::int32_t logits_columns)
     : execution_(execution),
-      mailbox_(require_two_ranks(execution), partial_bytes(rows, columns)) {
+      mailbox_(require_two_ranks(execution),
+               exchange_slot_bytes(rows, columns, output_rows, logits_columns)) {
     // One buffer per rank, on that rank's own device: the combine reads and writes both, so they
     // must be device-resident where their rank's exchange kernel runs.
     const std::size_t bytes = partial_bytes(rows, columns);
@@ -50,9 +66,28 @@ ShardedGroupOwner::ShardedGroupOwner(const ExecutionContext& execution, std::int
         buffers_[rank]  = DeviceBuffer(device, bytes);
         partials_[rank] = Tensor{buffers_[rank].span(), DType::BF16, {rows, columns}};
     }
+    // The logits pair is optional, but half of it is not: an extent given without the other is a
+    // caller that meant to gather and mistyped, and building nothing would turn that into a gather
+    // that finds no buffer later. Refuse here, where the extents are still visible.
+    if ((output_rows > 0) != (logits_columns > 0)) {
+        throw std::invalid_argument(
+            "sharded group: the logits pair needs both extents; got output_rows=" +
+            std::to_string(output_rows) + " logits_columns=" + std::to_string(logits_columns));
+    }
+    if (output_rows > 0) {
+        const std::size_t logits_bytes = partial_bytes(output_rows, logits_columns);
+        for (int rank = 0; rank < 2; ++rank) {
+            const Device device = execution_.device(rank).device();
+            const CudaDeviceScope scope(device);
+            logits_buffers_[rank] = DeviceBuffer(device, logits_bytes);
+            logits_[rank] =
+                Tensor{logits_buffers_[rank].span(), DType::BF16, {output_rows, logits_columns}};
+        }
+    }
     group_.execution = &execution_;
     group_.mailbox   = &mailbox_;
     group_.partials  = partials_;
+    group_.logits    = logits_;
 }
 
 ShardedGroupOwner::~ShardedGroupOwner() = default;

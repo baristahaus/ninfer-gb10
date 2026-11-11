@@ -59,6 +59,7 @@
 
 #include "core/arena.h"
 #include "core/device.h"
+#include "models/common/sharded_group.h"
 #include "models/qwen3_5/execution/linear.h"
 #include "models/qwen3_5/execution/parameters.h"
 #include "ninfer/ops/allreduce.h"
@@ -66,6 +67,8 @@
 
 #include <array>
 #include <cstddef>
+#include <stdexcept>
+#include <string>
 
 namespace ninfer::models::qwen3_5::execution {
 
@@ -145,5 +148,71 @@ void sharded_dense_mlp(const Tensor& hidden, const DenseParameters& parameters, 
                        std::array<Tensor, 2>& partials, const ShardedCollective& collective,
                        MemoryArena& workspace, CudaExecutionView execution,
                        DenseMlpUse use = DenseMlpUse::Text);
+
+// THE ROW-PARALLEL HEAD'S GATHER. `text/output_head` is Rows-sharded, so rank r's projection
+// produces only its block of the vocabulary. Sampling must see the whole vocabulary — and it must
+// see the SAME values on both ranks, or the two ranks could pick different tokens and the lane would
+// silently diverge. So the two rank-sized blocks are gathered into one full-vocabulary buffer that
+// both ranks hold identically, and then sampled exactly as width 1 samples.
+//
+// HOW, and why it is exact. Rank r zero-fills its full buffer, copies its own block into the row
+// range [rank * rank_rows, (rank + 1) * rank_rows), and calls the per-rank allreduce. Every row
+// outside that range is BF16 0.0 on that rank and its real value on the peer, and adding 0.0 to a
+// BF16 value is exact in the exchange's own arithmetic (float(x) + 0.0f == float(x), one
+// round-to-nearest-even store returns x). So the sum IS the concatenation, bit for bit, and no new
+// transport or kernel is involved.
+//
+// THE SLOT, which is why the gather is chunked by columns. The mailbox slot is sized for one
+// column-parallel partial — hidden_size x the plan's token capacity — and the logits payload is
+// vocabulary x columns, which is far wider: for the 27B one full verify round is ~64 MiB against a
+// ~42 MiB slot at a 4096-token capacity. Enlarging the slot to the logits payload would cost four
+// times that in pinned host memory (2 slots x 2 ranks), and 2 GiB for a causal-scoring lane. So the
+// gather exchanges COLUMN SLICES that fit the slot it has; a slice of the full buffer is contiguous
+// because dim 0 is fastest, so each slice is one payload. The number of exchanges is a property of
+// the plan below, and `slot` advances by exactly that many, which keeps the two ranks' slot
+// sequences in lockstep with the layer reduces that share the same mailbox.
+struct LogitsGatherPlan {
+    std::int32_t vocabulary    = 0; // rows of the full buffer
+    std::int32_t rank_rows     = 0; // rows this rank writes
+    std::int32_t columns       = 0; // columns to gather
+    std::int32_t chunk_columns = 0; // columns one exchange carries
+    std::int32_t exchanges     = 0; // ceil(columns / chunk_columns)
+    std::size_t bytes_per_column = 0;
+    std::size_t chunk_bytes      = 0; // the widest exchange's payload
+};
+
+// The gather's geometry, pure so the refusal is testable without a device. Throws
+// std::invalid_argument, naming the quantities, when the extents are not two rank halves, when the
+// rank is outside [0, 2), when a column's payload is not a whole number of 16-byte exchange units,
+// or when one column does not fit the mailbox slot — the case that cannot be chunked away.
+[[nodiscard]] LogitsGatherPlan plan_logits_gather(std::int32_t vocabulary, std::int32_t rank_rows,
+                                                  int rank, std::int32_t columns,
+                                                  std::size_t slot_bytes);
+
+// Gathers rank `rank`'s half of the vocabulary into the group's full-vocabulary logits pair. `local`
+// is this rank's [rank_rows, columns] projection; `full` is this rank's member of the group's pair,
+// [vocabulary, logits_columns] with logits_columns >= columns. `slot` is this rank's next exchange
+// index in the Program's deterministic sequence (`ShardedCollective::reduce_index`); it is advanced
+// by the number of exchanges the plan needs, so the caller passes it straight through.
+void all_gather_logits(const models::ShardedGroup& group, int rank, std::size_t& slot,
+                       const Tensor& local, const Tensor& full, CudaExecutionView execution);
+
+// This rank's member of the group's full-vocabulary logits pair, viewed at the call's column count.
+// The pair is [vocabulary, logits_columns]; a view at [vocabulary, columns] is its first `columns`
+// columns, which is exactly the region a gather of that many columns wrote, because dim 0 is fastest.
+// Sampling and the speculative accept ops read this instead of the frame's buffer at width 2.
+[[nodiscard]] inline Tensor sharded_logits_view(const models::ShardedGroup& group, int rank,
+                                                std::int32_t rows, std::int32_t columns) {
+    const Tensor& pair = group.logits[static_cast<std::size_t>(rank)];
+    if (pair.data == nullptr) {
+        throw std::logic_error("sharded forward: the group has no logits pair");
+    }
+    if (columns > pair.ne[1]) {
+        throw std::invalid_argument(
+            "sharded forward: the logits view is wider than the pair; columns=" +
+            std::to_string(columns) + " pair columns=" + std::to_string(pair.ne[1]));
+    }
+    return Tensor({pair.data, pair.bytes(), pair.device}, pair.dtype, {rows, columns});
+}
 
 } // namespace ninfer::models::qwen3_5::execution

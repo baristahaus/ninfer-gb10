@@ -16,6 +16,13 @@ if(NINFER_BUILD_ENGINE)
     include(models/common/moe/tests.cmake)
   endif()
   include(models/qwen4_exp/tests.cmake)
+
+  # The row-parallel head's logits gather: the host cases check the padded-sum layout and the
+  # refusals, the device cases run the real exchange between two devices and skip without them.
+  ninfer_add_test(ninfer_sharded_logits_gather_test
+    SOURCES "${CMAKE_CURRENT_LIST_DIR}/test_sharded_logits_gather.cpp"
+    LIBRARIES ninfer_model_execution ninfer_core CUDA::cudart)
+  set_tests_properties(ninfer_sharded_logits_gather_test PROPERTIES SKIP_RETURN_CODE 77)
 endif()
 include(ops/tests.cmake)
 include(distributed/tests.cmake)

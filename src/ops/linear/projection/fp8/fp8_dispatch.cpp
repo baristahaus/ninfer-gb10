@@ -20,7 +20,9 @@ const std::array kShapes{&kFp8N14336K5120, &kFp8N16384K5120, &kFp8N34816K5120,
                          &kFp8N7168K5120,  &kFp8N8192K5120,  &kFp8N124160K5120,
                          // The column-sharded outputs: the two 5120x6144 projections at half K,
                          // and mlp/down at half K. Appended for the same reason.
-                         &kFp8N5120K3072,  &kFp8N5120K8704};
+                         &kFp8N5120K3072,  &kFp8N5120K8704,
+                         // The GDN input projection's two width-1 parents.
+                         &kFp8N10240K5120, &kFp8N6144K5120};
 
 // A refused shape's FULL descriptor, not just n and k. n and k do not identify the weight: a fused
 // consumer and a repack gather can both present a shape that no binding in the artifact declares,

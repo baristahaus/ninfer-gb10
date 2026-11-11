@@ -57,4 +57,11 @@ extern const Fp8LinearShape kFp8N8704K5120;
 // output projections are whole and resolve as N5120K6144 and N5120K17408.
 extern const Fp8LinearShape kFp8N5120K3072;
 extern const Fp8LinearShape kFp8N5120K8704;
+
+// The GDN input projection's two width-1 PARENTS. The fused 16384-row object is presented at width 1
+// as a 10240-row qkv parent (query 2048 + key 2048 + value 6144) and a 6144-row z parent, which is
+// the paired form the model consumes when the four parts do not pack into one contiguous parent.
+// Width 2 takes the four-role split (N5120K5120, N3072K5120) and never presents these.
+extern const Fp8LinearShape kFp8N10240K5120;
+extern const Fp8LinearShape kFp8N6144K5120;
 } // namespace ninfer::ops::detail

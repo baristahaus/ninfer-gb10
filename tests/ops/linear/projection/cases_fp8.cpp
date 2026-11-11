@@ -53,6 +53,16 @@ constexpr std::array kWidthTwoFp8Shapes{
     WidthTwoShape{8192, 5120, 887U},    // gdn qkvz fused half
 };
 
+// The two shapes the WIDTH-1 reference arm presents and the width-2 lane does not: the GDN input
+// projection's paired parents. They surfaced only when the reference arm first ran, which is the
+// same gap in a different direction — a shape the table never had, so no case could miss it. They
+// are listed apart from the width-2 set because they belong to a different presentation of the same
+// weight, and a reader looking for "what does width 2 present" should not have to filter them out.
+constexpr std::array kWidthOnePairedFp8Shapes{
+    WidthTwoShape{10240, 5120, 891U},  // GDN qkv parent: query 2048 + key 2048 + value 6144
+    WidthTwoShape{6144, 5120, 893U},   // GDN z parent: 48 value heads of width 128
+};
+
 // The token extents that cross every band boundary of the width-2 shapes' A8 schedules: the A8
 // threshold at 17, then the 64/128/192/256/384/512/768/1024 tile boundaries and one past each.
 std::vector<Invocation> width_two_a8_calls() {
@@ -150,6 +160,13 @@ void run_fp8_a16(Suite& suite) {
                   make_fp8_weight,
                   {shape.n, shape.k, shape.seed, Comparison::Sampled, true, invocations});
     }
+    // The width-1 paired GDN parents, through the same A16 bands.
+    for (const auto& shape : kWidthOnePairedFp8Shapes) {
+        const auto invocations = a16_capacity_calls();
+        add_shape(suite, ninfer::QType::FP8_E4M3FN_ROW_BF16, ActivationRecipe::TokenBlocks,
+                  make_fp8_weight,
+                  {shape.n, shape.k, shape.seed, Comparison::Sampled, true, invocations});
+    }
 
     suite.add(linear_suite::make_case("fp8", 14336, 5120, 1, ops::LinearPolicy::A16Only,
                                       linear_suite::Execution::Eager, "metadata-s831"),
@@ -211,6 +228,9 @@ void run_fp8_a16(Suite& suite) {
         add_workspace_cases(suite, QType::FP8_E4M3FN_ROW_BF16, n, k);
     }
     for (const auto& shape : kWidthTwoFp8Shapes) {
+        add_workspace_cases(suite, QType::FP8_E4M3FN_ROW_BF16, shape.n, shape.k);
+    }
+    for (const auto& shape : kWidthOnePairedFp8Shapes) {
         add_workspace_cases(suite, QType::FP8_E4M3FN_ROW_BF16, shape.n, shape.k);
     }
 }
@@ -383,6 +403,13 @@ void run_fp8_a8(Suite& suite) {
     // shapes, different activation recipe and different token extents: the A16 and A8 halves of a
     // shape's schedule set are separate selections and each has to run.
     for (const auto& shape : kWidthTwoFp8Shapes) {
+        const auto invocations = width_two_a8_calls();
+        add_shape(suite, ninfer::QType::FP8_E4M3FN_ROW_BF16, ActivationRecipe::Hashed,
+                  make_fp8_weight,
+                  {shape.n, shape.k, shape.seed + 100U, Comparison::Sampled, true, invocations});
+    }
+    // The width-1 paired GDN parents through the same A8 bands.
+    for (const auto& shape : kWidthOnePairedFp8Shapes) {
         const auto invocations = width_two_a8_calls();
         add_shape(suite, ninfer::QType::FP8_E4M3FN_ROW_BF16, ActivationRecipe::Hashed,
                   make_fp8_weight,

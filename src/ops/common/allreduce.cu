@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: ValerioDolci/capy-flash
+// SPDX-License-Identifier: Apache-2.0
 // Implements: include/ninfer/ops/allreduce.h
 //
 // The mailbox transport only. See the header for why capy's staged path is not ported.

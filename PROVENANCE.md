@@ -56,6 +56,10 @@ Full per-PR detail is in [HISTORY.md](HISTORY.md) §"Pull requests merged since 
 | Qwen chat templates | the Qwen model releases | see `tools/chat_templates/LICENSE` | `tools/chat_templates/*.jinja` |
 | capy-flash pinned-host mailbox transport | [capy-flash](https://github.com/ValerioDolci/capy-flash) (formerly ninfer-tp2) | Apache-2.0 | `src/ops/kernel/peer_exchange.cuh`, `src/ops/kernel/peer_exchange_lane.cuh`, `src/ops/common/peer_mailbox.cu`, `include/ninfer/ops/peer_mailbox.h` ported unchanged except for this tree's `ExecutionContext` interface; `include/ninfer/ops/allreduce.h` and `src/ops/common/allreduce.cu` are a reduced adaptation of capy's all-reduce seam, keeping the mailbox transport and dropping the staged path (see the header for the measurement behind that) |
 | capy-flash durable disk KV tier | [capy-flash](https://github.com/ValerioDolci/capy-flash) | Apache-2.0 | `src/core/disk_kv_cache.{h,cpp}` and `tests/test_disk_kv_cache.cpp` ported from capy's `src/core/disk_kv_cache.{h,cpp}` (format 2, v0.9.0) and its test; the on-disk format, eviction order, reference counting and atomicity rules are unchanged. This tree adds `Writer::submit(MemorySpan)`, drops the writer's stderr progress line, and adds the restart durability and `MemorySpan` test cases. Not wired into the engine yet |
+| capy-flash serving telemetry and prefill-miss diagnostic | [capy-flash](https://github.com/ValerioDolci/capy-flash) | Apache-2.0 | `src/serve/gpu_telemetry.{h,cpp}` and `src/serve/prefill_miss_dump.{h,cpp}`, ported from capy's same-named files at capy HEAD `3d4b4b76`; the NVML subset, the sampling rules, the prefill-miss qualification rules and the dump format are capy's. This tree takes the device identities from `ServerLogEnvironment` and keeps the telemetry path free of CUDA |
+| capy-flash turn anchors | [capy-flash](https://github.com/ValerioDolci/capy-flash) | Apache-2.0 | `src/serve/turn_anchors.{h,cpp}`, ported from capy `src/serve/turn_anchors.{h,cpp}` v0.9.0; the anchor placement and the marker vocabulary are capy's. `include/ninfer/types.h` carries only the `--turn-anchors` option default and its comment — no capy code is in that file |
+| capy-flash reasoning-close retry | [capy-flash](https://github.com/ValerioDolci/capy-flash) | Apache-2.0 | `src/serve/reasoning_retry.{h,cpp}` and `tests/test_reasoning_retry.cpp`, ported from capy's same-named files (release commit `c2d9e4ba`, capy-flash v0.7.7; capy HEAD `3d4b4b76`). The planner is unchanged in behaviour; the surrounding types are adapted to this tree, and the caller-stop case uses this Engine's `FinishReason::StopString` instead of capy's stop-token-id test |
+| capy-flash YaRN rope math | [capy-flash](https://github.com/ValerioDolci/capy-flash) | Apache-2.0 | `src/ops/kernel/yarn.h`, adapted from capy `src/ops/kernel/yarn.h` @ `ccaf64cd` (2026-11-07), which follows HF transformers' `_compute_yarn_parameters`. This tree moves the frequency computation to the device side; capy keeps it on the host behind a `__constant__` table |
 
 ## 5. Vendored dependencies
 
@@ -106,10 +110,13 @@ Correctness fixes that matter to `sm_120a` are offered upstream as goodwill pull
 
 ## 9. Known gaps
 
-- SPDX identifiers are present only in `tools/chat_templates/*.jinja`. The two TensorFold kernel
-  files identify their origin in comments and in the directory `NOTICE`, but carry no SPDX line,
-  so automated licence scanners cannot classify them. Adding those two lines is the remaining
-  work in this area.
+- SPDX identifiers are present in `tools/chat_templates/*.jinja`, in the two TensorFold kernel
+  files (`exl3_decode.cuh`, `exl3_linear.cu`), and, since 2026-11-10, in the capy-flash files
+  named in §4. The earlier note here said TensorFold carried none; it does, and the note was
+  wrong.
+- `tools/check_provenance.py` enforces the ledger row for a header's port claim, not the SPDX
+  lines themselves: a ported file with a row but no `SPDX-License-Identifier` would pass. The
+  lines are present today; keeping them present is a review responsibility, not a guard.
 - The provenance columns in [HISTORY.md](HISTORY.md) describe the tree as it stood on 2026-10-28.
   Changes after that date are recorded in the git history and in the maintainer documents, not in
   HISTORY.md.

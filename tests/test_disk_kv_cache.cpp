@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: ValerioDolci/capy-flash
+// SPDX-License-Identifier: Apache-2.0
 // Disk tier of the context cache (format 2): content-addressed blobs shared between saves,
 // manifests, reference counts, LRU under the cap, free-space margin, directory lock, atomicity.
 // Ported from capy-flash (ValerioDolci/capy-flash v0.9.0, tests/test_disk_kv_cache.cpp,

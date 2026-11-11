@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: ValerioDolci/capy-flash
+// SPDX-License-Identifier: Apache-2.0
 // Implements: include/ninfer/ops/peer_mailbox.h
 //
 // Ported from capy-flash src/ops/common/peer_mailbox.cu; see the header for the adaptation note.

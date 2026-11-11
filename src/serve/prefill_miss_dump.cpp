@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: ValerioDolci/capy-flash
+// SPDX-License-Identifier: Apache-2.0
 #include "serve/prefill_miss_dump.h"
 
 #include <nlohmann/json.hpp>

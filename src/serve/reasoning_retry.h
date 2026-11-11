@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: ValerioDolci/capy-flash
+// SPDX-License-Identifier: Apache-2.0
 #pragma once
 
 // Reasoning-close retry planning. Ported from capy-flash `src/serve/reasoning_retry.{h,cpp}`

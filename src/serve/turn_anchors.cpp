@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: ValerioDolci/capy-flash
+// SPDX-License-Identifier: Apache-2.0
 // Turn-anchor marker injection (serve/turn_anchors.h). The protocol markers own the
 // explicit-marker budget; the anchors yield to it. Protocol markers are already in
 // input.context_cache.markers when this runs (see GenerationService::prepare).

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: ValerioDolci/capy-flash
+// SPDX-License-Identifier: Apache-2.0
 #pragma once
 
 // Prefix-reuse miss diagnostic. Ported from capy-flash `src/serve/prefill_miss_dump.{h,cpp}` (capy

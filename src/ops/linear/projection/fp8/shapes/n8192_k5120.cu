@@ -53,7 +53,11 @@ void launch_a8(const Tensor& x, const Weight& weight, Tensor& out, Fp8A8Workspac
 bool uses_a8(std::int32_t, std::int32_t max_tokens) { return max_tokens >= 17; }
 
 std::size_t partial_capacity_bytes(std::int32_t max_tokens) {
-    return max_tokens > 256 ? Bulk::kPartialBytes : 0;
+    // `launch_a8` selects Bulk from 193 tokens, so the split-K capacity has to start there. It
+    // reported 0 through 256 and refused the split-K launch the dispatch selects at 193..256.
+    // Over-allocating is safe (Bulk's partial is the widest of the schedules here), so the whole
+    // band above the dispatch's boundary takes Bulk's bytes.
+    return max_tokens > 192 ? Bulk::kPartialBytes : 0;
 }
 } // namespace
 

@@ -66,6 +66,13 @@ say "   build    $DST/$BUILD"
 say "   artifact $ARTIFACT"
 say "   variables NINFER_TP2_ACCEPT=1 NINFER_TP2_ARM=$ARM NINFER_TP2_UNVALIDATED=1"
 
+# The dry run stops here: it is the mode that works on a machine that cannot reach the lane host,
+# so it must not depend on the host being reachable.
+if [ "$DRY_RUN" -eq 1 ]; then
+    say "== dry run: nothing synced, built or run"
+    exit 0
+fi
+
 if ! remote true >/dev/null 2>&1; then
     die "host $HOST is not reachable over ssh (BatchMode). Check the address and the key."
 fi
@@ -80,11 +87,6 @@ if ! remote test -d "$DST/$BUILD" >/dev/null 2>&1; then
     die "$HOST:$DST/$BUILD is not a configured build tree. Configure it on the host first; this script does not configure builds."
 fi
 say "   build tree present"
-
-if [ "$DRY_RUN" -eq 1 ]; then
-    say "== dry run: nothing synced, built or run"
-    exit 0
-fi
 
 say "== sync $SRC -> $HOST:$DST"
 rsync -a --delete --exclude=.git --exclude=build --exclude=.agents --exclude=.agent-tmp \

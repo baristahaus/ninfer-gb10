@@ -379,6 +379,14 @@ __global__ __launch_bounds__(256) void peer_exchange_pipelined_kernel(
         const int v = base + j * 32;
         if (v < vecs) { mine_payload[v].raw = mine[j]; }
     }
+    // Every lane fences its OWN publish stores before the warp meets. The flag release below is
+    // executed by lane 0 alone and its system-scope fence orders lane 0's stores only, so without
+    // this a peer that observes the flag can still read a lane's host payload before that lane's
+    // PCIe write has landed. The original kernel does exactly this at its publish (:137
+    // __threadfence_system() by every thread, then the barrier); the pipelined path dropped it and
+    // relied on the release store's fence being "cumulative over the warp barrier", which it is not
+    // for stores issued by the other lanes.
+    __threadfence_system();
     __syncwarp();
     if (timed) { stamp[2] = clock64(); }
 

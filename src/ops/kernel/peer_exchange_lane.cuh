@@ -65,6 +65,10 @@ peer_exchange_lane(int warp, int lane, const PeerVec (&mine)[G], PeerVec (&peer)
         const int v = base + j * 32;
         if (v < vecs) { mine_payload[v] = mine[j]; }
     }
+    // Every lane fences its own publish stores before the warp meets; see the same fence in
+    // peer_exchange.cuh's pipelined kernel, where the reason is spelled out. The flag release below
+    // is lane 0's, so only a per-lane fence makes the other lanes' host writes visible first.
+    __threadfence_system();
     __syncwarp();
     int published = 1;
     if (lane == 0) {

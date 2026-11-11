@@ -29,6 +29,11 @@ public:
 
     [[nodiscard]] bool valid() const noexcept { return owner_ != nullptr; }
 
+    // The pool slot this handle names. Exposed because a page's identity is the thing a diagnostic
+    // has to report to say WHICH page it looked at: a probe that prints a handle it cannot name
+    // reports a verdict ("this page") instead of a quantity.
+    [[nodiscard]] std::int32_t index() const noexcept { return index_; }
+
 private:
     friend class DeviceKVPagePool;
     friend class DeviceKVPageLease;

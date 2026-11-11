@@ -3,7 +3,7 @@
 #include "ops/common/mbarrier.cuh"
 #include "ops/common/memory.cuh"
 #include "ops/common/mma.cuh"
-#include "ops/linear/nvfp4/nvfp4_schedule.cuh"
+#include "ops/linear/kernels/nvfp4/nvfp4_schedule.cuh"
 #include "ops/linear/nvfp4/nvfp4_operands.h"
 #include "ops/linear/nvfp4/nvfp4_shared.cuh"
 #include "ops/common/token_slices.h"

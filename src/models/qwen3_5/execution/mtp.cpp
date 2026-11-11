@@ -132,7 +132,7 @@ std::size_t mtp_kv_workspace_bytes(const MtpProjectionProfile& parameters,
 }
 
 void mtp_projection(const Tensor& hidden, const MtpProjectionParameters& parameters,
-                    const AttentionConfig& config, Tensor& query, Tensor& gate, Tensor& key,
+                    workspace::AttentionExtents extents, Tensor& query, Tensor& gate, Tensor& key,
                     Tensor& value, MemoryArena& workspace, CudaExecutionView execution) {
     const auto& p = parameters.packed;
     if (!parameters.rows) {
@@ -144,19 +144,15 @@ void mtp_projection(const Tensor& hidden, const MtpProjectionParameters& paramet
     const auto columns = hidden.ne[1];
     Tensor packed      = workspace.alloc(DType::BF16, {p.weight.n, columns});
     ops::linear(hidden, p.weight, packed, p.policy, workspace, execution);
-    Tensor q =
-        query.view({dimension(config.head_dim), dimension(config.num_attention_heads), columns});
-    Tensor k =
-        key.view({dimension(config.head_dim), dimension(config.num_key_value_heads), columns});
-    Tensor g =
-        gate.view({dimension(config.head_dim), dimension(config.num_attention_heads), columns});
-    Tensor v =
-        value.view({dimension(config.head_dim), dimension(config.num_key_value_heads), columns});
+    Tensor q = query.view({dimension(extents.head_dim), dimension(extents.query_heads), columns});
+    Tensor k = key.view({dimension(extents.head_dim), dimension(extents.kv_heads), columns});
+    Tensor g = gate.view({dimension(extents.head_dim), dimension(extents.query_heads), columns});
+    Tensor v = value.view({dimension(extents.head_dim), dimension(extents.kv_heads), columns});
     ops::split_bf16_features(packed, q, k, g, v, execution);
 }
 
 void mtp_kv_projection(const Tensor& hidden, const MtpProjectionParameters& parameters,
-                       const AttentionConfig& config, Tensor& key, Tensor& value,
+                       workspace::AttentionExtents extents, Tensor& key, Tensor& value,
                        MemoryArena& workspace, CudaExecutionView execution) {
     if (parameters.rows) {
         ops::linear_pair(hidden, (*parameters.rows)[1].weight, (*parameters.rows)[3].weight, key,
@@ -164,9 +160,38 @@ void mtp_kv_projection(const Tensor& hidden, const MtpProjectionParameters& para
         return;
     }
     auto scope   = workspace.scope();
-    Tensor query = workspace.alloc(DType::BF16, {dimension(config.query_width()), hidden.ne[1]});
-    Tensor gate  = workspace.alloc(DType::BF16, {dimension(config.query_width()), hidden.ne[1]});
-    mtp_projection(hidden, parameters, config, query, gate, key, value, workspace, execution);
+    Tensor query = workspace.alloc(DType::BF16, {dimension(extents.query_width), hidden.ne[1]});
+    Tensor gate  = workspace.alloc(DType::BF16, {dimension(extents.gate_width), hidden.ne[1]});
+    mtp_projection(hidden, parameters, extents, query, gate, key, value, workspace, execution);
+}
+
+workspace::AttentionExtents mtp_attention_extents(const MtpProjectionParameters& projection,
+                                                  const TextConfig& config) {
+    workspace::AttentionExtents out;
+    if (projection.rows) {
+        const auto& roles = *projection.rows;
+        out.query_width   = roles[0].weight.n;
+        out.key_width     = roles[1].weight.n;
+        out.gate_width    = roles[2].weight.n;
+        out.value_width   = roles[3].weight.n;
+    } else {
+        out.query_width = projection.output_rows[0];
+        out.key_width   = projection.output_rows[1];
+        out.gate_width  = projection.output_rows[2];
+        out.value_width = projection.output_rows[3];
+    }
+    out.head_dim    = static_cast<std::int32_t>(config.attention->head_dim);
+    out.hidden_size = static_cast<std::int32_t>(config.hidden_size);
+    if (out.head_dim <= 0 || out.query_width % out.head_dim != 0 ||
+        out.key_width % out.head_dim != 0) {
+        throw std::invalid_argument("MTP attention extents: head_dim " +
+                                    std::to_string(out.head_dim) + " does not divide query_width " +
+                                    std::to_string(out.query_width) + " and key_width " +
+                                    std::to_string(out.key_width));
+    }
+    out.query_heads = out.query_width / out.head_dim;
+    out.kv_heads    = out.key_width / out.head_dim;
+    return out;
 }
 
 void mtp_forward(MtpExecutionView state, const MtpInputs& inputs,
@@ -182,21 +207,23 @@ void mtp_forward(MtpExecutionView state, const MtpInputs& inputs,
                             static_cast<std::uint64_t>(columns));
     auto scope            = state.workspace.scope();
     auto stem             = mtp_stem(state, inputs, columns);
-    const auto& attention = *config.attention;
-    const ops::AttentionHeadGeometry geometry{dimension(attention.head_dim),
-                                              dimension(attention.num_attention_heads),
-                                              dimension(attention.num_key_value_heads)};
-    auto projection = workspace::mtp_attention_projection(state.workspace, config, columns);
-    mtp_projection(stem.attention_hidden, parameters.projection, attention, projection.query,
+    // The rank's own extents: at width 2 the widths and head counts are the rank's shards, and the
+    // roots are allocated at them because a row-slice of a config-sized root is strided.
+    const auto extents = mtp_attention_extents(parameters.projection, config);
+    const ops::AttentionHeadGeometry geometry{dimension(extents.head_dim),
+                                              dimension(extents.query_heads),
+                                              dimension(extents.kv_heads)};
+    auto projection = workspace::mtp_attention_projection(state.workspace, extents, columns);
+    mtp_projection(stem.attention_hidden, parameters.projection, extents, projection.query,
                    projection.gate, projection.key, projection.value, state.workspace,
                    state.execution);
 
-    const auto head_dim     = dimension(attention.head_dim);
-    const auto heads        = dimension(attention.num_attention_heads);
-    const auto kv_heads     = dimension(attention.num_key_value_heads);
+    const auto head_dim     = dimension(extents.head_dim);
+    const auto heads        = dimension(extents.query_heads);
+    const auto kv_heads     = dimension(extents.kv_heads);
     Tensor query            = projection.query.view({head_dim, heads, columns});
     Tensor key              = projection.key.view({head_dim, kv_heads, columns});
-    auto result             = workspace::mtp_attention_results(state.workspace, config, columns);
+    auto result             = workspace::mtp_attention_results(state.workspace, extents, columns);
     Tensor normalized_query = result.normalized_query.view({head_dim, heads, columns});
     Tensor normalized_key   = result.normalized_key.view({head_dim, kv_heads, columns});
     ops::rmsnorm(query, parameters.query_norm, config.rms_norm_eps, true, normalized_query,
@@ -212,7 +239,7 @@ void mtp_forward(MtpExecutionView state, const MtpInputs& inputs,
         normalized_key.view({head_dim, kv_heads, width, batch}),
         projection.value.view({head_dim, kv_heads, width, batch}), inputs.cache_positions,
         inputs.valid_columns, inputs.kv_table_rows, geometry,
-        static_cast<float>(1.0 / std::sqrt(static_cast<double>(attention.head_dim))), state.cache,
+        static_cast<float>(1.0 / std::sqrt(static_cast<double>(extents.head_dim))), state.cache,
         envelope, state.workspace, attention_output, state.execution);
     Tensor gated_attention = result.attention;
     ops::sigmoid_mul(projection.gate, gated_attention, state.execution);
@@ -244,18 +271,18 @@ void mtp_history(MtpExecutionView state, const MtpInputs& inputs,
     const auto& parameters = require_mtp(state.parameters);
     const auto& config     = state.parameters.profile->config.text;
     const auto columns     = validate_inputs(state, inputs);
-    const auto& attention  = *config.attention;
-    const auto head_dim    = dimension(attention.head_dim);
-    const auto kv_heads    = dimension(attention.num_key_value_heads);
+    const auto extents     = mtp_attention_extents(parameters.projection, config);
+    const auto head_dim    = dimension(extents.head_dim);
+    const auto kv_heads    = dimension(extents.kv_heads);
     const auto width       = inputs.ids.ne[0];
     const auto batch       = inputs.ids.ne[1];
     nvtx::ScopedRange range(nvtx::Name::PrefillMtpChunk, nvtx::Category::Mtp,
                             static_cast<std::uint64_t>(columns));
     auto scope   = state.workspace.scope();
     auto stem    = mtp_stem(state, inputs, columns);
-    Tensor key   = state.workspace.alloc(DType::BF16, {dimension(attention.key_width()), columns});
-    Tensor value = state.workspace.alloc(DType::BF16, {dimension(attention.key_width()), columns});
-    mtp_kv_projection(stem.attention_hidden, parameters.projection, attention, key, value,
+    Tensor key   = state.workspace.alloc(DType::BF16, {dimension(extents.key_width), columns});
+    Tensor value = state.workspace.alloc(DType::BF16, {dimension(extents.value_width), columns});
+    mtp_kv_projection(stem.attention_hidden, parameters.projection, extents, key, value,
                       state.workspace, state.execution);
     Tensor normalized_key = state.workspace.alloc(DType::BF16, {head_dim, kv_heads, columns});
     ops::rmsnorm(key.view({head_dim, kv_heads, columns}), parameters.key_norm, config.rms_norm_eps,
@@ -280,8 +307,15 @@ void mtp_propose(MtpExecutionView state, const Tensor& hidden, Tensor& full_logi
     auto scope = state.workspace.scope();
     switch (state.proposal_head) {
     case ProposalHead::Full:
-        require_tensor(full_logits, DType::BF16, {dimension(config.vocab_size), columns},
-                       state.execution.device(), "proposal logits");
+        // The MTP head is the target's output head, which is row-sharded, so this rank's logits
+        // are `output_head.weight.n` rows and not the full vocabulary. The full-vocabulary extent
+        // stays the gather's buffer (task-12): the rank cannot sample its own rows as global ids
+        // until they are placed at their vocabulary offset.
+        {
+            const auto local_rows = dimension(parameters.output_head.weight.n);
+            require_tensor(full_logits, DType::BF16, {local_rows, columns},
+                           state.execution.device(), "proposal logits");
+        }
         ops::linear(hidden, parameters.output_head.weight, full_logits,
                     parameters.output_head.policy, state.workspace, state.execution);
         ops::argmax(full_logits, ids, dimension(state.parameters.profile->public_tokens),

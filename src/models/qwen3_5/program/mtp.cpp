@@ -93,8 +93,14 @@ void RankProgramImpl::run_mtp_draft(std::uint32_t batch_size, std::uint32_t step
     auto base                = packed(mtp.base_conditioning, {hidden, batch});
     auto drafts              = packed(mtp.drafts, {static_cast<std::int32_t>(draft_window), batch});
     CUDA_CHECK(cudaMemsetAsync(drafts.data, 0, drafts.bytes(), cuda.stream()));
-    auto logits = packed(mtp.proposal_logits,
-                         {execution::dimension(parameters.profile->config.text.vocab_size), batch});
+    // The MTP head is the target's row-sharded output head, so this rank's proposal logits are its
+    // own rows. The frame spec's `output_rows` is still the model's vocabulary
+    // (program/planning/startup.cpp, another owner's file); until that is the rank's rows this is
+    // the only place that knows the real extent, and the two must be reconciled before width 2
+    // samples anything.
+    const auto local_rows = parameters.mtp ? parameters.mtp->output_head.weight.n : 0;
+    if (local_rows <= 0) { throw std::logic_error("MTP proposal head has no local rows"); }
+    auto logits = packed(mtp.proposal_logits, {execution::dimension(local_rows), batch});
     for (std::uint32_t step = 0; step < steps; ++step) {
         auto input         = mtp.step_view(static_cast<std::int32_t>(step), batch);
         const auto visible = static_cast<std::uint32_t>(

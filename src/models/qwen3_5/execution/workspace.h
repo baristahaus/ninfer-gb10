@@ -268,6 +268,18 @@ struct MtpAttentionProjectionRoots {
 };
 
 template <class Allocator>
+MtpAttentionProjectionRoots mtp_attention_projection(Allocator& allocator,
+                                                     AttentionExtents extents, std::int32_t tokens) {
+    return {
+        matrix(allocator, DType::BF16, dimension(extents.query_width), tokens),
+        matrix(allocator, DType::BF16, dimension(extents.key_width), tokens),
+        matrix(allocator, DType::BF16, dimension(extents.gate_width), tokens),
+        matrix(allocator, DType::BF16, dimension(extents.value_width), tokens),
+    };
+}
+
+// The config-wide form, for planning only.
+template <class Allocator>
 MtpAttentionProjectionRoots mtp_attention_projection(Allocator& allocator, const TextConfig& config,
                                                      std::int32_t tokens) {
     return {
@@ -284,6 +296,17 @@ struct MtpAttentionResultRoots {
     Tensor attention;
 };
 
+template <class Allocator>
+MtpAttentionResultRoots mtp_attention_results(Allocator& allocator, AttentionExtents extents,
+                                              std::int32_t tokens) {
+    return {
+        matrix(allocator, DType::BF16, dimension(extents.query_width), tokens),
+        matrix(allocator, DType::BF16, dimension(extents.key_width), tokens),
+        matrix(allocator, DType::BF16, dimension(extents.query_width), tokens),
+    };
+}
+
+// The config-wide form, for planning only.
 template <class Allocator>
 MtpAttentionResultRoots mtp_attention_results(Allocator& allocator, const TextConfig& config,
                                               std::int32_t tokens) {

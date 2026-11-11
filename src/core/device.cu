@@ -1,5 +1,7 @@
 #include "core/device.h"
 
+#include <array>
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <stdexcept>
@@ -54,6 +56,54 @@ void destroy_event(cudaEvent_t& event) noexcept {
         log_cuda_error("cudaEventDestroy", cudaEventDestroy(event));
         event = nullptr;
     }
+}
+
+// DIAGNOSTIC (NINFER_CTX_READY_TRACE=1): report every poll of a labelled completion event with
+// the raw cudaEventQuery code, before ready() maps it to a bool. The context frame's completion
+// event is the one labelled call site (qwen3_5/program/lifecycle.cpp); every other completion
+// event stays silent. Unset, neither ready() nor record() takes a diagnostic path.
+bool ctx_ready_trace_enabled() {
+    static const bool enabled = std::getenv("NINFER_CTX_READY_TRACE") != nullptr;
+    return enabled;
+}
+
+constexpr unsigned long long kCtxReadyTracePolls = 20;
+
+struct CtxReadyTraceCounters {
+    std::atomic<unsigned long long> polls{0};
+    std::atomic<int> last{static_cast<int>(cudaSuccess)};
+    std::atomic<bool> summary{false};
+};
+
+// The local two-GPU lane's rank is its device index, and that lane's device list is {0, 1}; one
+// counter set per rank. A rank outside that pair cannot occur on the lane this diagnostic targets
+// and shares slot 0, which is preferable to an out-of-bounds read in a diagnostic.
+CtxReadyTraceCounters& ctx_ready_trace_counters(int rank) {
+    static std::array<CtxReadyTraceCounters, 2> counters{};
+    const std::size_t slot = rank >= 0 && rank < 2 ? static_cast<std::size_t>(rank) : 0;
+    return counters[slot];
+}
+
+int current_cuda_device_or_negative() {
+    int current = -1;
+    if (cudaGetDevice(&current) != cudaSuccess) { current = -1; }
+    return current;
+}
+
+void print_ctx_ready_poll(int rank, unsigned long long poll, cudaEvent_t event, cudaStream_t stream,
+                          int created_device, int recorded_device, int current_device,
+                          cudaError_t cleared, cudaError_t status) {
+    std::fprintf(stderr,
+                 "[ctx-ready] rank=%d poll=%llu event=%p stream=%p created-device=%d "
+                 "recorded-device=%d current-device=%d cleared=%d(%s) query=%d(%s)\n",
+                 rank, poll, static_cast<const void*>(event), static_cast<const void*>(stream),
+                 created_device, recorded_device, current_device, static_cast<int>(cleared),
+                 cudaGetErrorName(cleared), static_cast<int>(status), cudaGetErrorName(status));
+}
+
+void print_ctx_ready_summary(int rank, unsigned long long polls, cudaError_t status) {
+    std::fprintf(stderr, "[ctx-ready] rank=%d summary polls=%llu last=%d(%s)\n", rank, polls,
+                 static_cast<int>(status), cudaGetErrorName(status));
 }
 
 } // namespace
@@ -295,8 +345,14 @@ float CudaEventTimer::stop_ms() {
     return elapsed_ms();
 }
 
-CudaCompletionEvent::CudaCompletionEvent(const DeviceContext& ctx) {
+CudaCompletionEvent::CudaCompletionEvent(const DeviceContext& ctx, const char* trace_label)
+    : trace_label_(trace_label), trace_rank_(ctx.device().index()) {
     ctx.bind_to_current_thread();
+    if (trace_label_ != nullptr && ctx_ready_trace_enabled()) {
+        created_device_ = current_cuda_device_or_negative();
+        // A diagnostic query must not leave its own failure for a later check.
+        (void)cudaGetLastError();
+    }
     const cudaError_t err = cudaEventCreateWithFlags(&event_, cudaEventDisableTiming);
     if (err != cudaSuccess) {
         throw std::runtime_error(cuda_error_message("cudaEventCreateWithFlags failed", err));
@@ -306,12 +362,25 @@ CudaCompletionEvent::CudaCompletionEvent(const DeviceContext& ctx) {
 CudaCompletionEvent::~CudaCompletionEvent() { destroy_event(event_); }
 
 CudaCompletionEvent::CudaCompletionEvent(CudaCompletionEvent&& other) noexcept
-    : event_(std::exchange(other.event_, nullptr)) {}
+    : event_(std::exchange(other.event_, nullptr)), trace_label_(other.trace_label_),
+      trace_rank_(other.trace_rank_), created_device_(other.created_device_),
+      recorded_stream_(other.recorded_stream_), recorded_device_(other.recorded_device_) {
+    other.trace_label_     = nullptr;
+    other.trace_rank_      = -1;
+    other.created_device_  = -1;
+    other.recorded_stream_ = nullptr;
+    other.recorded_device_ = -1;
+}
 
 CudaCompletionEvent& CudaCompletionEvent::operator=(CudaCompletionEvent&& other) noexcept {
     if (this == &other) { return *this; }
     destroy_event(event_);
-    event_ = std::exchange(other.event_, nullptr);
+    event_           = std::exchange(other.event_, nullptr);
+    trace_label_     = std::exchange(other.trace_label_, nullptr);
+    trace_rank_      = std::exchange(other.trace_rank_, -1);
+    created_device_  = std::exchange(other.created_device_, -1);
+    recorded_stream_ = std::exchange(other.recorded_stream_, nullptr);
+    recorded_device_ = std::exchange(other.recorded_device_, -1);
     return *this;
 }
 
@@ -319,10 +388,28 @@ void CudaCompletionEvent::record(cudaStream_t stream) {
     if (event_ == nullptr || stream == nullptr) {
         throw std::logic_error("CUDA completion event is not recordable");
     }
+    const bool trace    = ctx_ready_trace_enabled() && trace_label_ != nullptr;
+    int current         = -1;
+    cudaError_t cleared = cudaSuccess;
+    if (trace) {
+        current = current_cuda_device_or_negative();
+        cleared = cudaGetLastError();
+    }
     const auto status = cudaEventRecord(event_, stream);
+    if (trace) {
+        std::fprintf(stderr,
+                     "[ctx-ready] rank=%d record event=%p stream=%p created-device=%d "
+                     "current-device=%d cleared=%d(%s) status=%d(%s)\n",
+                     trace_rank_, static_cast<const void*>(event_),
+                     static_cast<const void*>(stream), created_device_, current,
+                     static_cast<int>(cleared), cudaGetErrorName(cleared), static_cast<int>(status),
+                     cudaGetErrorName(status));
+    }
     if (status != cudaSuccess) {
         throw std::runtime_error(cuda_error_message("cudaEventRecord failed", status));
     }
+    recorded_stream_ = stream;
+    if (trace) { recorded_device_ = current; }
 }
 
 void CudaCompletionEvent::record_external(cudaStream_t stream) {
@@ -330,6 +417,11 @@ void CudaCompletionEvent::record_external(cudaStream_t stream) {
         throw std::logic_error("CUDA completion event is not recordable");
     }
     CUDA_CHECK(cudaEventRecordWithFlags(event_, stream, cudaEventRecordExternal));
+    recorded_stream_ = stream;
+    if (ctx_ready_trace_enabled() && trace_label_ != nullptr) {
+        recorded_device_ = current_cuda_device_or_negative();
+        (void)cudaGetLastError();
+    }
 }
 
 void CudaCompletionEvent::wait(cudaStream_t stream) const {
@@ -394,7 +486,31 @@ const DeviceContext& ExecutionContext::device(int rank) const {
 
 bool CudaCompletionEvent::ready() const {
     if (event_ == nullptr) { throw std::logic_error("CUDA completion event is empty"); }
+    const bool trace    = ctx_ready_trace_enabled() && trace_label_ != nullptr;
+    int current         = -1;
+    cudaError_t cleared = cudaSuccess;
+    if (trace) {
+        current = current_cuda_device_or_negative();
+        // Clear a sticky error first: cudaEventQuery may also return an earlier launch's error,
+        // which would otherwise be indistinguishable from this query's own result.
+        cleared = cudaGetLastError();
+    }
     const cudaError_t status = cudaEventQuery(event_);
+    if (trace) {
+        auto& counters  = ctx_ready_trace_counters(trace_rank_);
+        const auto poll = counters.polls.fetch_add(1, std::memory_order_relaxed) + 1;
+        counters.last.store(static_cast<int>(status), std::memory_order_relaxed);
+        // The first N polls are the readable part; after that only a non-NotReady result is
+        // interesting, and the summary is the one line that survives the throttle.
+        if (poll <= kCtxReadyTracePolls || status != cudaErrorNotReady) {
+            print_ctx_ready_poll(trace_rank_, poll, event_, recorded_stream_, created_device_,
+                                 recorded_device_, current, cleared, status);
+        }
+        if ((status != cudaErrorNotReady || poll > kCtxReadyTracePolls) &&
+            !counters.summary.exchange(true, std::memory_order_relaxed)) {
+            print_ctx_ready_summary(trace_rank_, poll, status);
+        }
+    }
     if (status == cudaSuccess) { return true; }
     if (status == cudaErrorNotReady) { return false; }
     throw std::runtime_error(cuda_error_message("cudaEventQuery failed", status));

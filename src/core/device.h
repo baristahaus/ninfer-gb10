@@ -191,7 +191,10 @@ private:
 // component records it after enqueueing one transfer batch and polls it from later boundaries.
 class CudaCompletionEvent {
 public:
-    explicit CudaCompletionEvent(const DeviceContext& ctx);
+    // DIAGNOSTIC (NINFER_CTX_READY_TRACE=1): `trace_label` names the event so ready() can report
+    // its raw poll results without tracing every completion event. Null (the default) keeps the
+    // event silent. The label and the retained record facts are inert unless the variable is set.
+    explicit CudaCompletionEvent(const DeviceContext& ctx, const char* trace_label = nullptr);
     ~CudaCompletionEvent();
 
     CudaCompletionEvent(const CudaCompletionEvent&)            = delete;
@@ -211,6 +214,17 @@ public:
 
 private:
     cudaEvent_t event_ = nullptr;
+    // DIAGNOSTIC (NINFER_CTX_READY_TRACE=1): identity and last record facts for the poll trace.
+    // `trace_rank_` is the device index of the context that created the event; `created_device_`
+    // is the device current at creation, which is what makes a construction-time binding error
+    // visible. `recorded_stream_`/`recorded_device_` are the last successful record's stream and
+    // the device current when it was issued. All of it is inert unless the event has a label and
+    // the variable is set.
+    const char* trace_label_      = nullptr;
+    int trace_rank_               = -1;
+    int created_device_           = -1;
+    cudaStream_t recorded_stream_ = nullptr;
+    int recorded_device_          = -1;
 };
 
 } // namespace ninfer

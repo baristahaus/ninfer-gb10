@@ -26,7 +26,8 @@ RankProgramImpl::RankProgramImpl(const execution::Parameters& values, const Sequ
                                          : std::size_t(values.profile->public_tokens) *
                                                plan.max_concurrency * sizeof(std::int32_t)),
       result_ready(context), drafts_ready(context), compute_retired(context),
-      context_ready(context), prefill_timer(context), gpu_timer(context, plan.gpu_timing) {
+      context_ready(context, "context_ready"), prefill_timer(context),
+      gpu_timer(context, plan.gpu_timing) {
     if (parameters.profile != plan.profile || parameters.profile->options != plan.features)
         throw std::invalid_argument("Qwen3.5 rank parameters differ from the prepared plan");
     // The per-rank view of the group's collective. The mailbox and the partial pair are owned by

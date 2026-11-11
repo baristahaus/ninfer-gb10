@@ -12686,6 +12686,30 @@ ProgramImplCore::decode_mtp_batch(std::span<const std::uint32_t> lanes,
             state_images->continuation_hidden_store(),
             flash_decode_ple ? &*flash_decode_ple : nullptr};
 
+        // KV page probe: the paged text KV a decode round reads, as host-side bookkeeping only —
+        // the frontier, the bound execution-table row, and every prefix page's committed and
+        // protected coverage. A reuse that shares a checkpoint's pages must show the same coverage
+        // a cold prefill of those tokens produced; a page whose committed columns reach past the
+        // tokens actually written is the kind of fault a state-image dump cannot see.
+        if (std::getenv("NINFER_FLASH_NEXT_KV_PROBE") != nullptr) {
+            const auto page_size = static_cast<std::uint32_t>(kPagedKVPageSize);
+            for (std::size_t row = 0; row < lanes.size(); ++row) {
+                const SequenceState& probe_sequence = active_sequence(lanes[row]);
+                if (!probe_sequence.kv) { continue; }
+                const std::uint32_t frontier = probe_sequence.text_kv_valid;
+                const std::uint32_t pages    = (frontier + page_size - 1U) / page_size;
+                std::fprintf(stderr, "prefix kv probe: lane %u frontier %u bound_row %d\n",
+                             probe_sequence.lane, frontier,
+                             text_kv_addresses->bound_row(probe_sequence.kv->text));
+                for (std::uint32_t page = 0; page < pages; ++page) {
+                    const LogicalKVPageHandle logical =
+                        text_kv_addresses->logical_page(probe_sequence.kv->text, page);
+                    std::fprintf(stderr, "prefix kv probe:   page %u committed %u protected %u\n",
+                                 page, text_kv_pages->committed_columns(logical),
+                                 text_kv_pages->protected_columns(logical));
+                }
+            }
+        }
         schedule_state.pending_snapshot = &*replay_snapshot;
         schedule_state.pending_fold_rows =
             any_deferred ? static_cast<std::int32_t>(lanes.size()) : 0;

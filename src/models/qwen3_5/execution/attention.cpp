@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <stdexcept>
+#include <string>
 
 namespace ninfer::models::qwen3_5::execution {
 namespace {
@@ -31,17 +32,24 @@ workspace::AttentionExtents attention_extents(const AttentionParameters& paramet
         out.gate_width    = roles[2].weight.n;
         out.value_width   = roles[3].weight.n;
     } else {
+        // The segmented form has four segments, and `projection_rows` is filled in the order the
+        // projection writes them: query, key, gate, value (profile.cpp, parameters.cpp, and the
+        // `role_rows` comment above). The gate is segment 2, NOT the query's rows -- the two are
+        // equal on this model (6144/6144), which is exactly the kind of coincidence that would
+        // hide the mistake until a model where they differ.
         out.query_width = parameters.projection_rows[0];
         out.key_width   = parameters.projection_rows[1];
-        // The fused form has no separate gate: the gate is the query's own rows.
-        out.gate_width  = parameters.projection_rows[0];
+        out.gate_width  = parameters.projection_rows[2];
         out.value_width = parameters.projection_rows[3];
     }
     out.head_dim    = static_cast<std::int32_t>(config.attention->head_dim);
     out.hidden_size = static_cast<std::int32_t>(config.hidden_size);
     if (out.head_dim <= 0 || out.query_width % out.head_dim != 0 ||
         out.key_width % out.head_dim != 0) {
-        throw std::invalid_argument("attention extents are not a whole number of heads");
+        throw std::invalid_argument(
+            "attention extents are not a whole number of heads: head_dim " +
+            std::to_string(out.head_dim) + ", query width " + std::to_string(out.query_width) +
+            ", key width " + std::to_string(out.key_width));
     }
     out.query_heads = out.query_width / out.head_dim;
     out.kv_heads    = out.key_width / out.head_dim;

@@ -64,6 +64,8 @@ void configure_prefix_state_dump(const std::vector<ninfer::TokenId>& prompt,
                                   : std::to_string(reuse_base) + "," + std::to_string(prefill_end);
     ::setenv("NINFER_FLASH_NEXT_STATE_DIR", directory->string().c_str(), 1);
     ::setenv("NINFER_FLASH_NEXT_STATE_FRONTIER", value.c_str(), 1);
+    std::cerr << "prefix state dump: capturing into " << directory->string() << " at frontier(s) "
+              << value << " (reuse base " << reuse_base << ", prefill end " << prefill_end << ")\n";
 }
 
 [[nodiscard]] std::set<std::string> dump_stems(const std::filesystem::path& directory) {

@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
@@ -88,7 +89,8 @@ inline void capture_committed_state(const char* route, const StateImageDevicePoo
     if (directory == nullptr || selected == nullptr || *directory == '\0') { return; }
     // A comma-separated list selects several frontiers in one process: a comparison needs dumps of
     // the same state at more than one point, and one process cannot be re-run at a second frontier.
-    bool wanted = false;
+    const bool frontier_selected = std::strcmp(phase, "commit") == 0;
+    bool wanted                  = !frontier_selected;
     for (std::string_view rest(selected); !rest.empty() && !wanted;) {
         const auto comma              = rest.find(',');
         const std::string_view token  = rest.substr(0, comma);
@@ -109,6 +111,7 @@ inline void capture_committed_state(const char* route, const StateImageDevicePoo
                             {"lane", lane},
                             {"physical_slot", slot},
                             {"frontier", frontier},
+                            {"execution_frontier", frontier},
                             {"ledger", std::vector<std::int32_t>(ledger.begin(), ledger.end())}};
     std::vector<std::string> components;
     const auto dump = [&](const Tensor& tensor, const std::string& suffix,

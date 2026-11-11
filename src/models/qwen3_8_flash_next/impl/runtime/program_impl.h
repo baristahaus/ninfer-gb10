@@ -12035,10 +12035,21 @@ ProgramImplCore::advance_prefill(SequenceState& sequence, RequestControl& reques
         // Copy-identity seam, at the one point a suffix reuse reaches: the Fork is still pending
         // here — this prefill carries the state from the source into the destination — so the
         // source holds the restored copy of the checkpoint, before any chunk has run.
-        if (sequence.state.fork_pending) {
-            qwen3_8_flash_next::detail::capture_committed_state(
-                "prefill", *state_images, selectors.source, sequence.lane,
-                sequence.execution_frontier, sequence.ledger, device.stream(), "materialization");
+        if (std::getenv("NINFER_FLASH_NEXT_STATE_DIR") != nullptr) {
+            // Self-diagnosis for the copy-identity seam: the state this prefill step starts from,
+            // whether a Fork is still pending, and which slot is its source. Printed only when the
+            // maintainer capture is enabled.
+            std::fprintf(stderr,
+                         "prefix state probe: lane %u fork_pending %d execution_frontier %u "
+                         "text_kv_valid %u source %d destination %d\n",
+                         sequence.lane, sequence.state.fork_pending ? 1 : 0,
+                         sequence.execution_frontier, sequence.text_kv_valid, selectors.source,
+                         selectors.destination);
+            if (sequence.state.fork_pending) {
+                qwen3_8_flash_next::detail::capture_committed_state(
+                    "prefill", *state_images, selectors.source, sequence.lane,
+                    sequence.text_kv_valid, sequence.ledger, device.stream(), "materialization");
+            }
         }
         Tensor rewrite_capture_hidden;
         Tensor* rewrite_capture_hidden_ptr = nullptr;

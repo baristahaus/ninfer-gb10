@@ -68,10 +68,25 @@ int main() {
     const bool have_artifact = artifact != nullptr && *artifact != '\0';
     int devices                 = 0;
     const cudaError_t count_err = cudaGetDeviceCount(&devices);
-    const bool have_two_devices = count_err == cudaSuccess && devices >= 2;
-    if (!have_artifact || !have_two_devices) {
-        std::cerr << "SKIP: the two-GPU acceptance case needs two CUDA devices and a 27B artifact"
-                  << " (devices: "
+    const bool have_devices     = count_err == cudaSuccess && devices >= 1;
+
+    // Single-arm mode, for the lab this test cannot run in: nowhere has one host where the 27B fits
+    // at BOTH widths (hephaestus has 2x16 GB and width 1 needs 20.4 GB; trueno has one 32 GB 5090
+    // where width 2 cannot run; twofour has 121 GiB unified but one device). `NINFER_TP2_ARM=1` runs
+    // only the reference and prints its tokens; `=2` runs only the sharded arm. The two lists are
+    // then compared across machines, which catches every defect in the model math, the sharding or
+    // the collective -- and cannot catch one that depends on host state, which is stated rather than
+    // hidden.
+    //
+    // THE DEVICE REQUIREMENT FOLLOWS THE ARM. The reference arm runs on ONE device by definition, so
+    // requiring two would skip it on exactly the host the arm mode exists for; the sharded arm and
+    // the two-arm comparison both need two.
+    const char* arm_env = std::getenv("NINFER_TP2_ARM");
+    const int arm_width = arm_env != nullptr ? std::atoi(arm_env) : 0;
+    const int needed    = arm_env != nullptr && arm_width <= 1 ? 1 : 2;
+    if (!have_artifact || !have_devices || devices < needed) {
+        std::cerr << "SKIP: this arm needs " << needed << " CUDA device"
+                  << (needed == 1 ? "" : "s") << " and a 27B artifact (devices: "
                   << (count_err == cudaSuccess ? std::to_string(devices)
                                                : std::string("unavailable"))
                   << ", NINFER_TEST_ARTIFACT: " << (have_artifact ? "set" : "not set") << ")\n";
@@ -80,12 +95,6 @@ int main() {
 
     const std::vector<ninfer::TokenId> prompt{9707, 11, 1879, 13, 5765, 374};
 
-    // Single-arm mode, for the lab this test cannot run in: nowhere has one host where the 27B fits
-    // at BOTH widths (hephaestus has 2x16 GB and width 1 needs 20.4 GB; twofour has 121 GiB unified
-    // but one device). `NINFER_TP2_ARM=1` runs only the reference and prints its tokens;
-    // `=2` runs only the sharded arm. The two lists are then compared across machines, which
-    // catches every defect in the model math, the sharding or the collective -- and cannot catch one
-    // that depends on host state, which is stated rather than hidden.
     if (const char* arm = std::getenv("NINFER_TP2_ARM")) {
         const int width = std::atoi(arm);
         std::vector<ninfer::TokenId> tokens;

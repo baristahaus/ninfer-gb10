@@ -123,8 +123,20 @@ resolve_group_kv_capacity(const KvCapacityPolicy& policy,
     for (std::size_t index = 0; index < offers.size(); ++index) {
         const auto& offer = offers[index];
         const auto resolved = offer.curve.resolved_tokens(pages);
-        auto local = resolve_kv_capacity(KvCapacityPolicy::explicit_capacity(resolved), offer.curve,
-                                         budgets[index]);
+        KvCapacityResolution local;
+        try {
+            local = resolve_kv_capacity(KvCapacityPolicy::explicit_capacity(resolved), offer.curve,
+                                        budgets[index]);
+        } catch (const std::invalid_argument& error) {
+            // Name the rank and both numbers: the group's capacity and what this rank can hold.
+            // Without them the caller learns only that some rank does not fit.
+            throw std::invalid_argument(
+                "rank " + std::to_string(index) + " cannot hold the group's KV capacity of " +
+                std::to_string(resolved) + " tokens: it has " + std::to_string(budgets[index]) +
+                " bytes available for runtime capacity and needs " +
+                std::to_string(offer.curve.reservation_bytes(pages)) + " bytes (" + error.what() +
+                ")");
+        }
         local.mode = policy.mode;
         local.automatic_headroom_bytes = policy.automatic_headroom_bytes;
         result.push_back(local);

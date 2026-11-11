@@ -14,11 +14,13 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <map>
 #include <optional>
 #include <stdexcept>
@@ -208,6 +210,270 @@ struct KVPageDumpComparison {
     const char* boundary             = "not compared";
 };
 
+// Per-plane classification of the first differing column range. A first differing column only
+// locates a fault; it cannot distinguish an unwritten (zero) region from a region written by a
+// different numerical route. The classification accumulates over the DIFFERING values inside the
+// range: whether either side is entirely zero, whether every differing value is zero on one side,
+// the largest absolute difference, and the mean absolute magnitude of each side. It also keeps the
+// all-zero test over the whole range, because an all-zero pattern is a property of the region, not
+// only of the elements that happened to differ.
+struct KVPlaneClassification {
+    std::size_t plane                    = 0;
+    DType dtype                          = DType::BF16;
+    const char* domain                   = "value";
+    std::size_t values                   = 0;
+    std::size_t differing_values         = 0;
+    std::size_t finite_diffs             = 0;
+    std::size_t nonfinite_current        = 0;
+    std::size_t nonfinite_previous       = 0;
+    std::size_t nonfinite_diffs          = 0;
+    bool current_all_zero                = true;
+    bool previous_all_zero               = true;
+    bool current_diff_zero               = true;
+    bool previous_diff_zero              = true;
+    std::uint32_t first_differing_column = 0;
+    std::uint32_t last_differing_column  = 0;
+    double max_abs_diff                  = 0.0;
+    double max_abs_current               = 0.0;
+    double max_abs_previous              = 0.0;
+    double sum_abs_current_diff          = 0.0;
+    double sum_abs_previous_diff         = 0.0;
+    double sum_abs_current_range         = 0.0;
+    double sum_abs_previous_range        = 0.0;
+
+    [[nodiscard]] double mean_abs_current_diff() const {
+        return finite_diffs == 0 ? std::numeric_limits<double>::quiet_NaN()
+                                 : sum_abs_current_diff / static_cast<double>(finite_diffs);
+    }
+
+    [[nodiscard]] double mean_abs_previous_diff() const {
+        return finite_diffs == 0 ? std::numeric_limits<double>::quiet_NaN()
+                                 : sum_abs_previous_diff / static_cast<double>(finite_diffs);
+    }
+
+    [[nodiscard]] double mean_abs_current_range() const {
+        const std::size_t finite = values - nonfinite_current;
+        return finite == 0 ? std::numeric_limits<double>::quiet_NaN()
+                           : sum_abs_current_range / static_cast<double>(finite);
+    }
+
+    [[nodiscard]] double mean_abs_previous_range() const {
+        const std::size_t finite = values - nonfinite_previous;
+        return finite == 0 ? std::numeric_limits<double>::quiet_NaN()
+                           : sum_abs_previous_range / static_cast<double>(finite);
+    }
+};
+
+inline const char* kv_plane_dtype_name(DType dtype) {
+    switch (dtype) {
+    case DType::BF16:
+        return "bf16";
+    case DType::FP16:
+        return "fp16";
+    case DType::FP32:
+        return "fp32";
+    case DType::FP8_E4M3FN:
+        return "fp8_e4m3fn";
+    case DType::I8:
+        return "i8";
+    case DType::U8:
+        return "u8";
+    case DType::I32:
+        return "i32";
+    case DType::U32:
+        return "u32";
+    case DType::I64:
+        return "i64";
+    case DType::U64:
+        return "u64";
+    }
+    return "unknown";
+}
+
+// "value" means the absolute numbers are decoded floating-point values. "code" means the plane is
+// an integer code (or a packed code) and the reported magnitudes are code differences, not model
+// values; the domain field on every line makes that distinction explicit.
+inline const char* kv_plane_domain(DType dtype) {
+    switch (dtype) {
+    case DType::BF16:
+    case DType::FP16:
+    case DType::FP32:
+    case DType::FP8_E4M3FN:
+        return "value";
+    default:
+        return "code";
+    }
+}
+
+inline double kv_plane_decode(DType dtype, const std::byte* bytes) {
+    switch (dtype) {
+    case DType::BF16: {
+        std::uint16_t bits = 0;
+        std::memcpy(&bits, bytes, sizeof(bits));
+        const std::uint32_t wide = static_cast<std::uint32_t>(bits) << 16;
+        float value              = 0.0f;
+        std::memcpy(&value, &wide, sizeof(value));
+        return static_cast<double>(value);
+    }
+    case DType::FP16: {
+        std::uint16_t bits = 0;
+        std::memcpy(&bits, bytes, sizeof(bits));
+        const std::uint32_t sign     = (bits >> 15) & 1U;
+        const std::uint32_t exponent = (bits >> 10) & 0x1fU;
+        const std::uint32_t mantissa = bits & 0x3ffU;
+        double value                 = 0.0;
+        if (exponent == 0) {
+            value = std::ldexp(static_cast<double>(mantissa), -24);
+        } else if (exponent == 0x1fU) {
+            value = mantissa == 0 ? std::numeric_limits<double>::infinity()
+                                  : std::numeric_limits<double>::quiet_NaN();
+        } else {
+            value =
+                std::ldexp(static_cast<double>(mantissa | 0x400U), static_cast<int>(exponent) - 25);
+        }
+        return sign != 0 ? -value : value;
+    }
+    case DType::FP32: {
+        float value = 0.0f;
+        std::memcpy(&value, bytes, sizeof(value));
+        return static_cast<double>(value);
+    }
+    case DType::FP8_E4M3FN: {
+        const std::uint8_t bits      = *reinterpret_cast<const std::uint8_t*>(bytes);
+        const std::uint32_t sign     = (bits >> 7) & 1U;
+        const std::uint32_t exponent = (bits >> 3) & 0xfU;
+        const std::uint32_t mantissa = bits & 0x7U;
+        double value                 = 0.0;
+        if (exponent == 0) {
+            value = std::ldexp(static_cast<double>(mantissa), -9);
+        } else if (exponent == 0xfU && mantissa == 0x7U) {
+            value = std::numeric_limits<double>::quiet_NaN();
+        } else {
+            value =
+                std::ldexp(static_cast<double>(mantissa | 0x8U), static_cast<int>(exponent) - 10);
+        }
+        return sign != 0 ? -value : value;
+    }
+    case DType::I8: {
+        std::int8_t value = 0;
+        std::memcpy(&value, bytes, sizeof(value));
+        return static_cast<double>(value);
+    }
+    case DType::U8:
+        return static_cast<double>(*reinterpret_cast<const std::uint8_t*>(bytes));
+    case DType::I32: {
+        std::int32_t value = 0;
+        std::memcpy(&value, bytes, sizeof(value));
+        return static_cast<double>(value);
+    }
+    case DType::U32: {
+        std::uint32_t value = 0;
+        std::memcpy(&value, bytes, sizeof(value));
+        return static_cast<double>(value);
+    }
+    case DType::I64: {
+        std::int64_t value = 0;
+        std::memcpy(&value, bytes, sizeof(value));
+        return static_cast<double>(value);
+    }
+    case DType::U64: {
+        std::uint64_t value = 0;
+        std::memcpy(&value, bytes, sizeof(value));
+        return static_cast<double>(value);
+    }
+    }
+    throw std::logic_error("Flash-Next KV page dump cannot decode an unknown plane dtype");
+}
+
+inline const char* kv_zero_pattern(const KVPlaneClassification& classification) {
+    if (classification.current_all_zero && classification.previous_all_zero) { return "both"; }
+    if (classification.current_all_zero) { return "current"; }
+    if (classification.previous_all_zero) { return "previous"; }
+    return "none";
+}
+
+inline const char* kv_diff_zero_side(const KVPlaneClassification& classification) {
+    if (classification.differing_values == 0) { return "none"; }
+    if (classification.current_diff_zero && classification.previous_diff_zero) { return "both"; }
+    if (classification.current_diff_zero) { return "current"; }
+    if (classification.previous_diff_zero) { return "previous"; }
+    return "none";
+}
+
+// Walk one plane over rows whose token span intersects [first_column, end_column). Each row is
+// compared element by element; the differing elements feed the difference statistics while every
+// element feeds the all-zero pattern. Rows are the comparison unit because a four-token row packs
+// four original tokens into one leading span, and the dump cannot split that span without the
+// plane's private row layout.
+inline KVPlaneClassification
+classify_kv_plane_range(const HostKVPageLayout& layout, std::size_t plane_index,
+                        const std::byte* current, const std::byte* previous,
+                        std::uint32_t first_column, std::uint32_t end_column) {
+    const HostKVPlaneLayout& host_plane = layout.planes[plane_index];
+    const KVPlaneGeometry& plane        = layout.geometry.planes[plane_index];
+    const std::size_t element_size      = dtype_size(plane.dtype);
+    const std::size_t element_bytes = static_cast<std::size_t>(plane.leading_extent) * element_size;
+    const std::uint32_t rows        = layout.geometry.page_tokens / plane.tokens_per_row;
+    KVPlaneClassification out;
+    out.plane                  = plane_index;
+    out.dtype                  = plane.dtype;
+    out.domain                 = kv_plane_domain(plane.dtype);
+    bool first_difference_seen = false;
+    for (std::uint32_t row = 0; row < rows; ++row) {
+        const std::uint32_t column = row * plane.tokens_per_row;
+        if (column + plane.tokens_per_row <= first_column) { continue; }
+        if (column >= end_column) { break; }
+        for (std::int32_t head = 0; head < plane.head_extent; ++head) {
+            const std::size_t base =
+                host_plane.offset + static_cast<std::size_t>(head) * host_plane.head_payload_bytes +
+                static_cast<std::size_t>(row) * element_bytes;
+            for (std::int32_t element = 0; element < plane.leading_extent; ++element) {
+                const std::size_t offset = base + static_cast<std::size_t>(element) * element_size;
+                const double current_value  = kv_plane_decode(plane.dtype, current + offset);
+                const double previous_value = kv_plane_decode(plane.dtype, previous + offset);
+                out.values += 1;
+                out.current_all_zero  = out.current_all_zero && current_value == 0.0;
+                out.previous_all_zero = out.previous_all_zero && previous_value == 0.0;
+                if (std::isfinite(current_value)) {
+                    out.sum_abs_current_range += std::fabs(current_value);
+                } else {
+                    out.nonfinite_current += 1;
+                }
+                if (std::isfinite(previous_value)) {
+                    out.sum_abs_previous_range += std::fabs(previous_value);
+                } else {
+                    out.nonfinite_previous += 1;
+                }
+                if (std::memcmp(current + offset, previous + offset, element_size) == 0) {
+                    continue;
+                }
+                out.differing_values += 1;
+                out.current_diff_zero  = out.current_diff_zero && current_value == 0.0;
+                out.previous_diff_zero = out.previous_diff_zero && previous_value == 0.0;
+                if (!first_difference_seen) {
+                    out.first_differing_column = column;
+                    first_difference_seen      = true;
+                }
+                out.last_differing_column = column + plane.tokens_per_row - 1U;
+                if (std::isfinite(current_value) && std::isfinite(previous_value)) {
+                    out.finite_diffs += 1;
+                    out.sum_abs_current_diff += std::fabs(current_value);
+                    out.sum_abs_previous_diff += std::fabs(previous_value);
+                    out.max_abs_current = std::max(out.max_abs_current, std::fabs(current_value));
+                    out.max_abs_previous =
+                        std::max(out.max_abs_previous, std::fabs(previous_value));
+                    out.max_abs_diff =
+                        std::max(out.max_abs_diff, std::fabs(current_value - previous_value));
+                } else {
+                    out.nonfinite_diffs += 1;
+                    out.max_abs_diff = std::numeric_limits<double>::infinity();
+                }
+            }
+        }
+    }
+    return out;
+}
+
 // Maintainer-only KV write-target probe. The page a KV append writes is a DEVICE fact: the kernel
 // resolves it from the execution-table entry for the token's position, not from the host
 // membership the logical store keeps. A copy-on-write branch that publishes the host membership
@@ -317,6 +583,14 @@ inline void capture_prefix_kv_page(const char* directory, const DeviceKVPagePool
     }
 
     KVPageDumpComparison comparison;
+    std::vector<KVPlaneClassification> classifications;
+    std::uint32_t classify_begin        = 0;
+    std::uint32_t classify_end          = 0;
+    const char* classify_basis          = "none";
+    std::size_t differing_planes        = 0;
+    std::size_t differing_values        = 0;
+    std::uint32_t last_differing_column = 0;
+    bool classified                     = false;
     auto& history = run_history[rank_index][std::make_pair(frontier, logical_page)];
     // A phase snapshot is never paired: its purpose is to compare ONE run's prefill seam against
     // the same run's decode seam, and the paired-run history is keyed by (frontier, page) alone.
@@ -385,12 +659,42 @@ inline void capture_prefix_kv_page(const char* directory, const DeviceKVPagePool
                 }
                 comparison.first_global_token =
                     logical_page * layout.geometry.page_tokens + comparison.first_column;
-                comparison.boundary =
-                    comparison.first_global_token < frontier
-                        ? "inside the prefix (N < frontier)"
-                        : comparison.first_global_token == frontier
-                              ? "at the boundary (N == frontier)"
-                              : "beyond the prefix (N > frontier)";
+                comparison.boundary = comparison.first_global_token < frontier
+                                          ? "inside the prefix (N < frontier)"
+                                      : comparison.first_global_token == frontier
+                                          ? "at the boundary (N == frontier)"
+                                          : "beyond the prefix (N > frontier)";
+                // Classify the region the page claims is committed, starting at the first
+                // differing column. A first difference at or beyond the committed count is
+                // classified over the rest of the page instead, and the basis field says so.
+                const std::uint32_t page_tokens = layout.geometry.page_tokens;
+                const std::uint32_t committed =
+                    committed_columns > 0 ? std::min(committed_columns, page_tokens) : page_tokens;
+                classify_begin = comparison.first_column;
+                if (classify_begin < committed) {
+                    classify_end   = committed;
+                    classify_basis = "committed";
+                } else {
+                    classify_end   = page_tokens;
+                    classify_basis = "page";
+                }
+                if (classify_end > classify_begin) {
+                    classifications.reserve(layout.planes.size());
+                    for (std::size_t plane_index = 0; plane_index < layout.planes.size();
+                         ++plane_index) {
+                        KVPlaneClassification plane_classification =
+                            classify_kv_plane_range(layout, plane_index, view.data(),
+                                                    previous.data(), classify_begin, classify_end);
+                        if (plane_classification.differing_values != 0) {
+                            differing_planes += 1;
+                            differing_values += plane_classification.differing_values;
+                            last_differing_column = std::max(
+                                last_differing_column, plane_classification.last_differing_column);
+                        }
+                        classifications.push_back(plane_classification);
+                    }
+                    classified = true;
+                }
             }
         } else {
             comparison.compared = false;
@@ -443,11 +747,43 @@ inline void capture_prefix_kv_page(const char* directory, const DeviceKVPagePool
                          serial, frontier, logical_page);
         }
     }
+    if (classified) {
+        // The header names the range and the plane census; each following line is one plane's
+        // verdict. Only planes with a differing value print in full, so a page whose K plane
+        // differs and whose V plane agrees is one line plus a census, not two dozen empty rows.
+        std::fprintf(stderr,
+                     "prefix kv dump: classify serial %d vs %d frontier %u page %u columns %u..%u "
+                     "basis=%s committed=%u differing_planes=%zu/%zu differing_values=%zu "
+                     "last_differing_column=%u\n",
+                     serial, comparison.previous_serial, frontier, logical_page, classify_begin,
+                     classify_end - 1U, classify_basis, committed_columns, differing_planes,
+                     layout.planes.size(), differing_values, last_differing_column);
+        for (const KVPlaneClassification& plane_classification : classifications) {
+            if (plane_classification.differing_values == 0) { continue; }
+            std::fprintf(
+                stderr,
+                "prefix kv dump: classify serial %d vs %d frontier %u page %u plane %zu/%zu %s "
+                "%s n=%zu diffs=%zu max_abs_diff=%.9g max_abs_current=%.9g "
+                "max_abs_previous=%.9g mean_abs_current_diff=%.9g "
+                "mean_abs_previous_diff=%.9g zero_pattern=%s diff_zero_side=%s "
+                "nonfinite=%zu/%zu/%zu\n",
+                serial, comparison.previous_serial, frontier, logical_page,
+                plane_classification.plane, layout.planes.size(),
+                kv_plane_dtype_name(plane_classification.dtype), plane_classification.domain,
+                plane_classification.values, plane_classification.differing_values,
+                plane_classification.max_abs_diff, plane_classification.max_abs_current,
+                plane_classification.max_abs_previous, plane_classification.mean_abs_current_diff(),
+                plane_classification.mean_abs_previous_diff(),
+                kv_zero_pattern(plane_classification), kv_diff_zero_side(plane_classification),
+                plane_classification.nonfinite_current, plane_classification.nonfinite_previous,
+                plane_classification.nonfinite_diffs);
+        }
+    }
 
     nlohmann::json planes = nlohmann::json::array();
     for (std::size_t plane_index = 0; plane_index < layout.planes.size(); ++plane_index) {
         const HostKVPlaneLayout& host_plane = layout.planes[plane_index];
-        const KVPlaneGeometry& plane         = layout.geometry.planes[plane_index];
+        const KVPlaneGeometry& plane        = layout.geometry.planes[plane_index];
         planes.push_back(nlohmann::json{
             {"index", plane_index},
             {"dtype", static_cast<int>(plane.dtype)},
@@ -471,6 +807,47 @@ inline void capture_prefix_kv_page(const char* directory, const DeviceKVPagePool
         {"byte_in_row", comparison.byte_in_row},
         {"boundary", comparison.boundary},
     };
+    nlohmann::json classification_planes = nlohmann::json::array();
+    for (const KVPlaneClassification& plane_classification : classifications) {
+        classification_planes.push_back(nlohmann::json{
+            {"plane", plane_classification.plane},
+            {"dtype", kv_plane_dtype_name(plane_classification.dtype)},
+            {"domain", plane_classification.domain},
+            {"values", plane_classification.values},
+            {"differing_values", plane_classification.differing_values},
+            {"finite_diffs", plane_classification.finite_diffs},
+            {"nonfinite_current", plane_classification.nonfinite_current},
+            {"nonfinite_previous", plane_classification.nonfinite_previous},
+            {"nonfinite_diffs", plane_classification.nonfinite_diffs},
+            {"current_all_zero", plane_classification.current_all_zero},
+            {"previous_all_zero", plane_classification.previous_all_zero},
+            {"current_diff_zero", plane_classification.current_diff_zero},
+            {"previous_diff_zero", plane_classification.previous_diff_zero},
+            {"zero_pattern", kv_zero_pattern(plane_classification)},
+            {"diff_zero_side", kv_diff_zero_side(plane_classification)},
+            {"first_differing_column", plane_classification.first_differing_column},
+            {"last_differing_column", plane_classification.last_differing_column},
+            {"max_abs_diff", plane_classification.max_abs_diff},
+            {"max_abs_current", plane_classification.max_abs_current},
+            {"max_abs_previous", plane_classification.max_abs_previous},
+            {"mean_abs_current_diff", plane_classification.mean_abs_current_diff()},
+            {"mean_abs_previous_diff", plane_classification.mean_abs_previous_diff()},
+            {"mean_abs_current_range", plane_classification.mean_abs_current_range()},
+            {"mean_abs_previous_range", plane_classification.mean_abs_previous_range()},
+        });
+    }
+    const nlohmann::json classification_json{
+        {"classified", classified},
+        {"begin_column", classify_begin},
+        {"end_column", classify_end},
+        {"basis", classify_basis},
+        {"committed_columns", committed_columns},
+        {"differing_planes", differing_planes},
+        {"plane_count", layout.planes.size()},
+        {"differing_values", differing_values},
+        {"last_differing_column", last_differing_column},
+        {"planes", classification_planes},
+    };
     const nlohmann::json metadata{
         {"serial", serial},
         {"phase", phase == nullptr ? "decode" : phase},
@@ -484,6 +861,7 @@ inline void capture_prefix_kv_page(const char* directory, const DeviceKVPagePool
         {"page_stride", layout.page_stride},
         {"planes", planes},
         {"comparison", comparison_json},
+        {"classification", classification_json},
     };
     std::ofstream metadata_file(stem + ".json");
     metadata_file << metadata;

@@ -14,6 +14,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -114,14 +115,34 @@ struct EncodedChat {
     std::vector<std::optional<std::uint32_t>> cache_boundaries;
 };
 
-EncodedChat
-encode_rendered_chat(const Tokenizer& tokenizer, const RenderedChat& rendered,
-                     std::size_t maximum_tokens = std::numeric_limits<std::size_t>::max());
+// Media placeholder byte strings are common Qwen mechanics; the family maps them to token ids.
+inline constexpr std::string_view kImagePad = "<|image_pad|>";
+inline constexpr std::string_view kVideoPad = "<|video_pad|>";
 
+[[nodiscard]] inline std::uint32_t to_token_frontier(std::size_t frontier, std::string_view kind) {
+    if (frontier > std::numeric_limits<std::uint32_t>::max()) {
+        throw std::overflow_error(std::string(kind) + " token frontier exceeds uint32");
+    }
+    return static_cast<std::uint32_t>(frontier);
+}
+
+// The family supplies its own message, render, prepared-prompt and media-cache types. The
+// render/encode pipeline, media preprocessing, cache boundaries and position construction are
+// common mechanics and live here once.
+template <class Family>
 class Processor {
 public:
+    using Tokenizer            = typename Family::Tokenizer;
+    using CompiledChatTemplate = typename Family::CompiledChatTemplate;
+    using MediaCache           = typename Family::MediaPreprocessCache;
+    using ChatMessage          = typename Family::ChatMessage;
+    using ChatRenderOptions    = typename Family::ChatRenderOptions;
+    using ProcessedInput       = typename Family::ProcessedInput;
+    using EncodedChat          = typename Family::EncodedChat;
+    using RenderedChat         = typename Family::RenderedChat;
+
     Processor(const Tokenizer& tokenizer, const CompiledChatTemplate& chat_template,
-              ProcessorOptions options, std::shared_ptr<MediaPreprocessCache> media_cache);
+              ProcessorOptions options, std::shared_ptr<MediaCache> media_cache);
 
     [[nodiscard]] std::size_t count_tokens(std::vector<ChatMessage> messages,
                                            ChatRenderOptions render_options  = {},
@@ -132,11 +153,15 @@ public:
             const PreparationControl& control = {},
             std::size_t maximum_prompt_tokens = std::numeric_limits<std::size_t>::max()) const;
 
+    static EncodedChat
+    encode_rendered_chat(const Tokenizer& tokenizer, const RenderedChat& rendered,
+                         std::size_t maximum_tokens = std::numeric_limits<std::size_t>::max());
+
 private:
     const Tokenizer& tokenizer_;
     const CompiledChatTemplate& chat_template_;
     ProcessorOptions options_;
-    std::shared_ptr<MediaPreprocessCache> media_cache_;
+    std::shared_ptr<MediaCache> media_cache_;
 };
 
 } // namespace ninfer::models::qwen::frontend

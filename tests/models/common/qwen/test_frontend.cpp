@@ -6,6 +6,7 @@
 #include "models/common/qwen/frontend/digest.h"
 #include "models/common/qwen/frontend/media_cache.h"
 #include "models/common/qwen/frontend/processor.h"
+#include "models/common/qwen/frontend/processor_family.h"
 #include "models/common/qwen/frontend/test_access.h"
 #include "models/common/qwen/frontend/tokenizer.h"
 #include "text/unicode.h"
@@ -68,6 +69,7 @@ Frontend make_frontend(const FrontendResources& source, bool vision = true) {
 
 using PublishedOutput = ninfer::models::qwen::PublishedOutput;
 namespace fi          = ninfer::models::qwen::frontend;
+using Processor       = fi::Processor<fi::CommonProcessorFamily>;
 
 constexpr std::string_view kThinkingControlGuidance =
     "\n\n Considering the limited time by the user, I have to give the solution based on the "
@@ -657,7 +659,7 @@ int test_rendered_special_tokens() {
             const auto rendered = compiled.render(
                 {chat_message(ninfer::ChatRole::User, "question"), chat_message(role, quoted)},
                 {.reasoning_effort = ninfer::ReasoningEffort::Medium});
-            const auto encoded = fi::encode_rendered_chat(tokenizer, rendered);
+            const auto encoded = Processor::encode_rendered_chat(tokenizer, rendered);
             const auto count   = [&](int id) {
                 return std::count(encoded.input_ids.begin(), encoded.input_ids.end(), id);
             };
@@ -681,7 +683,8 @@ int test_rendered_special_tokens() {
     fi::ChatRenderOptions options;
     options.tool_jsons                = {R"({"function":{"description":"<|video_pad|>"}})"};
     options.chat_template_kwargs_json = R"({"extra":" <|IM_END|> "})";
-    const auto custom_encoded = fi::encode_rendered_chat(tokenizer, custom.render({call}, options));
+    const auto custom_encoded =
+        Processor::encode_rendered_chat(tokenizer, custom.render({call}, options));
     failures += check(
         std::count(custom_encoded.input_ids.begin(), custom_encoded.input_ids.end(), 248046) == 1 &&
             std::none_of(custom_encoded.input_ids.begin(), custom_encoded.input_ids.end(),
@@ -914,7 +917,7 @@ int test_assistant_continuation() {
         {chat_message(ninfer::ChatRole::User, "question"),
               chat_message(ninfer::ChatRole::Assistant, "<think>quoted <|im_end|><|image_pad|>")},
         options);
-    const auto encoded = fi::encode_rendered_chat(fixture_tokenizer(), literal);
+    const auto encoded = Processor::encode_rendered_chat(fixture_tokenizer(), literal);
     failures +=
         check(!literal.starts_in_reasoning && literal.text.ends_with("<|image_pad|>") &&
                   std::count(encoded.input_ids.begin(), encoded.input_ids.end(), 248046) == 1 &&
@@ -1060,7 +1063,7 @@ int test_adjacent_tool_message_boundary() {
         render_chat({chat_message(ninfer::ChatRole::User, "weather?"), std::move(assistant),
                      chat_message(ninfer::ChatRole::Tool, "sunny"),
                      chat_message(ninfer::ChatRole::Tool, "20C")});
-    const fi::EncodedChat encoded = fi::encode_rendered_chat(fixture_tokenizer(), rendered);
+    const fi::EncodedChat encoded = Processor::encode_rendered_chat(fixture_tokenizer(), rendered);
     return check(rendered.message_boundaries.size() == 5 && rendered.message_boundaries[3] &&
                      encoded.message_boundaries.size() == 5 && encoded.message_boundaries[3] &&
                      encoded.message_boundaries[4] &&
@@ -1086,8 +1089,8 @@ int test_literal_cache_boundary() {
     auto next = history;
     next.push_back(chat_message(ninfer::ChatRole::Developer, "new diagnostics"));
     const auto before =
-        fi::encode_rendered_chat(fixture_tokenizer(), render_chat(history, options));
-    const auto after = fi::encode_rendered_chat(fixture_tokenizer(), render_chat(next, options));
+        Processor::encode_rendered_chat(fixture_tokenizer(), render_chat(history, options));
+    const auto after = Processor::encode_rendered_chat(fixture_tokenizer(), render_chat(next, options));
     failures += check(
         after.input_ids.size() > before.input_ids.size() &&
             std::equal(before.input_ids.begin(), before.input_ids.end(), after.input_ids.begin()),
@@ -1734,7 +1737,7 @@ int test_media_admission_uses_aggregate_resources(const Frontend& frontend) {
     options.max_encoded_media_bytes = bytes.size() * 2 - 1;
     auto cache = std::make_shared<fi::MediaPreprocessCache>(ninfer::kDefaultMediaCacheBytes,
                                                             ninfer::kDefaultMediaLiveBytes);
-    fi::Processor processor(fixture_tokenizer(), thinking_toggle_template(), options,
+    Processor processor(fixture_tokenizer(), thinking_toggle_template(), options,
                             std::move(cache));
     fi::ChatMessage internal_message;
     internal_message.role = ninfer::ChatRole::User;

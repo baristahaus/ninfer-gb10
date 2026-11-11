@@ -1,6 +1,9 @@
 #pragma once
 
-#include "models/qwen3_8_flash_next/impl/frontend/processor.h"
+#include "models/qwen3_8_flash_next/impl/frontend/media_types.h"
+
+#include <ninfer/models/qwen3_8_flash_next/prepared_prompt.h>
+#include <ninfer/types.h>
 
 #include <array>
 #include <cstddef>

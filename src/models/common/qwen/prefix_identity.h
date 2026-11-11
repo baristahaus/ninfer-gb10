@@ -9,16 +9,25 @@
 #include <cstdint>
 #include <optional>
 #include <span>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace ninfer::models::qwen {
 
-class ResidentPrefixIdentity {
+template <class Prompt>
+using PromptVisionItems = std::remove_reference_t<decltype(std::declval<Prompt&>().vision_items)>;
+
+template <class Prompt>
+using PromptVisionItem = typename PromptVisionItems<Prompt>::value_type;
+
+template <class Prompt>
+class ResidentPrefixIdentityT {
 public:
     void reserve(std::size_t tokens);
     void clear() noexcept;
-    void assign(const PreparedPromptData& prompt);
-    void swap(ResidentPrefixIdentity& other) noexcept;
+    void assign(const Prompt& prompt);
+    void swap(ResidentPrefixIdentityT& other) noexcept;
     void prepare_generated(std::size_t count, std::int32_t rope_delta,
                            std::optional<std::uint32_t> execution_split_after = std::nullopt);
     void append_generated(std::size_t count, std::int32_t rope_delta,
@@ -31,14 +40,14 @@ public:
         return rewrite_execution_frontiers_;
     }
 
-    [[nodiscard]] bool matches(const PreparedPromptData& prompt, std::size_t count) const;
-    [[nodiscard]] bool equals(const ResidentPrefixIdentity& other) const;
-    [[nodiscard]] bool prefix_equals(const ResidentPrefixIdentity& other, std::size_t count) const;
+    [[nodiscard]] bool matches(const Prompt& prompt, std::size_t count) const;
+    [[nodiscard]] bool equals(const ResidentPrefixIdentityT& other) const;
+    [[nodiscard]] bool prefix_equals(const ResidentPrefixIdentityT& other, std::size_t count) const;
 
 private:
     std::vector<std::uint8_t> token_types_;
     std::array<std::vector<std::int32_t>, 3> positions_;
-    std::vector<VisionItem> vision_items_;
+    std::vector<PromptVisionItem<Prompt>> vision_items_;
     std::vector<std::uint32_t> rewrite_execution_frontiers_;
     // Exact proof for the initial text run: type zero and position[axis][i] = origin[axis] + i.
     std::size_t regular_prefix_ = 0;
@@ -48,12 +57,13 @@ private:
 // One rolling digest per token frontier. This is only a content shortlist: exact token and
 // ResidentPrefixIdentity comparison remains authoritative for reuse. Keeping it separate from the
 // exact identity avoids retaining hash-only state in immutable capture backings.
-class PrefixShortlistDigests {
+template <class Prompt>
+class PrefixShortlistDigestsT {
 public:
     void reserve(std::size_t tokens);
     void clear() noexcept;
-    void assign(const PreparedPromptData& prompt);
-    void swap(PrefixShortlistDigests& other) noexcept;
+    void assign(const Prompt& prompt);
+    void swap(PrefixShortlistDigestsT& other) noexcept;
     void prepare_generated(std::size_t count, std::int32_t rope_delta,
                            std::optional<std::uint32_t> execution_split_after = std::nullopt);
     void append_generated(std::span<const TokenId> tokens, std::int32_t rope_delta,
@@ -72,21 +82,27 @@ private:
 
 // A borrowed view of one complete immutable recovery point. Backing identity is a fast proof
 // only after the frontier, domain and digest checks; it never equates physical State/KV owners.
-struct RecoveryIdentityView {
+template <class Prompt>
+struct RecoveryIdentityViewT {
     std::uint32_t frontier;
     std::uint32_t domain;
     std::span<const TokenId> tokens;
-    const ResidentPrefixIdentity& positions;
-    const PrefixShortlistDigests& digests;
+    const ResidentPrefixIdentityT<Prompt>& positions;
+    const PrefixShortlistDigestsT<Prompt>& digests;
     const void* backing;
 };
 
-[[nodiscard]] bool recovery_prefix_matches(const RecoveryIdentityView& earlier,
-                                           const RecoveryIdentityView& later);
+template <class Prompt>
+[[nodiscard]] bool recovery_prefix_matches(const RecoveryIdentityViewT<Prompt>& earlier,
+                                           const RecoveryIdentityViewT<Prompt>& later);
 
-[[nodiscard]] bool prefix_matches(const PreparedPromptData& prompt,
-                                  std::span<const TokenId> resident_tokens,
-                                  const ResidentPrefixIdentity& resident_identity,
+template <class Prompt>
+[[nodiscard]] bool prefix_matches(const Prompt& prompt, std::span<const TokenId> resident_tokens,
+                                  const ResidentPrefixIdentityT<Prompt>& resident_identity,
                                   std::size_t count);
+
+using ResidentPrefixIdentity = ResidentPrefixIdentityT<PreparedPromptData>;
+using PrefixShortlistDigests = PrefixShortlistDigestsT<PreparedPromptData>;
+using RecoveryIdentityView   = RecoveryIdentityViewT<PreparedPromptData>;
 
 } // namespace ninfer::models::qwen

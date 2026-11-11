@@ -60,7 +60,7 @@ void validate_instruction_message(const ChatMessage& message) {
     }
 }
 
-void append_literal_span(std::vector<ByteSpan>& spans, ByteSpan span) {
+void append_literal_span(std::vector<text::ByteSpan>& spans, text::ByteSpan span) {
     if (span.begin == span.end) { return; }
     if (!spans.empty() && spans.back().end == span.begin) {
         spans.back().end = span.end;
@@ -79,7 +79,7 @@ public:
     void append_literal(std::string_view text) {
         const std::size_t begin = fragment_.text.size();
         fragment_.text += text;
-        append_literal_span(fragment_.literal_spans, ByteSpan{begin, fragment_.text.size()});
+        append_literal_span(fragment_.literal_spans, text::ByteSpan{begin, fragment_.text.size()});
     }
 
     void append_media_placeholder(std::string_view text, Modality modality,
@@ -87,7 +87,7 @@ public:
         const std::size_t begin = fragment_.text.size();
         fragment_.text += text;
         fragment_.media_placeholders.push_back(MediaPlaceholderByteSpec{
-            .bytes      = ByteSpan{begin, fragment_.text.size()},
+            .bytes      = text::ByteSpan{begin, fragment_.text.size()},
             .modality   = modality,
             .item_index = item_index,
         });
@@ -96,9 +96,9 @@ public:
     void append(RenderedFragment fragment) {
         const std::size_t offset = fragment_.text.size();
         fragment_.text += fragment.text;
-        for (const ByteSpan span : fragment.literal_spans) {
+        for (const text::ByteSpan span : fragment.literal_spans) {
             append_literal_span(fragment_.literal_spans,
-                                ByteSpan{offset + span.begin, offset + span.end});
+                                text::ByteSpan{offset + span.begin, offset + span.end});
         }
         for (MediaPlaceholderByteSpec placeholder : fragment.media_placeholders) {
             placeholder.bytes.begin += offset;
@@ -139,12 +139,12 @@ RenderedFragment slice_fragment(const RenderedFragment& source, std::size_t begi
     }
     RenderedFragment result;
     result.text = source.text.substr(begin, end - begin);
-    for (const ByteSpan span : source.literal_spans) {
+    for (const text::ByteSpan span : source.literal_spans) {
         const std::size_t clipped_begin = std::max(span.begin, begin);
         const std::size_t clipped_end   = std::min(span.end, end);
         if (clipped_begin < clipped_end) {
             append_literal_span(result.literal_spans,
-                                ByteSpan{clipped_begin - begin, clipped_end - begin});
+                                text::ByteSpan{clipped_begin - begin, clipped_end - begin});
         }
     }
     for (MediaPlaceholderByteSpec placeholder : source.media_placeholders) {
@@ -435,8 +435,6 @@ CompiledChatTemplate CompiledChatTemplate::resolve(std::string_view source) {
     throw std::invalid_argument("unsupported frontend/chat_template.jinja (sha256 " +
                                 sha256_hex(digest) + ")");
 }
-
-
 
 RenderedChat CompiledChatTemplate::render(const std::vector<ChatMessage>& messages,
                                           ChatRenderOptions options) const {

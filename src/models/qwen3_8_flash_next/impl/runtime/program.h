@@ -18,7 +18,7 @@
 #include "models/qwen3_8_flash_next/impl/runtime/host_kv_extent_store.h"
 #include "models/qwen3_8_flash_next/impl/runtime/logical_kv_store.h"
 #include "models/qwen3_8_flash_next/impl/runtime/state_image_store.h"
-#include "models/qwen3_8_flash_next/impl/runtime/prefix_identity.h"
+#include "models/common/qwen/prefix_identity.h"
 #include "models/qwen3_8_flash_next/impl/runtime/resource_projection.h"
 #include "models/qwen3_8_flash_next/impl/runtime/text_context.h"
 #include "models/qwen3_8_flash_next/impl/runtime/vision_context.h"
@@ -69,7 +69,7 @@ enum class RewriteCheckpointDisposition : std::uint8_t {
 
 struct PreparedCaptureBacking {
     std::vector<TokenId> ledger;
-    qwen3_8_flash_next::detail::ResidentPrefixIdentity prefix_identity;
+    qwen::ResidentPrefixIdentityT<PreparedPromptData> prefix_identity;
 };
 
 struct PreparedCaptureIdentity {
@@ -82,7 +82,7 @@ struct PreparedCaptureIdentity {
         return std::span<const TokenId>(backing->ledger).first(shortlist_key.frontier);
     }
 
-    [[nodiscard]] const qwen3_8_flash_next::detail::ResidentPrefixIdentity*
+    [[nodiscard]] const qwen::ResidentPrefixIdentityT<PreparedPromptData>*
     prefix_identity() const noexcept {
         return backing ? &backing->prefix_identity : nullptr;
     }
@@ -194,7 +194,7 @@ struct RequestBasePlanImpl<NINFER_QWEN38_FLASH_NEXT_VARIANT> {
     std::optional<qwen3_8_flash_next::RewriteCheckpointSpec> rewrite_checkpoint;
     std::vector<NINFER_QWEN38_FLASH_NEXT_RUNTIME_NS::CaptureGroup> capture_groups;
     std::vector<NINFER_QWEN38_FLASH_NEXT_RUNTIME_NS::CaptureGroup> shared_candidates;
-    qwen3_8_flash_next::detail::PrefixShortlistDigests prefix_digests;
+    qwen::PrefixShortlistDigestsT<PreparedPromptData> prefix_digests;
     std::uint32_t prefix_identity_tag = 0;
     bool allow_prefix_reuse           = false;
 };
@@ -433,8 +433,8 @@ struct SequenceState {
     std::uint32_t execution_frontier = 0;
     std::uint32_t ledger_frontier    = 0;
     std::vector<TokenId> ledger;
-    qwen3_8_flash_next::detail::ResidentPrefixIdentity prefix_identity;
-    qwen3_8_flash_next::detail::PrefixShortlistDigests prefix_digests;
+    qwen::ResidentPrefixIdentityT<PreparedPromptData> prefix_identity;
+    qwen::PrefixShortlistDigestsT<PreparedPromptData> prefix_digests;
     std::int32_t rope_delta               = 0;
     std::uint32_t text_kv_valid           = 0;
     std::uint32_t mtp_kv_valid            = 0;
@@ -955,8 +955,8 @@ private:
     CudaCompletionEvent context_source_ready_;
     CudaCompletionEvent context_completion_;
     std::vector<TokenId> materialization_ledger_;
-    qwen3_8_flash_next::detail::ResidentPrefixIdentity materialization_identity_;
-    qwen3_8_flash_next::detail::PrefixShortlistDigests materialization_prefix_digests_;
+    qwen::ResidentPrefixIdentityT<PreparedPromptData> materialization_identity_;
+    qwen::PrefixShortlistDigestsT<PreparedPromptData> materialization_prefix_digests_;
 
     struct ActiveCaptureTransaction {
         std::uint64_t id         = 0;

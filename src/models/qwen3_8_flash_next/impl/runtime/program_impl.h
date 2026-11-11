@@ -4404,13 +4404,13 @@ ProgramImplCore::revalidate_materialization(const AdmissionCandidate& plan,
         return runtime::PreflightStatus::InvariantFailure;
     }
     if (source_state != nullptr &&
-        !qwen3_8_flash_next::detail::prefix_matches(
+        !qwen::prefix_matches(
             prompt, source_state->ledger, source_state->prefix_identity, details.reuse_base)) {
         return runtime::PreflightStatus::StalePolicyState;
     }
     if (shared_state != nullptr &&
         (!shared_state->identity || shared_state->identity->prefix_identity() == nullptr ||
-         !qwen3_8_flash_next::detail::prefix_matches(prompt, shared_state->identity->ledger(),
+         !qwen::prefix_matches(prompt, shared_state->identity->ledger(),
                                                      *shared_state->identity->prefix_identity(),
                                                      details.reuse_base))) {
         return runtime::PreflightStatus::StalePolicyState;
@@ -4654,14 +4654,14 @@ ProgramImplCore::reserve_materialization(AdmissionCandidate&& plan, PreparedProm
             throw std::logic_error("materialization source does not match the selected reuse path");
         }
         if (source_state != nullptr &&
-            !qwen3_8_flash_next::detail::prefix_matches(prompt, source_state->ledger,
+            !qwen::prefix_matches(prompt, source_state->ledger,
                                                         source_state->prefix_identity,
                                                         request_plan.reuse_base)) {
             throw std::logic_error("planned resident prefix is no longer reusable");
         }
         if (shared_state != nullptr &&
             (!shared_state->identity || shared_state->identity->prefix_identity() == nullptr ||
-             !qwen3_8_flash_next::detail::prefix_matches(prompt, shared_state->identity->ledger(),
+             !qwen::prefix_matches(prompt, shared_state->identity->ledger(),
                                                          *shared_state->identity->prefix_identity(),
                                                          request_plan.reuse_base))) {
             throw std::logic_error("planned shared prefix is no longer reusable");
@@ -4718,7 +4718,7 @@ ProgramImplCore::reserve_materialization(AdmissionCandidate&& plan, PreparedProm
                 group.frontier > prompt_tokens ||
                 group.identity->shortlist_key.frontier != group.frontier ||
                 group.identity->prefix_identity() == nullptr ||
-                !qwen3_8_flash_next::detail::prefix_matches(prompt, group.identity->ledger(),
+                !qwen::prefix_matches(prompt, group.identity->ledger(),
                                                             *group.identity->prefix_identity(),
                                                             group.frontier)) {
                 throw std::logic_error("planned capture identity is invalid");
@@ -7257,7 +7257,7 @@ bool ProgramImplCore::can_retain_rewrite_checkpoint(const PreparedPromptData& pr
                                                     std::uint32_t reuse_base) const {
     if (!sequence.rewrite_checkpoint.valid || !sequence.rewrite_state ||
         !state_store->valid(*sequence.rewrite_state) ||
-        !qwen3_8_flash_next::detail::prefix_matches(prompt, sequence.ledger,
+        !qwen::prefix_matches(prompt, sequence.ledger,
                                                     sequence.prefix_identity,
                                                     sequence.rewrite_checkpoint.frontier)) {
         return false;

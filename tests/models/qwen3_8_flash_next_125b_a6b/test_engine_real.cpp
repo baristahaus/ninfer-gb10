@@ -373,6 +373,33 @@ ninfer::EngineOptions engine_options(const char* artifact) {
     return options;
 }
 
+void print_tokens(const char* label, const std::vector<ninfer::TokenId>& tokens);
+
+// Prints both streams in full and the first index at which they differ. That index decides which
+// half of the system owns a prefix-reuse defect: a difference at index 0 means the state at the
+// reuse boundary does not hold what a cold prefill of those tokens produces, so the fault is in
+// what the cache stores or the frontier it stores it at; agreement for N tokens and a difference
+// after that means the boundary is right and the reused path computes differently downstream.
+void report_token_divergence(const char* label, const std::vector<ninfer::TokenId>& reused,
+                             const std::vector<ninfer::TokenId>& cold) {
+    std::size_t index = 0;
+    while (index < reused.size() && index < cold.size() && reused[index] == cold[index]) { ++index; }
+    const bool identical = index == reused.size() && index == cold.size();
+    std::cerr << "prefix reuse divergence: " << label << ": reused " << reused.size()
+              << " tokens, cold " << cold.size() << " tokens, first difference at index " << index;
+    if (identical) {
+        std::cerr << " (identical)\n";
+        return;
+    }
+    if (index == reused.size() || index == cold.size()) {
+        std::cerr << " (one stream is a prefix of the other)\n";
+    } else {
+        std::cerr << " (reused " << reused[index] << ", cold " << cold[index] << ")\n";
+    }
+    print_tokens("reused", reused);
+    print_tokens("cold", cold);
+}
+
 const std::vector<ninfer::TokenId>& canonical_prompt() {
     static const std::vector<ninfer::TokenId> prompt{
         248045, 846, 198,  814, 20139,  303, 2250,   2716,  22157, 3069,   279, 12515,  7701, 6105,
@@ -560,6 +587,7 @@ int exercise_mtp_and_prefix(ninfer::Engine& engine,
     }
     const std::uint32_t expected_reuse =
         static_cast<std::uint32_t>(prompt.size() + first.generated_token_ids.size() - 1);
+    report_token_divergence("two tokens", reused.generated_token_ids, cold.generated_token_ids);
     if (reused.reused_prompt_tokens != expected_reuse || reused.generated_token_ids.size() != 2 ||
         cold.reused_prompt_tokens != 0 || cold.generated_token_ids != reused.generated_token_ids) {
         std::cerr << "Flash-Next prefix reuse is incorrect: reused=" << reused.reused_prompt_tokens
@@ -580,6 +608,8 @@ int exercise_mtp_and_prefix(ninfer::Engine& engine,
         engine.generate(engine.prepare_tokens(continuation), greedy_options(16, true));
     const ninfer::GenerationResult cold_long =
         engine.generate(engine.prepare_tokens(continuation), greedy_options(16, false));
+    report_token_divergence("sixteen tokens", reused_long.generated_token_ids,
+                            cold_long.generated_token_ids);
     if (reused_long.reused_prompt_tokens == 0 || cold_long.reused_prompt_tokens != 0 ||
         reused_long.generated_token_ids != cold_long.generated_token_ids) {
         std::cerr << "Flash-Next long prefix reuse diverges: reused="

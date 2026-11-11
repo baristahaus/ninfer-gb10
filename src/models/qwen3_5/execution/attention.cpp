@@ -21,6 +21,33 @@ void require_rope_axes(const Tensor& positions, const RopeConfig& config) {
 
 } // namespace
 
+workspace::AttentionExtents attention_extents(const AttentionParameters& parameters,
+                                             const TextConfig& config) {
+    workspace::AttentionExtents out;
+    if (parameters.role_rows) {
+        const auto& roles = *parameters.role_rows;
+        out.query_width   = roles[0].weight.n;
+        out.key_width     = roles[1].weight.n;
+        out.gate_width    = roles[2].weight.n;
+        out.value_width   = roles[3].weight.n;
+    } else {
+        out.query_width = parameters.projection_rows[0];
+        out.key_width   = parameters.projection_rows[1];
+        // The fused form has no separate gate: the gate is the query's own rows.
+        out.gate_width  = parameters.projection_rows[0];
+        out.value_width = parameters.projection_rows[3];
+    }
+    out.head_dim    = static_cast<std::int32_t>(config.attention->head_dim);
+    out.hidden_size = static_cast<std::int32_t>(config.hidden_size);
+    if (out.head_dim <= 0 || out.query_width % out.head_dim != 0 ||
+        out.key_width % out.head_dim != 0) {
+        throw std::invalid_argument("attention extents are not a whole number of heads");
+    }
+    out.query_heads = out.query_width / out.head_dim;
+    out.kv_heads    = out.key_width / out.head_dim;
+    return out;
+}
+
 std::size_t attention_projection_workspace_bytes(const AttentionProfile& parameters,
                                                  std::int32_t first, std::int32_t last) {
     if (parameters.role_profiles) {

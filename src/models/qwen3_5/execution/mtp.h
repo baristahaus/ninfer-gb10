@@ -1,6 +1,7 @@
 #pragma once
 
 #include "models/qwen3_5/execution/parameters.h"
+#include "models/qwen3_5/execution/workspace.h"
 #include "ninfer/ops/kv_cache_append.h"
 #include "ninfer/ops/softmax_attention.h"
 #include "ninfer/types.h"
@@ -42,6 +43,14 @@ struct MtpInputs {
     Tensor kv_table_rows;
     const Tensor* input_embeddings = nullptr;
 };
+
+// The attention extents this rank holds in the MTP path, read from the prepared projection weights
+// rather than the config. The four role widths follow the same documented order the text path uses,
+// query, key, gate, value: `rows` carries four separate role weights in that order, and
+// `output_rows` is the segmented form's row counts in the same order. head_dim and the residual
+// width are not sharded and come from the config.
+[[nodiscard]] workspace::AttentionExtents
+mtp_attention_extents(const MtpProjectionParameters& projection, const TextConfig& config);
 
 void mtp_forward(MtpExecutionView state, const MtpInputs& inputs,
                  ops::CausalAttentionExecutionEnvelope envelope, Tensor& hidden);

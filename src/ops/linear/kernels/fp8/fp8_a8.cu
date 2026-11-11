@@ -13,6 +13,7 @@
 
 #include <cstdint>
 #include <stdexcept>
+#include <string>
 
 namespace ninfer::ops::detail {
 namespace {
@@ -93,8 +94,17 @@ void launch_fp8_a8_quantize(const Tensor& x, const Weight& weight, Fp8A8Workspac
     case Fp8Activation17408Geometry::kInputRows:
         launch_quantize_exact<Fp8Activation17408Geometry>(x, workspace, stream);
         return;
+    case Fp8Activation3072Geometry::kInputRows:
+        launch_quantize_exact<Fp8Activation3072Geometry>(x, workspace, stream);
+        return;
+    case Fp8Activation8704Geometry::kInputRows:
+        launch_quantize_exact<Fp8Activation8704Geometry>(x, workspace, stream);
+        return;
     default:
-        throw std::invalid_argument("fp8 A8 quantize: unsupported K");
+        // Name the K: this refusal is a missing specialization, and the shape tables can present a
+        // K the activation route has no kernel for. It fired for 3072 and 8704 the first time the
+        // column-sharded width-2 outputs ran.
+        throw std::invalid_argument("fp8 A8 quantize: unsupported K " + std::to_string(weight.k));
     }
 }
 

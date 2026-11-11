@@ -42,6 +42,11 @@ using Fp8N5120K8704              = Fp8Geometry<5120, 8704>;
 using Fp8Activation5120Geometry  = Fp8ActivationGeometry<5120>;
 using Fp8Activation6144Geometry  = Fp8ActivationGeometry<6144>;
 using Fp8Activation17408Geometry = Fp8ActivationGeometry<17408>;
+// The A8 route quantizes the activation, so its geometry is the activation's K and every projection
+// K that reaches the A8 path needs one here. The column-sharded width-2 outputs are the first K
+// values that were not already present: 5120x3072 and 5120x8704 present K = 3072 and 8704.
+using Fp8Activation3072Geometry  = Fp8ActivationGeometry<3072>;
+using Fp8Activation8704Geometry  = Fp8ActivationGeometry<8704>;
 
 enum class Fp8GeometryId : std::uint8_t {
     N14336K5120,

@@ -3,6 +3,7 @@
 #include "ninfer/engine.h"
 #include "core/device.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -28,10 +29,10 @@ namespace {
 // `physical_slot(sequence.state.read)` at the commit, and once a Fork has settled the read handle
 // IS the restore's destination. A dump that read any other slot would prove nothing.
 //
-// COVERAGE: the hook covers the linear-attention (GDN) state only — conv (BF16) and recurrent
-// (FP32) for every layer. It does NOT cover continuation_hidden, mtp_hidden, ple or dflash_local:
-// no accessor for those exists outside the Program, and reaching them needs a change under
-// src/models/qwen3_8_flash_next/, which this task's write scope excludes.
+// COVERAGE: every component the pool owns — the GDN state (conv BF16 and recurrent FP32, every
+// layer), continuation_hidden, mtp_hidden, ple and, for a masked-draft Program, the local cyclic
+// K/V per layer. A component the pool does not carry is absent from both runs' dumps and is
+// skipped, so the comparison never invents a difference from a component that does not exist.
 constexpr const char* kPrefixStateDumpEnv = "NINFER_PREFIX_STATE_DUMP";
 
 [[nodiscard]] std::optional<std::filesystem::path> prefix_state_dump_dir() {
@@ -153,6 +154,21 @@ void compare_prefix_state_dumps(const std::filesystem::path& directory,
                      "comparison would prove nothing\n";
         return;
     }
+    // Two different sequences normally occupy different physical slots, and the comparison is by
+    // content at one frontier, so a mismatch is reported rather than silently compared — but a
+    // caller who knows the runs are distinct sequences can say so explicitly.
+    if (reused_slot != cold_slot) {
+        const char* policy = std::getenv("NINFER_PREFIX_STATE_DUMP_SLOT_POLICY");
+        const bool allow   = policy != nullptr && std::strcmp(policy, "any") == 0;
+        std::cerr << "prefix state dump: the runs committed different physical slots (reused "
+                  << reused_slot << ", cold " << cold_slot << ")";
+        if (!allow) {
+            std::cerr << "; refusing to compare (set NINFER_PREFIX_STATE_DUMP_SLOT_POLICY=any to "
+                         "compare by content at the same frontier)\n";
+            return;
+        }
+        std::cerr << "; comparing by content at the same frontier\n";
+    }
     for (std::uint32_t layer = 0; layer < layers; ++layer) {
         const std::string conv = ".conv." + std::to_string(layer) + ".bf16";
         const DumpDifference conv_difference =
@@ -171,8 +187,47 @@ void compare_prefix_state_dumps(const std::filesystem::path& directory,
             return;
         }
     }
-    std::cerr << "prefix state dump: conv and recurrent state of all " << layers
-              << " layers are bitwise identical\n";
+    // The components that are one file per slot, in the order the capture wrote them.
+    const std::vector<std::string> reused_components =
+        reused_meta.value("components", std::vector<std::string>{});
+    const std::vector<std::string> cold_components =
+        cold_meta.value("components", std::vector<std::string>{});
+    const auto has_component = [](const std::vector<std::string>& list, const char* name) {
+        return std::find(list.begin(), list.end(), name) != list.end();
+    };
+    const auto compare_single = [&](const char* component, const std::string& suffix) {
+        if (!has_component(reused_components, component) ||
+            !has_component(cold_components, component)) {
+            std::cerr << "prefix state dump: " << component
+                      << " is absent from a run; skipped\n";
+            return false;
+        }
+        const DumpDifference difference =
+            compare_dump_file(directory, reused_stem, cold_stem, suffix, 2);
+        if (difference.differs) {
+            std::cerr << "prefix state dump: " << component << ": " << difference.report << '\n';
+            return true;
+        }
+        return false;
+    };
+    if (compare_single("continuation_hidden", ".continuation_hidden.bf16") ||
+        compare_single("mtp_hidden", ".mtp_hidden.bf16") ||
+        compare_single("ple", ".ple.bf16")) {
+        return;
+    }
+    const auto dflash_layers = reused_meta.value("dflash_local_layers", 0U);
+    for (std::uint32_t layer = 0; layer < dflash_layers; ++layer) {
+        const std::string suffix = std::to_string(layer) + ".bf16";
+        if (compare_single("dflash_local_k", ".dflash_local_k." + suffix) ||
+            compare_single("dflash_local_v", ".dflash_local_v." + suffix)) {
+            return;
+        }
+    }
+    std::cerr << "prefix state dump: every component of the committed slot is bitwise identical "
+                 "(conv and recurrent for all "
+              << layers << " layers";
+    if (dflash_layers != 0) { std::cerr << ", dflash local for " << dflash_layers << " layers"; }
+    std::cerr << ")\n";
 }
 
 

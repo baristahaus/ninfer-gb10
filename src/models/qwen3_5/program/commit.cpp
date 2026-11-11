@@ -10,6 +10,27 @@ void RankProgramImpl::launch_commit(ComputeOperation& operation) {
     auto& frame       = resources.frame;
     const auto& value = *operation.commit;
     const bool decode = std::holds_alternative<DecodeWork>(operation.request.work.operation);
+    const auto* forward =
+        std::get_if<ForwardWork>(&operation.request.work.operation);
+    // A generating commit carries one row per round member, and every loop below indexes
+    // `value.rows[i]` by that count. Checking it here rather than trusting it is what keeps a
+    // short commit from reading past the end: a segfault names nothing, and a refusal names both
+    // counts. `prepare_commit` makes the same check, but it runs on rank 0 only (see the note),
+    // so every rank must make it for itself.
+    const bool generated = decode || (forward != nullptr && forward->sample != SamplePurpose::None);
+    const std::size_t row_count = value.rows.size();
+    if (generated && row_count != operation.batch) {
+        throw std::invalid_argument(
+            "Qwen3.5 commit has " + std::to_string(row_count) + " rows for a round of batch " +
+            std::to_string(operation.batch) + (decode ? " (decode)" : " (sampling forward)") +
+            "; a generating commit must carry one row per member");
+    }
+    if (!generated && row_count != 0 && row_count != operation.batch) {
+        throw std::invalid_argument(
+            "Qwen3.5 commit has " + std::to_string(row_count) + " rows for a round of batch " +
+            std::to_string(operation.batch) + "; a non-generating commit carries none or one per "
+            "member");
+    }
     bool device_work  = false;
     if (decode) {
         const bool mtp_history =
@@ -23,7 +44,7 @@ void RankProgramImpl::launch_commit(ComputeOperation& operation) {
             });
         if (mtp_history || draft_history) {
             *frame.host_commit = {};
-            for (std::uint32_t i = 0; i < operation.batch; ++i) {
+            for (std::size_t i = 0; i < row_count; ++i) {
                 const auto& row    = operation.rows[i];
                 const int accepted = static_cast<int>(value.rows[i].accepted_tokens);
                 frame.host_commit->history_columns[i]         = std::max(accepted - 1, 0);
@@ -39,12 +60,12 @@ void RankProgramImpl::launch_commit(ComputeOperation& operation) {
         }
         if (operation.speculative) {
             std::array<ops::GdnReplayFoldRow, kMaximumConcurrency> fold{};
-            for (std::uint32_t i = 0; i < operation.batch; ++i) {
+            for (std::size_t i = 0; i < row_count; ++i) {
                 const auto& row = operation.rows[i];
                 fold[i]         = {row.state_slots.source, row.state_slots.destination,
                                    static_cast<int>(value.rows[i].accepted_tokens)};
             }
-            resources.replay_fold->execute(std::span(fold).first(operation.batch),
+            resources.replay_fold->execute(std::span(fold).first(row_count),
                                            device.execution_view());
             device_work = true;
             if (mtp_history) {
@@ -61,7 +82,7 @@ void RankProgramImpl::launch_commit(ComputeOperation& operation) {
         const auto hidden =
             frame.input_view(static_cast<int>(operation.width), static_cast<int>(operation.batch))
                 .hidden;
-        for (std::uint32_t i = 0; i < operation.batch; ++i) {
+        for (std::size_t i = 0; i < row_count; ++i) {
             const auto accepted = value.rows[i].accepted_tokens;
             if (!accepted) continue;
             if (backend == SpeculativeBackend::Mtp ||

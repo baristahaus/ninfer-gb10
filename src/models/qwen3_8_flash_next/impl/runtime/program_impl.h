@@ -5381,6 +5381,24 @@ void ProgramImplCore::prepare_prefix_forks(MaterializationTransaction& transacti
             *text_kv_addresses, *text_kv_pages, *transaction.text_prefix_fork,
             details.text_retained_tail_release, transaction.text_retained_tail,
             transaction.text_retained_tail_backup);
+        // KV write-target probe, fork side: name the parent page the partial tail is copied FROM
+        // and the branch page it is copied TO, with the execution row the fork will publish. The
+        // suffix prefill probe then says which of the two the chunk's writes actually resolve to.
+        // Host bookkeeping only; no device read. Inert when the probe env is unset.
+        if (std::getenv("NINFER_FLASH_NEXT_KV_WRITE_PROBE") != nullptr &&
+            *transaction.text_activation_frontier % static_cast<std::uint32_t>(kPagedKVPageSize) !=
+                0) {
+            const DeviceKVPageHandle tail_source =
+                text_kv_addresses->prefix_fork_tail_source(*transaction.text_prefix_fork);
+            const DeviceKVPageHandle tail_destination =
+                text_kv_addresses->prefix_fork_tail_destination(*transaction.text_prefix_fork);
+            std::fprintf(stderr,
+                         "prefix kv write: text fork frontier %u row %d tail_source %d "
+                         "tail_destination %d\n",
+                         *transaction.text_activation_frontier,
+                         static_cast<std::int32_t>(transaction.destination.value),
+                         tail_source.index(), tail_destination.index());
+        }
         if (*transaction.text_activation_frontier % static_cast<std::uint32_t>(kPagedKVPageSize) !=
             0) {
             start_context_transfer_timer(runtime::ContextResourceClass::MainKV);
@@ -12128,6 +12146,34 @@ ProgramImplCore::advance_prefill(SequenceState& sequence, RequestControl& reques
             bool finalized                   = false;
             while (remaining != 0) {
                 schedule_state.text_kv_base           = staged.cursor;
+                // KV write-target probe: the page a suffix token's K/V append resolves to is the
+                // DEVICE execution-table entry for its position, not the host membership the store
+                // keeps. Read both before the chunk is submitted; a DIFFER here means the chunk's
+                // writes land somewhere other than the page the request's own bookkeeping names.
+                // Synchronous and env-gated; prefill never runs inside a CUDA graph.
+                if (std::getenv("NINFER_FLASH_NEXT_KV_WRITE_PROBE") != nullptr && sequence.kv) {
+                    const auto page_size = static_cast<std::uint32_t>(kPagedKVPageSize);
+                    const std::uint32_t first_page = staged.cursor / page_size;
+                    const std::uint32_t last_page = (staged.cursor + remaining - 1U) / page_size;
+                    const std::int32_t row = text_kv_addresses->bound_row(sequence.kv->text);
+                    std::fprintf(stderr,
+                                 "prefix kv write: suffix prefill lane %u rank %d frontier %u "
+                                 "cursor %u chunk_end %u row %d\n",
+                                 sequence.lane, rank, sequence.text_kv_valid, staged.cursor,
+                                 staged.cursor + remaining, row);
+                    for (std::uint32_t page = first_page; page <= last_page; ++page) {
+                        if (page >= text_kv_addresses->mapped_pages(sequence.kv->text)) { continue; }
+                        const LogicalKVPageHandle logical =
+                            text_kv_addresses->logical_page(sequence.kv->text, page);
+                        qwen3_8_flash_next::detail::probe_kv_table_binding(
+                            "suffix prefill", decoder->text_kv.execution_tables().matrix(), row,
+                            page, text_kv_addresses->physical_page(sequence.kv->text, page).index(),
+                            text_kv_pages->committed_columns(logical),
+                            text_kv_pages->address_references(logical),
+                            text_kv_pages->writer_references(logical), sequence.lane, rank,
+                            staged.cursor, device.stream());
+                    }
+                }
                 selectors                             = state_selectors(sequence);
                 schedule_state.state_source_slot      = selectors.source;
                 schedule_state.state_destination_slot = selectors.destination;
@@ -12282,6 +12328,31 @@ ProgramImplCore::advance_prefill(SequenceState& sequence, RequestControl& reques
         staged.elapsed_seconds += std::chrono::duration<double>(Clock::now() - started).count();
         const double vision_seconds       = staged.vision ? staged.vision->elapsed_seconds() : 0.0;
         const std::uint32_t prompt_tokens = staged.prompt_tokens;
+
+        // Suffix-prefill page snapshot: the same page record the decode dump writes, taken at the
+        // prefill seam of the SAME run and named with a phase. Comparing one run's prefill and
+        // decode records distinguishes "the suffix write never reached the page" from "the page
+        // was overwritten or rebound between the two seams". Separate directory and env from the
+        // paired decode dump, so the pair history is never polluted. Synchronous and env-gated.
+        if (const char* prefill_dump = std::getenv("NINFER_FLASH_NEXT_KV_PREFILL_DUMP");
+            prefill_dump != nullptr && *prefill_dump != '\0' && sequence.kv) {
+            const auto page_size = static_cast<std::uint32_t>(kPagedKVPageSize);
+            // Start at the page holding the checkpoint's last token, exactly as the decode dump's
+            // bounded range does, so the two phases cover the same pages for a same-run compare.
+            const std::uint32_t first_page =
+                staged.base == 0 ? 0U : (staged.base - 1U) / page_size;
+            const std::uint32_t last_page  = (prompt_tokens - 1U) / page_size;
+            const std::uint32_t mapped = text_kv_addresses->mapped_pages(sequence.kv->text);
+            for (std::uint32_t page = first_page; page <= last_page && page < mapped; ++page) {
+                const LogicalKVPageHandle logical =
+                    text_kv_addresses->logical_page(sequence.kv->text, page);
+                qwen3_8_flash_next::detail::capture_prefix_kv_page(
+                    prefill_dump, text_kv_pages->physical_pool(),
+                    text_kv_addresses->physical_page(sequence.kv->text, page), page, prompt_tokens,
+                    text_kv_pages->committed_columns(logical), sequence.lane, rank,
+                    device.stream(), "prefill");
+            }
+        }
 
         validate_licensed_tokens(std::span<const TokenId>(host_tokens, 1));
         if (sequence.ledger.size() != prompt_tokens) {
@@ -12720,6 +12791,52 @@ ProgramImplCore::decode_mtp_batch(std::span<const std::uint32_t> lanes,
                                  text_kv_pages->writer_references(logical),
                                  text_kv_addresses->physical_page(probe_sequence.kv->text, page)
                                      .index());
+                }
+            }
+        }
+        // KV write-target probe: the execution-table entry a decode round resolves is a DEVICE
+        // fact — the device ingress frame's row index into the shared table matrix. Print it
+        // beside the row the host bookkeeping names and beside the membership's physical page, so
+        // a fork whose row still names the parent page is visible as DIFFER. The same probe at the
+        // suffix prefill seam prints the write side; this is the read side, at the same logical
+        // page. Env-gated and synchronous; this seam is outside CUDA graph capture.
+        if (std::getenv("NINFER_FLASH_NEXT_KV_WRITE_PROBE") != nullptr) {
+            const auto page_size = static_cast<std::uint32_t>(kPagedKVPageSize);
+            for (std::size_t row = 0; row < lanes.size(); ++row) {
+                const SequenceState& bind_sequence = active_sequence(lanes[row]);
+                if (!bind_sequence.kv) { continue; }
+                const std::uint32_t frontier = bind_sequence.text_kv_valid;
+                // The round resolves its table rows for the verify columns frontier..frontier+extent;
+                // report exactly those logical pages.
+                const std::uint32_t extent = static_cast<std::uint32_t>(
+                    std::max(0, mtp_host_ingress->current_extents[row]));
+                const std::uint32_t last_position = frontier + std::min(extent, draft_window);
+                const std::uint32_t pages = last_position / page_size + 1U;
+                const std::int32_t bound_row = text_kv_addresses->bound_row(bind_sequence.kv->text);
+                // The decode kernel reads the row from the DEVICE ingress frame, which may have
+                // been advanced in place instead of re-uploaded; read the device frame itself
+                // rather than trusting the host copy.
+                std::int32_t device_ingress_row = -1;
+                CUDA_CHECK(cudaMemcpyAsync(
+                    &device_ingress_row,
+                    static_cast<const std::int32_t*>(io.mtp_decode->text_kv_table_rows.data) + row,
+                    sizeof(device_ingress_row), cudaMemcpyDeviceToHost, device.stream()));
+                CUDA_CHECK(cudaStreamSynchronize(device.stream()));
+                std::fprintf(stderr,
+                             "prefix kv write: decode lane %u rank %d frontier %u extent %u "
+                             "bound_row %d host_ingress_row %d device_ingress_row %d\n",
+                             bind_sequence.lane, rank, frontier, extent, bound_row,
+                             mtp_host_ingress->text_kv_table_rows[row], device_ingress_row);
+                for (std::uint32_t page = 0; page < pages; ++page) {
+                    const LogicalKVPageHandle logical =
+                        text_kv_addresses->logical_page(bind_sequence.kv->text, page);
+                    qwen3_8_flash_next::detail::probe_kv_table_binding(
+                        "decode", decoder->text_kv.execution_tables().matrix(), device_ingress_row,
+                        page, text_kv_addresses->physical_page(bind_sequence.kv->text, page).index(),
+                        text_kv_pages->committed_columns(logical),
+                        text_kv_pages->address_references(logical),
+                        text_kv_pages->writer_references(logical), bind_sequence.lane, rank,
+                        frontier, device.stream());
                 }
             }
         }

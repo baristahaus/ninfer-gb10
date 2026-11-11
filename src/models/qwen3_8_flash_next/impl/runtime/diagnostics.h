@@ -208,10 +208,56 @@ struct KVPageDumpComparison {
     const char* boundary             = "not compared";
 };
 
+// Maintainer-only KV write-target probe. The page a KV append writes is a DEVICE fact: the kernel
+// resolves it from the execution-table entry for the token's position, not from the host
+// membership the logical store keeps. A copy-on-write branch that publishes the host membership
+// but leaves the execution row naming the parent is therefore invisible to the host probe and to
+// the page dump (which reads the membership's physical page), yet the suffix writes land on the
+// parent. This reads the row's device content for one logical page and prints it beside the
+// membership's physical page: DIFFER names the resolution point that did not move.
+//
+// `phase` names the caller: "suffix prefill" at the chunk seam, "decode" at the round head. The
+// matrix is `KVExecutionTablePool::matrix()`, I32 [logical pages, rows]; row r's logical page p is
+// element p + logical_pages * r. Synchronous, so it must never run under CUDA graph capture.
+// Inert when NINFER_FLASH_NEXT_KV_WRITE_PROBE is unset.
+inline void probe_kv_table_binding(const char* phase, const Tensor& table_matrix, std::int32_t row,
+                                   std::uint32_t logical_page, std::int32_t membership_physical,
+                                   std::uint32_t committed, std::uint32_t refs,
+                                   std::uint32_t writers, std::uint32_t lane, int rank,
+                                   std::uint32_t frontier, cudaStream_t stream) {
+    static const char* enabled = std::getenv("NINFER_FLASH_NEXT_KV_WRITE_PROBE");
+    if (enabled == nullptr || *enabled == '\0') { return; }
+    if (stream == nullptr) {
+        throw std::logic_error("Flash-Next KV write probe requires the compute stream");
+    }
+    if (table_matrix.data == nullptr || table_matrix.dtype != DType::I32 ||
+        table_matrix.ne[0] <= 0 || table_matrix.ne[1] <= 0 || row < 0 ||
+        row >= table_matrix.ne[1] || logical_page >= static_cast<std::uint32_t>(table_matrix.ne[0])) {
+        throw std::logic_error("Flash-Next KV write probe got an invalid execution-table row");
+    }
+    std::int32_t device_physical = -1;
+    const std::size_t index =
+        static_cast<std::size_t>(logical_page) +
+        static_cast<std::size_t>(table_matrix.ne[0]) * static_cast<std::size_t>(row);
+    CUDA_CHECK(cudaMemcpyAsync(&device_physical,
+                               static_cast<const std::int32_t*>(table_matrix.data) + index,
+                               sizeof(device_physical), cudaMemcpyDeviceToHost, stream));
+    // The engine's streams are cudaStreamNonBlocking: the copy is ordered only against `stream`,
+    // so the host read must wait on that same stream.
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+    std::fprintf(stderr,
+                 "prefix kv write: %s lane %u rank %d frontier %u row %d page %u device %d "
+                 "membership %d %s committed %u refs %u writers %u\n",
+                 phase, lane, rank, frontier, row, logical_page, device_physical,
+                 membership_physical, device_physical == membership_physical ? "AGREE" : "DIFFER",
+                 committed, refs, writers);
+}
+
 inline void capture_prefix_kv_page(const char* directory, const DeviceKVPagePool& pool,
                                    DeviceKVPageHandle physical, std::uint32_t logical_page,
                                    std::uint32_t frontier, std::uint32_t committed_columns,
-                                   std::uint32_t lane, int rank, cudaStream_t stream) {
+                                   std::uint32_t lane, int rank, cudaStream_t stream,
+                                   const char* phase = nullptr) {
     if (directory == nullptr || *directory == '\0') { return; }
     if (rank < 0 || rank >= 2) { return; }
     if (stream == nullptr) {
@@ -254,9 +300,13 @@ inline void capture_prefix_kv_page(const char* directory, const DeviceKVPagePool
         throw std::runtime_error("cannot create Flash-Next KV dump directory: " + error.message());
     }
     const int serial = serial_by_rank[rank_index]++;
+    // The phase is part of the file name, so one run's prefill snapshot and its decode dump never
+    // collide even at the same frontier and logical page.
+    const std::string phase_prefix =
+        phase == nullptr ? std::string() : std::string(phase) + ".";
     const std::string stem =
         (std::filesystem::path(directory) /
-         (std::to_string(serial) + "." + std::to_string(frontier) + "." +
+         (std::to_string(serial) + "." + phase_prefix + std::to_string(frontier) + "." +
           std::to_string(logical_page)))
             .string();
     {
@@ -268,11 +318,13 @@ inline void capture_prefix_kv_page(const char* directory, const DeviceKVPagePool
 
     KVPageDumpComparison comparison;
     auto& history = run_history[rank_index][std::make_pair(frontier, logical_page)];
-    history.push_back(serial);
+    // A phase snapshot is never paired: its purpose is to compare ONE run's prefill seam against
+    // the same run's decode seam, and the paired-run history is keyed by (frontier, page) alone.
+    if (phase == nullptr) { history.push_back(serial); }
     // Run order pairing: the first and second dump at one (frontier, page) are a pair, the third
     // and fourth another. A reused run and its cold control are consecutive dumps of the same
     // request shape; lane and physical page are deliberately not keys.
-    if (history.size() >= 2 && history.size() % 2 == 0) {
+    if (phase == nullptr && history.size() >= 2 && history.size() % 2 == 0) {
         comparison.compared        = true;
         comparison.previous_serial = history[history.size() - 2];
         const std::string previous_stem =
@@ -345,11 +397,19 @@ inline void capture_prefix_kv_page(const char* directory, const DeviceKVPagePool
         }
     }
 
-    std::fprintf(stderr,
-                 "prefix kv dump: serial %d frontier %u page %u physical %d lane %u rank %d "
-                 "committed %u page_bytes %zu -> %s.bin\n",
-                 serial, frontier, logical_page, physical.index(), lane, rank, committed_columns,
-                 layout.page_stride, stem.c_str());
+    if (phase != nullptr) {
+        std::fprintf(stderr,
+                     "prefix kv dump: phase %s serial %d frontier %u page %u physical %d lane %u "
+                     "rank %d committed %u page_bytes %zu -> %s.bin\n",
+                     phase, serial, frontier, logical_page, physical.index(), lane, rank,
+                     committed_columns, layout.page_stride, stem.c_str());
+    } else {
+        std::fprintf(stderr,
+                     "prefix kv dump: serial %d frontier %u page %u physical %d lane %u rank %d "
+                     "committed %u page_bytes %zu -> %s.bin\n",
+                     serial, frontier, logical_page, physical.index(), lane, rank,
+                     committed_columns, layout.page_stride, stem.c_str());
+    }
     if (comparison.compared) {
         if (comparison.identical) {
             std::fprintf(stderr,
@@ -376,10 +436,12 @@ inline void capture_prefix_kv_page(const char* directory, const DeviceKVPagePool
                          comparison.row, comparison.byte_in_row, comparison.boundary);
         }
     } else {
-        std::fprintf(stderr,
-                     "prefix kv dump: serial %d frontier %u page %u: no previous run at this "
-                     "frontier/page to compare\n",
-                     serial, frontier, logical_page);
+        if (phase == nullptr) {
+            std::fprintf(stderr,
+                         "prefix kv dump: serial %d frontier %u page %u: no previous run at this "
+                         "frontier/page to compare\n",
+                         serial, frontier, logical_page);
+        }
     }
 
     nlohmann::json planes = nlohmann::json::array();
@@ -411,6 +473,7 @@ inline void capture_prefix_kv_page(const char* directory, const DeviceKVPagePool
     };
     const nlohmann::json metadata{
         {"serial", serial},
+        {"phase", phase == nullptr ? "decode" : phase},
         {"frontier", frontier},
         {"page", logical_page},
         {"physical", physical.index()},

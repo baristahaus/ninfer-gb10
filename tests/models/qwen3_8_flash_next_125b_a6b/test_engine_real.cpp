@@ -3,14 +3,233 @@
 #include "ninfer/engine.h"
 #include "core/device.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <optional>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include <nlohmann/json.hpp>
+
 namespace {
+
+// Opt-in prefix-reuse state dump. The engine's maintainer capture
+// (src/models/qwen3_8_flash_next/impl/runtime/diagnostics.h) writes, for one commit, every layer's
+// convolution and recurrent state of the committed slot at one execution frontier. This driver
+// turns it on and compares the reused run's dump against the cold run's, bitwise.
+//
+// It reads the SAME slot the restore writes: the hook dumps
+// `physical_slot(sequence.state.read)` at the commit, and once a Fork has settled the read handle
+// IS the restore's destination. A dump that read any other slot would prove nothing.
+//
+// COVERAGE: every component the pool owns — the GDN state (conv BF16 and recurrent FP32, every
+// layer), continuation_hidden, mtp_hidden, ple and, for a masked-draft Program, the local cyclic
+// K/V per layer. A component the pool does not carry is absent from both runs' dumps and is
+// skipped, so the comparison never invents a difference from a component that does not exist.
+constexpr const char* kPrefixStateDumpEnv = "NINFER_PREFIX_STATE_DUMP";
+
+[[nodiscard]] std::optional<std::filesystem::path> prefix_state_dump_dir() {
+    const char* directory = std::getenv(kPrefixStateDumpEnv);
+    if (directory == nullptr || *directory == '\0') { return std::nullopt; }
+    return std::filesystem::path(directory);
+}
+
+// The hook latches its environment at first use, so these must be set before the first generate.
+// The frontier is the end of the continuation's prefill: the state the first decode round reads,
+// and the one frontier both runs commit at (their post-decode frontiers differ, because the tokens
+// diverge — that is the defect). The continuation is prompt + generated + separator and the golden
+// fixes the generated count, so the frontier is known before anything runs.
+void configure_prefix_state_dump(const std::vector<ninfer::TokenId>& prompt,
+                                 const std::vector<ninfer::TokenId>& generated) {
+    const auto directory = prefix_state_dump_dir();
+    if (!directory) { return; }
+    std::error_code error;
+    std::filesystem::create_directories(*directory, error);
+    const std::uint32_t frontier =
+        static_cast<std::uint32_t>(prompt.size() + generated.size() + 1);
+    const char* override_frontier = std::getenv("NINFER_PREFIX_STATE_DUMP_FRONTIER");
+    const std::string value = override_frontier != nullptr && *override_frontier != '\0'
+                                  ? std::string(override_frontier)
+                                  : std::to_string(frontier);
+    ::setenv("NINFER_FLASH_NEXT_STATE_DIR", directory->string().c_str(), 1);
+    ::setenv("NINFER_FLASH_NEXT_STATE_FRONTIER", value.c_str(), 1);
+}
+
+[[nodiscard]] std::set<std::string> dump_stems(const std::filesystem::path& directory) {
+    std::set<std::string> stems;
+    std::error_code error;
+    for (const auto& entry : std::filesystem::directory_iterator(directory, error)) {
+        if (entry.path().extension() == ".json") { stems.insert(entry.path().stem().string()); }
+    }
+    return stems;
+}
+
+[[nodiscard]] std::set<std::string>
+new_dump_stems(const std::filesystem::path& directory, const std::set<std::string>& before) {
+    std::set<std::string> created;
+    for (const auto& stem : dump_stems(directory)) {
+        if (before.count(stem) == 0) { created.insert(stem); }
+    }
+    return created;
+}
+
+[[nodiscard]] std::vector<char> read_binary(const std::filesystem::path& path) {
+    std::ifstream file(path, std::ios::binary);
+    return std::vector<char>(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+}
+
+struct DumpDifference {
+    bool differs = false;
+    std::string report;
+};
+
+// One component file of one layer, byte for byte. The first differing byte names the element; a
+// size mismatch is reported as such rather than compared past its end.
+[[nodiscard]] DumpDifference compare_dump_file(const std::filesystem::path& directory,
+                                               const std::string& reused_stem,
+                                               const std::string& cold_stem,
+                                               const std::string& suffix,
+                                               std::size_t element_bytes) {
+    const std::vector<char> reused = read_binary(directory / (reused_stem + suffix));
+    const std::vector<char> cold   = read_binary(directory / (cold_stem + suffix));
+    if (reused.size() != cold.size()) {
+        return {.differs = true,
+                .report  = suffix + " sizes differ: reused " + std::to_string(reused.size()) +
+                          " bytes, cold " + std::to_string(cold.size()) + " bytes"};
+    }
+    for (std::size_t byte = 0; byte < reused.size(); ++byte) {
+        if (reused[byte] == cold[byte]) { continue; }
+        char reused_value[32];
+        char cold_value[32];
+        std::snprintf(reused_value, sizeof(reused_value), "%02x", static_cast<unsigned>(static_cast<unsigned char>(reused[byte])));
+        std::snprintf(cold_value, sizeof(cold_value), "%02x", static_cast<unsigned>(static_cast<unsigned char>(cold[byte])));
+        return {.differs = true,
+                .report  = suffix + " first differs at element " + std::to_string(byte / element_bytes) +
+                          " (byte " + std::to_string(byte) + "): reused 0x" + reused_value +
+                          ", cold 0x" + cold_value};
+    }
+    return {};
+}
+
+// Compares the reused run's dump against the cold run's, layer by layer, conv then recurrent, and
+// reports the first difference. Prints one line either way; the token comparison stays the verdict.
+void compare_prefix_state_dumps(const std::filesystem::path& directory,
+                                const std::set<std::string>& reused_stems,
+                                const std::set<std::string>& cold_stems) {
+    if (reused_stems.empty() || cold_stems.empty()) {
+        std::cerr << "prefix state dump: no dump at the requested frontier (reused "
+                  << reused_stems.size() << ", cold " << cold_stems.size()
+                  << "); the commit did not reach it\n";
+        return;
+    }
+    const std::string reused_stem = *reused_stems.begin();
+    const std::string cold_stem   = *cold_stems.begin();
+    nlohmann::json reused_meta;
+    nlohmann::json cold_meta;
+    {
+        std::ifstream file(directory / (reused_stem + ".json"));
+        file >> reused_meta;
+    }
+    {
+        std::ifstream file(directory / (cold_stem + ".json"));
+        file >> cold_meta;
+    }
+    const auto reused_slot    = reused_meta.value("physical_slot", -1);
+    const auto cold_slot      = cold_meta.value("physical_slot", -1);
+    const auto reused_frontier = reused_meta.value("frontier", -1U);
+    const auto cold_frontier   = cold_meta.value("frontier", -1U);
+    const auto layers          = reused_meta.value("layers", 0U);
+    std::cerr << "prefix state dump: reused slot " << reused_slot << " frontier " << reused_frontier
+              << ", cold slot " << cold_slot << " frontier " << cold_frontier << ", layers "
+              << layers << '\n';
+    if (reused_frontier != cold_frontier) {
+        std::cerr << "prefix state dump: the two runs did not commit at the same frontier; the "
+                     "comparison would prove nothing\n";
+        return;
+    }
+    // Two different sequences normally occupy different physical slots, and the comparison is by
+    // content at one frontier, so a mismatch is reported rather than silently compared — but a
+    // caller who knows the runs are distinct sequences can say so explicitly.
+    if (reused_slot != cold_slot) {
+        const char* policy = std::getenv("NINFER_PREFIX_STATE_DUMP_SLOT_POLICY");
+        const bool allow   = policy != nullptr && std::strcmp(policy, "any") == 0;
+        std::cerr << "prefix state dump: the runs committed different physical slots (reused "
+                  << reused_slot << ", cold " << cold_slot << ")";
+        if (!allow) {
+            std::cerr << "; refusing to compare (set NINFER_PREFIX_STATE_DUMP_SLOT_POLICY=any to "
+                         "compare by content at the same frontier)\n";
+            return;
+        }
+        std::cerr << "; comparing by content at the same frontier\n";
+    }
+    for (std::uint32_t layer = 0; layer < layers; ++layer) {
+        const std::string conv = ".conv." + std::to_string(layer) + ".bf16";
+        const DumpDifference conv_difference =
+            compare_dump_file(directory, reused_stem, cold_stem, conv, 2);
+        if (conv_difference.differs) {
+            std::cerr << "prefix state dump: conv layer " << layer << ": "
+                      << conv_difference.report << '\n';
+            return;
+        }
+        const std::string recurrent = ".recurrent." + std::to_string(layer) + ".fp32";
+        const DumpDifference recurrent_difference =
+            compare_dump_file(directory, reused_stem, cold_stem, recurrent, 4);
+        if (recurrent_difference.differs) {
+            std::cerr << "prefix state dump: recurrent layer " << layer << ": "
+                      << recurrent_difference.report << '\n';
+            return;
+        }
+    }
+    // The components that are one file per slot, in the order the capture wrote them.
+    const std::vector<std::string> reused_components =
+        reused_meta.value("components", std::vector<std::string>{});
+    const std::vector<std::string> cold_components =
+        cold_meta.value("components", std::vector<std::string>{});
+    const auto has_component = [](const std::vector<std::string>& list, const char* name) {
+        return std::find(list.begin(), list.end(), name) != list.end();
+    };
+    const auto compare_single = [&](const char* component, const std::string& suffix) {
+        if (!has_component(reused_components, component) ||
+            !has_component(cold_components, component)) {
+            std::cerr << "prefix state dump: " << component
+                      << " is absent from a run; skipped\n";
+            return false;
+        }
+        const DumpDifference difference =
+            compare_dump_file(directory, reused_stem, cold_stem, suffix, 2);
+        if (difference.differs) {
+            std::cerr << "prefix state dump: " << component << ": " << difference.report << '\n';
+            return true;
+        }
+        return false;
+    };
+    if (compare_single("continuation_hidden", ".continuation_hidden.bf16") ||
+        compare_single("mtp_hidden", ".mtp_hidden.bf16") ||
+        compare_single("ple", ".ple.bf16")) {
+        return;
+    }
+    const auto dflash_layers = reused_meta.value("dflash_local_layers", 0U);
+    for (std::uint32_t layer = 0; layer < dflash_layers; ++layer) {
+        const std::string suffix = std::to_string(layer) + ".bf16";
+        if (compare_single("dflash_local_k", ".dflash_local_k." + suffix) ||
+            compare_single("dflash_local_v", ".dflash_local_v." + suffix)) {
+            return;
+        }
+    }
+    std::cerr << "prefix state dump: every component of the committed slot is bitwise identical "
+                 "(conv and recurrent for all "
+              << layers << " layers";
+    if (dflash_layers != 0) { std::cerr << ", dflash local for " << dflash_layers << " layers"; }
+    std::cerr << ")\n";
+}
+
 
 ninfer::EngineOptions engine_options(const char* artifact) {
     ninfer::EngineOptions options;
@@ -28,6 +247,9 @@ ninfer::EngineOptions engine_options(const char* artifact) {
         no_graphs != nullptr && *no_graphs != '\0') {
         options.use_cuda_graph = false;
     }
+    // A prefix-state dump run performs synchronous copies at its commits, so it must not capture
+    // graphs; the dump is opt-in, so this changes nothing when it is unset.
+    if (prefix_state_dump_dir()) { options.use_cuda_graph = false; }
     options.max_concurrency                  = 2;
     options.max_pending_requests             = 2;
     options.context_cache.device_state_slots = 4;
@@ -184,10 +406,23 @@ int exercise_mtp_and_prefix(ninfer::Engine& engine,
     continuation.insert(continuation.end(), first.generated_token_ids.begin(),
                         first.generated_token_ids.end());
     continuation.push_back(fixture.separator);
+    const auto dump_directory = prefix_state_dump_dir();
+    std::set<std::string> dump_before_reused;
+    if (dump_directory) { dump_before_reused = dump_stems(*dump_directory); }
     const ninfer::GenerationResult reused =
         engine.generate(engine.prepare_tokens(continuation), greedy_options(2, true));
+    std::set<std::string> reused_dump_stems;
+    std::set<std::string> dump_before_cold;
+    if (dump_directory) {
+        reused_dump_stems = new_dump_stems(*dump_directory, dump_before_reused);
+        dump_before_cold  = dump_stems(*dump_directory);
+    }
     const ninfer::GenerationResult cold =
         engine.generate(engine.prepare_tokens(continuation), greedy_options(2, false));
+    if (dump_directory) {
+        compare_prefix_state_dumps(*dump_directory, reused_dump_stems,
+                                   new_dump_stems(*dump_directory, dump_before_cold));
+    }
     const std::uint32_t expected_reuse =
         static_cast<std::uint32_t>(prompt.size() + first.generated_token_ids.size() - 1);
     if (reused.reused_prompt_tokens != expected_reuse || reused.generated_token_ids.size() != 2 ||
@@ -807,6 +1042,7 @@ int main() {
     const std::string recipe       = artifact_recipe(artifact);
     const bool qad                 = qad_recipe(recipe);
     const auto& expected_prefix    = qad ? qad_mtp_output() : canonical_output();
+    configure_prefix_state_dump(canonical_prompt(), expected_prefix);
     const CrossPathFixture fixture = cross_path_fixture(recipe);
     try {
         for (const auto head : {ninfer::ProposalHead::Full, ninfer::ProposalHead::Optimized}) {

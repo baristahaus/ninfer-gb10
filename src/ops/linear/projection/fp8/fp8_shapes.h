@@ -64,4 +64,8 @@ extern const Fp8LinearShape kFp8N5120K8704;
 // Width 2 takes the four-role split (N5120K5120, N3072K5120) and never presents these.
 extern const Fp8LinearShape kFp8N10240K5120;
 extern const Fp8LinearShape kFp8N6144K5120;
+
+// The width-1 attention key and value roles (4 KV heads of width 256). Width 2 presents the halved
+// 512-row N512K5120 and never reaches this; width 1 does, which the reference arm found.
+extern const Fp8LinearShape kFp8N1024K5120;
 } // namespace ninfer::ops::detail

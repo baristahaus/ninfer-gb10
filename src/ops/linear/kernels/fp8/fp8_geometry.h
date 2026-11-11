@@ -44,6 +44,9 @@ using Fp8N5120K8704              = Fp8Geometry<5120, 8704>;
 // the four parts do not pack into one contiguous parent. Width 2 takes the four-role split instead.
 using Fp8N10240K5120             = Fp8Geometry<10240, 5120>;
 using Fp8N6144K5120              = Fp8Geometry<6144, 5120>;
+// The width-1 attention key and value roles: 4 KV heads of width 256. Width 2 halves them to the
+// 512-row N512K5120; width 1 presents them at full width.
+using Fp8N1024K5120              = Fp8Geometry<1024, 5120>;
 using Fp8Activation5120Geometry  = Fp8ActivationGeometry<5120>;
 using Fp8Activation6144Geometry  = Fp8ActivationGeometry<6144>;
 using Fp8Activation17408Geometry = Fp8ActivationGeometry<17408>;
@@ -71,6 +74,7 @@ enum class Fp8GeometryId : std::uint8_t {
     N5120K8704,
     N10240K5120,
     N6144K5120,
+    N1024K5120,
 };
 
 inline Fp8GeometryId resolve_fp8_geometry(std::int32_t output_rows, std::int32_t input_rows) {
@@ -124,6 +128,9 @@ inline Fp8GeometryId resolve_fp8_geometry(std::int32_t output_rows, std::int32_t
     }
     if (output_rows == Fp8N6144K5120::kOutputRows && input_rows == Fp8N6144K5120::kInputRows) {
         return Fp8GeometryId::N6144K5120;
+    }
+    if (output_rows == Fp8N1024K5120::kOutputRows && input_rows == Fp8N1024K5120::kInputRows) {
+        return Fp8GeometryId::N1024K5120;
     }
     throw std::invalid_argument("unsupported FP8 problem N" + std::to_string(output_rows) + "K" +
                                 std::to_string(input_rows));

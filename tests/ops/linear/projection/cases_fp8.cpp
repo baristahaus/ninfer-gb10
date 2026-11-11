@@ -53,14 +53,23 @@ constexpr std::array kWidthTwoFp8Shapes{
     WidthTwoShape{8192, 5120, 887U},    // gdn qkvz fused half
 };
 
-// The two shapes the WIDTH-1 reference arm presents and the width-2 lane does not: the GDN input
-// projection's paired parents. They surfaced only when the reference arm first ran, which is the
-// same gap in a different direction — a shape the table never had, so no case could miss it. They
-// are listed apart from the width-2 set because they belong to a different presentation of the same
-// weight, and a reader looking for "what does width 2 present" should not have to filter them out.
-constexpr std::array kWidthOnePairedFp8Shapes{
+// The shapes the WIDTH-1 reference arm presents and the width-2 lane does not. They surfaced one
+// run at a time as the reference arm reached them, which is the same gap in a different direction —
+// a shape the table never had, so no case could miss it. They are listed apart from the width-2 set
+// because they belong to a different presentation of the same weights, and a reader looking for
+// "what does width 2 present" should not have to filter them out.
+//
+// Every one of them was derived from the artifact's own binding parts rather than from the recipe:
+// the GDN input projection is one 16384-row object whose parts are contiguous in
+// query|key|value|z order, so width 1 consumes it as a 10240-row qkv parent plus a 6144-row z
+// parent; the attention input projection is one 14336-row object whose four parts are also
+// contiguous, but the packed form still hands the model one weight per role, so width 1 consumes it
+// as 6144 / 1024 / 6144 / 1024. N6144K5120 serves both the GDN z parent and the attention query and
+// gate roles, because the FP8 table is keyed by (n, k) and not by role.
+constexpr std::array kWidthOneFp8Shapes{
     WidthTwoShape{10240, 5120, 891U},  // GDN qkv parent: query 2048 + key 2048 + value 6144
-    WidthTwoShape{6144, 5120, 893U},   // GDN z parent: 48 value heads of width 128
+    WidthTwoShape{6144, 5120, 893U},   // GDN z parent; also the attention query and gate roles
+    WidthTwoShape{1024, 5120, 895U},   // attention key and value roles: 4 KV heads of width 256
 };
 
 // The token extents that cross every band boundary of the width-2 shapes' A8 schedules: the A8
@@ -161,7 +170,7 @@ void run_fp8_a16(Suite& suite) {
                   {shape.n, shape.k, shape.seed, Comparison::Sampled, true, invocations});
     }
     // The width-1 paired GDN parents, through the same A16 bands.
-    for (const auto& shape : kWidthOnePairedFp8Shapes) {
+    for (const auto& shape : kWidthOneFp8Shapes) {
         const auto invocations = a16_capacity_calls();
         add_shape(suite, ninfer::QType::FP8_E4M3FN_ROW_BF16, ActivationRecipe::TokenBlocks,
                   make_fp8_weight,
@@ -230,7 +239,7 @@ void run_fp8_a16(Suite& suite) {
     for (const auto& shape : kWidthTwoFp8Shapes) {
         add_workspace_cases(suite, QType::FP8_E4M3FN_ROW_BF16, shape.n, shape.k);
     }
-    for (const auto& shape : kWidthOnePairedFp8Shapes) {
+    for (const auto& shape : kWidthOneFp8Shapes) {
         add_workspace_cases(suite, QType::FP8_E4M3FN_ROW_BF16, shape.n, shape.k);
     }
 }
@@ -409,7 +418,7 @@ void run_fp8_a8(Suite& suite) {
                   {shape.n, shape.k, shape.seed + 100U, Comparison::Sampled, true, invocations});
     }
     // The width-1 paired GDN parents through the same A8 bands.
-    for (const auto& shape : kWidthOnePairedFp8Shapes) {
+    for (const auto& shape : kWidthOneFp8Shapes) {
         const auto invocations = width_two_a8_calls();
         add_shape(suite, ninfer::QType::FP8_E4M3FN_ROW_BF16, ActivationRecipe::Hashed,
                   make_fp8_weight,

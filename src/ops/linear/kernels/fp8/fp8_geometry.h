@@ -39,6 +39,11 @@ using Fp8N8704K5120              = Fp8Geometry<8704, 5120>;
 // output projections become 5120x3072 and mlp/down becomes 5120x8704.
 using Fp8N5120K3072              = Fp8Geometry<5120, 3072>;
 using Fp8N5120K8704              = Fp8Geometry<5120, 8704>;
+// The GDN input projection's two width-1 parents: the fused 16384-row object is presented as a
+// 10240-row qkv parent and a 6144-row z parent, which is what the model's paired form consumes when
+// the four parts do not pack into one contiguous parent. Width 2 takes the four-role split instead.
+using Fp8N10240K5120             = Fp8Geometry<10240, 5120>;
+using Fp8N6144K5120              = Fp8Geometry<6144, 5120>;
 using Fp8Activation5120Geometry  = Fp8ActivationGeometry<5120>;
 using Fp8Activation6144Geometry  = Fp8ActivationGeometry<6144>;
 using Fp8Activation17408Geometry = Fp8ActivationGeometry<17408>;
@@ -64,6 +69,8 @@ enum class Fp8GeometryId : std::uint8_t {
     N8704K5120,
     N5120K3072,
     N5120K8704,
+    N10240K5120,
+    N6144K5120,
 };
 
 inline Fp8GeometryId resolve_fp8_geometry(std::int32_t output_rows, std::int32_t input_rows) {
@@ -111,6 +118,12 @@ inline Fp8GeometryId resolve_fp8_geometry(std::int32_t output_rows, std::int32_t
     }
     if (output_rows == Fp8N5120K8704::kOutputRows && input_rows == Fp8N5120K8704::kInputRows) {
         return Fp8GeometryId::N5120K8704;
+    }
+    if (output_rows == Fp8N10240K5120::kOutputRows && input_rows == Fp8N10240K5120::kInputRows) {
+        return Fp8GeometryId::N10240K5120;
+    }
+    if (output_rows == Fp8N6144K5120::kOutputRows && input_rows == Fp8N6144K5120::kInputRows) {
+        return Fp8GeometryId::N6144K5120;
     }
     throw std::invalid_argument("unsupported FP8 problem N" + std::to_string(output_rows) + "K" +
                                 std::to_string(input_rows));

@@ -27,6 +27,45 @@ std::vector<Invocation> a16_capacity_calls() {
     return calls;
 }
 
+// THE SHAPES A TENSOR-PARALLEL WIDTH-2 RANK PRESENTS, and the reason they are listed here rather
+// than derived: every one of them is its own schedule set in the FP8 shape table, chosen by hand for
+// its own (n, k). At width 2 the 27B's model-total FP8 objects become one rank's half of each — the
+// row-sharded fused views (7168, 8192, 124160), the per-role splits the execution profile makes of
+// them (3072, 512, 5120, 8704) and the column-sharded outputs, where a Columns shard halves K
+// instead of the rows (5120x3072, 5120x8704). A schedule derived by scaling a parent's token bands
+// is exactly the kind of change that compiles, links, resolves, and then faults on the device, so
+// each shape runs here through the token bands it can actually be called with.
+struct WidthTwoShape {
+    std::int32_t n;
+    std::int32_t k;
+    std::uint32_t seed;
+};
+
+constexpr std::array kWidthTwoFp8Shapes{
+    WidthTwoShape{3072, 5120, 871U},    // attention query/gate role, gdn z role
+    WidthTwoShape{512, 5120, 873U},     // attention key/value role
+    WidthTwoShape{5120, 5120, 875U},    // gdn query+key+value role
+    WidthTwoShape{8704, 5120, 877U},    // mlp gate/up role
+    WidthTwoShape{5120, 3072, 879U},    // attention/output and gdn/output (Columns shard halves K)
+    WidthTwoShape{5120, 8704, 881U},    // mlp/down (Columns shard halves K)
+    WidthTwoShape{124160, 5120, 883U},  // text/output_head (Rows shard)
+    WidthTwoShape{7168, 5120, 885U},    // attention qkv+gate fused half
+    WidthTwoShape{8192, 5120, 887U},    // gdn qkvz fused half
+};
+
+// The token extents that cross every band boundary of the width-2 shapes' A8 schedules: the A8
+// threshold at 17, then the 64/128/192/256/384/512/768/1024 tile boundaries and one past each.
+std::vector<Invocation> width_two_a8_calls() {
+    std::vector<Invocation> calls;
+    for (int t : {17, 33, 64, 65, 97, 128, 129, 192, 193, 256, 257, 384, 385, 512, 513, 768, 769,
+                  1024, 1025, 2048})
+        calls.push_back({t, CallForm::Policy, ops::LinearPolicy::AllowA8});
+    // The verify round is graph-captured, so the captured form runs too.
+    for (int t : {128, 1025})
+        calls.push_back({t, CallForm::Policy, ops::LinearPolicy::AllowA8, true});
+    return calls;
+}
+
 void run_fp8_a16(Suite& suite) {
     const auto attn_invocations = a16_capacity_calls();
     add_shape(suite, ninfer::QType::FP8_E4M3FN_ROW_BF16, ActivationRecipe::TokenBlocks,
@@ -104,6 +143,14 @@ void run_fp8_a16(Suite& suite) {
               make_fp8_weight,
               {5120, 17408, 829U, Comparison::Sampled, true, residual17408_invocations});
 
+    // The width-2 shapes, through the A16 bands the decode and sampled-prefill calls land in.
+    for (const auto& shape : kWidthTwoFp8Shapes) {
+        const auto invocations = a16_capacity_calls();
+        add_shape(suite, ninfer::QType::FP8_E4M3FN_ROW_BF16, ActivationRecipe::TokenBlocks,
+                  make_fp8_weight,
+                  {shape.n, shape.k, shape.seed, Comparison::Sampled, true, invocations});
+    }
+
     suite.add(linear_suite::make_case("fp8", 14336, 5120, 1, ops::LinearPolicy::A16Only,
                                       linear_suite::Execution::Eager, "metadata-s831"),
               [] {
@@ -162,6 +209,9 @@ void run_fp8_a16(Suite& suite) {
     for (auto [n, k] : {std::pair{14336, 5120}, std::pair{16384, 5120}, std::pair{34816, 5120},
                         std::pair{248320, 5120}, std::pair{5120, 6144}, std::pair{5120, 17408}}) {
         add_workspace_cases(suite, QType::FP8_E4M3FN_ROW_BF16, n, k);
+    }
+    for (const auto& shape : kWidthTwoFp8Shapes) {
+        add_workspace_cases(suite, QType::FP8_E4M3FN_ROW_BF16, shape.n, shape.k);
     }
 }
 
@@ -328,6 +378,16 @@ void run_fp8_a8(Suite& suite) {
     };
     add_shape(suite, ninfer::QType::FP8_E4M3FN_ROW_BF16, ActivationRecipe::Hashed, make_fp8_weight,
               {5120, 17408, 859U, Comparison::Sampled, true, residual17408_invocations});
+
+    // The width-2 shapes through the A8 bands, which the verify and prefill rounds land in. Same
+    // shapes, different activation recipe and different token extents: the A16 and A8 halves of a
+    // shape's schedule set are separate selections and each has to run.
+    for (const auto& shape : kWidthTwoFp8Shapes) {
+        const auto invocations = width_two_a8_calls();
+        add_shape(suite, ninfer::QType::FP8_E4M3FN_ROW_BF16, ActivationRecipe::Hashed,
+                  make_fp8_weight,
+                  {shape.n, shape.k, shape.seed + 100U, Comparison::Sampled, true, invocations});
+    }
 }
 
 } // namespace

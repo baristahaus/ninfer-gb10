@@ -277,6 +277,9 @@ BuiltModel<typename Setup::Types> build_local_model(const artifact::Reader& read
     std::optional<typename Types::PreparedSession> prepared_session;
     StartupMemorySummary memory;
     std::optional<CalibratedPlan<typename Setup::ExecutionPlan>> calibrated;
+    // The one capacity the whole group runs at, decided once below and published to every rank.
+    // Empty at width 1, where rank 0 is the group.
+    std::optional<std::uint32_t> published_group_tokens;
     std::size_t available_after_weights = 0;
     auto frontend                       = [&] {
         StartupPhaseScope phase(options.startup_observer, StartupPhase::FrontendInitialize);
@@ -300,6 +303,11 @@ BuiltModel<typename Setup::Types> build_local_model(const artifact::Reader& read
             summary.max_rank_staging_bytes =
                 std::max(summary.max_rank_staging_bytes, stats.peak_staging_bytes);
             instance = std::make_unique<RankModelInstance<Types>>(std::move(model), setup.profile);
+            // One capacity for the whole group, decided once and published to both ranks. Rank 0's
+            // plan resolved against its own budget; the peer's curve is needed before its Program
+            // exists, and the group bottleneck is the smallest count either rank can hold. Without
+            // this the lane resolves two capacities and refuses at the rank-1 re-plan, turning a
+            // legitimate asymmetric box into an error instead of running it at the common capacity.
             // The group outlives the instance (BuiltModel declares it first). The two-GPU lane's
             // shared mailbox and partial pair are owned by the executor that builds both ranks and
             // are installed here; null until then, which the Program refuses at width > 1.
@@ -313,6 +321,38 @@ BuiltModel<typename Setup::Types> build_local_model(const artifact::Reader& read
             // capacity is the resolved plan's, which every family has. A family without the hook has
             // no two-GPU lane and never reaches this branch at width 2 (its per-rank materialization
             // is refused below).
+            if (execution->width() > 1) {
+                auto group_policy = options.kv_capacity;
+                // budget.available() already removes the headroom, so the group decision must not
+                // subtract it a second time.
+                group_policy.automatic_headroom_bytes = 0;
+                auto& peer_device       = execution->device(1);
+                const auto peer_budget =
+                    budget.available(device_memory_snapshot(peer_device.device()));
+                const std::array<RankCapacityOffer, 2> offers{
+                    RankCapacityOffer{candidate->curve,
+                                      budget_available - choices[selected].device_bytes},
+                    RankCapacityOffer{
+                        setup.capacity_curve(peer_device, options, choices[selected].placement),
+                        peer_budget - choices[selected].device_bytes}};
+                const auto capacities = resolve_group_kv_capacity(group_policy, offers);
+                published_group_tokens = capacities.front().resolved_tokens;
+                if (*published_group_tokens != candidate->capacity.resolved_tokens) {
+                    // The peer's budget is the bottleneck: rank 0 is re-planned at the group's
+                    // count, never the other way round.
+                    auto replanned =
+                        setup.plan(device, options, choices[selected].placement,
+                                   budget_available - choices[selected].device_bytes,
+                                   published_group_tokens);
+                    if (!replanned) {
+                        throw std::invalid_argument(
+                            "rank 0 cannot hold the group's KV capacity of " +
+                            std::to_string(*published_group_tokens) +
+                            " tokens, which the peer's budget lowered it to");
+                    }
+                    candidate = std::move(replanned);
+                }
+            }
             if (execution->width() > 1) {
                 if constexpr (requires(Setup& s) { s.sharded_partial_rows(); }) {
                     const auto rows = setup.sharded_partial_rows();
@@ -410,30 +450,36 @@ BuiltModel<typename Setup::Types> build_local_model(const artifact::Reader& read
         if constexpr (requires(Setup& s, DeviceContext& d, const StartupObserver& o) {
                           s.materialize(d, models::WeightPlacement::Resident, o, 1);
                       }) {
-            // Rank 1's Program, planned from rank 1's own device. Its capacity must equal rank 0's
-            // because the mirror addresses rank 0's pages by index; a mismatch is refused rather
-            // than papered over, so an asymmetric box says so.
+            // Rank 1's Program is planned at the capacity the group decided above: it never
+            // resolves a capacity of its own, because the mirror addresses rank 0's pages by index
+            // and two decisions are two answers.
             if (peers.size() != 1) {
                 throw std::invalid_argument("a two-rank lane needs exactly one peer instance");
+            }
+            if (!published_group_tokens) {
+                throw std::logic_error("two-GPU lane: the group capacity was never published");
             }
             auto& peer_device = execution->device(1);
             const auto peer_available =
                 budget.available(device_memory_snapshot(peer_device.device()));
             auto peer_plan = setup.plan(peer_device, options, choices[selected].placement,
-                                        peer_available);
+                                        peer_available, published_group_tokens);
             if (!peer_plan) {
                 throw std::invalid_argument(
-                    "rank 1 cannot hold the model weights and required execution resources");
+                    "rank 1 cannot hold the model weights and required execution resources at the "
+                    "group's KV capacity of " +
+                    std::to_string(*published_group_tokens) + " tokens");
             }
-            if (peer_plan->capacity.resolved_tokens !=
-                calibrated->startup.capacity.resolved_tokens) {
-                throw std::invalid_argument(
-                    "tensor-parallel ranks resolved different KV capacities (" +
-                    std::to_string(calibrated->startup.capacity.resolved_tokens) + " vs " +
-                    std::to_string(peer_plan->capacity.resolved_tokens) +
-                    " tokens): the rank-1 mirror addresses rank 0's pages by index, so both ranks "
-                    "must resolve the same capacity. The box is asymmetric or the options differ "
-                    "per rank");
+            // An invariant check, not a second decision: both ranks must report the published
+            // capacity, so a future re-plan that quietly resolves its own number fails here.
+            if (peer_plan->capacity.resolved_tokens != *published_group_tokens ||
+                calibrated->startup.capacity.resolved_tokens != *published_group_tokens) {
+                throw std::logic_error(
+                    "rank capacity escaped the group decision: rank 0 has " +
+                    std::to_string(calibrated->startup.capacity.resolved_tokens) +
+                    " tokens, rank 1 has " +
+                    std::to_string(peer_plan->capacity.resolved_tokens) + ", the group published " +
+                    std::to_string(*published_group_tokens));
             }
             // The startup record describes every rank the executor drives, and the per-rank report
             // indexes `startup.ranks` by the description's rank index. Rank 1 materializes on its

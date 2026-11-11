@@ -4,6 +4,7 @@
 #include <iostream>
 #include <array>
 #include <stdexcept>
+#include <string>
 #include <span>
 
 namespace {
@@ -195,6 +196,49 @@ int main() {
                       "shared Host payload capacity was not reserved");
     failures += check(shared.fits({3000, 12000}) && !shared.fits({2999, 12000}),
                       "startup consumed the shared Host payload reservation");
+
+    // --- one derivation for the whole group ------------------------------------------------
+    // Width 1 is the one-element case of the group path, so a fixed option set must resolve to the
+    // same resolution field for field. This is the demonstration behind "byte-identical at width 1"
+    // rather than an assertion of it.
+    const auto single_2000 = ninfer::runtime::resolve_kv_capacity(
+        ninfer::KvCapacityPolicy::automatic(50), curve, 2000);
+    const std::array<ninfer::runtime::RankCapacityOffer, 1> one_rank{
+        ninfer::runtime::RankCapacityOffer{curve, 2000}};
+    const auto group_one =
+        ninfer::runtime::resolve_group_kv_capacity(ninfer::KvCapacityPolicy::automatic(50), one_rank);
+    failures += check(same_resolution(group_one.front(), single_2000),
+                      "a group of one rank resolved differently from the single-device path");
+
+    // Two ranks with different budgets resolve ONE capacity, and both report it: the tighter
+    // budget is the bottleneck, not a disagreement.
+    const std::array<ninfer::runtime::RankCapacityOffer, 2> uneven{
+        ninfer::runtime::RankCapacityOffer{wide, 1380},
+        ninfer::runtime::RankCapacityOffer{wide, 1780}};
+    const auto group_uneven = ninfer::runtime::resolve_group_kv_capacity(
+        ninfer::KvCapacityPolicy::automatic(50), uneven);
+    failures += check(group_uneven[0].resolved_tokens == group_uneven[1].resolved_tokens &&
+                          group_uneven[0].main_page_groups == 5 &&
+                          group_uneven[0].main_page_groups == group_uneven[1].main_page_groups,
+                      "group capacity did not resolve one count from uneven rank budgets");
+
+    // A rank that cannot hold the group's capacity is refused naming the rank and both numbers:
+    // the group's token count and what that rank has.
+    const std::array<ninfer::runtime::RankCapacityOffer, 2> short_rank{
+        ninfer::runtime::RankCapacityOffer{wide, 1380},
+        ninfer::runtime::RankCapacityOffer{wide, 1200}};
+    bool named_both = false;
+    try {
+        (void)ninfer::runtime::resolve_group_kv_capacity(
+            ninfer::KvCapacityPolicy::explicit_capacity(320), short_rank);
+    } catch (const std::invalid_argument& error) {
+        const std::string message = error.what();
+        named_both = message.find("rank 1") != std::string::npos &&
+                     message.find("320") != std::string::npos &&
+                     message.find("1200") != std::string::npos;
+    }
+    failures += check(named_both,
+                      "a rank that cannot hold the group capacity was not named with both numbers");
 
     if (failures == 0) { std::cout << "ok\n"; }
     return failures == 0 ? 0 : 1;

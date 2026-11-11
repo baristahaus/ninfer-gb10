@@ -26,8 +26,17 @@ public:
 
     [[nodiscard]] Architecture architecture() const noexcept { return architecture_; }
 
-    [[nodiscard]] std::optional<ExecutionPlan> plan(DeviceContext&, const EngineOptions&,
-                                                    WeightPlacement, std::size_t available) const;
+    // `published_tokens` pins the capacity to a group decision instead of resolving one here. It is
+    // the seam that lets both ranks of a group plan at one capacity: the caller decides once, then
+    // every rank is planned at the same count.
+    [[nodiscard]] std::optional<ExecutionPlan>
+    plan(DeviceContext&, const EngineOptions&, WeightPlacement, std::size_t available,
+         std::optional<std::uint32_t> published_tokens = std::nullopt) const;
+    // The curve plan() would resolve against, without finalizing a sequence. A group decision needs
+    // every rank's curve before either Program exists.
+    [[nodiscard]] runtime::SequenceCapacityCurve capacity_curve(DeviceContext&,
+                                                                const EngineOptions&,
+                                                                WeightPlacement) const;
     // `rank` selects which of `rank_definitions()` the materialization reads, so a group's rank
     // materializes its own bindings on its own device. Rank 0 is the local rank and the default, so
     // every existing caller is unchanged.

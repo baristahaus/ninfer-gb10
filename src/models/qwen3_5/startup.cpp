@@ -47,10 +47,27 @@ Startup::Startup(const artifact::Reader& definition_source, const artifact::Read
     }
 }
 
+runtime::SequenceCapacityCurve Startup::capacity_curve(DeviceContext& device,
+                                                        const EngineOptions& options,
+                                                        WeightPlacement placement) const {
+    if (placement == WeightPlacement::HostExperts) {
+        // The host-expert curve is resolved after the offload plan, so it has no curve to offer
+        // before that plan exists. A group decision over host experts is not supported.
+        throw std::invalid_argument("a host-expert placement has no standalone capacity curve");
+    }
+    auto trial      = options;
+    trial.prefill_chunk = std::min(options.max_context, options.prefill_chunk ? options.prefill_chunk
+                                                                              : 1024U);
+    auto planner    = make_sequence_planner(profile, device, trial, nullptr);
+    return planner.capacity_curve();
+}
+
 std::optional<Startup::ExecutionPlan> Startup::plan(DeviceContext& device,
                                                     const EngineOptions& options,
                                                     WeightPlacement placement,
-                                                    std::size_t available) const {
+                                                    std::size_t available,
+                                                    std::optional<std::uint32_t>
+                                                        published_tokens) const {
     using runtime::resolve_kv_capacity;
     const bool host_experts = placement == WeightPlacement::HostExperts;
     if (host_experts && !offload_) return {};
@@ -72,12 +89,23 @@ std::optional<Startup::ExecutionPlan> Startup::plan(DeviceContext& device,
             : curve.minimum_main_page_groups;
     if (curve.reservation_bytes(pages) > available) return std::nullopt;
     if (!host_experts) {
-        auto resolution = resolve_kv_capacity(policy, curve, available);
+        // A published capacity is the group's decision; resolving here would be a second one.
+        auto resolution =
+            published_tokens
+                ? resolve_kv_capacity(KvCapacityPolicy::explicit_capacity(*published_tokens), curve,
+                                      available)
+                : resolve_kv_capacity(policy, curve, available);
+        if (published_tokens) { resolution.mode = options.kv_capacity.mode; }
         return ExecutionPlan{std::move(planner).finalize(resolution.main_page_groups),
                              resolution,
                              placement,
                              chunk,
-                             {}};
+                             {},
+                             curve};
+    }
+    if (published_tokens) {
+        throw std::invalid_argument(
+            "a published capacity is not supported for a host-expert placement");
     }
     auto limited          = KvCapacityPolicy::explicit_capacity(curve.resolved_tokens(pages));
     auto base             = resolve_kv_capacity(limited, curve, available);
@@ -89,13 +117,15 @@ std::optional<Startup::ExecutionPlan> Startup::plan(DeviceContext& device,
     if (!moe) return std::nullopt;
     auto final = make_sequence_planner(profile, device, trial, moe);
     if (final.capacity_curve().reservation_bytes(pages) > available) return std::nullopt;
-    auto resolution = resolve_kv_capacity(limited, final.capacity_curve(), available);
-    resolution.mode = policy.mode;
+    const auto final_curve = final.capacity_curve();
+    auto resolution        = resolve_kv_capacity(limited, final_curve, available);
+    resolution.mode        = policy.mode;
     return ExecutionPlan{std::move(final).finalize(resolution.main_page_groups),
                          resolution,
                          placement,
                          chunk,
-                         {std::move(moe)}};
+                         {std::move(moe)},
+                         final_curve};
 }
 
 std::unique_ptr<ModelShard> Startup::materialize(DeviceContext& device, WeightPlacement placement,

@@ -1,6 +1,8 @@
 // Implements: src/models/common/sharded_group.h
 #include "models/common/sharded_group.h"
 
+#include <cstdio>
+#include <cstdlib>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -82,6 +84,28 @@ ShardedGroupOwner::ShardedGroupOwner(const ExecutionContext& execution, std::int
             logits_buffers_[rank] = DeviceBuffer(device, logits_bytes);
             logits_[rank] =
                 Tensor{logits_buffers_[rank].span(), DType::BF16, {output_rows, logits_columns}};
+        }
+    }
+    // DIAGNOSTIC (NINFER_MAILBOX_TRACE=1): the group's device buffers, per rank, and an assertion
+    // that no two of them are the same allocation. The audit that preceded this checked the partial
+    // pair by SHAPE; if a rank's reduce lands in an allocation that is also the logits pair, the
+    // sum is not a sum and the magnitude is whatever lives there.
+    if (std::getenv("NINFER_MAILBOX_TRACE") != nullptr) {
+        for (int rank = 0; rank < 2; ++rank) {
+            std::fprintf(stderr,
+                         "[group] rank=%d dev=%d partials=%p logits=%p mailbox_slab=%p\n", rank,
+                         execution_.device(rank).device().index(),
+                         static_cast<const void*>(partials_[rank].data),
+                         static_cast<const void*>(logits_[rank].data),
+                         static_cast<const void*>(mailbox_.payload_base(rank)));
+        }
+        const auto* p0 = static_cast<const std::byte*>(partials_[0].data);
+        const auto* p1 = static_cast<const std::byte*>(partials_[1].data);
+        const auto* l0 = static_cast<const std::byte*>(logits_[0].data);
+        const auto* l1 = static_cast<const std::byte*>(logits_[1].data);
+        if (p0 == p1 || p0 == l0 || p0 == l1 || p1 == l0 || p1 == l1 || l0 == l1) {
+            throw std::logic_error(
+                "sharded group: two of the group's buffers are the same allocation");
         }
     }
     group_.execution = &execution_;

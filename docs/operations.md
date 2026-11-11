@@ -123,6 +123,7 @@ not appear in a shared configuration file.
 | `NINFER_FLASH_NEXT_STATE_DIR` | directory for Flash-Next state dumps. |
 | `NINFER_FLASH_NEXT_STATE_FRONTIER` | execution-token count at which to capture the committed GDN convolution frontier. |
 | `NINFER_FLASH_NEXT_LOGITS_DIR` | directory for Flash-Next logits dumps. |
+| `NINFER_CTX_SEGMENTS` | `1` prints, at each context migration's enqueue on every rank, one line per transfer segment and one line per action the segment bookkeeping skips: rank (the rank's device index), resource class, direction, units, pages, payload bytes, copy operations, target pool, and the source/destination slot, page or Host extent. The last line before a stalled completion names the last transfer-stream work enqueued. |
 
 `tools/check_docs.py` runs as the `ninfer_docs_guard_test` CTest and fails when a serve flag, a
 CLI flag, a benchmark flag or an environment variable is read without a line here or in the

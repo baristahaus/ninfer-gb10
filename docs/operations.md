@@ -123,6 +123,11 @@ not appear in a shared configuration file.
 | `NINFER_FLASH_NEXT_STATE_DIR` | directory for Flash-Next state dumps. |
 | `NINFER_FLASH_NEXT_STATE_FRONTIER` | execution-token count at which to capture the committed GDN convolution frontier. |
 | `NINFER_FLASH_NEXT_LOGITS_DIR` | directory for Flash-Next logits dumps. |
+| `NINFER_FLASH_NEXT_KV_PROBE` | `1` prints, at each MTP decode round, the text KV frontier, the bound execution row and, per page covering the prefix, the committed and protected columns, reference and writer counts, and the physical page identity. |
+| `NINFER_FLASH_NEXT_KV_DUMP` | directory for a prefix KV page dump taken at the decode round: one raw page plus a JSON layout sidecar per dump, compared against the previous dump at the same frontier and page. Reports the first differing column when two dumps disagree. |
+| `NINFER_FLASH_NEXT_KV_PREFILL_DUMP` | directory for the same page record taken at the end of the suffix prefill. Records are never paired automatically; they exist for offline comparison against a decode dump. |
+| `NINFER_FLASH_NEXT_KV_WRITE_PROBE` | `1` prints the fork's source and destination page, the page each suffix-prefill chunk's device execution-table row resolves to against the host membership, and the same comparison for the decode round's ingress row. Names a write/bind mismatch when one exists. |
+| `NINFER_MAILBOX_TRACE` | `1` prints the peer mailbox's first exchange as the kernel sees it — slot, vector count, payload and flag addresses, expected epoch, the value the poller saw, spins, and whether it gave up — plus the sharded group's per-rank buffer addresses with an assertion that the partial and logits pairs are distinct. |
 
 `tools/check_docs.py` runs as the `ninfer_docs_guard_test` CTest and fails when a serve flag, a
 CLI flag, a benchmark flag or an environment variable is read without a line here or in the

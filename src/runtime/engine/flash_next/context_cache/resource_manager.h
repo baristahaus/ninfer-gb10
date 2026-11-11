@@ -5,6 +5,7 @@
 #include "runtime/contract/resources.h"
 #include "runtime/engine/context_cache/context_cost.h"
 #include "runtime/engine/flash_next/context_cache/materialization_planner.h"
+#include "runtime/engine/flash_next/context_cache/reuse_trace.h"
 #include "runtime/engine/flash_next/context_cache/shared_capture_planner.h"
 
 #include <algorithm>
@@ -290,10 +291,12 @@ public:
         // materialization the Program must refuse to seal.
         if (!std::holds_alternative<std::monostate>(transaction_) ||
             program.has_context_transaction()) {
+            reuse_trace_line(0, "inspect: BLOCKED context-transaction (no admission decision)");
             return {.readiness    = Readiness::TemporarilyBlocked,
                     .block_reason = BlockReason::ContextTransaction};
         }
         if (program.has_unsettled_state_fork()) {
+            reuse_trace_line(0, "inspect: BLOCKED unsettled-state-fork (no admission decision)");
             return {.readiness    = Readiness::TemporarilyBlocked,
                     .block_reason = BlockReason::UnsettledStateFork};
         }
@@ -301,6 +304,7 @@ public:
             throw std::invalid_argument("request publication order is zero");
         }
         if (!program.isolated_request_feasible(base)) {
+            reuse_trace_line(0, "inspect: PERMANENTLY_INFEASIBLE isolated-request");
             return {.readiness = Readiness::PermanentlyInfeasible};
         }
         std::optional<LaneId> destination;
@@ -311,12 +315,160 @@ public:
             }
         }
         if (!destination) {
+            reuse_trace_line(0, "inspect: BLOCKED no-free-lane (no admission decision)");
             return {.readiness    = Readiness::TemporarilyBlocked,
                     .block_reason = BlockReason::NoFreeLane};
         }
 
         const typename Planner::Clock::time_point planning_started = Planner::Clock::now();
         rebuild_prefix_index();
+
+        // Env-gated admission trace. It reads host catalog metadata and Program occupancy counters
+        // only; no device memory is touched, so no stream ordering applies. The hit count reported
+        // to the caller is printed at selection below.
+        constexpr int trace_rank = 0; // Flash-Next runs one Program per rank.
+        const RequestPlanSummary& trace_summary = base.summary();
+        const auto& trace_cache                 = base.context_cache();
+        const auto trace_usage                 = program.physical_usage();
+        std::uint32_t trace_private_catalogued = 0;
+        for (const CatalogEntry& entry : catalog_) {
+            if (entry.state == CatalogState::Catalogued && entry.handle) {
+                ++trace_private_catalogued;
+            }
+        }
+        std::uint32_t trace_shared_catalogued = 0;
+        std::uint32_t trace_shared_vacant     = 0;
+        for (const SharedCatalogEntry& entry : shared_catalog_) {
+            if (entry.state == SharedCatalogState::Vacant) {
+                ++trace_shared_vacant;
+            } else if (entry.state == SharedCatalogState::Catalogued && entry.handle) {
+                ++trace_shared_catalogued;
+            }
+        }
+        std::uint32_t trace_lanes_active = 0;
+        std::uint32_t trace_lanes_free   = 0;
+        std::uint32_t trace_lanes_other  = 0;
+        for (const LogicalLaneState state : lanes_) {
+            if (state == LogicalLaneState::Active) {
+                ++trace_lanes_active;
+            } else if (state == LogicalLaneState::Free) {
+                ++trace_lanes_free;
+            } else {
+                ++trace_lanes_other;
+            }
+        }
+        reuse_trace_line(
+            trace_rank,
+            "inspect: prompt_tokens=%u requested_output=%u effective_output=%u "
+            "publish_continuation=%d reusable_prompt_tokens=%u opportunities=%zu session_key=%d "
+            "update_session_index=%d | capacity: private_continuations=%u shared_prefixes=%u "
+            "max_long_anchors=%u lanes=%u | occupancy: catalogued private=%u shared=%u "
+            "shared_vacant=%u lanes active=%u free=%u other=%u device_state_slots=%u "
+            "main_kv_pages=%u backend_kv_pages=%u host_state_slots=%u host_kv_bytes=%zu",
+            trace_summary.prompt_tokens, trace_summary.requested_output_tokens,
+            trace_summary.effective_output_tokens, trace_summary.publish_continuation ? 1 : 0,
+            trace_summary.reusable_prompt_tokens, trace_cache.opportunities.size(),
+            trace_cache.session_key.has_value() ? 1 : 0, trace_cache.update_session_index ? 1 : 0,
+            catalog_count_, shared_catalog_count_, max_long_anchors_, lane_count_,
+            trace_private_catalogued, trace_shared_catalogued, trace_shared_vacant,
+            trace_lanes_active, trace_lanes_free, trace_lanes_other, trace_usage.device_state_slots,
+            trace_usage.device_main_kv_pages, trace_usage.device_backend_kv_pages,
+            trace_usage.host_state_slots, trace_usage.host_kv_bytes);
+
+        if (const std::optional<PrefixShortlistKey> request_key =
+                base.prefix_shortlist_key(trace_summary.prompt_tokens);
+            request_key) {
+            reuse_trace_line(
+                trace_rank,
+                "request identity: prompt_key(frontier=%u tag=0x%08x digests=%016llx/%016llx)",
+                request_key->frontier, request_key->identity_tag,
+                static_cast<unsigned long long>(request_key->digests[0]),
+                static_cast<unsigned long long>(request_key->digests[1]));
+        } else {
+            reuse_trace_line(
+                trace_rank,
+                "request identity: prompt_key ABSENT at frontier=%u (publish_continuation=%d)",
+                trace_summary.prompt_tokens, trace_summary.publish_continuation ? 1 : 0);
+        }
+
+        for (const PrefixIndexEntry& index : prefix_index_) {
+            if (!index.occupied) { continue; }
+            const std::uint32_t frontier = index.key.frontier;
+            reuse_trace_line(
+                trace_rank,
+                "checkpoint candidate: shared=%d slot=%u owner_id=%llu revision=%llu "
+                "ref(kind=%d frontier=%u ordinal=%u) key(frontier=%u tag=0x%08x "
+                "digests=%016llx/%016llx)",
+                index.shared ? 1 : 0, index.slot,
+                static_cast<unsigned long long>(index.owner_id),
+                static_cast<unsigned long long>(index.revision),
+                static_cast<int>(index.checkpoint.kind), index.checkpoint.frontier,
+                index.checkpoint.ordinal, frontier, index.key.identity_tag,
+                static_cast<unsigned long long>(index.key.digests[0]),
+                static_cast<unsigned long long>(index.key.digests[1]));
+            if (!valid_prefix_index_entry(index)) {
+                reuse_trace_line(trace_rank,
+                                 "checkpoint candidate check: REJECT stale-index-entry");
+                continue;
+            }
+            const std::optional<PrefixShortlistKey> incoming =
+                base.prefix_shortlist_key(frontier);
+            if (!incoming) {
+                reuse_trace_line(
+                    trace_rank,
+                    "checkpoint candidate check: incoming=ABSENT (frontier=%u prompt_tokens=%u) => "
+                    "REJECT frontier-beyond-request",
+                    frontier, trace_summary.prompt_tokens);
+                continue;
+            }
+            reuse_trace_line(
+                trace_rank,
+                "checkpoint candidate check: incoming(frontier=%u tag=0x%08x "
+                "digests=%016llx/%016llx) tag_match=%d digest_match=%d",
+                incoming->frontier, incoming->identity_tag,
+                static_cast<unsigned long long>(incoming->digests[0]),
+                static_cast<unsigned long long>(incoming->digests[1]),
+                incoming->identity_tag == index.key.identity_tag ? 1 : 0,
+                incoming->digests == index.key.digests ? 1 : 0);
+            if (incoming->identity_tag != index.key.identity_tag) {
+                reuse_trace_line(trace_rank,
+                                 "checkpoint candidate check: REJECT identity-tag-mismatch");
+                continue;
+            }
+            if (incoming->digests != index.key.digests) {
+                reuse_trace_line(trace_rank, "checkpoint candidate check: REJECT digest-mismatch");
+                continue;
+            }
+            if (!index.shared) {
+                const CatalogEntry& entry = catalog_[index.slot];
+                if (entry.state != CatalogState::Catalogued || !entry.handle) {
+                    reuse_trace_line(
+                        trace_rank,
+                        "checkpoint candidate check: REJECT private-entry-not-catalogued "
+                        "(state=%d handle=%d)",
+                        static_cast<int>(entry.state), entry.handle ? 1 : 0);
+                    continue;
+                }
+                if (private_has_active_edge(index.slot)) {
+                    reuse_trace_line(
+                        trace_rank,
+                        "checkpoint candidate check: REJECT private-active-edge (slot=%u)",
+                        index.slot);
+                    continue;
+                }
+            } else {
+                const SharedCatalogEntry& entry = shared_catalog_[index.slot];
+                if (entry.state != SharedCatalogState::Catalogued || !entry.handle) {
+                    reuse_trace_line(
+                        trace_rank,
+                        "checkpoint candidate check: REJECT shared-entry-not-catalogued "
+                        "(state=%d handle=%d)",
+                        static_cast<int>(entry.state), entry.handle ? 1 : 0);
+                    continue;
+                }
+            }
+            reuse_trace_line(trace_rank, "checkpoint candidate check: CONSIDERED");
+        }
         PrefixDemandRecord provisional_demand;
         provisional_demand.domain =
             reuse_domain(base.context_cache().session_key, publication_order);
@@ -417,13 +569,49 @@ public:
             }
         }
 
+        reuse_trace_line(trace_rank,
+                         "candidate summary: %zu total (1 root + %zu cache candidates)",
+                         candidates.size(), candidates.size() - 1U);
+        for (std::size_t candidate_index = 0; candidate_index < candidates.size();
+             ++candidate_index) {
+            const Candidate& candidate = candidates[candidate_index];
+            if (!candidate.plan) {
+                reuse_trace_line(trace_rank, "plan candidate %zu: no AdmissionCandidate",
+                                 candidate_index);
+                continue;
+            }
+            const RequestPlanSummary& plan_summary = candidate.plan->summary();
+            const auto& identity                   = candidate.plan->identity_assessment();
+            reuse_trace_line(
+                trace_rank,
+                "plan candidate %zu: reusable_prompt_tokens=%u path=%d physical_status=%d "
+                "source_mode=%d private_source=%d shared_source=%d",
+                candidate_index, plan_summary.reusable_prompt_tokens,
+                static_cast<int>(plan_summary.prefix_reuse_path),
+                static_cast<int>(identity.physical_status),
+                static_cast<int>(identity.source_mode), candidate.private_source ? 1 : 0,
+                candidate.shared_source ? 1 : 0);
+        }
+
         std::optional<Choice> selected =
             plan_materialization(program, prompt, base, *destination, candidates, publication_order,
                                  planning_started, provisional_demand, allowance);
         if (!selected) {
+            reuse_trace_line(trace_rank,
+                             "selection: NONE (NoFeasiblePlan) candidates=%zu; the request stays "
+                             "blocked, so this is not yet an admission decision",
+                             candidates.size());
             return {.readiness    = Readiness::TemporarilyBlocked,
                     .block_reason = BlockReason::NoFeasiblePlan};
         }
+        reuse_trace_line(
+            trace_rank,
+            "selection: reusable_prompt_tokens=%u path=%d needs_transfer=%d source_mode=%d "
+            "private_source=%d shared_source=%d candidates=%zu (reported hit for this request)",
+            selected->summary().reusable_prompt_tokens,
+            static_cast<int>(selected->summary().prefix_reuse_path),
+            selected->needs_transfer() ? 1 : 0, static_cast<int>(selected->source_mode_),
+            selected->private_source_ ? 1 : 0, selected->shared_source_ ? 1 : 0, candidates.size());
         return {
             .readiness = selected->needs_transfer() ? Readiness::NeedsTransfer : Readiness::Ready,
             .choice    = std::move(selected),
@@ -570,6 +758,25 @@ public:
                     break;
                 }
             }
+        }
+        {
+            std::uint32_t trace_shared_vacant     = 0;
+            std::uint32_t trace_shared_catalogued = 0;
+            for (const SharedCatalogEntry& entry : shared_catalog_) {
+                if (entry.state == SharedCatalogState::Vacant) {
+                    ++trace_shared_vacant;
+                } else if (entry.state == SharedCatalogState::Catalogued && entry.handle) {
+                    ++trace_shared_catalogued;
+                }
+            }
+            reuse_trace_line(
+                0,
+                "capture offer: frontier=%u publishes_private=%d publishes_shared=%d "
+                "evidence=0x%02x exact_shared=%d | shared slots capacity=%u vacant=%u catalogued=%u",
+                candidate.frontier, candidate.publishes_private ? 1 : 0,
+                candidate.publishes_shared ? 1 : 0,
+                static_cast<unsigned>(candidate.shared_evidence), exact_shared ? 1 : 0,
+                shared_catalog_count_, trace_shared_vacant, trace_shared_catalogued);
         }
         if (exact_shared != nullptr) {
             if (!private_baseline.publishes_private || !private_baseline.physically_feasible) {
@@ -825,6 +1032,12 @@ public:
         }
 
         if (!selected) {
+            reuse_trace_line(
+                0,
+                "capture result: no shared target selected (planner returned no positive-value "
+                "plan); private_baseline publishes_private=%d physically_feasible=%d",
+                private_baseline.publishes_private ? 1 : 0,
+                private_baseline.physically_feasible ? 1 : 0);
             if (!private_baseline.publishes_private || !private_baseline.physically_feasible) {
                 program.skip_capture(std::move(offer));
                 return ActiveCaptureReserveResult::Skipped;
@@ -842,6 +1055,18 @@ public:
             return ActiveCaptureReserveResult::Reserved;
         }
 
+        reuse_trace_line(
+            0,
+            "capture reserve: selected shared target slot=%u replacement_id=%llu "
+            "replacement_frontier=%u net_gain=%llu evidence=0x%02x (commits at adoption)",
+            selected->scenario.publication_slot,
+            static_cast<unsigned long long>(selected->scenario.replacement_id),
+            selected->scenario.replacement == nullptr
+                ? 0U
+                : shared_catalog_[selected->scenario.publication_slot]
+                      .summary.checkpoint.ref.frontier,
+            static_cast<unsigned long long>(selected->plan.net_gain),
+            static_cast<unsigned>(selected->scenario.assessment.shared_evidence));
         ActiveCaptureRecord record{
             .lane                 = lane,
             .publishes_private    = selected->scenario.assessment.publishes_private,
@@ -986,6 +1211,24 @@ public:
             clear_catalog_entry(publication);
             reset_active_entry(active);
             lanes_[lane.value] = LogicalLaneState::Free;
+            std::uint32_t trace_private_catalogued = 0;
+            for (const CatalogEntry& entry : catalog_) {
+                if (entry.state == CatalogState::Catalogued && entry.handle) {
+                    ++trace_private_catalogued;
+                }
+            }
+            std::uint32_t trace_shared_catalogued = 0;
+            for (const SharedCatalogEntry& entry : shared_catalog_) {
+                if (entry.state == SharedCatalogState::Catalogued && entry.handle) {
+                    ++trace_shared_catalogued;
+                }
+            }
+            reuse_trace_line(
+                0,
+                "finish: lane=%u released (cache_enabled=%d disposition=Released); no continuation "
+                "catalogued | catalogued private=%u shared=%u",
+                lane.value, cache_enabled_ ? 1 : 0, trace_private_catalogued,
+                trace_shared_catalogued);
             return result;
         }
         if (result.disposition != FinishDisposition::Catalogued || !result.continuation ||
@@ -1008,6 +1251,54 @@ public:
         publication.retention = active.retention;
         migrate_observations(publication, result.summary, active.retention);
         advance_revision(publication.revision);
+        {
+            std::uint32_t trace_private_catalogued = 0;
+            for (const CatalogEntry& entry : catalog_) {
+                if (entry.state == CatalogState::Catalogued && entry.handle) {
+                    ++trace_private_catalogued;
+                }
+            }
+            std::uint32_t trace_shared_catalogued = 0;
+            for (const SharedCatalogEntry& entry : shared_catalog_) {
+                if (entry.state == SharedCatalogState::Catalogued && entry.handle) {
+                    ++trace_shared_catalogued;
+                }
+            }
+            const auto& endpoint = publication.summary.endpoint;
+            if (endpoint) {
+                reuse_trace_line(
+                    0,
+                    "finish: lane=%u catalogued continuation slot=%u owner_id=%llu revision=%llu "
+                    "endpoint(kind=%d frontier=%u ordinal=%u) endpoint_key(frontier=%u tag=0x%08x "
+                    "digests=%016llx/%016llx) rewrite=%d long_anchors=%zu session=%d retention=%d "
+                    "| catalogued private=%u shared=%u",
+                    lane.value, active.publication_slot,
+                    static_cast<unsigned long long>(publication.id),
+                    static_cast<unsigned long long>(publication.revision),
+                    static_cast<int>(endpoint->ref.kind), endpoint->ref.frontier,
+                    endpoint->ref.ordinal, endpoint->shortlist_key.frontier,
+                    endpoint->shortlist_key.identity_tag,
+                    static_cast<unsigned long long>(endpoint->shortlist_key.digests[0]),
+                    static_cast<unsigned long long>(endpoint->shortlist_key.digests[1]),
+                    publication.summary.rewrite.has_value() ? 1 : 0,
+                    publication.summary.long_anchors.size(),
+                    publication.session.has_value() ? 1 : 0,
+                    static_cast<int>(publication.retention), trace_private_catalogued,
+                    trace_shared_catalogued);
+            } else {
+                reuse_trace_line(
+                    0,
+                    "finish: lane=%u catalogued continuation slot=%u owner_id=%llu revision=%llu "
+                    "with no endpoint (rewrite=%d long_anchors=%zu) | catalogued private=%u "
+                    "shared=%u",
+                    lane.value, active.publication_slot,
+                    static_cast<unsigned long long>(publication.id),
+                    static_cast<unsigned long long>(publication.revision),
+                    publication.summary.rewrite.has_value() ? 1 : 0,
+                    publication.summary.long_anchors.size(), trace_private_catalogued,
+                    trace_shared_catalogued);
+            }
+        }
         if (publication.session && active.update_session_index) {
             if (!publish_session(*publication.session, active.publication_slot, publication.id,
                                  publication.revision, active.publication_order)) {
@@ -3108,6 +3399,19 @@ private:
             assign_continuation_summary(publication.summary, result.active_summary);
             migrate_observations(publication, result.active_summary, active.retention);
             advance_revision(publication.revision);
+            if (result.active_summary.endpoint) {
+                const auto& endpoint = *result.active_summary.endpoint;
+                reuse_trace_line(
+                    0,
+                    "capture published: private slot=%u owner_id=%llu revision=%llu "
+                    "endpoint_frontier=%u endpoint_key_frontier=%u rewrite=%d long_anchors=%zu",
+                    active.publication_slot,
+                    static_cast<unsigned long long>(publication.id),
+                    static_cast<unsigned long long>(publication.revision), endpoint.ref.frontier,
+                    endpoint.shortlist_key.frontier,
+                    result.active_summary.rewrite.has_value() ? 1 : 0,
+                    result.active_summary.long_anchors.size());
+            }
         }
         if (record->publishes_shared) {
             SharedCatalogEntry& publication = shared_catalog_[record->publication_slot];
@@ -3136,6 +3440,20 @@ private:
             advance_revision(publication.revision);
             active.shared_sources.push_back(
                 active_edge(shared_capability(record->publication_slot)));
+            reuse_trace_line(
+                0,
+                "capture published: shared slot=%u owner_id=%llu revision=%llu frontier=%u "
+                "key(frontier=%u tag=0x%08x digests=%016llx/%016llx) active_references=%u",
+                record->publication_slot, static_cast<unsigned long long>(publication.id),
+                static_cast<unsigned long long>(publication.revision),
+                publication.summary.checkpoint.ref.frontier,
+                publication.summary.checkpoint.shortlist_key.frontier,
+                publication.summary.checkpoint.shortlist_key.identity_tag,
+                static_cast<unsigned long long>(
+                    publication.summary.checkpoint.shortlist_key.digests[0]),
+                static_cast<unsigned long long>(
+                    publication.summary.checkpoint.shortlist_key.digests[1]),
+                publication.summary.active_references);
         }
         observe_transfers(result);
         observe_operations(result);

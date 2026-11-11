@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: ValerioDolci/capy-flash
+// SPDX-License-Identifier: Apache-2.0
 #pragma once
 
 // YaRN (Yet another RoPE extensioN) NTK-by-parts frequency scaling, device side.

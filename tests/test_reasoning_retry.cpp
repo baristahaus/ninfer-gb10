@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: ValerioDolci/capy-flash
+// SPDX-License-Identifier: Apache-2.0
 // plan_reasoning_retry (serve --reasoning-close-retry): when a reply is continued, with which
 // tokens, and when it is left alone. Ported from capy-flash tests/test_reasoning_retry.cpp (release
 // commit c2d9e4ba); the caller-stop case uses this Engine's FinishReason::StopString instead of

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: ValerioDolci/capy-flash
+// SPDX-License-Identifier: Apache-2.0
 #pragma once
 
 // ninfer::ops::detail - the kernels behind the pinned-host mailbox transport for TP2 collectives.

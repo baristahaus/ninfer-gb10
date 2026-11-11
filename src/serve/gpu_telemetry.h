@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: ValerioDolci/capy-flash
+// SPDX-License-Identifier: Apache-2.0
 #pragma once
 
 // GPU clock, power, energy and temperature samples for the request JSONL `throughput` event.

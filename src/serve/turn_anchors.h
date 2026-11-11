@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: ValerioDolci/capy-flash
+// SPDX-License-Identifier: Apache-2.0
 #pragma once
 
 // Turn anchors (--turn-anchors N). Ported from capy-flash (ValerioDolci/capy-flash v0.9.0,

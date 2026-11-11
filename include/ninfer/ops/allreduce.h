@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: ValerioDolci/capy-flash
+// SPDX-License-Identifier: Apache-2.0
 #pragma once
 
 // Two-device all-reduce for the tensor-parallel lane.

@@ -9,6 +9,9 @@ template <class Types>
 class Executor {
 public:
     virtual ~Executor()                                                              = default;
+    // Binds every rank of the group for a caller that acts on all of them in sequence. This is a
+    // group-wide bind, not a per-rank bind: after it returns the LAST rank's device is current.
+    // Per-rank work binds its own rank first; see LocalExecutor::bind_to_current_thread.
     virtual void bind_to_current_thread()                                            = 0;
     [[nodiscard]] virtual SessionEpoch epoch() const noexcept                        = 0;
     [[nodiscard]] virtual ExecutionCapacity capacity() const noexcept                = 0;

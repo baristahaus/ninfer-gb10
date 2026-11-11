@@ -329,6 +329,7 @@ void ContextMigration::prepare(const ContextActions& actions) {
 }
 
 void ContextMigration::enqueue(const ContextActions& actions, CudaExecutionView execution) {
+    bind_rank();
     occupied_ = true;
     if (actions.empty()) {
         submitted_stream_ = nullptr;
@@ -425,10 +426,12 @@ void ContextMigration::submit(const ContextActions& actions) {
 }
 
 bool ContextMigration::ready() const {
+    bind_rank();
     return !occupied_ || (fenced_ && (!submitted_stream_ || completed_.ready()));
 }
 
 std::span<const runtime::ContextTransferObservation> ContextMigration::observations() {
+    bind_rank();
     if (!occupied_ || !fenced_ || !ready())
         throw std::logic_error("context observations require completed execution");
     observations_.clear();
@@ -463,6 +466,7 @@ void ContextMigration::finish() {
 }
 
 void ContextMigration::drain() {
+    bind_rank();
     if (!occupied_) return;
     std::exception_ptr error;
     try {

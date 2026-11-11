@@ -41,6 +41,8 @@ public:
         instance_.reset();
     }
 
+    // Binds this worker's own rank. A group-wide bind leaves the last rank current, so per-rank
+    // work calls this immediately before touching the rank (see LocalExecutor::bind_rank).
     void bind_to_current_thread() { device_.bind_to_current_thread(); }
 
     [[nodiscard]] Device device() const noexcept { return device_.device(); }

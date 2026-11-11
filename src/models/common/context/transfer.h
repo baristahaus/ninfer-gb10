@@ -45,6 +45,10 @@ private:
 
     void prepare(const ContextActions& actions);
     void enqueue(const ContextActions& actions, CudaExecutionView execution);
+    // This slot is one rank's: its transfer stream, events and timers belong to `device_`. A
+    // group-wide bind leaves the last rank current, which is not necessarily this rank, so every
+    // entry point that touches them binds this rank first.
+    void bind_rank() const { device_->bind_to_current_thread(); }
 
     DeviceContext* device_;
     ContextStorage* storage_;

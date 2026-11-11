@@ -41,20 +41,33 @@ public:
         }
     }
 
+    // Group-wide bind: selects every rank's device in rank order, so the LAST rank is current when
+    // this returns. That is what a caller acting on all ranks in sequence wants (a collective that
+    // enqueues both ranks from one thread), and it is NOT a per-rank bind: it says nothing about
+    // which device must be current for a later per-rank call. A group-wide bind is not a per-rank
+    // bind -- the last rank wins -- and any per-rank CUDA work must bind its own rank first
+    // (`bind_rank` below); every dispatch in this class does so. At width 1 the single rank is also
+    // the last, which is why the distinction is invisible on the one-GPU lane.
     void bind_to_current_thread() override {
         for (auto& worker : workers_) { worker->bind_to_current_thread(); }
     }
 
     // Rank 0's Program is the authority: it owns the capacity, the frame pool and the events the
-    // engine consumes. A rank above 0 replays, so its results are issued but never read here.
+    // engine consumes. A rank above 0 replays, so its results are issued but never read here. A
+    // caller that executes on it binds rank 0 first; the dispatch methods below do.
     [[nodiscard]] typename Types::RankProgram& program() noexcept {
         return workers_.front()->program();
     }
 
-    // Every mutation is issued on every rank, rank 0 first, in the same order.
+    // Every mutation is issued on every rank, rank 0 first, in the same order. Each rank's device
+    // is bound immediately before its Program is touched, because the caller's current device is
+    // not necessarily that rank's (see bind_to_current_thread above).
     template <typename Fn>
     void for_each_program(Fn&& fn) {
-        for (auto& worker : workers_) { fn(worker->program()); }
+        for (std::size_t rank = 0; rank < workers_.size(); ++rank) {
+            bind_rank(rank);
+            fn(workers_[rank]->program());
+        }
     }
 
     [[nodiscard]] SessionEpoch epoch() const noexcept override { return epoch_; }
@@ -70,6 +83,7 @@ public:
                                          typename Protocol::Work work) override {
         require_available();
         if (!reservation) throw std::logic_error("empty execution reservation");
+        bind_rank(0);
         program().validate_work(work, reservation.frame().kind);
         const ExecutionTicket ticket{epoch_, ++next_execution_,
                                      pool_.accept(std::move(reservation))};
@@ -92,6 +106,7 @@ public:
         if (flight.phase != Phase::Decision || flight.decision_stage != input.stage) {
             throw std::logic_error("decision input does not match the pending execution stage");
         }
+        bind_rank(0);
         program().validate_decision(ticket, input);
         flight.command = next_command();
         flight.phase   = Phase::Running;
@@ -100,6 +115,7 @@ public:
                 // The payload is per-round control data, identical on every rank; rank 0 takes
                 // the move and the others take a copy, in rank order.
                 for (std::size_t rank = 0; rank < workers_.size(); ++rank) {
+                    bind_rank(rank);
                     auto& program = workers_[rank]->program();
                     if (rank == 0) {
                         program.supply(ticket, flight.command, std::move(input));
@@ -119,6 +135,7 @@ public:
         if (flight.phase != Phase::Result) {
             throw std::logic_error("execution has no result awaiting commit");
         }
+        bind_rank(0);
         program().prepare_commit(ticket, commit);
         flight.command = next_command();
         flight.phase   = Phase::Retiring;
@@ -130,6 +147,7 @@ public:
                 // which `prepare_commit` could not catch because it runs on rank 0 only, and which
                 // `launch_commit` caught as a segfault before it learned to refuse.
                 for (std::size_t rank = 0; rank < workers_.size(); ++rank) {
+                    bind_rank(rank);
                     auto& program = workers_[rank]->program();
                     if (rank + 1 == workers_.size()) {
                         program.commit(ticket, flight.command, std::move(commit));
@@ -180,8 +198,10 @@ public:
                     // scheduler decision, a conditional exchange), this becomes a race and the
                     // ticket must wait for every rank's event instead.
                     observe_host_call(host_.progress_ns, [&] {
+                        bind_rank(0);
                         auto event = program().poll();
                         for (std::size_t rank = 1; rank < workers_.size(); ++rank) {
+                            bind_rank(rank);
                             (void)workers_[rank]->program().poll();
                         }
                         return event;
@@ -277,12 +297,18 @@ public:
     void reset_measurement_peaks() override {
         for_each_program([](auto& program) { program.reset_measurement_peaks(); });
         for (std::size_t rank = 0; rank < workers_.size(); ++rank) {
+            bind_rank(rank);
             this->observations_[rank].memory = workers_[rank]->program().observe_resources();
         }
     }
 
 private:
+    // A group-wide bind is not a per-rank bind -- the last rank wins. This selects one rank's
+    // device so the caller can touch that rank's Program; see bind_to_current_thread above.
+    void bind_rank(std::size_t rank) { workers_[rank]->bind_to_current_thread(); }
+
     void sample_resources(bool force) {
+        bind_rank(0);
         auto& snapshot = this->observations_[0];
         const auto now = observation_time_ns();
         // The program observation is cheap and carries the measurement peaks; only the

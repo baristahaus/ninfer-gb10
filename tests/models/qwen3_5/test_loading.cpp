@@ -82,8 +82,8 @@ struct ModelFixture {
                            {"tie_word_embeddings", true},
                            {"rms_norm_eps", 1e-6},
                            {"layer_types", {"full_attention"}},
-                           {"num_attention_heads", 2},
-                           {"num_key_value_heads", 1},
+                           {"num_attention_heads", 16},
+                           {"num_key_value_heads", 16},
                            {"head_dim", 8},
                            {"intermediate_size", 24},
                            {"rope_parameters",
@@ -102,23 +102,24 @@ struct ModelFixture {
         const std::string p = "text/layers/0/";
         parameter(p + "input_norm", {128});
         parameter(p + "post_attention_norm", {128});
-        tensor("mixer-storage", {128, 128}, QType::NVFP4, QuantLayout::BlockScaleK16M128x4);
+        tensor("mixer-storage", {512, 128}, QType::NVFP4, QuantLayout::BlockScaleK16M128x4);
         tensor("calibration", {2}, QType::FP32);
         const auto calibration = file.root["objects"].back()["offset"].get<std::size_t>();
         put_word(file.payload, calibration, 0x40000000, 4);
         put_word(file.payload, calibration + 4, 0x40400000, 4);
         const std::array roles = {"query", "key", "gate", "value"};
-        const std::array rows  = {0, 16, 24, 40, 48};
+        // NVFP4's scale block spans 128 rows, so each part is 128 rows: 128 rows x 128 elements.
+        const std::array rows  = {0, 1, 2, 3, 4};
         for (std::size_t i = 0; i < roles.size(); ++i) {
             const auto name             = p + "attention/" + roles[i];
             file.root["bindings"][name] = {
                 {"parts", Json::array({{{"object", "mixer-storage"},
-                                        {"range", {rows[i] * 128, rows[i + 1] * 128}}}})}};
+                                        {"range", {rows[i] * 128 * 128, rows[i + 1] * 128 * 128}}}})}};
             use(name, p + "mixer_input", i < 2 ? 0 : 1);
         }
         parameter(p + "attention/query_norm", {8});
         parameter(p + "attention/key_norm", {8});
-        parameter(p + "attention/output", {128, 16}, p + "attention/gated_output");
+        parameter(p + "attention/output", {128, 128}, p + "attention/gated_output");
         parameter(p + "mlp/gate", {24, 128}, p + "ffn_input");
         parameter(p + "mlp/up", {24, 128}, p + "ffn_input");
         tensor("down-storage", {128, 24}, QType::Q6_G64_FP16, QuantLayout::RowSplit);
@@ -186,7 +187,8 @@ void logical_data_and_instances() {
     const auto& query     = plan->parameter(attention.query);
     const auto& gate      = plan->parameter(attention.gate);
     require(query.binding.parts[0].object == gate.binding.parts[0].object &&
-                query.binding.parts[0].begin == 0 && gate.binding.parts[0].begin == 24 * 128,
+                query.binding.parts[0].begin == 0 &&
+                gate.binding.parts[0].begin == 2 * 128 * 128,
             "Q/gate logical row correspondence changed");
     require(plan->uses(attention.query)[0].activation_input_divisor == 2.0F &&
                 plan->uses(attention.gate)[0].activation_input_divisor == 3.0F,

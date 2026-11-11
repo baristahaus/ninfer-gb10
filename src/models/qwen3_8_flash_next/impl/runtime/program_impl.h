@@ -820,7 +820,8 @@ make_peer_rank(const SequencePlanImpl& plan, DeviceContext& peer_device) {
 ProgramImplCore::ProgramImplCore(const LoadedModelData& model_in, const SequencePlanImpl& plan,
                                  DeviceContext& device_in, const StartupObserver& startup_observer,
                                  DeviceContext* peer_device)
-    : model(model_in), device(device_in), capacity(plan.capacity), kv_capacity(plan.kv_capacity),
+    : model(model_in), device(device_in), rank(plan.rank), capacity(plan.capacity),
+      kv_capacity(plan.kv_capacity),
       max_concurrency(plan.max_concurrency), context_cache(plan.context_cache),
       continuation_capacity(normalized_private_capacity(plan.context_cache)),
       shared_prefix_capacity(plan.context_cache.max_shared_prefixes.value_or(0)),
@@ -12719,6 +12720,43 @@ ProgramImplCore::decode_mtp_batch(std::span<const std::uint32_t> lanes,
                                  text_kv_pages->writer_references(logical),
                                  text_kv_addresses->physical_page(probe_sequence.kv->text, page)
                                      .index());
+                }
+            }
+        }
+        // Prefix KV page dump: the same head-of-round seam as the probe above, but the physical page
+        // CONTENTS rather than the host-side bookkeeping. A reused run's page must hold the bytes a
+        // cold prefill of the same tokens wrote; the first differing column says whether a fault is
+        // at the boundary (N == frontier) or inside the checkpointed prefix (N < frontier). The dump
+        // is bounded to the last page of the prefix plus the page the suffix wrote: this request
+        // shape has a two-token suffix, so the page holding the checkpoint's last token and the
+        // page(s) holding the two suffix tokens span at most two logical pages. One page at a time,
+        // on the compute stream.
+        if (const char* dump_directory = std::getenv("NINFER_FLASH_NEXT_KV_DUMP");
+            dump_directory != nullptr && *dump_directory != '\0') {
+            constexpr std::uint32_t kSuffixTokens = 2;
+            const auto page_size = static_cast<std::uint32_t>(kPagedKVPageSize);
+            for (std::size_t row = 0; row < lanes.size(); ++row) {
+                const SequenceState& dump_sequence = active_sequence(lanes[row]);
+                if (!dump_sequence.kv || dump_sequence.text_kv_valid == 0) { continue; }
+                const std::uint32_t frontier = dump_sequence.text_kv_valid;
+                // The checkpoint prefix ends at frontier - 2; its last page is the page holding
+                // token frontier - 3. The suffix writes tokens frontier - 2 and frontier - 1.
+                const std::uint32_t checkpoint_last_page =
+                    (frontier > kSuffixTokens + 1U ? frontier - kSuffixTokens - 1U : 0U) /
+                    page_size;
+                const std::uint32_t suffix_first_page =
+                    (frontier > kSuffixTokens ? frontier - kSuffixTokens : 0U) / page_size;
+                const std::uint32_t last_page = (frontier - 1U) / page_size;
+                const std::uint32_t first_page = std::min(checkpoint_last_page, suffix_first_page);
+                for (std::uint32_t page = first_page; page <= last_page; ++page) {
+                    const LogicalKVPageHandle logical =
+                        text_kv_addresses->logical_page(dump_sequence.kv->text, page);
+                    const DeviceKVPageHandle physical =
+                        text_kv_addresses->physical_page(dump_sequence.kv->text, page);
+                    capture_prefix_kv_page(dump_directory, text_kv_pages->physical_pool(), physical,
+                                           page, frontier,
+                                           text_kv_pages->committed_columns(logical),
+                                           dump_sequence.lane, rank, device.stream());
                 }
             }
         }

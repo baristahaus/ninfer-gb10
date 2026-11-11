@@ -651,6 +651,10 @@ public:
 
     const LoadedModelData& model;
     DeviceContext& device;
+    // The execution-group rank this Program describes. It is rank 0 today (rank 1 is persistent
+    // storage plus mirrors, not a second Program), but diagnostics that keep per-rank state index
+    // by it rather than assuming the process has only one rank.
+    const int rank;
     const std::uint32_t capacity;
     const std::uint32_t kv_capacity;
     const std::uint32_t max_concurrency;

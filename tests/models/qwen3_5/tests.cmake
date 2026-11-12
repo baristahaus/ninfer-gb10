@@ -13,7 +13,10 @@ ninfer_add_test(ninfer_qwen3_5_loading_test
 
 # The two-GPU lane loads but refuses to infer until the sharded forward is wired. Needs two GPUs
 # and a 27B artifact; skips otherwise.
-ninfer_add_test(ninfer_qwen3_5_tp2_accept_real_test
+# NEEDS_SOURCE_DIR: the test reads its prompt and goldens from tests/fixtures/tp2_accept/, so both
+# arms consume the same token ids without a tokenizer and the reference chain is recorded rather
+# than only compared across hosts.
+ninfer_add_test(ninfer_qwen3_5_tp2_accept_real_test NEEDS_SOURCE_DIR
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/test_engine_tp2_accept_real.cpp"
   LIBRARIES ninfer_engine CUDA::cudart)
 set_tests_properties(ninfer_qwen3_5_tp2_accept_real_test PROPERTIES

@@ -1,9 +1,24 @@
 // The two-GPU lane's acceptance test: a width-2 round must produce the same tokens as a width-1
-// round, token for token, from the same prompt and the same options.
+// round, token for token, from the same prompt and the same options -- and both must reproduce the
+// chain recorded on the reference host.
 //
 // Not approximately. Every defect this lane has found -- the extent units, the column-slice order,
 // the contiguity checks, the fused parents, the bind-by-object-handle -- produced numbers that
 // looked plausible. A token comparison is the only check that catches the last one.
+//
+// WHY THE PROMPT IS A FIXTURE. The chain this test compares is only as good an oracle as the prompt
+// that produces it. The 6-token prompt this test used first, {9707, 11, 1879, 13, 5765, 374}, makes
+// the reference lane repeat its own tail forever -- `11 1879 13 5765 374` for the whole 32-token
+// budget, a period-5 cycle over five distinct tokens -- so any implementation that reproduces the
+// loop passes, including wrong ones. The prompt and both goldens therefore live in
+// tests/fixtures/tp2_accept/ as TOKEN IDS: real, in-distribution ids from the committed corpus
+// slice, so neither arm tokenizes anything and the two hosts cannot disagree about the prompt.
+//
+// THE GOLDEN IS THE REFERENCE SEMANTICS. tests/fixtures/tp2_accept/golden_plain.ids is the width-1
+// greedy chain captured on the reference host (trueno, RTX 5090), and golden_mtp.ids is the same
+// for the MTP lane (NINFER_TP2_SPEC=mtp). An arm run must reproduce the golden for its lane; the
+// two-arm comparison additionally requires width 2 to equal width 1. Regenerate with
+// NINFER_TP2_CAPTURE=1 and write the printed chain into the fixture.
 //
 // Opt-in by design: while the refusal stands (a width-2 round has never been validated), running
 // this test would fail for a known and intended reason, so it needs NINFER_TP2_ACCEPT=1. With the
@@ -16,8 +31,11 @@
 #include <cuda_runtime.h>
 
 #include <cstdlib>
+#include <fstream>
 #include <iostream>
+#include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace {
@@ -33,8 +51,46 @@ int fail(const std::string& message) {
 // independent of where either round stops.
 constexpr std::uint32_t kOutputTokens = 32;
 
+// ---- fixtures ----------------------------------------------------------------------------------
+
+std::string fixture_path(const char* name) {
+    return std::string(NINFER_SOURCE_DIR) + "/tests/fixtures/tp2_accept/" + name;
+}
+
+// Whitespace-separated token ids, the same format for the prompt and for a golden chain.
+std::vector<ninfer::TokenId> read_ids(const std::string& path) {
+    std::ifstream file(path);
+    if (!file) {
+        throw std::runtime_error("cannot read fixture " + path +
+                                 "; run with NINFER_TP2_CAPTURE=1 to record it");
+    }
+    std::vector<ninfer::TokenId> ids;
+    long long id = 0;
+    while (file >> id) {
+        if (id < 0 || id > 0x7fffffffLL) {
+            throw std::runtime_error("fixture token id out of range in " + path);
+        }
+        ids.push_back(static_cast<ninfer::TokenId>(id));
+    }
+    if (ids.empty()) { throw std::runtime_error("fixture is empty: " + path); }
+    return ids;
+}
+
+std::string chain_text(const std::vector<ninfer::TokenId>& tokens) {
+    std::string text;
+    for (const auto token : tokens) {
+        if (!text.empty()) { text += ' '; }
+        text += std::to_string(token);
+    }
+    return text;
+}
+
+// The chain a lane must reproduce, named after the speculative backend so the MTP lane has its own.
+const char* golden_name(bool mtp) { return mtp ? "golden_mtp.ids" : "golden_plain.ids"; }
+
 std::vector<ninfer::TokenId> run_round(const char* artifact, int width, int device,
-                                       const std::vector<ninfer::TokenId>& prompt_tokens) {
+                                       const std::vector<ninfer::TokenId>& prompt_tokens,
+                                       bool mtp) {
     ninfer::EngineOptions options;
     options.artifact_path  = artifact;
     options.use_cuda_graph = false; // width > 1 refuses capture (caf91488)
@@ -44,12 +100,9 @@ std::vector<ninfer::TokenId> run_round(const char* artifact, int width, int devi
     // instead of inheriting defaults that the gate would refuse. Each of those combinations gets
     // its own row in that table, and its own comparison, when it is validated.
     options.context_cache.enabled = false;
-    // NINFER_TP2_SPEC selects a speculative backend so one binary can run each option-gate
-    // comparison. Unset means the plain lane, which is the configuration this test validated first.
-    const char* spec = std::getenv("NINFER_TP2_SPEC");
-    if (spec != nullptr && std::string_view(spec) == "mtp") {
-        options.speculative.backend        = ninfer::SpeculativeBackend::Mtp;
-        options.speculative.draft_tokens   = 3;
+    if (mtp) {
+        options.speculative.backend      = ninfer::SpeculativeBackend::Mtp;
+        options.speculative.draft_tokens = 3;
     } else {
         options.speculative.backend = ninfer::SpeculativeBackend::None;
     }
@@ -88,10 +141,9 @@ int main() {
     // Single-arm mode, for the lab this test cannot run in: nowhere has one host where the 27B fits
     // at BOTH widths (hephaestus has 2x16 GB and width 1 needs 20.4 GB; trueno has one 32 GB 5090
     // where width 2 cannot run; twofour has 121 GiB unified but one device). `NINFER_TP2_ARM=1` runs
-    // only the reference and prints its tokens; `=2` runs only the sharded arm. The two lists are
-    // then compared across machines, which catches every defect in the model math, the sharding or
-    // the collective -- and cannot catch one that depends on host state, which is stated rather than
-    // hidden.
+    // only the reference and prints its tokens; `=2` runs only the sharded arm. Each arm is checked
+    // against the recorded golden here, which is what makes the cross-machine comparison meaningful:
+    // both hosts compare against the same chain instead of against each other's output.
     //
     // THE DEVICE REQUIREMENT FOLLOWS THE ARM. The reference arm runs on ONE device by definition, so
     // requiring two would skip it on exactly the host the arm mode exists for; the sharded arm and
@@ -108,25 +160,52 @@ int main() {
         return 77;
     }
 
-    const std::vector<ninfer::TokenId> prompt{9707, 11, 1879, 13, 5765, 374};
+    // NINFER_TP2_SPEC selects a speculative backend so one binary can run each option-gate
+    // comparison. Unset means the plain lane, which is the configuration this test validated first.
+    const char* spec = std::getenv("NINFER_TP2_SPEC");
+    const bool mtp   = spec != nullptr && std::string_view(spec) == "mtp";
+    const bool capture = std::getenv("NINFER_TP2_CAPTURE") != nullptr;
+
+    // The prompt is read up front; a golden is read only AFTER the round has produced tokens, so a
+    // lane that cannot run at all reports that instead of being masked by a missing fixture.
+    std::vector<ninfer::TokenId> prompt;
+    try {
+        prompt = read_ids(fixture_path("prompt.ids"));
+    } catch (const std::exception& error) { return fail(error.what()); }
 
     if (const char* arm = std::getenv("NINFER_TP2_ARM")) {
         const int width = std::atoi(arm);
         std::vector<ninfer::TokenId> tokens;
         try {
-            tokens = run_round(artifact, width, 0, prompt);
+            tokens = run_round(artifact, width, 0, prompt, mtp);
         } catch (const std::exception& error) {
             return fail(std::string("width ") + arm + " round threw: " + error.what());
         }
-        std::cout << "arm " << width << " tokens (" << tokens.size() << "):";
-        for (const auto token : tokens) std::cout << ' ' << token;
-        std::cout << '\n';
+        std::cout << "arm " << width << " tokens (" << tokens.size() << "): "
+                  << chain_text(tokens) << '\n';
+        if (capture) {
+            std::cout << "capture: write the chain above into " << golden_name(mtp) << '\n';
+            return 0;
+        }
+        std::vector<ninfer::TokenId> golden;
+        try {
+            golden = read_ids(fixture_path(golden_name(mtp)));
+        } catch (const std::exception& error) { return fail(error.what()); }
+        if (tokens != golden) {
+            return fail(std::string("arm ") + arm + " does not reproduce the golden\n  golden: " +
+                        chain_text(golden) + "\n  actual: " + chain_text(tokens) +
+                        "\n  (a mismatch on a host other than the reference is a result to report, "
+                        "not necessarily a defect; regenerate with NINFER_TP2_CAPTURE=1 only after "
+                        "the reference lane itself changed)");
+        }
+        std::cout << "ok: arm " << width << " reproduces the golden (" << golden.size()
+                  << " tokens)\n";
         return 0;
     }
 
     std::vector<ninfer::TokenId> single;
     try {
-        single = run_round(artifact, 1, 0, prompt);
+        single = run_round(artifact, 1, 0, prompt, mtp);
     } catch (const std::exception& error) {
         return fail(std::string("the single-device reference round threw: ") + error.what());
     }
@@ -134,7 +213,7 @@ int main() {
 
     std::vector<ninfer::TokenId> sharded;
     try {
-        sharded = run_round(artifact, 2, 0, prompt);
+        sharded = run_round(artifact, 2, 0, prompt, mtp);
     } catch (const std::exception& error) {
         // With the flag set, a refusal is exactly what this test exists to prevent shipping.
         return fail(std::string("the width-2 round did not run: ") + error.what());
@@ -151,6 +230,17 @@ int main() {
                         std::to_string(sharded[i]) + " vs width 1 " + std::to_string(single[i]));
         }
     }
-    std::cout << "ok: " << single.size() << " tokens identical at width 1 and width 2\n";
+    if (!capture) {
+        std::vector<ninfer::TokenId> golden;
+        try {
+            golden = read_ids(fixture_path(golden_name(mtp)));
+        } catch (const std::exception& error) { return fail(error.what()); }
+        if (single != golden) {
+            return fail("the reference lane does not reproduce the golden\n  golden: " +
+                        chain_text(golden) + "\n  actual: " + chain_text(single));
+        }
+    }
+    std::cout << "ok: " << single.size() << " tokens identical at width 1 and width 2"
+              << (capture ? " (captured, golden not compared)" : ", and equal to the golden") << '\n';
     return 0;
 }

@@ -9,6 +9,7 @@ cache and are described by [`artifacts/manifest.json`](artifacts/manifest.json)
 | `corpus/tokens.ids` | the first 2,048 ids of the committed benchmark corpus | `fdefedde…` |
 | `corpus/manifest.json` | provenance of that slice (source corpus, digest, range) | — |
 | `prompts/corpus.json` | eight fixed, model-agnostic prompts with budgets and coarse expectations | `cc383848…` |
+| `tp2_accept/` | the two-GPU acceptance test's prompt ids and width-1 golden chains, with provenance and the old prompt's degenerate continuation | see its README |
 | `exl3/exllamav3-1.6.1.json` | EXL3 codec ground truth, generated once and committed | `41c0557c…` |
 | `exl3/generate_fixture.py` | regenerates the EXL3 ground truth (needs a GPU) | — |
 | `serve/qwen3_6_thinking_preservation.json` | a recorded serving transcript for the preservation test | — |

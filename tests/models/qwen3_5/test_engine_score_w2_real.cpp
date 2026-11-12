@@ -30,6 +30,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <memory>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -228,19 +229,33 @@ ninfer::EngineOptions options_for(const char* artifact, int width) {
     return options;
 }
 
-std::vector<ninfer::TokenId> fixed_sequence(const char* artifact) {
+// The fixed sequence is tokenized by the arm's own engine. It used to be tokenized by a width-1
+// engine, which on a 16 GB card is a full 20.02 GiB model and refused before the width-2 arm was
+// ever constructed -- a test-side failure that read like a lane defect. One engine per arm.
+std::vector<ninfer::TokenId> fixed_sequence(ninfer::Engine& engine) {
     const std::string paragraph =
         "The quick brown fox jumps over the lazy dog. NInfer scores every target token from the "
         "preceding hidden state and compares two routes with a tolerance.\n";
     std::string text;
     std::vector<ninfer::TokenId> tokens;
-    ninfer::Engine engine(options_for(artifact, 1));
     while (tokens.size() < kTokenCount) {
         text += paragraph;
         tokens = engine.tokenize_text(text);
     }
     tokens.resize(kTokenCount);
     return tokens;
+}
+
+// A refusal at construction is a result, not an abort: the message names the width and the reason.
+std::unique_ptr<ninfer::Engine> build(const char* artifact, int width) {
+    std::cerr << "constructing width=" << width << " CausalScoring engine\n";
+    try {
+        return std::make_unique<ninfer::Engine>(options_for(artifact, width));
+    } catch (const std::exception& error) {
+        fail(std::string("engine construction refused at width ") + std::to_string(width) + ": " +
+             error.what());
+        return nullptr;
+    }
 }
 
 double percentile(std::vector<double> values, double fraction) {
@@ -287,10 +302,11 @@ int main() {
         std::cerr << "artifact digest could not be computed\n";
         return 1;
     }
-    const auto tokens = fixed_sequence(artifact);
+    auto engine = build(artifact, capture ? 1 : 2);
+    if (!engine) { return 1; }
+    const auto tokens = fixed_sequence(*engine);
 
     if (capture) {
-        ninfer::Engine engine(options_for(artifact, 1));
         Reference reference;
         reference.artifact_sha256 = digest;
         {
@@ -301,12 +317,12 @@ int main() {
         reference.max_context  = kMaxContext;
         reference.first_target = 1;
         reference.tokens       = tokens;
-        reference.logprobs     = engine.score_tokens(tokens, 1);
+        reference.logprobs     = engine->score_tokens(tokens, 1);
         reference.altered_index = kAlteredIndex;
         auto altered            = tokens;
         reference.altered_token = static_cast<ninfer::TokenId>((tokens[kAlteredIndex] + 977) % 150000);
         altered[kAlteredIndex]  = reference.altered_token;
-        reference.altered_logprobs = engine.score_tokens(altered, 1);
+        reference.altered_logprobs = engine->score_tokens(altered, 1);
         if (!write_reference(fixture, reference)) {
             std::cerr << "could not write the reference to " << fixture << '\n';
             return 1;
@@ -333,8 +349,7 @@ int main() {
         return 1;
     }
 
-    ninfer::Engine engine(options_for(artifact, 2));
-    const std::vector<float> sharded = engine.score_tokens(tokens, 1);
+    const std::vector<float> sharded = engine->score_tokens(tokens, 1);
     if (sharded.size() != reference.logprobs.size()) {
         fail("the sharded arm returned a different score count");
         return 1;
@@ -370,7 +385,7 @@ int main() {
     // a deliberately altered one, and agree on how much worse.
     auto altered = tokens;
     altered[kAlteredIndex] = reference.altered_token;
-    const std::vector<float> sharded_altered = engine.score_tokens(altered, 1);
+    const std::vector<float> sharded_altered = engine->score_tokens(altered, 1);
     const double reference_margin = static_cast<double>(reference.logprobs[kAlteredIndex]) -
                                     reference.altered_logprobs[kAlteredIndex];
     const double sharded_margin =

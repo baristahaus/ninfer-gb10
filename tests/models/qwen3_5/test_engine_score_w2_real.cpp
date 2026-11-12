@@ -40,7 +40,25 @@ namespace {
 
 // 4x the largest route difference measured on the 125B (0.0281 nats), rounded up: a sharded scoring
 // path that is right lands inside it, one that is wrong does not.
-constexpr double kToleranceNats = 0.12;
+// The acceptance tolerance is not a constant: the residual is a function of the K/V profile (the
+// teacher-forced oracle's is: BF16 0.0281 nats, FP8 E4M3 0.1380), so the derived tolerance comes in
+// through NINFER_SCORE_TOLERANCE. The 0.12 default is the old borrowed anchor and is only a fallback.
+constexpr double kDefaultToleranceNats = 0.12;
+
+double tolerance_nats() {
+    const char* env = std::getenv("NINFER_SCORE_TOLERANCE");
+    if (env == nullptr || *env == '\0') { return kDefaultToleranceNats; }
+    return std::strtod(env, nullptr);
+}
+
+// The K/V profile the scoring purpose is measured at. bf16 is the lane's validated profile; fp8 is
+// the second profile the tolerance has to be a function of.
+const char* kv_profile_name() {
+    const char* env = std::getenv("NINFER_SCORE_KV");
+    if (env == nullptr || *env == '\0') { return "bf16"; }
+    if (std::string(env) == "fp8") { return "fp8"; }
+    return "bf16";
+}
 constexpr std::uint32_t kMaxContext = 2048;
 constexpr std::size_t kTokenCount   = 256;
 constexpr std::size_t kAlteredIndex = 128;
@@ -248,9 +266,13 @@ ninfer::EngineOptions options_for(const char* artifact, int width) {
     options.use_cuda_graph        = false; // width > 1 refuses capture
     options.context_cache.enabled = false; // unvalidated at width > 1
     options.max_context           = kMaxContext;
-    // bf16 KV: a quantized pool is its own unvalidated width-2 row and would refuse before scoring
-    // ran, so both arms use the configuration the lane is actually validated for.
-    options.kv_cache              = ninfer::KvCacheStorage::BFloat16;
+    // bf16 KV is the lane's validated profile. fp8 (E4M3, row 256) is the second profile the
+    // tolerance must be a function of; at width 2 it sits behind its own unvalidated gate row, so a
+    // measurement run lifts that row locally and the measurement is a diagnostic, not a validation
+    // of the quantized-pool row.
+    options.kv_cache = std::string(kv_profile_name()) == "fp8"
+                           ? ninfer::KvCacheStorage::Fp8E4M3Row256
+                           : ninfer::KvCacheStorage::BFloat16;
     options.kv_capacity           = ninfer::KvCapacityPolicy::explicit_capacity(kMaxContext);
     if (width > 1) {
         options.devices = {0, 1};
@@ -413,7 +435,7 @@ int main() {
             std::ifstream probe(artifact, std::ios::binary | std::ios::ate);
             reference.artifact_bytes = static_cast<std::uint64_t>(probe.tellg());
         }
-        reference.kv_dtype     = "bf16";
+        reference.kv_dtype     = kv_profile_name();
         reference.max_context  = kMaxContext;
         reference.first_target = 1;
         reference.tokens       = tokens;
@@ -458,6 +480,12 @@ int main() {
         std::cerr << "REFUSED: the reference's token sequence differs from this box's tokenization\n";
         return 1;
     }
+    if (reference.kv_dtype != kv_profile_name()) {
+        std::cerr << "REFUSED: the reference was captured with kv_dtype '" << reference.kv_dtype
+                  << "' but this run asks for '" << kv_profile_name() << "'\n";
+        return 1;
+    }
+    const double tolerance = tolerance_nats();
 
     const std::vector<float> sharded = engine->score_tokens(tokens, 1);
     if (sharded.size() != reference.logprobs.size()) {
@@ -510,12 +538,13 @@ int main() {
         }
         std::cout << "position report: " << report_path << '\n';
     }
+    std::cout << "profile=" << kv_profile_name() << " tolerance=" << tolerance << "\n";
     std::cout << "positions=" << deltas.size() << " max|dlogp|=" << max_delta
               << " mean|dlogp|=" << mean_delta << " p99|dlogp|=" << percentile(deltas, 0.99)
               << " over0.01=" << over_0p01 << " over0.05=" << over_0p05 << '\n';
-    if (max_delta > kToleranceNats) {
+    if (max_delta > tolerance) {
         fail("width-2 scoring differs from the recorded width-1 reference beyond the tolerance of " +
-             std::to_string(kToleranceNats) + " nats");
+             std::to_string(tolerance) + " nats");
     }
 
     // The property adjudication needs: both routes must find the real next token clearly better than
@@ -532,7 +561,7 @@ int main() {
     if (reference_margin <= 0.0 || sharded_margin <= 0.0) {
         fail("an unambiguous next token was not preferred over the altered one");
     }
-    if (std::abs(reference_margin - sharded_margin) > kToleranceNats) {
+    if (std::abs(reference_margin - sharded_margin) > tolerance) {
         fail("the two routes disagree on how much worse the altered token is");
     }
 

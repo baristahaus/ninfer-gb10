@@ -148,18 +148,27 @@ constexpr WidthTwoOption kWidthTwoOptions[] = {
     {"--causal-scoring",
      [](const EngineOptions& o) { return o.purpose == EnginePurpose::CausalScoring; },
      false, "",
-     "the sharded scoring path is FIXED but still differs from the recorded width-1 reference by "
-     "more than the 0.12-nat tolerance. The gather's chunk-offset defect (sharded.cpp: the exchange "
-     "combined the buffers' bases instead of each chunk's slice, so chunk 0 was re-combined once per "
-     "later exchange and chunk k > 0 never received the peer's half) is fixed; the same 255-position "
-     "fixture now reads max|dlogp|=1.812, mean=0.0363, p99=0.563, 58 of 255 beyond 0.01, margin "
-     "11.912 against 10.667. The 436.744-nat corruption is gone; the residual is the numerical "
-     "divergence between the width-1 full head and the width-2 rank half (different Q8 kernel "
-     "bands), which exceeds both the per-position tolerance and the 1.0-nat margin tolerance. The "
-     "row is promoted only by a measured round inside a tolerance this purpose's own profile can "
-     "justify -- a decision, not a fix. Evidence: tests/models/qwen3_5/test_engine_score_w2_real.cpp; "
-     "the gather regression is tests/test_sharded_logits_gather.cpp at 3, 43, 84, 85 and 128 "
-     "columns"},
+     "the width-2 scoring residual is SEQUENCE-DEPENDENT and no single-sequence calibration covers "
+     "it. The gather's chunk-offset corruption (436.744 nats) is fixed; what remains is the "
+     "numerical divergence between the width-1 full head (N=248320) and the width-2 rank half "
+     "(N=124160), which run different Q8 kernel bands. Measured on the periodic calibration "
+     "sequence, BF16, at 41/117/254 positions (1/3/7 gather exchanges): max|dlogp| "
+     "1.043/0.930/1.812, mean 0.120/0.054/0.036, p99 0.698/0.408/0.563, 27/35/57 positions over "
+     "0.01. The tolerance derived as the calibration max at the acceptance length x 1.5 (a 50% "
+     "margin over the sample maximum; 412 calibration positions) is 1.395 nats at 118 positions. "
+     "The HELD-OUT distinct sequence at the same 118 positions reads max 1.416 (mean 0.237, p99 "
+     "1.015), so the calibration does not cover it. An envelope over every calibration length "
+     "(1.812 x 1.5 = 2.72) would cover it, but it is wider than the 1.0-nat tie band this purpose "
+     "adjudicates, so accepting the row on it would make the sharded score coarser than the "
+     "disagreement it is meant to settle. FP8 (quantized KV, its own unvalidated width-2 row, "
+     "lifted only for this diagnostic) reads max 0.598 at 117 positions and 9.195 at 254, so a "
+     "profile-dependent tolerance would be 0.90/13.79 -- also outside any adjudication band. The "
+     "row is promoted only by a calibration that covers the sequence-to-sequence variation with a "
+     "tolerance inside the adjudication band. Evidence: "
+     "tests/models/qwen3_5/test_engine_score_w2_real.cpp (NINFER_SCORE_COUNT, NINFER_SCORE_KV, "
+     "NINFER_SCORE_TOLERANCE); the gather regression is tests/test_sharded_logits_gather.cpp at "
+     "3, 43, 84, 85 and 128 columns"},
+
     {"prefix reuse / context cache",
      [](const EngineOptions& o) { return o.context_cache.enabled; },
      false, "",

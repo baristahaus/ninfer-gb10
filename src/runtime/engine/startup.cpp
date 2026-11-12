@@ -151,8 +151,13 @@ constexpr WidthTwoOption kWidthTwoOptions[] = {
     {"--causal-scoring",
      [](const EngineOptions& o) { return o.purpose == EnginePurpose::CausalScoring; },
      false, "",
-     "the scoring purpose runs a different frame kind and its sharded path has never been "
-     "exercised"},  // PROMOTION PENDING: see task-28
+     "a two-rank scoring round is WRONG, not merely untested: scored against a recorded width-1 "
+     "reference for the same 27B artifact and token sequence (255 positions, digest-pinned fixture), "
+     "it differs by up to 436.744 nats (mean 11.949, p99 217.2, 60 of 255 positions beyond 0.01) and "
+     "the two routes disagree on the adjudication margin (11.912 vs 10.741). The engine's width-2 "
+     "TEXT path matches its reference token for token on the same host and artifact, so the defect is "
+     "specific to the scoring frame. Evidence: tests/models/qwen3_5/test_engine_score_w2_real.cpp; "
+     "the row is promoted only by a measured round inside 0.12 nats"},
     {"prefix reuse / context cache",
      [](const EngineOptions& o) { return o.context_cache.enabled; },
      false, "",

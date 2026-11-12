@@ -88,8 +88,13 @@ void launch_nvfp4_a4_quantize(const Tensor& x, const Weight& weight, Nvfp4A4Work
     case Nvfp4Activation17408Geometry::kInputRows:
         launch_quantize_exact<Nvfp4Activation17408Geometry>(x, weight, workspace, layout, stream);
         return;
+    case Nvfp4Activation8704Geometry::kInputRows:
+        launch_quantize_exact<Nvfp4Activation8704Geometry>(x, weight, workspace, layout, stream);
+        return;
     default:
-        throw std::invalid_argument("nvfp4 A4 quantize: unsupported K");
+        // Name the K: the caller is looking at a rank-sized geometry it did not write by hand, and
+        // "unsupported K" alone does not say which one. The FP8 quantizer already names its own.
+        throw std::invalid_argument("nvfp4 A4 quantize: unsupported K " + std::to_string(weight.k));
     }
 }
 

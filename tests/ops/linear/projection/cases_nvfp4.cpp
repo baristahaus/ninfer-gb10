@@ -80,6 +80,16 @@ void run_nvfp4_a4(Suite& suite) {
               {5120, 6144, 723U, Comparison::Sampled, true, invocations});
     add_shape(suite, ninfer::QType::NVFP4, ActivationRecipe::Hashed, make_nvfp4_weight,
               {5120, 17408, 725U, Comparison::Sampled, true, invocations});
+    // The tensor-parallel width-2 geometries, which no A4 case covered: the row-sharded halves of the
+    // fused mlp parent and one gate/up role, and mlp/down's Columns shard, whose K is 8704 where
+    // width 1 presents 17408. The sweep above already crosses the shapes' own A4 thresholds (8 for
+    // mlp/down and the 8704-row role, 4 for the 14336 parent), so the first call above each
+    // threshold is what a missing quantize geometry would refuse.
+    for (auto [n, k, seed] : {std::tuple{17408, 5120, 727U}, std::tuple{8704, 5120, 729U},
+                              std::tuple{5120, 8704, 731U}}) {
+        add_shape(suite, ninfer::QType::NVFP4, ActivationRecipe::Hashed, make_nvfp4_weight,
+                  {n, k, seed, Comparison::Sampled, true, invocations});
+    }
 }
 
 } // namespace

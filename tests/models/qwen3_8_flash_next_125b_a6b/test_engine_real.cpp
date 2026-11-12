@@ -1524,34 +1524,59 @@ int exercise_route_matched_control(const char* artifact) {
 // tolerance - because a perturbation of at most tau per log-probability can move the argmax only
 // where the top-2 gap is at most 2*tau.
 //
-// TOLERANCE: 0.40 nats. The quantity it bounds is |delta log p| at one position - the log-probability
-// of the same token under the two routes. That is the right quantity because temperature-0 generation
-// is decided by the argmax of exactly these log-probabilities: a difference that cannot move a
-// log-probability cannot move a token, and the margin condition above then tests the cases where it
-// can.
+// THE QUANTITY. tau bounds |delta log p| at one position: the log-probability of the same token
+// under the two routes. That is the right quantity because temperature-0 generation is decided by
+// the argmax of exactly these log-probabilities - a difference that cannot move a log-probability
+// cannot move a token, and the margin condition above then tests the cases where it can.
 //
-// The anchor is the measured legitimate difference (issues ninfer-gb10-53j and ninfer-gb10-e9e): one
-// BF16 ULP in the layer-0 GDN conv/recurrent state, amplified through 36 layers of recurrence, gives
-// 3407 of 20480 committed-KV bytes at frontier 40, a 21% difference at one hidden element
-// (continuation_hidden element 0: 1.17188 vs 0.964844), and a per-layer relative L2 on the K plane of
-// 3.74e-2 at the first KV-bearing layer, plateauing at 6-10e-2. The hidden state is the input to the
-// logit readout, so a relative perturbation of the hidden state bounds the relative perturbation of
-// the logits; to first order a log-probability changes by the relative change of its probability. The
-// plateau's upper bound (0.10) is therefore the expected |delta log p| scale, and the review's
-// amplification caution - the 1-ULP seed reaching 21% at one element shows amplification is large, not
-// small - justifies 4x slack for the tail: tau = 4 x 0.10 = 0.40 nats.
+// THE TOLERANCE IS A MEASURED PROPERTY OF THE K/V PROFILE, NOT A SINGLE NUMBER. Flash-Next supports
+// exactly two K/V profiles, and the cross-route difference is materially different between them:
+// measured on twofour (GB10, sm_121a, fp8_mtp artifact, local 4-volume artifact, 8 compared
+// positions each) the maximum |delta log p| was 0.0281 nats at BF16 and 0.1380 nats at FP8 E4M3
+// row-256 - a ratio of 4.91. Each tolerance is derived from its own measurement by the review's
+// instrument-U rule, four times the measured response:
 //
-// MEASURED, and the constant follows the measurement rather than the other way round. The first run
-// on twofour (GB10, sm_121a, fp8_mtp artifact, 8 compared positions) gave a maximum |delta log p| of
-// 0.0281 nats, no token divergence, and 7 of 8 positions discriminating (top-2 margin above 2*tau).
-// That is the response the review's instrument U asks for: tau = 4x the measured response =
-// 4 x 0.0281 = 0.112, rounded up to 0.12 nats. The earlier 0.40 anchor was derived from the
-// hidden-state plateau and turned out 14x looser than the observed difference, so it is replaced by
-// this value, which is still 4x the observed difference and leaves room for run-to-run variation
-// across builds. The observed maximum and the margin distribution are printed on every run so the
-// next measurement confirms or tightens it; a tolerance that makes every position pass is not an
-// oracle, so the margin report also says whether the prompt discriminates at all.
-constexpr double kOracleLogprobTolerance = 0.12;
+//   BF16:  4 x 0.0281 = 0.112 -> 0.12 nats
+//   FP8:   4 x 0.1380 = 0.552 -> 0.55 nats
+//
+// A test that asserts one tau across both profiles is asserting something false about one of them:
+// 0.12 fails the FP8 measurement, and 0.55 at BF16 would accept a difference twenty times the one
+// that profile actually produces. The profile dependence is the finding, not an inconvenience.
+//
+// WHAT THE FP8 NUMBER DOES AND DOES NOT MEAN. The e9e localisation predicts that the seed enters
+// before the K/V store - one BF16 ULP in the layer-0 GDN conv/recurrent state, amplified through 36
+// layers of recurrence to a 21% hidden-state difference and 3407 of 20480 committed-KV bytes at
+// frontier 40 - and that prediction implies the two profiles should agree within tolerance. They do
+// not, so the prediction failed. It does NOT follow that the seed is in the K/V store. Quantization
+// is a nonlinear map: a coarser store amplifies any input difference, whether the seed is upstream
+// of the store or in it. Growth under FP8 therefore tells you the amplification is profile-dependent,
+// which is a different statement from relocating the seed. Reading "FP8 is 4.9x worse" as "the seed
+// is in the store" is exactly the inference this comment exists to prevent.
+//
+// HISTORY. The first anchor was 0.40 nats, derived from the hidden-state relative-L2 plateau
+// (6-10e-2) rather than from a measurement; it turned out 14x looser than the observed BF16
+// difference and was replaced by 4x that measurement. The observed maximum and the margin
+// distribution are printed on every run so the next measurement confirms or tightens each value; a
+// tolerance that makes every position pass is not an oracle, so the margin report also says whether
+// the prompt discriminates at all.
+struct ProfileTolerance {
+    ninfer::KvCacheStorage storage;
+    double nats;
+};
+
+// One entry per K/V profile the model family supports. Adding a profile here without a measurement
+// is not allowed: the value has to come from the teacher-forced measurement at that profile.
+constexpr ProfileTolerance kOracleLogprobTolerances[] = {
+    {ninfer::KvCacheStorage::BFloat16, 0.12},        // 4 x measured 0.0281 nats
+    {ninfer::KvCacheStorage::Fp8E4M3Row256, 0.55},   // 4 x measured 0.1380 nats
+};
+
+double oracle_logprob_tolerance(ninfer::KvCacheStorage storage) {
+    for (const auto& entry : kOracleLogprobTolerances) {
+        if (entry.storage == storage) { return entry.nats; }
+    }
+    throw std::invalid_argument("no teacher-forced tolerance is measured for this K/V profile");
+}
 
 // One teacher-forced measurement at one K/V precision. The quantity is the natural-log probability
 // of the same token under the cold prefill route and the decode-built reused route, at every
@@ -1570,6 +1595,7 @@ ToleranceMeasurement measure_teacher_forced(const char* artifact, ninfer::KvCach
                                             const char* label) {
     ToleranceMeasurement out;
     const auto& prompt = canonical_prompt();
+    const double tolerance = oracle_logprob_tolerance(storage);
     ninfer::EngineOptions options = engine_options(artifact);
     options.token_logprobs        = true;
     options.enable_vision         = false;
@@ -1632,7 +1658,7 @@ ToleranceMeasurement measure_teacher_forced(const char* artifact, ninfer::KvCach
         if (cold_report.top.size() >= 2) {
             margin = cold_report.top[0].logprob - cold_report.top[1].logprob;
         }
-        const bool discriminating = margin > 2.0 * kOracleLogprobTolerance;
+        const bool discriminating = margin > 2.0 * tolerance;
         if (!discriminating) { ++out.flat; }
         if (cold.generated_token_ids[position] != reused.generated_token_ids[step]) {
             ++out.diverged;
@@ -1641,7 +1667,7 @@ ToleranceMeasurement measure_teacher_forced(const char* artifact, ninfer::KvCach
                 std::cerr << label << ": a confident choice changed at position " << position
                           << " (cold " << cold.generated_token_ids[position] << ", reused "
                           << reused.generated_token_ids[step] << ", margin " << margin << " nats > "
-                          << 2.0 * kOracleLogprobTolerance << ")\n";
+                          << 2.0 * tolerance << ")\n";
             }
             continue;
         }
@@ -1650,18 +1676,18 @@ ToleranceMeasurement measure_teacher_forced(const char* artifact, ninfer::KvCach
             std::abs(static_cast<double>(cold_report.logprob) - reused_report.logprob);
         out.max_delta = std::max(out.max_delta, delta);
         ++out.compared;
-        if (delta > kOracleLogprobTolerance) {
+        if (delta > tolerance) {
             std::cerr << label << ": |delta log p| " << delta << " exceeds "
-                      << kOracleLogprobTolerance << " at position " << position << " (cold "
+                      << tolerance << " at position " << position << " (cold "
                       << cold_report.logprob << ", reused " << reused_report.logprob << ")\n";
             out.ok = false;
         }
     }
     std::cerr << label << ": " << out.compared << " position(s) compared, max |delta log p| "
-              << out.max_delta << " nats (tolerance " << kOracleLogprobTolerance << "); "
+              << out.max_delta << " nats (tolerance " << tolerance << "); "
               << out.diverged << " token(s) diverged, " << out.confident_bad
               << " at a discriminating position; " << out.flat << " of " << out.positions
-              << " position(s) have a top-2 margin <= " << 2.0 * kOracleLogprobTolerance
+              << " position(s) have a top-2 margin <= " << 2.0 * tolerance
               << " nats\n";
     if (out.confident_bad != 0) { out.ok = false; }
     if (out.flat * 2 >= out.positions) {
@@ -1706,6 +1732,12 @@ int report_precision_scaling(const ToleranceMeasurement& bf16, const ToleranceMe
     const double ratio = bf16.max_delta > 0.0 ? fp8.max_delta / bf16.max_delta : 0.0;
     std::cerr << "precision scaling: max |delta log p| bf16 " << bf16.max_delta << " nats, fp8 "
               << fp8.max_delta << " nats, ratio " << ratio << " (fp8/bf16)\n";
+    // The ratio is the finding and it must not be read as a localisation: a coarser store amplifies
+    // any input difference, so growth under FP8 does not move the seed into the K/V store.
+    std::cerr << "precision scaling: the cross-route difference is profile-dependent (" << ratio
+              << "x larger at fp8); each profile is bounded by its own measured tolerance. Growth "
+                 "under a coarser store does not relocate the seed to the K/V store - quantization "
+                 "amplifies any input difference, wherever the seed enters\n";
     if (bf16.diverged != 0 || fp8.diverged != 0) {
         std::cerr << "precision scaling: token divergence at bf16 " << bf16.diverged << ", fp8 "
                   << fp8.diverged << " (the measurement still bounds the log-probability "

@@ -50,6 +50,22 @@ null in the manifest): the inventory knows they exist and which tests need them,
 digest, so `fetch_test_artifacts.py --check` cannot verify them until someone pins them on a host
 that holds one.
 
+## How a pinned digest is computed
+
+For a single-file artifact the digest is the file's `sha256`. **For a sharded container it is one
+`sha256` over the volumes concatenated in order — the entry file first, then the `.part-NNNNN`
+continuations sorted by name — and `bytes` is the total across all volumes.** It is not the digest of
+the entry file alone, so a hand check that runs `sha256sum` on the first file will report a mismatch
+on a correct copy. Verify with `tools/fetch_test_artifacts.py --check`, which applies the same rule
+(`volumes()` then one hash over the concatenation).
+
+Both real artifacts are pinned, and both pins were verified against the local copies in November 2026:
+
+| artifact | volumes | bytes | sha256 |
+|---|---|---:|---|
+| `qwen3_8_27b_v3_plain` | 1 | 21,492,938,224 | `231ae09a158ab5fc5aade8dc3eaf4e6a977e6d5faf6bbf1fc97cd574be7c5f4d` |
+| `qwen3_8_flash_next_125b_a6b_fp8_mtp` | 4 | 126,921,610,496 | `3be54b07772d1876925755df84f81bacad3f6dbf1123c2110bb64ab004b833b2` |
+
 ## What "produced by" means
 
 - `committed:` — the file is in the repository and always present. Its digest is checked on every

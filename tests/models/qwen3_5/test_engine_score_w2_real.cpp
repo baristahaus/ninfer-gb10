@@ -28,6 +28,7 @@
 #include <cstdlib>
 #include <cuda_runtime.h>
 #include <fstream>
+#include <stdexcept>
 #include <iomanip>
 #include <iostream>
 #include <memory>
@@ -140,6 +141,7 @@ std::string artifact_sha256(const std::string& path) {
 
 // --- the fixture ---------------------------------------------------------------------------
 struct Reference {
+    std::string sequence;
     std::string artifact_sha256;
     std::uint64_t artifact_bytes = 0;
     std::string kv_dtype;
@@ -156,6 +158,7 @@ bool write_reference(const std::string& path, const Reference& reference) {
     std::ofstream out(path, std::ios::trunc);
     if (!out) { return false; }
     out << "score_w2_reference 1\n";
+    out << "sequence " << reference.sequence << '\n';
     out << "artifact_sha256 " << reference.artifact_sha256 << '\n';
     out << "artifact_bytes " << reference.artifact_bytes << '\n';
     out << "kv_dtype " << reference.kv_dtype << '\n';
@@ -193,7 +196,8 @@ bool read_reference(const std::string& path, Reference& reference, std::string& 
     std::string key;
     std::size_t count = 0;
     while (in >> key) {
-        if (key == "artifact_sha256") in >> reference.artifact_sha256;
+        if (key == "sequence") in >> reference.sequence;
+        else if (key == "artifact_sha256") in >> reference.artifact_sha256;
         else if (key == "artifact_bytes") in >> reference.artifact_bytes;
         else if (key == "kv_dtype") in >> reference.kv_dtype;
         else if (key == "max_context") in >> reference.max_context;
@@ -259,17 +263,46 @@ ninfer::EngineOptions options_for(const char* artifact, int width) {
 // The fixed sequence is tokenized by the arm's own engine. It used to be tokenized by a width-1
 // engine, which on a 16 GB card is a full 20.02 GiB model and refused before the width-2 arm was
 // ever constructed -- a test-side failure that read like a lane defect. One engine per arm.
-std::vector<ninfer::TokenId> fixed_sequence(ninfer::Engine& engine) {
-    const std::string paragraph =
+// The default sequence repeats one paragraph, so a token at position p recurs at p+31: a per-target
+// defect and a per-offset-within-the-period defect produce the SAME wrong set, which is a confound.
+// `distinct` takes 256 ids that never recur, so wrongness can only follow the target or the offset,
+// not both. `control` takes the distinct sequence and repeats ONE target at two different offsets,
+// which is the direct control for the confound.
+std::vector<ninfer::TokenId> sequence_for(ninfer::Engine& engine, const std::string& kind) {
+    const std::string first =
         "The quick brown fox jumps over the lazy dog. NInfer scores every target token from the "
         "preceding hidden state and compares two routes with a tolerance.\n";
-    std::string text;
+    const std::string second =
+        "A copper kettle whistles on the stove while winter rain drums against the window; the "
+        "orchard gate swings, and a grey heron waits beside the frozen pond.\n";
     std::vector<ninfer::TokenId> tokens;
-    while (tokens.size() < kTokenCount) {
-        text += paragraph;
-        tokens = engine.tokenize_text(text);
+    if (kind == "periodic") {
+        std::string text;
+        while (tokens.size() < kTokenCount) {
+            text += first;
+            tokens = engine.tokenize_text(text);
+        }
+        tokens.resize(kTokenCount);
+        return tokens;
     }
-    tokens.resize(kTokenCount);
+    // Distinct: walk a longer text and keep only ids not seen yet.
+    std::string text = first + second + first + second;
+    const auto all   = engine.tokenize_text(text);
+    std::vector<bool> seen(250000, false);
+    for (const auto token : all) {
+        if (tokens.size() == kTokenCount) break;
+        if (seen[token]) continue;
+        seen[token] = true;
+        tokens.push_back(token);
+    }
+    if (tokens.size() != kTokenCount) {
+        throw std::runtime_error("the distinct sequence could not be built");
+    }
+    if (kind == "control") {
+        // One target at two deliberately different offsets: the control for the confound.
+        tokens[64]  = tokens[0];
+        tokens[192] = tokens[0];
+    }
     return tokens;
 }
 
@@ -331,10 +364,20 @@ int main() {
     }
     auto engine = build(artifact, capture ? 1 : 2);
     if (!engine) { return 1; }
-    const auto tokens = fixed_sequence(*engine);
+    const char* sequence_env = std::getenv("NINFER_SCORE_SEQUENCE");
+    const std::string kind =
+        sequence_env != nullptr && *sequence_env ? sequence_env : "periodic";
+    std::vector<ninfer::TokenId> tokens;
+    try {
+        tokens = sequence_for(*engine, kind);
+    } catch (const std::exception& error) {
+        fail(std::string("the sequence could not be built: ") + error.what());
+        return 1;
+    }
 
     if (capture) {
         Reference reference;
+        reference.sequence        = kind;
         reference.artifact_sha256 = digest;
         {
             std::ifstream probe(artifact, std::ios::binary | std::ios::ate);
@@ -363,6 +406,11 @@ int main() {
     std::string reference_error;
     if (!read_reference(fixture, reference, reference_error)) {
         std::cerr << "REFUSED: the reference could not be read: " << reference_error << '\n';
+        return 1;
+    }
+    if (reference.sequence != kind) {
+        std::cerr << "REFUSED: the reference was captured for sequence '" << reference.sequence
+                  << "' but this run asked for '" << kind << "'\n";
         return 1;
     }
     if (reference.artifact_sha256 != digest) {

@@ -4,6 +4,7 @@
 #include "runtime/executor/rank_worker.h"
 #include "runtime/executor/round_trace.h"
 #include "runtime/observability/snapshot.h"
+#include "core/collective_audit.h"
 
 #include <array>
 #include <exception>
@@ -121,6 +122,7 @@ public:
                         static_cast<unsigned long long>(ticket.frame.generation),
                         static_cast<unsigned long long>(flight.command.value), workers_.size());
         }
+        ::ninfer::core::audit::reset_round();
         try {
             observe_host_call(host_.submit_ns, [&] {
                 // INVARIANT: no rank may block on a collective before every rank has been
@@ -323,24 +325,52 @@ public:
         try {
             for (;;) {
                 event =
-                    // Rank 0's event is the ticket's progress. That is sound only while every
-                    // peer's work is strictly stream-ordered behind rank 0's, which is what the
-                    // rank-1 mirrors' ordering argument gives: both ranks issue the same sequence
-                    // in the same order, so rank 0 cannot complete a round before a peer has been
-                    // issued the same round. If a peer ever gains independent progress (its own
-                    // scheduler decision, a conditional exchange), this becomes a race and the
-                    // ticket must wait for every rank's event instead.
-                    observe_host_call(host_.progress_ns, [&] {
+                    // EVERY rank's event is required, not just rank 0's. The ticket is released
+                    // only when all of them have completed, because a peer can retire LATER than
+                    // rank 0: a frame whose commit did device work (commit.cpp: branch B) parks in
+                    // ComputeStage::Retiring until an event on its own stream completes, and one
+                    // rank's stream can drain before the other's. Returning rank 0's event alone
+                    // then releases the next round while a peer's compute slot is still parked,
+                    // and the peer's start_frame refuses with "compute frame is occupied". The
+                    // earlier shortcut was sound only while every rank retired synchronously, when
+                    // "issued the same round" and "completed the same round" coincide; the MTP lane
+                    // is the first consumer to set device_work at commit and so the first to park.
+                    observe_host_call(host_.progress_ns, [&]() -> std::optional<Event> {
                         bind_rank(0);
                         auto rank0_event = program().poll();
                         trace_poll_result(0, rank0_event);
+                        if (!rank0_event) { return std::nullopt; }
+                        if (std::holds_alternative<ExecutionFailed>(*rank0_event)) {
+                            return rank0_event;
+                        }
+                        const auto ticket =
+                            std::visit([](const auto& value) { return value.ticket; }, *rank0_event);
                         for (std::size_t rank = 1; rank < workers_.size(); ++rank) {
                             bind_rank(rank);
                             auto peer_event = workers_[rank]->program().poll();
-                            // Rank 1's event is polled and discarded: only rank 0's is returned.
-                            // The trace prints it because a failure on the peer would otherwise
-                            // be invisible here.
                             trace_poll_result(rank, peer_event);
+                            if (!peer_event) {
+                                // The peer is still working on this ticket. Report no progress so
+                                // the caller's poll loop retries; do not release the round.
+                                return std::nullopt;
+                            }
+                            if (std::holds_alternative<ExecutionFailed>(*peer_event)) {
+                                // A peer's failure is the ticket's failure: it used to be
+                                // discarded, which made a peer failure invisible here.
+                                return peer_event;
+                            }
+                            const auto peer_ticket = std::visit(
+                                [](const auto& value) { return value.ticket; }, *peer_event);
+                            if (peer_ticket != ticket) {
+                                if (round_trace_enabled()) {
+                                    round_trace(
+                                        "poll.peer.ticket rank=%zu peer=%llu rank0=%llu (the peer "
+                                        "reported a different ticket; holding the round)",
+                                        rank, static_cast<unsigned long long>(peer_ticket.id),
+                                        static_cast<unsigned long long>(ticket.id));
+                                }
+                                return std::nullopt;
+                            }
                         }
                         return rank0_event;
                     });
@@ -358,8 +388,7 @@ public:
                     break;
             }
             if (round_trace_enabled()) {
-                round_trace("poll.return rank=0 ticket=%llu event=%s (the only event returned; "
-                            "rank>=1 events above were discarded)",
+                round_trace("poll.return rank=0 ticket=%llu event=%s (every rank's event matched)",
                             static_cast<unsigned long long>(trace_event_ticket(*event)),
                             trace_event_name(*event));
             }
@@ -459,6 +488,11 @@ private:
     // dispatch; see the invariant there for why a serial loop is not enough. Width 1 runs inline:
     // one rank, no peer to keep enqueueing, and no ordering to establish.
     void progress_each_rank() {
+        // The collective audit covers the frame's enqueue phase: every rank's host has enqueued its
+        // collectives by the time this returns, and the device work has not yet spun. A mismatch is
+        // therefore reported in milliseconds, naming the site, rather than after the mailbox's
+        // multi-second give-up naming a warp.
+        ::ninfer::core::audit::reset_frame();
         if (workers_.size() == 1) {
             bind_rank(0);
             workers_.front()->program().progress();
@@ -486,6 +520,8 @@ private:
         for (auto& thread : threads) thread.join();
         for (auto& error : errors)
             if (error) std::rethrow_exception(error);
+        ::ninfer::core::audit::verify("the frame's enqueue phase");
+        ::ninfer::core::audit::verify_round("the frame's enqueue phase");
     }
 
     void sample_resources(bool force) {

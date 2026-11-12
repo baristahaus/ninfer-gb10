@@ -1,0 +1,46 @@
+== lane sweep
+   lengths  8 10 12 16 17 20 24 28 31 32 40 48 64
+   work     /home/barista/ninferno/wtJ/lane-sweep/.sweep-work
+   reference 172.30.30.16 (/home/barista/ninfer/models/qwen3_8_27b_nvfp4.v3.ninfer)
+   sharded   172.30.30.15 (/home/barista/artifacts/27b-v3-nvfp4/qwen3_8_27b_nvfp4.v3.ninfer)
+   checkout  /home/barista/ninferno/wtJ/lane-sweep -> /home/barista/src/wt-tp2
+== artifact digests
+   reference 044fc2f0a164bdff8355a3a871010db8f526365a4672bd4a791e1a8808278561
+   sharded   044fc2f0a164bdff8355a3a871010db8f526365a4672bd4a791e1a8808278561
+wrote 13 prompt files from 64 available ids
+== prompts to both hosts
+== sweep
+   T=8  already recorded, skipped
+   T=10  already recorded, skipped
+   T=12  already recorded, skipped
+   T=16  exact match over 32 tokens
+   T=17  exact match over 32 tokens
+   T=20  mismatch at 6, margin 0.375 nats -> tie
+   T=24  exact match over 32 tokens
+   T=28  exact match over 10 tokens
+   T=31  mismatch at 18, margin 0.125 nats -> tie
+   T=32  mismatch at 1, margin 0.375 nats -> tie
+   T=40  exact match over 32 tokens
+   T=48  mismatch at 1, margin 0.125 nats -> tie
+   T=64  exact match over 32 tokens
+== profile
+length  match  position  margin_nats  classification
+8       exact  -         0            verified
+10      exact  -         0            verified
+12      exact  -         0            verified
+16      exact  -         0            verified
+17      exact  -         0            verified
+20      no     6         0.375        tie
+24      exact  -         0            verified
+28      exact  -         0            verified
+31      no     18        0.125        tie
+32      no     1         0.375        tie
+40      exact  -         0            verified
+48      no     1         0.125        tie
+64      exact  -         0            verified
+
+   exact:      8 10 12 16 17 24 28 40 64 
+   tie-only:   20 31 32 48 
+   defective:  
+   table at /home/barista/ninferno/wtJ/lane-sweep/.sweep-work/sweep.tsv
+EXIT=0

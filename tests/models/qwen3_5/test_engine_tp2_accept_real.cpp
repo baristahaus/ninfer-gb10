@@ -242,9 +242,16 @@ int main() {
 
     // The prompt is read up front; a golden is read only AFTER the round has produced tokens, so a
     // lane that cannot run at all reports that instead of being masked by a missing fixture.
+    // NINFER_TP2_PROMPT names an alternative token-id file, so a sweep can run the same contract at
+    // several prompt lengths without rewriting the checked-in fixture. The file is a whitespace
+    // separated id list in the same format as prompt.ids; both arms must be given the same file,
+    // because the comparison is only meaningful when the two hosts prefilled the same ids.
+    const char* prompt_override = std::getenv("NINFER_TP2_PROMPT");
     std::vector<ninfer::TokenId> prompt;
     try {
-        prompt = read_ids(fixture_path("prompt.ids"));
+        prompt = read_ids(prompt_override != nullptr && *prompt_override != '\0'
+                              ? std::string(prompt_override)
+                              : fixture_path("prompt.ids"));
     } catch (const std::exception& error) { return fail(error.what()); }
 
     if (const char* arm = std::getenv("NINFER_TP2_ARM")) {

@@ -1,0 +1,14 @@
+length	match	position	margin_nats	classification
+8	exact	-	0	verified
+10	exact	-	0	verified
+12	exact	-	0	verified
+16	exact	-	0	verified
+17	exact	-	0	verified
+20	no	6	0.375	tie
+24	exact	-	0	verified
+28	exact	-	0	verified
+31	no	18	0.125	tie
+32	no	1	0.375	tie
+40	exact	-	0	verified
+48	no	1	0.125	tie
+64	exact	-	0	verified

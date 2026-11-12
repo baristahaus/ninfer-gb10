@@ -17,7 +17,9 @@ execution::DraftExecutionView draft_view(RankProgramImpl& program) {
             program.device.execution_view(),
             state.local,
             state.full ? &*state.full : nullptr,
-            program.proposal_head};
+            program.proposal_head,
+            program.sharded_,
+            program.sharded_collective()};
 }
 
 Tensor dense_prefix(const Tensor& tensor, std::initializer_list<std::int32_t> shape) {

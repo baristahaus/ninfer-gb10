@@ -127,19 +127,16 @@ constexpr WidthTwoOption kWidthTwoOptions[] = {
     {"--spec mtp",
      [](const EngineOptions& o) { return o.speculative.backend == SpeculativeBackend::Mtp; },
      false, "",
-     "width 1 is validated -- arm 1 reproduces tests/fixtures/tp2_accept/golden_mtp.ids on trueno -- "
-     "but width 2 now refuses in the MTP proposal path, which is not a shape registry: with seven "
-     "geometry gaps fixed (the five Q8 projection geometries, the two Q8 add geometries, the GDN fold "
-     "geometry, the split_bf16_features derivation and Q8N17408K5120), the round throws 'argmax: "
-     "valid_rows must be in [1, logits.ne[0]]' (hephaestus, arm 2, nvfp4.v3). "
-     "src/models/qwen3_5/execution/mtp.cpp:321 already knows the rank's logits are "
-     "output_head.weight.n rows -- 124160 at width 2 -- and its own comment says the rank cannot "
-     "sample its own rows as global ids until they are placed at their vocabulary offset, but it then "
-     "calls argmax with the full public vocabulary (248320) as valid_rows. The fix is the logits "
-     "gather in the MTP proposal path, the all_gather_logits the plain lane already uses (task-12), "
-     "which is a models change rather than an ops registration. This is where the chain ends: MTP at "
-     "width 2 needs the preflight plus the gaps it names, and this one is a missing gather rather "
-     "than a missing entry"},
+     "width 1 is validated -- arm 1 reproduces tests/fixtures/tp2_accept/golden_mtp.ids on trueno. "
+     "The proposal path's missing logits gather is fixed (the MTP and DFlash proposal heads gather "
+     "the rank's rows into the group's full-vocabulary pair and sample the tight view; the MTP "
+     "proposal buffer is reconciled to the frame's own extent), and the width-2 round now gets PAST "
+     "that argmax: on hephaestus (arm 2, nvfp4.v3) it throws 'Qwen3.5 compute frame is occupied' on "
+     "the second decode round -- rank 0's first round retires, rank 1's compute frame does not, so "
+     "the next round starts with rank 1's slot occupied. That is a frame/collective sequencing "
+     "defect behind the gather, not a missing gather: the gather is enqueued on both ranks and the "
+     "round's first compute frame completes on rank 0 only. The row is promoted only by a two-rank "
+     "round whose disagreements are adjudicated inside the 1.0-nat tie tolerance"},
     {"--spec dflash",
      [](const EngineOptions& o) { return o.speculative.backend == SpeculativeBackend::DFlash; },
      false, "",

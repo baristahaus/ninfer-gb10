@@ -30,12 +30,14 @@ Tensor host_step(const Tensor& storage, std::uint32_t step, std::int32_t element
 }
 
 execution::MtpExecutionView mtp_view(const execution::Parameters& parameters, Resources& resources,
-                                     CudaExecutionView execution, ProposalHead proposal_head) {
+                                     CudaExecutionView execution, ProposalHead proposal_head,
+                                     const models::ShardedGroup* group = nullptr,
+                                     const execution::ShardedCollective* collective = nullptr) {
     if (!resources.frame.mtp || !resources.decoder.mtp_cache()) {
         throw std::logic_error("MTP execution resources are unavailable");
     }
     return {parameters, resources.work, execution,
-            resources.decoder.mtp_cache()->batch_layer_view(0), proposal_head};
+            resources.decoder.mtp_cache()->batch_layer_view(0), proposal_head, group, collective};
 }
 
 void retain_conditioning(Resources& resources, std::span<const ExecutionRow> rows,
@@ -89,18 +91,18 @@ void RankProgramImpl::run_mtp_draft(std::uint32_t batch_size, std::uint32_t step
     const auto cuda          = device.execution_view();
     const auto batch         = static_cast<std::int32_t>(batch_size);
     const auto hidden        = execution::dimension(parameters.profile->config.text.hidden_size);
-    const auto mtp_execution = mtp_view(parameters, resources, cuda, proposal_head);
+    const auto mtp_execution = mtp_view(parameters, resources, cuda, proposal_head, sharded_,
+                                        sharded_collective());
     auto base                = packed(mtp.base_conditioning, {hidden, batch});
     auto drafts              = packed(mtp.drafts, {static_cast<std::int32_t>(draft_window), batch});
     CUDA_CHECK(cudaMemsetAsync(drafts.data, 0, drafts.bytes(), cuda.stream()));
-    // The MTP head is the target's row-sharded output head, so this rank's proposal logits are its
-    // own rows. The frame spec's `output_rows` is still the model's vocabulary
-    // (program/planning/startup.cpp, another owner's file); until that is the rank's rows this is
-    // the only place that knows the real extent, and the two must be reconciled before width 2
-    // samples anything.
-    const auto local_rows = parameters.mtp ? parameters.mtp->output_head.weight.n : 0;
-    if (local_rows <= 0) { throw std::logic_error("MTP proposal head has no local rows"); }
-    auto logits = packed(mtp.proposal_logits, {execution::dimension(local_rows), batch});
+    // The frame's MTP proposal buffer is the frame's own extent, `spec.output_rows` (the public
+    // vocabulary). That is the width-1 projection's destination and the extent the width-2 gather
+    // fills the group's pair with; at width 2 the projection goes to a rank-sized scratch inside
+    // `mtp_propose` and this buffer is unused, so the buffer and the frame spec no longer disagree
+    // about its extent. The rank's row count is read where the projection is made, not here.
+    auto logits = packed(mtp.proposal_logits,
+                         {execution::dimension(frame.spec.output_rows), batch});
     for (std::uint32_t step = 0; step < steps; ++step) {
         auto input         = mtp.step_view(static_cast<std::int32_t>(step), batch);
         const auto visible = static_cast<std::uint32_t>(

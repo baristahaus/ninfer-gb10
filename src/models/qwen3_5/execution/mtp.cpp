@@ -306,21 +306,40 @@ void mtp_propose(MtpExecutionView state, const Tensor& hidden, Tensor& full_logi
                             static_cast<std::uint64_t>(columns));
     auto scope = state.workspace.scope();
     switch (state.proposal_head) {
-    case ProposalHead::Full:
-        // The MTP head is the target's output head, which is row-sharded, so this rank's logits
-        // are `output_head.weight.n` rows and not the full vocabulary. The full-vocabulary extent
-        // stays the gather's buffer (task-12): the rank cannot sample its own rows as global ids
-        // until they are placed at their vocabulary offset.
-        {
-            const auto local_rows = dimension(parameters.output_head.weight.n);
-            require_tensor(full_logits, DType::BF16, {local_rows, columns},
-                           state.execution.device(), "proposal logits");
+    case ProposalHead::Full: {
+        // The MTP head is the target's output head. At width 1 it is whole, so this rank's
+        // projection is the full vocabulary and the frame's proposal buffer is the destination. At
+        // width 2 it is row-sharded: the rank's projection is its own rows, and sampling must rank
+        // the WHOLE vocabulary, so those rows are gathered into the group's full-vocabulary pair and
+        // the pair's tight view is sampled exactly as width 1 samples. `valid_rows` is the extent
+        // scanned, not a normalisation, so passing the rank's row count would rank only this rank's
+        // block -- the gather is the fix, not a smaller number.
+        const auto vocabulary = dimension(state.parameters.profile->public_tokens);
+        if (state.group != nullptr) {
+            if (state.collective == nullptr) {
+                throw std::logic_error("MTP: the sharded lane has no collective");
+            }
+            const auto rank_rows = dimension(parameters.output_head.weight.n);
+            auto scope           = state.workspace.scope();
+            Tensor scratch       = state.workspace.alloc(DType::BF16, {rank_rows, columns});
+            ops::linear(hidden, parameters.output_head.weight, scratch,
+                        parameters.output_head.policy, state.workspace, state.execution);
+            const int rank = state.collective->rank;
+            Tensor full    = state.group->logits[static_cast<std::size_t>(rank)];
+            all_gather_logits(*state.group, rank, state.collective->reduce_index, scratch, full,
+                              state.execution);
+            Tensor gathered = sharded_logits_view(*state.group, rank, vocabulary, columns);
+            ops::argmax(gathered, ids, vocabulary, state.execution);
+            return;
         }
+        const auto local_rows = dimension(parameters.output_head.weight.n);
+        require_tensor(full_logits, DType::BF16, {local_rows, columns},
+                       state.execution.device(), "proposal logits");
         ops::linear(hidden, parameters.output_head.weight, full_logits,
                     parameters.output_head.policy, state.workspace, state.execution);
-        ops::argmax(full_logits, ids, dimension(state.parameters.profile->public_tokens),
-                    state.execution);
+        ops::argmax(full_logits, ids, vocabulary, state.execution);
         return;
+    }
     case ProposalHead::Optimized: {
         if (!state.parameters.proposal) {
             throw std::logic_error("MTP: optimized proposal head was not selected");

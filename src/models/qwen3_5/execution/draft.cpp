@@ -468,13 +468,35 @@ void propose_batch_impl(DraftExecutionView& execution, const DraftInputs& inputs
                      proposal_hidden, execution.cuda);
         Tensor flat_drafts = drafts.view({static_cast<std::int32_t>(k) * batch_size});
         if (execution.proposal_head == ProposalHead::Full) {
-            Tensor logits =
-                execution.work.alloc(DType::BF16, {dimension(target.vocab_size),
-                                                   static_cast<std::int32_t>(k) * batch_size});
-            project(proposal_hidden, execution.parameters.draft->output_head, logits,
-                    execution.work, execution.cuda);
-            ops::argmax(logits, flat_drafts, dimension(execution.parameters.profile->public_tokens),
-                        execution.cuda);
+            // The draft's proposal head is the target's output head. At width 1 it is whole, so the
+            // projection fills the full-vocabulary buffer. At width 2 it is row-sharded: the rank
+            // projects its own rows, and sampling must rank the whole vocabulary, so those rows are
+            // gathered into the group's full-vocabulary pair and the pair's tight view is sampled.
+            const auto vocabulary = dimension(execution.parameters.profile->public_tokens);
+            const auto columns    = static_cast<std::int32_t>(k) * batch_size;
+            if (execution.group != nullptr) {
+                if (execution.collective == nullptr) {
+                    throw std::logic_error("DFlash: the sharded lane has no collective");
+                }
+                const auto rank_rows =
+                    dimension(execution.parameters.draft->output_head.weight.n);
+                Tensor scratch = execution.work.alloc(DType::BF16, {rank_rows, columns});
+                project(proposal_hidden, execution.parameters.draft->output_head, scratch,
+                        execution.work, execution.cuda);
+                const int rank = execution.collective->rank;
+                Tensor full    = execution.group->logits[static_cast<std::size_t>(rank)];
+                all_gather_logits(*execution.group, rank, execution.collective->reduce_index,
+                                  scratch, full, execution.cuda);
+                Tensor gathered =
+                    sharded_logits_view(*execution.group, rank, vocabulary, columns);
+                ops::argmax(gathered, flat_drafts, vocabulary, execution.cuda);
+            } else {
+                Tensor logits = execution.work.alloc(
+                    DType::BF16, {dimension(target.vocab_size), columns});
+                project(proposal_hidden, execution.parameters.draft->output_head, logits,
+                        execution.work, execution.cuda);
+                ops::argmax(logits, flat_drafts, vocabulary, execution.cuda);
+            }
         } else {
             if (!execution.parameters.proposal.has_value()) {
                 throw std::logic_error("optimized DFlash proposal head is unavailable");

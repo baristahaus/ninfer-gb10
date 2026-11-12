@@ -1,6 +1,8 @@
 #pragma once
 
+#include "models/common/sharded_group.h"
 #include "models/qwen3_5/execution/parameters.h"
+#include "models/qwen3_5/execution/sharded.h"
 #include "models/qwen3_5/execution/workspace.h"
 #include "ninfer/ops/kv_cache_append.h"
 #include "ninfer/ops/softmax_attention.h"
@@ -26,6 +28,12 @@ struct MtpExecutionView {
     CudaExecutionView execution;
     PagedKVBatchLayerView cache;
     ProposalHead proposal_head = ProposalHead::Full;
+    // The two-rank bundle and this Program's collective, when the lane is width 2. The proposal head
+    // is the target's row-sharded output head, so sampling gathers both ranks' vocabulary halves
+    // into the group's full-vocabulary pair. Both are null at width 1, where the head is whole and
+    // the frame's proposal buffer is the projection's destination.
+    const models::ShardedGroup* group   = nullptr;
+    const ShardedCollective* collective = nullptr;
 };
 
 // Each live column pairs target conditioning H[p] with token x[p+1], writes cache position p,

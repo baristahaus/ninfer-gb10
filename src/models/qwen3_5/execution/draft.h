@@ -6,6 +6,8 @@
 #include "models/qwen3_5/state/decoder_state.h"
 #include "ninfer/ops/kv_cache_append.h"
 #include "ninfer/ops/sampling.h"
+#include "models/common/sharded_group.h"
+#include "models/qwen3_5/execution/sharded.h"
 #include "ninfer/ops/sliding_window_attention.h"
 #include "ninfer/ops/softmax_attention.h"
 
@@ -18,6 +20,11 @@ struct DraftExecutionView {
     const CyclicKVCacheView& local;
     const PagedKVCache* full   = nullptr;
     ProposalHead proposal_head = ProposalHead::Full;
+    // The two-rank bundle and this Program's collective, when the lane is width 2. The draft's
+    // proposal head is the target's row-sharded output head, so sampling gathers both ranks'
+    // vocabulary halves into the group's pair. Both are null at width 1.
+    const models::ShardedGroup* group   = nullptr;
+    const ShardedCollective* collective = nullptr;
 
     [[nodiscard]] CyclicKVCacheLayerView local_layer(std::uint32_t layer) const;
     [[nodiscard]] PagedKVBatchLayerView full_layer(std::uint32_t layer) const;

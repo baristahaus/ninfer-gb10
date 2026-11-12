@@ -389,6 +389,17 @@ int main() {
     std::vector<ninfer::TokenId> tokens;
     try {
         tokens = sequence_for(*engine, kind);
+        // The count sweep: NINFER_SCORE_COUNT truncates the sequence so the same artifact and the
+        // same fixture machinery measure one column count at a time.
+        if (const char* count_env = std::getenv("NINFER_SCORE_COUNT");
+            count_env != nullptr && *count_env) {
+            const auto wanted = static_cast<std::size_t>(std::strtoul(count_env, nullptr, 10));
+            if (wanted < 2 || wanted > tokens.size()) {
+                fail("NINFER_SCORE_COUNT must be in [2, the sequence length]");
+                return 1;
+            }
+            tokens.resize(wanted);
+        }
     } catch (const std::exception& error) {
         fail(std::string("the sequence could not be built: ") + error.what());
         return 1;

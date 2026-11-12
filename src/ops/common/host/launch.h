@@ -3,10 +3,33 @@
 #include "core/device.h"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <stdexcept>
 
 namespace ninfer::ops::common {
+
+// cudaFuncAttributeMaxDynamicSharedMemorySize is a property of a (function, device) pair, not of a
+// function. A one-time process-wide set therefore admits the capacity on whichever device happened to
+// be current at the first call and leaves every other device at the 48 KiB default, where the same
+// kernel launch fails as cudaErrorInvalidValue. No single-device run can observe that, which is why
+// it appears only on the second device of a multi-device round. Memoise per device instead.
+template <auto Kernel>
+void set_max_dynamic_shared(int bytes) {
+    int device = 0;
+    CUDA_CHECK(cudaGetDevice(&device));
+    // Per instantiation, so each kernel keeps its own memo; sized for the largest device ordinal the
+    // driver can report, and an ordinal outside it simply sets the attribute every time.
+    static std::array<std::uint8_t, 64> prepared{};
+    if (device >= 0 && device < static_cast<int>(prepared.size())) {
+        if (prepared[device] != 0) { return; }
+        CUDA_CHECK(
+            cudaFuncSetAttribute(Kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, bytes));
+        prepared[device] = 1;
+        return;
+    }
+    CUDA_CHECK(cudaFuncSetAttribute(Kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, bytes));
+}
 
 // AlwaysDynamic is for kernels that declare extern shared storage at every size.
 // Their static shared storage also counts against the default limit, so explicitly
@@ -15,9 +38,7 @@ template <int Bytes, auto Kernel, bool AlwaysDynamic = false>
 int prepare_shared() {
     static_assert(Bytes >= 0 && Bytes <= 99 * 1024);
     if constexpr (Bytes > 48 * 1024 || (AlwaysDynamic && Bytes > 0)) {
-        static const cudaError_t status =
-            cudaFuncSetAttribute(Kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, Bytes);
-        CUDA_CHECK(status);
+        set_max_dynamic_shared<Kernel>(Bytes);
         return Bytes;
     } else {
         return AlwaysDynamic ? Bytes : 0;

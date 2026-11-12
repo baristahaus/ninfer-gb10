@@ -1,6 +1,7 @@
 #pragma once
 #include "core/device.h"
 
+#include "ops/common/host/launch.h"
 namespace ninfer::ops::detail {
 template <int Bytes>
 __device__ __forceinline__ unsigned char* q8_shared_storage() {
@@ -17,9 +18,7 @@ __device__ __forceinline__ unsigned char* q8_shared_storage() {
 template <int Bytes, auto Kernel>
 int q8_prepare_shared() {
     if constexpr (Bytes > 48 * 1024) {
-        static const cudaError_t attribute =
-            cudaFuncSetAttribute(Kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, Bytes);
-        CUDA_CHECK(attribute);
+        common::set_max_dynamic_shared<Kernel>(Bytes);
         return Bytes;
     } else
         return 0;

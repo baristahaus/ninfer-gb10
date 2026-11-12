@@ -346,7 +346,10 @@ The artifact describes its model configuration and weight representations;
 `--kv-capacity N` controls the shared physical Main Text KV pool independently and is rounded up to
 the 64-token page size. `--kv-capacity auto` loads the selected weights, measures the remaining GPU
 memory, and directly chooses the largest legal page capacity for the complete enabled runtime
-layout. This includes the selected speculative backend, fixed sequence state, unified workspace,
+layout. On a tensor-parallel group the choice is symmetric: every rank measures its own budget and
+the pool takes the smallest page count any rank can hold, because a sharded KV pool is one pool and
+the rank with the least memory decides it. The automatic headroom is a per-device reserve, so each
+rank leaves it free once and it is not subtracted a second time from the bottleneck. This includes the selected speculative backend, fixed sequence state, unified workspace,
 and CUDA Graph allowance, while leaving the default 1 GiB automatic headroom
 unallocated. On an integrated GPU that shares host memory (GB10), remaining memory is the kernel's
 `MemAvailable`, which counts reclaimable page cache, less the pinned Host KV capacity and a fixed

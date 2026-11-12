@@ -128,14 +128,15 @@ constexpr WidthTwoOption kWidthTwoOptions[] = {
      [](const EngineOptions& o) { return o.speculative.backend == SpeculativeBackend::Mtp; },
      false, "",
      "width 1 is validated -- arm 1 reproduces tests/fixtures/tp2_accept/golden_mtp.ids on trueno -- "
-     "but width 2 now refuses in split_bf16_features, the fifth geometry gap: with the binding "
-     "(4e1a9074), the five Q8 projection geometries (1837c230), the two Q8 add geometries and the "
-     "fifth GDN fold geometry all fixed, the round throws 'split_bf16_features: invalid shape for "
-     "source' (hephaestus, arm 2, nvfp4.v3). src/ops/indexing/features.cu:115 asserts the WIDTH-1 "
-     "packed attention geometry as literals -- source 14336 rows, first 256x24, second 256x4 -- so at "
-     "width 2, where the Rows shard presents 7168 rows and 256x12 / 256x2, it refuses. Unlike the "
-     "four registries this is not a table: the op's own validation hard-codes one width's shape, and "
-     "the fix is to derive the geometry from the operands the way concat_bf16_features already does"},
+     "but width 2 refuses in a SIXTH geometry gap. With the binding (4e1a9074), the five Q8 "
+     "projection geometries (1837c230), the two Q8 add geometries, the fifth GDN fold geometry and "
+     "the split_bf16_features derivation all fixed, the round throws 'q8 linear: unsupported shape "
+     "N17408K5120 T1' (hephaestus, arm 2, nvfp4.v3). That is the width-2 half of the fused "
+     "34816x5120 mlp gate|up parent that 4e1a9074 introduced: the Rows shard halves 34816 to 17408, "
+     "and the Q8 projection table carries 34816 (width 1) and 8704 (the role split) but not 17408. "
+     "Six gaps in a row now, five of them a registry missing one entry and one an op validating a "
+     "literal width-1 shape: the honest answer for this lane is that MTP at width 2 needs the "
+     "preflight plus the gaps it names, not a seventh one-off"},
     {"--spec dflash",
      [](const EngineOptions& o) { return o.speculative.backend == SpeculativeBackend::DFlash; },
      false, "",

@@ -59,6 +59,8 @@ the entry file alone, so a hand check that runs `sha256sum` on the first file wi
 on a correct copy. Verify with `tools/fetch_test_artifacts.py --check`, which applies the same rule
 (`volumes()` then one hash over the concatenation).
 
+The 125B container's four volumes, as recorded in the issue tracker, are 32,000,000,000 / 32,000,000,000 / 32,000,000,000 / 30,921,610,496 bytes with individual digests `fac7e9d4…`, `488226cd…`, `11a6f39b…` and `bcffcc9e…`; the composite above is the digest of the concatenation and is what the manifest pins. Per-volume digests identify a single damaged volume without recomputing 118 GiB.
+
 Both real artifacts are pinned, and both pins were verified against the local copies in November 2026:
 
 | artifact | volumes | bytes | sha256 |

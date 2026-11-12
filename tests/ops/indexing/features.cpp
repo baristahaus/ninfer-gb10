@@ -71,10 +71,14 @@ int pack_case(std::int32_t hidden, std::int32_t tokens) {
     return failures;
 }
 
-int split_case(std::int32_t tokens) {
-    constexpr std::int32_t kInputRows = 14336;
-    constexpr std::int32_t kQueryRows = 6144;
-    constexpr std::int32_t kKvRows    = 1024;
+// The packed q|k|g|v geometry is an OPERAND, not a constant: at tensor-parallel width 2 the Rows
+// shard halves every head count, so the same op presents 7168 packed rows and 12/2/12/2 heads where
+// width 1 presents 14336 and 24/4/24/4. This case is run at both, because the op used to assert the
+// width-1 numbers as literals and a test at one width is how that survived.
+int split_case(std::int32_t tokens, std::int32_t wide_heads, std::int32_t narrow_heads) {
+    const std::int32_t kInputRows = 256 * (2 * wide_heads + 2 * narrow_heads);
+    const std::int32_t kQueryRows = 256 * wide_heads;
+    const std::int32_t kKvRows    = 256 * narrow_heads;
     const auto input = bit_pattern(static_cast<std::size_t>(kInputRows) * tokens, 0x2468'ace0u);
     std::vector<std::uint16_t> expected_query(static_cast<std::size_t>(kQueryRows) * tokens);
     std::vector<std::uint16_t> expected_key(static_cast<std::size_t>(kKvRows) * tokens);
@@ -108,15 +112,17 @@ int split_case(std::int32_t tokens) {
     device_value.fill(0xcd);
 
     Tensor input_tensor(device_input.span(), DType::BF16, {kInputRows, tokens});
-    Tensor query_tensor(device_query.span(), DType::BF16, {256, 24, tokens});
-    Tensor key_tensor(device_key.span(), DType::BF16, {256, 4, tokens});
-    Tensor gate_tensor(device_gate.span(), DType::BF16, {256, 24, tokens});
-    Tensor value_tensor(device_value.span(), DType::BF16, {256, 4, tokens});
+    Tensor query_tensor(device_query.span(), DType::BF16, {256, wide_heads, tokens});
+    Tensor key_tensor(device_key.span(), DType::BF16, {256, narrow_heads, tokens});
+    Tensor gate_tensor(device_gate.span(), DType::BF16, {256, wide_heads, tokens});
+    Tensor value_tensor(device_value.span(), DType::BF16, {256, narrow_heads, tokens});
     ops::split_bf16_features(input_tensor, query_tensor, key_tensor, gate_tensor, value_tensor,
                              ninfer::test::cuda_environment().default_execution);
     cuda_synchronize();
 
-    const std::string label = "split_bf16_features T=" + std::to_string(tokens);
+    const std::string label = "split_bf16_features T=" + std::to_string(tokens) +
+                              " heads=" + std::to_string(wide_heads) + "/" +
+                              std::to_string(narrow_heads);
     int failures            = 0;
     failures += verify_exact((label + " query").c_str(),
                              from_device<std::uint16_t>(device_query.data(), expected_query.size()),
@@ -147,6 +153,13 @@ void add_features_cases(ninfer::test::OpSuite& suite) {
         for (int tokens : {1, 6, 48})
             suite.add("concat_features/" + std::to_string(hidden) + "/t" + std::to_string(tokens),
                       [=] { return pack_case(hidden, tokens); });
+    // Both widths' packed geometry: width 1 is 14336 rows with 24/4/24/4 heads, width 2 is 7168 with
+    // 12/2/12/2 because the Rows shard halves every head count. A case at only one width is how the
+    // op kept a width-1 literal.
     for (int tokens : {1, 6, 48})
-        suite.add("split_features/t" + std::to_string(tokens), [=] { return split_case(tokens); });
+        suite.add("split_features/t" + std::to_string(tokens) + "/w1",
+                  [=] { return split_case(tokens, 24, 4); });
+    for (int tokens : {1, 6, 48})
+        suite.add("split_features/t" + std::to_string(tokens) + "/w2",
+                  [=] { return split_case(tokens, 12, 2); });
 }

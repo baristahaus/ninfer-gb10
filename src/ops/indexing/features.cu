@@ -1,6 +1,7 @@
 #include "ops/common/host/operands.h"
 #include "ninfer/ops/indexing.h"
 #include <stdexcept>
+#include <string>
 #include "ops/common/numeric/math.h"
 #include "ops/common/host/launch.h"
 #include "core/device.h"
@@ -12,10 +13,6 @@ namespace ninfer::ops {
 using namespace common;
 
 namespace {
-
-inline constexpr int kSplitRows  = 14336;
-inline constexpr int kWideRows   = 6144;
-inline constexpr int kNarrowRows = 1024;
 
 __global__ void concat_bf16_features_kernel(const __nv_bfloat16* first, const __nv_bfloat16* second,
                                             __nv_bfloat16* out, std::int32_t rows) {
@@ -29,34 +26,39 @@ __global__ void concat_bf16_features_kernel(const __nv_bfloat16* first, const __
     out[out_base + rows + row]  = second[in_idx];
 }
 
+// The packed source is q|k|g|v: two wide ranges and two narrow ones, in that order. The extents are
+// operands, not constants: at tensor-parallel width 2 the Rows shard halves every head count, so the
+// same op presents 7168 packed rows and 12/2/12/2 heads where width 1 presents 14336 and 24/4/24/4.
 __global__ void split_bf16_features_kernel(const __nv_bfloat16* source, __nv_bfloat16* first,
                                            __nv_bfloat16* second, __nv_bfloat16* third,
-                                           __nv_bfloat16* fourth, std::int32_t tokens) {
+                                           __nv_bfloat16* fourth, std::int32_t tokens,
+                                           std::int32_t total_rows, std::int32_t wide_rows,
+                                           std::int32_t narrow_rows) {
     const std::int64_t idx = blockIdx.x * static_cast<std::int64_t>(blockDim.x) + threadIdx.x;
-    const std::int64_t n   = static_cast<std::int64_t>(kSplitRows) * tokens;
+    const std::int64_t n   = static_cast<std::int64_t>(total_rows) * tokens;
     if (idx >= n) { return; }
 
-    const int row             = static_cast<int>(idx % kSplitRows);
-    const int token           = static_cast<int>(idx / kSplitRows);
+    const int row             = static_cast<int>(idx % total_rows);
+    const int token           = static_cast<int>(idx / total_rows);
     const __nv_bfloat16 value = source[idx];
 
-    if (row < kWideRows) {
-        first[static_cast<std::int64_t>(token) * kWideRows + row] = value;
+    if (row < wide_rows) {
+        first[static_cast<std::int64_t>(token) * wide_rows + row] = value;
         return;
     }
-    if (row < kWideRows + kNarrowRows) {
-        const int local                                                = row - kWideRows;
-        second[static_cast<std::int64_t>(token) * kNarrowRows + local] = value;
+    if (row < wide_rows + narrow_rows) {
+        const int local = row - wide_rows;
+        second[static_cast<std::int64_t>(token) * narrow_rows + local] = value;
         return;
     }
-    if (row < kWideRows + kNarrowRows + kWideRows) {
-        const int local                                             = row - kWideRows - kNarrowRows;
-        third[static_cast<std::int64_t>(token) * kWideRows + local] = value;
+    if (row < 2 * wide_rows + narrow_rows) {
+        const int local = row - wide_rows - narrow_rows;
+        third[static_cast<std::int64_t>(token) * wide_rows + local] = value;
         return;
     }
 
-    const int local = row - kWideRows - kNarrowRows - kWideRows;
-    fourth[static_cast<std::int64_t>(token) * kNarrowRows + local] = value;
+    const int local = row - 2 * wide_rows - narrow_rows;
+    fourth[static_cast<std::int64_t>(token) * narrow_rows + local] = value;
 }
 
 void concat_bf16_features_launch(const Tensor& first, const Tensor& second, Tensor& out,
@@ -77,7 +79,8 @@ void concat_bf16_features_launch(const Tensor& first, const Tensor& second, Tens
 }
 
 void split_bf16_features_launch(const Tensor& source, Tensor& first, Tensor& second, Tensor& third,
-                                Tensor& fourth, cudaStream_t stream) {
+                                Tensor& fourth, std::int32_t wide_rows, std::int32_t narrow_rows,
+                                cudaStream_t stream) {
     constexpr int kBlock = 256;
     const std::int64_t n = static_cast<std::int64_t>(source.ne[0]) * source.ne[1];
     const int grid =
@@ -85,7 +88,8 @@ void split_bf16_features_launch(const Tensor& source, Tensor& first, Tensor& sec
     split_bf16_features_kernel<<<grid, kBlock, 0, stream>>>(
         static_cast<const __nv_bfloat16*>(source.data), static_cast<__nv_bfloat16*>(first.data),
         static_cast<__nv_bfloat16*>(second.data), static_cast<__nv_bfloat16*>(third.data),
-        static_cast<__nv_bfloat16*>(fourth.data), source.ne[1]);
+        static_cast<__nv_bfloat16*>(fourth.data), source.ne[1], source.ne[0], wide_rows,
+        narrow_rows);
     CUDA_CHECK(cudaGetLastError());
 }
 
@@ -128,21 +132,43 @@ void split_bf16_features(const Tensor& source, Tensor& first, Tensor& second, Te
     common::operand::contiguous_nonnull(fourth, op, "fourth", execution.device());
     const std::int32_t tokens = source.ne[1];
     if (tokens <= 0) { throw std::invalid_argument("split_bf16_features: T must be positive"); }
-    common::operand::shape(source, {14336, tokens, 1, 1}, op, "source");
-    if (first.ne[0] != 256 || first.ne[1] != 24 || first.ne[2] != tokens || first.ne[3] != 1) {
-        throw std::invalid_argument("split_bf16_features: invalid shape for first");
+    // DERIVED, NOT ASSERTED AGAINST A LITERAL. The four destinations describe the split, so the
+    // packed extents come from them: the head extent is shared, the two wide ranges (query, gate)
+    // carry one head count and the two narrow ones (key, value) the other, and the source is their
+    // concatenation in q|k|g|v order. Asserting those RELATIONS is what keeps a wrong derivation
+    // from moving the failure into the kernel, and it holds at whatever width the caller presents --
+    // 14336 packed rows with 24/4/24/4 heads at width 1, 7168 with 12/2/12/2 at width 2.
+    const std::int32_t head_dim = first.ne[0];
+    if (head_dim <= 0) { throw std::invalid_argument("split_bf16_features: head extent must be positive"); }
+    const auto expect_operand = [&](const Tensor& operand, const char* name) {
+        if (operand.ne[0] != head_dim || operand.ne[2] != tokens || operand.ne[3] != 1) {
+            throw std::invalid_argument(std::string("split_bf16_features: ") + name +
+                                        " is not a {head, heads, tokens} range of the source");
+        }
+    };
+    expect_operand(first, "first");
+    expect_operand(second, "second");
+    expect_operand(third, "third");
+    expect_operand(fourth, "fourth");
+    if (first.ne[1] != third.ne[1]) {
+        throw std::invalid_argument(
+            "split_bf16_features: the two wide ranges must carry the same head count");
     }
-    if (second.ne[0] != 256 || second.ne[1] != 4 || second.ne[2] != tokens || second.ne[3] != 1) {
-        throw std::invalid_argument("split_bf16_features: invalid shape for second");
+    if (second.ne[1] != fourth.ne[1]) {
+        throw std::invalid_argument(
+            "split_bf16_features: the two narrow ranges must carry the same head count");
     }
-    if (third.ne[0] != 256 || third.ne[1] != 24 || third.ne[2] != tokens || third.ne[3] != 1) {
-        throw std::invalid_argument("split_bf16_features: invalid shape for third");
+    const std::int32_t wide_rows   = head_dim * first.ne[1];
+    const std::int32_t narrow_rows = head_dim * second.ne[1];
+    if (source.ne[0] != 2 * wide_rows + 2 * narrow_rows) {
+        throw std::invalid_argument(
+            "split_bf16_features: the source's rows are not the concatenation of the four ranges");
     }
-    if (fourth.ne[0] != 256 || fourth.ne[1] != 4 || fourth.ne[2] != tokens || fourth.ne[3] != 1) {
-        throw std::invalid_argument("split_bf16_features: invalid shape for fourth");
+    if (source.ne[2] != 1 || source.ne[3] != 1) {
+        throw std::invalid_argument("split_bf16_features: the source must be a {rows, tokens} plane");
     }
 
-    split_bf16_features_launch(source, first, second, third, fourth, stream);
+    split_bf16_features_launch(source, first, second, third, fourth, wide_rows, narrow_rows, stream);
 }
 
 } // namespace ninfer::ops

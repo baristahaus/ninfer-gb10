@@ -1274,6 +1274,311 @@ int exercise_forced_own_source_compound(const char* artifact) {
 
 } // namespace
 
+// ---------------------------------------------------------------------------------------------
+// E and T: the instruments that replace the single-golden-chain oracle.
+// ---------------------------------------------------------------------------------------------
+
+// One evaluation's tokens and their per-position probability reports.
+struct LogprobRun {
+    std::vector<ninfer::TokenId> tokens;
+    std::vector<ninfer::GeneratedTokenLogprob> logprobs;
+    std::uint32_t reused_prompt_tokens = 0; // 0 means the suffix was cold, not reused
+};
+
+bool same_float_bits(float a, float b) { return std::memcmp(&a, &b, sizeof(float)) == 0; }
+
+// E - route-matched exact control.
+//
+// The reuse exercises above compare a cold single-call prefill (the wide MMA route) with a
+// continuation whose prefix KV was written by decode (the narrow fused/split route). Both the reuse
+// machinery and the arithmetic route differ between those runs, so a difference cannot be
+// attributed to either - the review's C1 finding. This control removes the confound: the same call
+// sequence runs twice with identical call boundaries, and the only difference between the runs is
+// the state path under test (a Device-resident checkpoint versus one forced through the Host
+// replica).
+//
+// Precondition, asserted rather than assumed: the engine is run-to-run deterministic for a fixed
+// call sequence. Measured on twofour within one engine configuration, committed KV is reproducible
+// across runs (204/204 comparable pairs identical, tools/compare_kv_dumps.py). If the precondition
+// fails here, this reports a failed precondition - never a route difference - because an exact
+// control is not legitimate on an engine that is not deterministic.
+
+LogprobRun run_two_request_sequence(ninfer::Engine& engine, const std::vector<ninfer::TokenId>& prompt,
+                                    std::uint32_t first_tokens, std::uint32_t suffix_tokens) {
+    LogprobRun run;
+    const auto first =
+        engine.generate(engine.prepare_tokens(prompt), greedy_options(first_tokens, true));
+    run.tokens   = first.generated_token_ids;
+    run.logprobs = first.token_logprobs;
+    std::vector<ninfer::TokenId> continuation = prompt;
+    continuation.insert(continuation.end(), first.generated_token_ids.begin(),
+                        first.generated_token_ids.end());
+    const auto suffix =
+        engine.generate(engine.prepare_tokens(continuation), greedy_options(suffix_tokens, true));
+    run.reused_prompt_tokens = suffix.reused_prompt_tokens;
+    run.tokens.insert(run.tokens.end(), suffix.generated_token_ids.begin(),
+                      suffix.generated_token_ids.end());
+    run.logprobs.insert(run.logprobs.end(), suffix.token_logprobs.begin(),
+                        suffix.token_logprobs.end());
+    return run;
+}
+
+// Reports the first difference between two runs that must be identical, naming the position, the
+// token and both values. Returns the number of differences found.
+int compare_exact_runs(const char* label, const LogprobRun& a, const LogprobRun& b) {
+    int differences = 0;
+    const auto report = [&](const char* what, std::size_t index, double left, double right) {
+        ++differences;
+        if (differences == 1) {
+            std::cerr << label << ": " << what << " differs at position " << index << " (" << left
+                      << " vs " << right << ")\n";
+        }
+    };
+    if (a.tokens.size() != b.tokens.size()) {
+        std::cerr << label << ": token counts differ (" << a.tokens.size() << " vs "
+                  << b.tokens.size() << ")\n";
+        return 1;
+    }
+    if (a.logprobs.size() != b.logprobs.size()) {
+        std::cerr << label << ": log-probability counts differ (" << a.logprobs.size() << " vs "
+                  << b.logprobs.size() << ")\n";
+        return 1;
+    }
+    for (std::size_t index = 0; index < a.tokens.size(); ++index) {
+        if (a.tokens[index] != b.tokens[index]) {
+            report("token", index, a.tokens[index], b.tokens[index]);
+        }
+        const auto& left  = a.logprobs[index];
+        const auto& right = b.logprobs[index];
+        if (!same_float_bits(left.logprob, right.logprob)) {
+            report("log-probability", index, left.logprob, right.logprob);
+        }
+    }
+    return differences;
+}
+
+int exercise_route_matched_control(const char* artifact) {
+    const auto& prompt = canonical_prompt();
+    const auto options_for = [&](std::uint32_t device_state_slots,
+                                 std::uint32_t host_state_slots) {
+        ninfer::EngineOptions options             = engine_options(artifact);
+        options.token_logprobs                    = true;
+        options.enable_vision                     = false;
+        options.context_cache.device_state_slots  = device_state_slots;
+        options.context_cache.host_state_slots    = host_state_slots;
+        return options;
+    };
+    constexpr std::uint32_t kFirstTokens  = 6;
+    constexpr std::uint32_t kSuffixTokens = 2;
+
+    // 1. Determinism precondition: the same call sequence from two fresh engines. Two runs on ONE
+    //    engine would not be the same sequence - the second would find the first run's checkpoint
+    //    and take the reuse route - so the precondition needs a clean state on both sides.
+    {
+        LogprobRun first;
+        {
+            ninfer::Engine engine(options_for(2, 4));
+            first = run_two_request_sequence(engine, prompt, kFirstTokens, kSuffixTokens);
+        }
+        LogprobRun second;
+        {
+            ninfer::Engine engine(options_for(2, 4));
+            second = run_two_request_sequence(engine, prompt, kFirstTokens, kSuffixTokens);
+        }
+        const int differences = compare_exact_runs("determinism precondition", first, second);
+        if (first.reused_prompt_tokens == 0 || second.reused_prompt_tokens == 0) {
+            std::cerr << "determinism precondition: a suffix run did not reuse the checkpoint, so "
+                         "the sequence was cold twice and the precondition is vacuous\n";
+            return 1;
+        }
+        if (differences != 0) {
+            std::cerr << "route-matched control: the engine is not run-to-run deterministic for a "
+                         "fixed call sequence, so the exact control is not legitimate; this is a "
+                         "failed precondition, not a route difference\n";
+            return 1;
+        }
+        std::cerr << "route-matched control: determinism precondition holds ("
+                  << first.tokens.size() << " tokens, " << first.logprobs.size()
+                  << " probability reports, bitwise identical across two runs)\n";
+    }
+
+    // 2. The control itself: identical call boundaries, Device-resident checkpoint versus Host.
+    ninfer::Engine device_engine(options_for(2, 4));
+    const LogprobRun device_run =
+        run_two_request_sequence(device_engine, prompt, kFirstTokens, kSuffixTokens);
+    ninfer::Engine host_engine(options_for(0, 4));
+    const LogprobRun host_run =
+        run_two_request_sequence(host_engine, prompt, kFirstTokens, kSuffixTokens);
+    // The Host path must actually have been taken; a control that did not exercise the state path
+    // under test proves nothing and says so rather than passing.
+    const auto host_stats = host_engine.runtime_stats();
+    if (host_stats.state_d2h_count == 0) {
+        std::cerr << "route-matched control: the Host-forced run never demoted state (d2h 0), so "
+                     "the control did not exercise the path under test\n";
+        return 1;
+    }
+    if (device_run.reused_prompt_tokens == 0 || host_run.reused_prompt_tokens == 0) {
+        std::cerr << "route-matched control: a suffix run did not reuse the checkpoint (device "
+                  << device_run.reused_prompt_tokens << ", host " << host_run.reused_prompt_tokens
+                  << "), so the state path was not exercised\n";
+        return 1;
+    }
+    const int differences = compare_exact_runs("route-matched control", device_run, host_run);
+    if (differences != 0) {
+        std::cerr << "route-matched control: identical call boundaries with only the state path "
+                     "differing produced " << differences << " difference(s)\n";
+        return 1;
+    }
+    std::cerr << "route-matched control: identical call boundaries agree bitwise across the Device "
+                 "and Host state paths (" << device_run.tokens.size() << " tokens, "
+              << device_run.logprobs.size() << " probability reports)\n";
+    return 0;
+}
+
+// T - teacher-forced logit tolerance.
+//
+// Both routes evaluate the SAME token sequence: the cold run generates greedily from the canonical
+// prompt, and the reused run is fed that exact sequence as its prompt prefix so both sides are
+// conditioned on the same text. At every compared position the same token's natural-log probability
+// is compared, and the token is asserted equal only where the top-2 margin exceeds twice the
+// tolerance - because a perturbation of at most tau per log-probability can move the argmax only
+// where the top-2 gap is at most 2*tau.
+//
+// TOLERANCE: 0.40 nats. The quantity it bounds is |delta log p| at one position - the log-probability
+// of the same token under the two routes. That is the right quantity because temperature-0 generation
+// is decided by the argmax of exactly these log-probabilities: a difference that cannot move a
+// log-probability cannot move a token, and the margin condition above then tests the cases where it
+// can.
+//
+// The anchor is the measured legitimate difference (issues ninfer-gb10-53j and ninfer-gb10-e9e): one
+// BF16 ULP in the layer-0 GDN conv/recurrent state, amplified through 36 layers of recurrence, gives
+// 3407 of 20480 committed-KV bytes at frontier 40, a 21% difference at one hidden element
+// (continuation_hidden element 0: 1.17188 vs 0.964844), and a per-layer relative L2 on the K plane of
+// 3.74e-2 at the first KV-bearing layer, plateauing at 6-10e-2. The hidden state is the input to the
+// logit readout, so a relative perturbation of the hidden state bounds the relative perturbation of
+// the logits; to first order a log-probability changes by the relative change of its probability. The
+// plateau's upper bound (0.10) is therefore the expected |delta log p| scale, and the review's
+// amplification caution - the 1-ULP seed reaching 21% at one element shows amplification is large, not
+// small - justifies 4x slack for the tail: tau = 4 x 0.10 = 0.40 nats.
+//
+// This constant is a starting anchor, not a measurement of this build's response: the mapping
+// assumes the logit readout does not amplify the hidden-state perturbation beyond the 4x slack, and
+// the observed maximum and the margin distribution are printed so instrument U (precision scaling,
+// which sets tau to 4x the measured response to injected 1-ULP noise) can replace the assumption with
+// a measurement without changing the assertion's shape. A tolerance that makes every position pass is not an oracle, so the margin
+// report also says whether the prompt discriminates at all.
+constexpr double kOracleLogprobTolerance = 0.40;
+
+int exercise_teacher_forced_tolerance(const char* artifact) {
+    const auto& prompt = canonical_prompt();
+    ninfer::EngineOptions options = engine_options(artifact);
+    options.token_logprobs        = true;
+    options.enable_vision         = false;
+    ninfer::Engine engine(options);
+    constexpr std::uint32_t kTotalTokens = 12;
+    constexpr std::uint32_t kReusedBase  = 4;
+
+    // Route B's capture runs first: a first request has no state to reuse, so the checkpoint the
+    // continuation restores is this request's own. The cold run that follows sets
+    // allow_prefix_reuse = false, so it prefills from scratch and never touches that checkpoint.
+    const auto capture =
+        engine.generate(engine.prepare_tokens(prompt), greedy_options(kReusedBase, true));
+    // Route A: cold. One request, no reuse.
+    const auto cold =
+        engine.generate(engine.prepare_tokens(prompt), greedy_options(kTotalTokens, false));
+    if (cold.generated_token_ids.size() != kTotalTokens ||
+        cold.token_logprobs.size() != cold.generated_token_ids.size()) {
+        std::cerr << "teacher-forced tolerance: the cold run did not report one probability per "
+                     "generated token\n";
+        return 1;
+    }
+    // The continuation is fed the SAME token sequence cold produced, so both routes evaluate the
+    // same text.
+    if (capture.generated_token_ids !=
+        std::vector<ninfer::TokenId>(cold.generated_token_ids.begin(),
+                                     cold.generated_token_ids.begin() + kReusedBase)) {
+        std::cerr << "teacher-forced tolerance: the capture run diverged from the cold run inside "
+                     "the shared prefix, so the two routes were not fed the same sequence\n";
+        print_tokens("cold", cold.generated_token_ids);
+        print_tokens("capture", capture.generated_token_ids);
+        return 1;
+    }
+    std::vector<ninfer::TokenId> continuation = prompt;
+    continuation.insert(continuation.end(), cold.generated_token_ids.begin(),
+                        cold.generated_token_ids.begin() + kReusedBase);
+    const auto reused = engine.generate(engine.prepare_tokens(continuation),
+                                        greedy_options(kTotalTokens - kReusedBase, true));
+    if (reused.reused_prompt_tokens == 0) {
+        std::cerr << "teacher-forced tolerance: the continuation reused nothing, so the two routes "
+                     "are the same route and the comparison proves nothing\n";
+        return 1;
+    }
+    if (reused.token_logprobs.size() != reused.generated_token_ids.size()) {
+        std::cerr << "teacher-forced tolerance: the reused run did not report one probability per "
+                     "generated token\n";
+        return 1;
+    }
+
+    double max_delta        = 0.0;
+    std::size_t compared    = 0;
+    std::size_t flat        = 0;
+    std::size_t diverged    = 0;
+    std::size_t confident_bad = 0;
+    for (std::size_t step = 0; step < reused.generated_token_ids.size(); ++step) {
+        const std::size_t position = kReusedBase + step;
+        const auto& cold_report    = cold.token_logprobs[position];
+        const auto& reused_report  = reused.token_logprobs[step];
+        // The top-2 margin at this position, from the cold route's own report. A position whose top
+        // two candidates are within 2*tau cannot be decided reliably by either route, so token
+        // equality is not asserted there.
+        double margin = 0.0;
+        if (cold_report.top.size() >= 2) {
+            margin = cold_report.top[0].logprob - cold_report.top[1].logprob;
+        }
+        const bool discriminating = margin > 2.0 * kOracleLogprobTolerance;
+        if (!discriminating) { ++flat; }
+        if (cold.generated_token_ids[position] != reused.generated_token_ids[step]) {
+            ++diverged;
+            if (discriminating) {
+                ++confident_bad;
+                std::cerr << "teacher-forced tolerance: a confident choice changed at position "
+                          << position << " (cold " << cold.generated_token_ids[position]
+                          << ", reused " << reused.generated_token_ids[step] << ", margin "
+                          << margin << " nats > " << 2.0 * kOracleLogprobTolerance << ")\n";
+            }
+            continue;
+        }
+        // Same token: the same log-probability must agree within the tolerance.
+        const double delta =
+            std::abs(static_cast<double>(cold_report.logprob) - reused_report.logprob);
+        max_delta = std::max(max_delta, delta);
+        ++compared;
+        if (delta > kOracleLogprobTolerance) {
+            std::cerr << "teacher-forced tolerance: |delta log p| " << delta << " exceeds "
+                      << kOracleLogprobTolerance << " at position " << position << " (cold "
+                      << cold_report.logprob << ", reused " << reused_report.logprob << ")\n";
+            return 1;
+        }
+    }
+    std::cerr << "teacher-forced tolerance: " << compared << " position(s) compared, max |delta "
+                 "log p| " << max_delta << " nats (tolerance " << kOracleLogprobTolerance
+              << "); " << diverged << " token(s) diverged, " << confident_bad
+              << " at a discriminating position; " << flat << " of "
+              << reused.generated_token_ids.size() << " position(s) have a top-2 margin <= "
+              << 2.0 * kOracleLogprobTolerance << " nats\n";
+    if (confident_bad != 0) { return 1; }
+    if (flat * 2 >= reused.generated_token_ids.size()) {
+        // Honest power report: most positions cannot discriminate, so this prompt is a weak oracle.
+        // The fix is a harder prompt, not a looser tolerance.
+        std::cerr << "teacher-forced tolerance: WARNING the prompt is too flat to be a "
+                     "discriminating oracle (" << flat << " of "
+                  << reused.generated_token_ids.size()
+                  << " positions have a top-2 margin within 2*tolerance); a harder prompt is "
+                     "needed, not a looser tolerance\n";
+    }
+    return 0;
+}
+
 int main() {
     const char* artifact = std::getenv("NINFER_QWEN38_FLASH_NEXT_WEIGHTS");
     if (artifact == nullptr || *artifact == '\0') {
@@ -1342,6 +1647,8 @@ int main() {
                 return 1;
             }
         }
+        if (exercise_route_matched_control(artifact) != 0) { return 1; }
+        if (exercise_teacher_forced_tolerance(artifact) != 0) { return 1; }
         if (exercise_ordinary_greedy(artifact, canonical_output()) != 0) { return 1; }
         // The serving-shape section needs a 72 GB resident set at a 73728-token context, which this
         // box cannot hold beside the weights. It is skipped deliberately, not by accident, when the

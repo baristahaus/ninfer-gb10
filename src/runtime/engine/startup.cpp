@@ -98,10 +98,17 @@ void validate_options(const EngineOptions& options) {
 namespace {
 
 // Width > 1 option combinations: one row per option this engine has that touches the sharded lane.
-// A row is either validated — a two-rank round has been compared token for token against width 1 —
-// or it refuses. Promotion means adding the evidence to a row, never deleting a refusal, and a row
-// whose option disappears is deleted with the option: this is a register of what exists, not a
-// framework.
+// A row is either validated — a two-rank round has been compared against width 1 — or it refuses.
+// Promotion means adding the evidence to a row, never deleting a refusal, and a row whose option
+// disappears is deleted with the option: this is a register of what exists, not a framework.
+//
+// THE CRITERION IS A MEASURED MARGIN, NOT TOKEN EQUALITY. A sharded round is not bit-identical to a
+// width-1 round: the shard sums in a different order, so where the reference has two near-equal
+// continuations the argmax can fall either way. Measured on this lane, three such disagreements sat
+// 0.125 to 0.250 nats apart on the reference, against 14.0 nats for a candidate the reference would
+// not choose. The acceptance test adjudicates exactly that way (test_engine_tp2_accept_real.cpp,
+// kTieToleranceNats), so a row's evidence is a two-rank round whose disagreements were adjudicated
+// within that tolerance -- not a round that happened to produce identical tokens.
 //
 // The sharded path's own checks ("the collective requires exactly two ranks") guard the collective's
 // SHAPE; they say nothing about whether an option's semantics were ever compared at width 2. That is
@@ -120,12 +127,15 @@ constexpr WidthTwoOption kWidthTwoOptions[] = {
     {"--spec mtp",
      [](const EngineOptions& o) { return o.speculative.backend == SpeculativeBackend::Mtp; },
      false, "",
-     "the MTP block's projections are Q8 and the Q8 projection table has no rank-sized shape: a "
-     "width-2 round now gets past linear_pair (its N was hard-coded to 1024) and throws "
-     "'q8 linear: unsupported shape N7168K5120 T1' -- the MTP attention projection's packed rows "
-     "at width 2 (14336 halved). The width-2 Q8 set the MTP block needs is N7168K5120 (attention "
-     "in), N5120K3072 (attention out), N8704K5120 (mlp gate/up), N5120K8704 (mlp down) and "
-     "N124160K5120 (mtp/output_head, shared with text/output_head); none is registered"},
+     "the MTP block's attention input is bound as four parts from four different parents, so the "
+     "projection's contiguous-parent-region requirement (src/core/weight_view.cpp:206) cannot be "
+     "satisfied and the lane throws 'mtp: native input requires one contiguous parent region "
+     "(parts=4, part 1 begins 0 but part 0 ends 31457280, different parents)'. That fails at WIDTH 1, "
+     "on the reference side, before any sharding, so it blocks MTP at every width and no MTP chain "
+     "has ever been captured. The Q8 tables are NOT the blocker: every mtp/ projection is Q8, the "
+     "five width-2 rank-sized geometries are registered (1837c230), the stem is replicated so "
+     "Q8N5120K10240 already covers it, and the K/V pair is N-agnostic since c3898a07 -- verified by "
+     "enumeration, so no sixth entry is needed and the remaining blocker is the binding alone"},
     {"--spec dflash",
      [](const EngineOptions& o) { return o.speculative.backend == SpeculativeBackend::DFlash; },
      false, "",
@@ -162,8 +172,9 @@ constexpr WidthTwoOption kWidthTwoOptions[] = {
     throw std::invalid_argument(
         std::string(row.option) +
         " has no validated two-rank round: " + std::string(row.reason) +
-        ". The refusal is removed by a two-rank round compared token for token against width 1; "
-        "until then pass a single device with --device");
+        ". The refusal is removed by a two-rank round compared against width 1 by the tie-tolerant "
+        "margin criterion -- a sharded round is not bit-identical, so token equality is not the "
+        "criterion; until then pass a single device with --device");
 }
 
 } // namespace

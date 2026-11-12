@@ -159,7 +159,7 @@ constexpr WidthTwoOption kWidthTwoOptions[] = {
      "row is promoted only by a measured round inside a tolerance this purpose's own profile can "
      "justify -- a decision, not a fix. Evidence: tests/models/qwen3_5/test_engine_score_w2_real.cpp; "
      "the gather regression is tests/test_sharded_logits_gather.cpp at 3, 43, 84, 85 and 128 "
-     "columns"}
+     "columns"},
     {"prefix reuse / context cache",
      [](const EngineOptions& o) { return o.context_cache.enabled; },
      false, "",

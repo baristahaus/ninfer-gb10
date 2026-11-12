@@ -127,15 +127,15 @@ constexpr WidthTwoOption kWidthTwoOptions[] = {
     {"--spec mtp",
      [](const EngineOptions& o) { return o.speculative.backend == SpeculativeBackend::Mtp; },
      false, "",
-     "the MTP block's attention input is bound as four parts from four different parents, so the "
-     "projection's contiguous-parent-region requirement (src/core/weight_view.cpp:206) cannot be "
-     "satisfied and the lane throws 'mtp: native input requires one contiguous parent region "
-     "(parts=4, part 1 begins 0 but part 0 ends 31457280, different parents)'. That fails at WIDTH 1, "
-     "on the reference side, before any sharding, so it blocks MTP at every width and no MTP chain "
-     "has ever been captured. The Q8 tables are NOT the blocker: every mtp/ projection is Q8, the "
-     "five width-2 rank-sized geometries are registered (1837c230), the stem is replicated so "
-     "Q8N5120K10240 already covers it, and the K/V pair is N-agnostic since c3898a07 -- verified by "
-     "enumeration, so no sixth entry is needed and the remaining blocker is the binding alone"},
+     "width 1 is validated -- arm 1 reproduces tests/fixtures/tp2_accept/golden_mtp.ids on trueno -- "
+     "but width 2 refuses in the Q8 ADD path, not in the projection table: with the binding fixed "
+     "(4e1a9074) and the five rank-sized Q8 geometries registered (1837c230), a width-2 MTP round "
+     "runs and throws 'q8 linear_add: unsupported shape or token extent N5120K8704 T1' (measured on "
+     "hephaestus, arm 2, nvfp4.v3). src/ops/linear/add/dispatch.cpp admits (2048,4096), (2048,6144), "
+     "(5120,6144) and (5120,17408) for Q8 and nothing else, so the fused add that the MTP draft "
+     "block uses has no rank-sized entry for mlp/down's Columns shard. The projection table's five "
+     "shapes were necessary but not sufficient: the add path is a second table, which the same "
+     "commit that flagged it for FP8/NVFP4 left unextended for Q8"},
     {"--spec dflash",
      [](const EngineOptions& o) { return o.speculative.backend == SpeculativeBackend::DFlash; },
      false, "",

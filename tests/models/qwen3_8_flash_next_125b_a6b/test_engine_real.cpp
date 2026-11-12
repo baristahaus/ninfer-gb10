@@ -475,12 +475,37 @@ const std::vector<ninfer::TokenId>& canonical_output() {
     // (sm_121a) resolves it to 27891 with a different continuation from index 2 on. Recorded
     // 2026-11-10 on twofour against the fp8_mtp artifact; each chain is authoritative for its own
     // compute capability only, and a new lane records its own.
+    //
+    // Re-recorded 2026-11-11: the sm_121a chain was 27891 from index 2, and that value had no valid
+    // provenance. The commit that recorded it (2f8f7517) fails the prefix-reuse assertion in this
+    // same test and aborts before reaching this check, so no green run ever validated it; it was
+    // recorded by hand or from a build of a lineage master does not share. A clean checkout of
+    // master, built fresh for sm_121a, produces 5435 under BOTH CUDA 13.0 and 13.4 with the artifact
+    // unchanged (dated 2026-10-17), so the toolchain is excluded and the chain is the engine's own.
+    // The choice is the documented exact BF16 tie at generated index 2 (5435 and 27891 both at
+    // logprob -1.06157), so either resolution is defensible and the step 7 perplexity gate is what
+    // measures quality; exactness here pins regressions, not quality.
     static const std::vector<ninfer::TokenId> golden_sm120a{
         29108, 4009, 5435, 660, 7736, 314, 279, 9155, 19142, 11, 694, 22602};
     static const std::vector<ninfer::TokenId> golden_sm121a{
-        29108, 4009, 27891, 8964, 579, 16078, 321, 1100, 9872, 303, 660, 17425};
+        29108, 4009, 5435, 660, 7736, 314, 279, 9155, 19142, 11, 694, 22602};
     static const int capability = ninfer::DeviceContext(0).compute_capability();
     return capability == 121 ? golden_sm121a : golden_sm120a;
+}
+
+// The MTP VERIFY chain, which is a different evaluation from plain decode: the verify path runs
+// T=2..4 kernels and resolves the documented 27891/5435 near-tie its own way. On sm_120a it agrees
+// with the plain-decode golden; on sm_121a it resolves the tie to 27891 and then follows the model's
+// confident continuation. Measured 2026-11-11 on twofour: plain decode gives the 5435 chain and MTP
+// verify gives the 27891 chain on the same build, same artifact, same prompt - so one shared vector
+// could not express both, and an earlier version of this test conflated them.
+const std::vector<ninfer::TokenId>& qad_mtp_output();
+const std::vector<ninfer::TokenId>& canonical_output();
+const std::vector<ninfer::TokenId>& mtp_verify_output(const std::string& recipe) {
+    if (qad_recipe(recipe)) { return qad_mtp_output(); }
+    static const std::vector<ninfer::TokenId> verify_sm121a{
+        29108, 4009, 27891, 8964, 579, 16078, 321, 1100, 9872, 303, 660, 17425};
+    return ninfer::DeviceContext(0).compute_capability() == 121 ? verify_sm121a : canonical_output();
 }
 
 // The QAD recipe's MTP verify golden: the 27891/5435 near-tie resolves to 5435 under the
@@ -1250,7 +1275,7 @@ int main() {
     }
     const std::string recipe       = artifact_recipe(artifact);
     const bool qad                 = qad_recipe(recipe);
-    const auto& expected_prefix    = qad ? qad_mtp_output() : canonical_output();
+    const auto& expected_prefix    = mtp_verify_output(recipe);
     configure_prefix_state_dump(canonical_prompt(), expected_prefix);
     const CrossPathFixture fixture = cross_path_fixture(recipe);
     try {

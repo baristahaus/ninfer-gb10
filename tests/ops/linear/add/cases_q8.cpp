@@ -95,7 +95,11 @@ void q8_a16_conformance(ninfer::test::linear_suite::Suite& suite) {
     constexpr std::array<std::int32_t, 8> large_interiors{1, 4, 8, 96, 128, 512, 1024, 1025};
     constexpr std::array<std::int32_t, 6> graph_tokens{1, 8, 64, 65, 129, 512};
     constexpr std::array<std::int32_t, 3> full_tokens{1, 4, 8};
-    for (const auto k : {6144, 17408}) {
+    // 3072 and 8704 are the width-2 Columns shards of 6144 and 17408: a Columns shard halves K, and
+    // the fused residual add follows the projection, so the lane presents both the width-1 and the
+    // rank-sized geometry. The sweep below covers T=1 and the prefill extents (96, 128, 512, 1024),
+    // which is what the MTP draft block's T<=4 hot band and a prefill both reach.
+    for (const auto k : {3072, 6144, 8704, 17408}) {
         ninfer::test::linear_add::add_shape(suite, QType::Q8_G32_FP16,
                                             ShapeCase{.n               = 5120,
                                                       .k               = k,
@@ -111,8 +115,9 @@ void q8_a16_conformance(ninfer::test::linear_suite::Suite& suite) {
                                                       .route_interiors = full_tokens,
                                                       .full_output     = true});
     }
-    for (const auto [n, k] : std::array<std::array<int, 2>, 4>{
-             {{2048, 4096}, {2048, 6144}, {5120, 6144}, {5120, 17408}}}) {
+    for (const auto [n, k] : std::array<std::array<int, 2>, 6>{
+             {{2048, 4096}, {2048, 6144}, {5120, 6144}, {5120, 17408}, {5120, 3072},
+              {5120, 8704}}}) {
         suite.add(ninfer::test::linear_suite::make_case(
                       "q8", n, k, 129, ninfer::ops::LinearPolicy::A16Only,
                       ninfer::test::linear_suite::Execution::Eager,

@@ -23,6 +23,42 @@ bool cuda_unavailable(cudaError_t err) {
            err == cudaErrorStubLibrary;
 }
 
+// A CUDA_CHECK failure must reach the caller as an error carrying the file, the line and the
+// driver's text, not as SIGABRT. The trigger is a real driver error, taken from a runtime API call
+// rather than a kernel launch because this translation unit is plain C++ and the launch syntax is
+// CUDA-only: an invalid device ordinal is rejected by the driver and is deterministic.
+int expect_cuda_check_reports() {
+    const cudaError_t error = cudaSetDevice(-1);
+    if (error == cudaSuccess) {
+        return fail("an invalid device ordinal was accepted, so the check cannot run");
+    }
+    const std::string expected_text = cudaGetErrorString(error);
+    const std::string expected_name = cudaGetErrorName(error);
+    const int line                  = __LINE__;
+    try {
+        ninfer::cuda_check(error, "cudaSetDevice(-1)", __FILE__, line);
+    } catch (const std::runtime_error& caught) {
+        const std::string what = caught.what();
+        int failures           = 0;
+        const auto expect      = [&](const std::string& needle, const char* label) {
+            if (what.find(needle) == std::string::npos) {
+                std::cerr << "CUDA_CHECK report does not name the " << label << ": " << what << '\n';
+                ++failures;
+            }
+        };
+        expect("test_device.cpp", "file");
+        expect(":" + std::to_string(line) + ":", "line");
+        expect("cudaSetDevice(-1)", "checked expression");
+        expect(expected_name, "driver error name");
+        expect(expected_text, "driver error text");
+        if (failures == 0) {
+            std::cout << "ok: CUDA_CHECK reported " << what << '\n';
+        }
+        return failures;
+    }
+    return fail("CUDA_CHECK returned without throwing");
+}
+
 int expect_throws_device(int device_id) {
     try {
         ninfer::DeviceContext invalid(device_id);
@@ -55,6 +91,15 @@ int check_context(const ninfer::DeviceContext& ctx, const char* label) {
 } // namespace
 
 int main(int argc, char** argv) {
+    if (argc == 2 && std::string_view(argv[1]) == "--cuda-check-reports") {
+        int count                   = 0;
+        const cudaError_t count_err = cudaGetDeviceCount(&count);
+        if (cuda_unavailable(count_err) || count_err != cudaSuccess || count == 0) {
+            std::cerr << "SKIP: no usable CUDA device for the CUDA_CHECK report check\n";
+            return 77;
+        }
+        return expect_cuda_check_reports();
+    }
     if (argc == 2 && std::string_view(argv[1]) == "--invalid-sync") {
         try {
             ninfer::DeviceContext ctx(0);

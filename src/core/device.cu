@@ -114,9 +114,16 @@ DeviceAllocationError::DeviceAllocationError(const char* operation, std::size_t 
 
 void cuda_check(cudaError_t err, const char* expr, const char* file, int line) {
     if (err == cudaSuccess) { return; }
-    std::fprintf(stderr, "%s:%d: CUDA_CHECK(%s) failed: %s: %s\n", file, line, expr,
-                 cudaGetErrorName(err), cudaGetErrorString(err));
-    std::abort();
+    // Report, do not abort. A CUDA error is a failure of the operation that hit it, and every other
+    // CUDA failure in this codebase already reaches the caller as an exception (cudaGetDeviceCount,
+    // cudaSetDeviceFlags, allocation). Aborting threw that away: it killed the stack that says which
+    // round and which request failed, and left a core dump that has to be read with a debugger
+    // instead of a message the caller can print, log and act on. The message keeps the file, the
+    // line, the checked expression, the driver's name and its text, so the report is no less precise
+    // than the abort's. A poisoned context still fails loudly: every later CUDA call reports again.
+    throw std::runtime_error(std::string(file) + ":" + std::to_string(line) + ": CUDA_CHECK(" +
+                             expr + ") failed: " + cudaGetErrorName(err) + ": " +
+                             cudaGetErrorString(err));
 }
 
 DeviceContext::DeviceContext(int device_id) : device_(Device::cuda(device_id)) {

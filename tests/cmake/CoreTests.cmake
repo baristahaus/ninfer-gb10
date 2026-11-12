@@ -35,6 +35,11 @@ foreach(mode flags IN ZIP_LISTS sync_modes sync_flags)
   set_tests_properties(ninfer_device_sync_${mode}_test PROPERTIES
     ENVIRONMENT "NINFER_CUDA_SYNC=${mode}" SKIP_RETURN_CODE 77)
 endforeach()
+# A CUDA_CHECK failure reports through an exception instead of aborting; this asserts the report
+# carries the file, the line and the driver's text, which is what makes a lane failure diagnosable.
+add_test(NAME ninfer_device_cuda_check_test COMMAND ninfer_device_test --cuda-check-reports)
+set_tests_properties(ninfer_device_cuda_check_test PROPERTIES SKIP_RETURN_CODE 77)
+
 foreach(mode IN ITEMS invalid empty)
   add_test(NAME ninfer_device_sync_${mode}_test COMMAND ninfer_device_test --invalid-sync)
 endforeach()

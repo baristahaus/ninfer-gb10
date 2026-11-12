@@ -8,7 +8,13 @@
 #include <stdexcept>
 
 namespace ninfer::ops::detail::gated_delta_net {
-enum class FoldGeometryId { Layers48Heads48, Layers30Heads32, Layers36Heads48, Layers36Heads24 };
+enum class FoldGeometryId {
+    Layers48Heads48,
+    Layers30Heads32,
+    Layers36Heads48,
+    Layers36Heads24,
+    Layers48Heads24,
+};
 
 inline FoldGeometryId select_fold_geometry(const GdnReplayRecordSpec& spec) {
     if (spec.qk_heads == 16 && spec.value_heads == 48 && spec.conv_channels == 10240) {
@@ -21,6 +27,13 @@ inline FoldGeometryId select_fold_geometry(const GdnReplayRecordSpec& spec) {
     if (spec.layers == 36 && spec.qk_heads == 8 && spec.value_heads == 24 &&
         spec.conv_channels == 5120)
         return FoldGeometryId::Layers36Heads24;
+    // The 48-layer width-2 cross. The three branches above cover the width-1 forms and the 36-layer
+    // width-2 form; this is the width-2 form of the 48-layer one, which is what a 27B presents at
+    // width 2 because its 48 GDN layers shard 16 qk heads to 8, 48 value heads to 24 and 10240
+    // convolution channels to 5120.
+    if (spec.layers == 48 && spec.qk_heads == 8 && spec.value_heads == 24 &&
+        spec.conv_channels == 5120)
+        return FoldGeometryId::Layers48Heads24;
     throw std::invalid_argument("gdn_replay_fold: unsupported record geometry");
 }
 

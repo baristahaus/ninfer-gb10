@@ -35,6 +35,11 @@ using FoldGeometry48x48 = FoldGeometry<48, 16, 48, 10240>;
 using FoldGeometry30x32 = FoldGeometry<30, 16, 32, 8192>;
 using FoldGeometry36x48 = FoldGeometry<36, 16, 48, 10240>;
 using FoldGeometry36x24 = FoldGeometry<36, 8, 24, 5120>;
+// The 48-layer width-2 cross: a 48-GDN-layer 27B at tensor-parallel width 2 shards 16 qk heads to 8,
+// 48 value heads to 24 and 10240 convolution channels to 5120. It is the one record geometry the lane
+// actually presents at width 2, and it is the same kernel as its width-1 sibling FoldGeometry48x48 --
+// only these four constants differ.
+using FoldGeometry48x24 = FoldGeometry<48, 8, 24, 5120>;
 
 __device__ __forceinline__ GdnReplayFoldKernelRow fold_row(const GdnReplayFoldKernelRows& rows,
                                                            int b) {

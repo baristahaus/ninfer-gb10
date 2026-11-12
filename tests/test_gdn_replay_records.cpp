@@ -1,4 +1,5 @@
 #include "core/gdn_replay_records.h"
+#include "ops/linear_attention/gated_delta_net/replay/launch.h"
 #include "core/buffer.h"
 #include "core/linear_attention_state.h"
 
@@ -54,6 +55,43 @@ std::size_t record_bytes(const ninfer::GdnReplayRecordSpec& spec) {
 }
 
 } // namespace
+
+int expect_fold_geometry(int layers, int qk_heads, int value_heads, int conv_channels,
+                         ninfer::ops::detail::gated_delta_net::FoldGeometryId expected,
+                         const char* label) {
+    const ninfer::GdnReplayRecordSpec spec{
+        .layers          = layers,
+        .record_capacity = 1,
+        .width           = 1,
+        .conv_channels   = conv_channels,
+        .qk_heads        = qk_heads,
+        .value_heads     = value_heads,
+        .key_dim         = 128,
+        .value_dim       = 128,
+    };
+    if (ninfer::ops::detail::gated_delta_net::select_fold_geometry(spec) == expected) { return 0; }
+    std::cerr << label << ": the fold selection does not match the record geometry\n";
+    return 1;
+}
+
+int expect_fold_geometry_refused(int layers, int qk_heads, int value_heads, int conv_channels,
+                                 const char* label) {
+    const ninfer::GdnReplayRecordSpec spec{
+        .layers          = layers,
+        .record_capacity = 1,
+        .width           = 1,
+        .conv_channels   = conv_channels,
+        .qk_heads        = qk_heads,
+        .value_heads     = value_heads,
+        .key_dim         = 128,
+        .value_dim       = 128,
+    };
+    try {
+        (void)ninfer::ops::detail::gated_delta_net::select_fold_geometry(spec);
+    } catch (const std::invalid_argument&) { return 0; }
+    std::cerr << label << ": an unsupported record geometry was accepted\n";
+    return 1;
+}
 
 int main() {
     int failures = 0;
@@ -187,6 +225,25 @@ int main() {
         expect_size(static_cast<std::size_t>(all.conv_layer0.ne[2]), 7, "all-layer slot count");
     failures += expect_size(static_cast<std::size_t>(records.spec.record_capacity), 5,
                             "independent record capacity");
+
+    // The replay fold is instantiated per record geometry, so the selection has to cover every
+    // geometry the models present -- including the 48-layer width-2 cross, which is what a
+    // 48-GDN-layer 27B presents at tensor-parallel width 2 and which no branch covered until a
+    // width-2 MTP round measured it as "gdn_replay_fold: unsupported record geometry layers=48
+    // qk_heads=8 value_heads=24 conv_channels=5120".
+    using FoldGeometryId = ninfer::ops::detail::gated_delta_net::FoldGeometryId;
+    failures += expect_fold_geometry(48, 16, 48, 10240, FoldGeometryId::Layers48Heads48,
+                                     "48 layers, width 1");
+    failures += expect_fold_geometry(36, 16, 48, 10240, FoldGeometryId::Layers36Heads48,
+                                     "36 layers, width 1");
+    failures += expect_fold_geometry(30, 16, 32, 8192, FoldGeometryId::Layers30Heads32,
+                                     "30 layers, width 1");
+    failures += expect_fold_geometry(36, 8, 24, 5120, FoldGeometryId::Layers36Heads24,
+                                     "36 layers, width 2");
+    failures += expect_fold_geometry(48, 8, 24, 5120, FoldGeometryId::Layers48Heads24,
+                                     "48 layers, width 2");
+    failures += expect_fold_geometry_refused(48, 8, 48, 5120, "48 layers, mixed heads");
+    failures += expect_fold_geometry_refused(64, 8, 24, 5120, "64 layers, width 2");
 
     return failures == 0 ? 0 : fail("GDN replay record storage test failed");
 }

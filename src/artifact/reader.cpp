@@ -65,7 +65,23 @@ struct Reader::Impl {
     io::ReadOnlyFile open_file(std::size_t index, io::ReadMode mode) const {
         if (index >= files.size()) { throw ArtifactError("invalid continuation index"); }
         const auto& record = directory.files[index];
-        io::ReadOnlyFile input(index ? entry.parent_path() / *record.path : entry, mode);
+        const std::filesystem::path path = index ? entry.parent_path() / *record.path : entry;
+        // The loader's direct reads must never start on a network filesystem: a read there can wait
+        // uninterruptibly inside the filesystem's own direct path, so the engine would hang instead
+        // of failing. Refuse at open, where the user still sees which file and which filesystem.
+        if (mode == io::ReadMode::Direct) {
+            const std::uint64_t type = io::filesystem_type(path);
+            if (const char* name = io::unsupported_direct_io_filesystem(type); name != nullptr) {
+                throw ArtifactError(
+                    "artifact file '" + path.string() + "' is on a " + name +
+                    " filesystem, which the engine's direct-I/O loader cannot read: a direct read "
+                    "on it can wait uninterruptibly inside the kernel and the process cannot be "
+                    "interrupted. Copy the artifact to local storage (a local disk or tmpfs) and "
+                    "point the engine at that copy; network filesystems are for distribution and "
+                    "archiving only. See docs/maintainer/test-storage.md.");
+            }
+        }
+        io::ReadOnlyFile input(path, mode);
         const auto prefix = index ? kPayloadAlignment : entry_payload_start;
         if (input.bytes() != checked_add(prefix, record.payload_bytes, "file length"))
             throw ArtifactError("file length differs from directory");

@@ -12,6 +12,7 @@
 
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <sys/vfs.h>
 #include <unistd.h>
 #include <sys/mman.h>
 
@@ -29,7 +30,34 @@ off_t position(std::uint64_t value) {
     return static_cast<off_t>(value);
 }
 
+// The magic numbers are the kernel's superblock types, not guesses: NFS_SUPER_MAGIC (NFSv3 and
+// NFSv4 both), CIFS_MAGIC_NUMBER, SMB2_MAGIC_NUMBER (SMB2 and SMB3), FUSE_SUPER_MAGIC and
+// V9FS_MAGIC. A filesystem not listed here is not known to be unable to serve direct reads, so it is
+// accepted; refusing an unknown type would break local filesystems the engine has never seen.
+constexpr std::uint64_t kNfsSuperMagic  = 0x6969;
+constexpr std::uint64_t kCifsMagic      = 0xFF534D42;
+constexpr std::uint64_t kSmb2Magic      = 0xFE534D42;
+constexpr std::uint64_t kFuseSuperMagic = 0x65735546;
+constexpr std::uint64_t kV9fsMagic      = 0x01021997;
+
 } // namespace
+
+const char* unsupported_direct_io_filesystem(std::uint64_t f_type) noexcept {
+    switch (f_type) {
+    case kNfsSuperMagic: return "NFS";
+    case kCifsMagic: return "CIFS";
+    case kSmb2Magic: return "SMB";
+    case kFuseSuperMagic: return "FUSE";
+    case kV9fsMagic: return "9P";
+    default: return nullptr;
+    }
+}
+
+std::uint64_t filesystem_type(const std::filesystem::path& path) {
+    struct statfs status {};
+    if (::statfs(path.c_str(), &status)) fail(path, "statfs");
+    return static_cast<std::uint64_t>(status.f_type);
+}
 
 ReadOnlyFile::ReadOnlyFile(const std::filesystem::path& path, ReadMode mode) : path_(path) {
     if (mode != ReadMode::Buffered && mode != ReadMode::Direct)

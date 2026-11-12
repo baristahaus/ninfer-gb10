@@ -1403,16 +1403,23 @@ int exercise_route_matched_control(const char* artifact) {
     }
 
     // 2. The control itself: identical call boundaries, Device-resident checkpoint versus Host.
-    ninfer::Engine device_engine(options_for(2, 4));
-    const LogprobRun device_run =
-        run_two_request_sequence(device_engine, prompt, kFirstTokens, kSuffixTokens);
-    ninfer::Engine host_engine(options_for(0, 4));
-    const LogprobRun host_run =
-        run_two_request_sequence(host_engine, prompt, kFirstTokens, kSuffixTokens);
+    //    The engines are scoped so one resident 125B set exists at a time: two would exceed the
+    //    integrated pool and fail at construction, which is a resource error, not a route result.
+    LogprobRun device_run;
+    {
+        ninfer::Engine device_engine(options_for(2, 4));
+        device_run = run_two_request_sequence(device_engine, prompt, kFirstTokens, kSuffixTokens);
+    }
+    LogprobRun host_run;
+    std::uint64_t host_d2h = 0;
+    {
+        ninfer::Engine host_engine(options_for(0, 4));
+        host_run = run_two_request_sequence(host_engine, prompt, kFirstTokens, kSuffixTokens);
+        host_d2h  = host_engine.runtime_stats().state_d2h_count;
+    }
     // The Host path must actually have been taken; a control that did not exercise the state path
     // under test proves nothing and says so rather than passing.
-    const auto host_stats = host_engine.runtime_stats();
-    if (host_stats.state_d2h_count == 0) {
+    if (host_d2h == 0) {
         std::cerr << "route-matched control: the Host-forced run never demoted state (d2h 0), so "
                      "the control did not exercise the path under test\n";
         return 1;
@@ -1461,13 +1468,17 @@ int exercise_route_matched_control(const char* artifact) {
 // amplification caution - the 1-ULP seed reaching 21% at one element shows amplification is large, not
 // small - justifies 4x slack for the tail: tau = 4 x 0.10 = 0.40 nats.
 //
-// This constant is a starting anchor, not a measurement of this build's response: the mapping
-// assumes the logit readout does not amplify the hidden-state perturbation beyond the 4x slack, and
-// the observed maximum and the margin distribution are printed so instrument U (precision scaling,
-// which sets tau to 4x the measured response to injected 1-ULP noise) can replace the assumption with
-// a measurement without changing the assertion's shape. A tolerance that makes every position pass is not an oracle, so the margin
-// report also says whether the prompt discriminates at all.
-constexpr double kOracleLogprobTolerance = 0.40;
+// MEASURED, and the constant follows the measurement rather than the other way round. The first run
+// on twofour (GB10, sm_121a, fp8_mtp artifact, 8 compared positions) gave a maximum |delta log p| of
+// 0.0281 nats, no token divergence, and 7 of 8 positions discriminating (top-2 margin above 2*tau).
+// That is the response the review's instrument U asks for: tau = 4x the measured response =
+// 4 x 0.0281 = 0.112, rounded up to 0.12 nats. The earlier 0.40 anchor was derived from the
+// hidden-state plateau and turned out 14x looser than the observed difference, so it is replaced by
+// this value, which is still 4x the observed difference and leaves room for run-to-run variation
+// across builds. The observed maximum and the margin distribution are printed on every run so the
+// next measurement confirms or tightens it; a tolerance that makes every position pass is not an
+// oracle, so the margin report also says whether the prompt discriminates at all.
+constexpr double kOracleLogprobTolerance = 0.12;
 
 int exercise_teacher_forced_tolerance(const char* artifact) {
     const auto& prompt = canonical_prompt();
@@ -1590,7 +1601,20 @@ int main() {
     const auto& expected_prefix    = mtp_verify_output(recipe);
     configure_prefix_state_dump(canonical_prompt(), expected_prefix);
     const CrossPathFixture fixture = cross_path_fixture(recipe);
+    // Focused oracle run. E and T are the instruments this test adds to replace the single-golden
+    // chain, and they are the only sections that need to run when they are being validated against a
+    // new build; the rest of the battery is unchanged and still runs by default.
+    const char* oracle_only = std::getenv("NINFER_TEST_ORACLE_ONLY");
     try {
+        if (oracle_only != nullptr && *oracle_only != '\0') {
+            // Both instruments run and both report even when one fails: a focused oracle run exists
+            // to produce the two numbers, and stopping at the first failure would hide the second.
+            const int control = exercise_route_matched_control(artifact);
+            const int tolerance = exercise_teacher_forced_tolerance(artifact);
+            if (control != 0 || tolerance != 0) { return 1; }
+            std::cout << "OK Qwen3.8 Flash Next oracle instruments\n";
+            return 0;
+        }
         // The battery normally runs both proposal heads. A dump comparison needs ONE configuration
         // per process, because the dump metadata records the frontier, page and phase but not which
         // engine produced it - so two dumps that look identical can come from runs that are not

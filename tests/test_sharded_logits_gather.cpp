@@ -290,15 +290,16 @@ int exercise_refusals() {
 
 // --- two devices: the real gather -------------------------------------------------------
 
-int exercise_device_gather(ninfer::ExecutionContext& context) {
+int exercise_device_gather(ninfer::ExecutionContext& context, std::int32_t kColumns) {
     constexpr std::int32_t kVocabulary = 8;
     constexpr std::int32_t kRankRows   = 4;
-    constexpr std::int32_t kColumns    = 3;
     int failures                       = 0;
 
     // The partial extents are irrelevant to the gather; the logits extents are what it uses. The
-    // mailbox slot (8 x 4 BF16 = 64 bytes) carries a 3-column gather whole, so this exercises one
-    // exchange and the layout, not the chunk loop.
+    // mailbox slot (8 x 4 BF16 = 64 bytes) carries four 16-byte columns, so a 3-column gather is
+    // one exchange and a 43-column one is eleven: the same case at both sides of the chunk
+    // boundary, which is the boundary the scoring lane found. Columns <= chunk_columns are the
+    // single-chunk case that always passed; the multi-chunk cases are the regression.
     ShardedGroupOwner owner(context, 8, 4, kVocabulary, kColumns);
     const auto& group = owner.group();
     failures += check(group.logits[0].data != nullptr && group.logits[1].data != nullptr,
@@ -327,15 +328,20 @@ int exercise_device_gather(ninfer::ExecutionContext& context) {
     }
 
     // Both ranks issue the gather, each on its own stream, then both are synchronized: the exchange
-    // kernels meet on the mailbox.
-    std::size_t slot = 0;
+    // kernels meet on the mailbox. The slot index is the CALLER's exchange counter and the two ranks
+    // must agree on it, so each rank starts at 0 -- a slot shared across the two calls would start
+    // rank 1 where rank 0 finished and the two would wait on different mailbox slots.
     for (int rank = 0; rank < 2; ++rank) {
         const CudaDeviceScope scope(context.device(rank).device());
         Tensor local_view{scratch[static_cast<std::size_t>(rank)].span(), DType::BF16,
                           {kRankRows, kColumns}};
+        std::size_t slot = 0;
         ninfer::models::qwen3_5::execution::all_gather_logits(
             group, rank, slot, local_view, group.logits[static_cast<std::size_t>(rank)],
             context.device(rank).execution_view());
+        failures += check(slot == static_cast<std::size_t>(plan.exchanges),
+                          "rank " + std::to_string(rank) +
+                              "'s gather did not consume one exchange index per exchange");
     }
     for (int rank = 0; rank < 2; ++rank) {
         const CudaDeviceScope scope(context.device(rank).device());
@@ -344,8 +350,7 @@ int exercise_device_gather(ninfer::ExecutionContext& context) {
     }
     failures += check(!group.mailbox->hang_reported(),
                       "a poller gave up: the two ranks did not meet on the mailbox");
-    failures += check(slot == static_cast<std::size_t>(plan.exchanges),
-                      "the gather did not consume one exchange index per exchange");
+
 
     // Both ranks must hold the whole vocabulary, bit for bit.
     for (int rank = 0; rank < 2; ++rank) {
@@ -401,7 +406,12 @@ int main() {
 
     try {
         ninfer::ExecutionContext two(std::vector<int>{0, 1});
-        failures += exercise_device_gather(two);
+        // One exchange (3 columns) then the multi-chunk cases the old code got wrong. The chunk
+        // size here is four columns (the 64-byte slot), so 43, 84, 85 and 128 columns are 11, 21,
+        // 22 and 32 exchanges; a gather that only sums the first chunk fails every one of them.
+        for (const std::int32_t columns : {3, 43, 84, 85, 128}) {
+            failures += exercise_device_gather(two, columns);
+        }
     } catch (const std::exception& error) {
         std::cerr << "FAIL: threw: " << error.what() << '\n';
         return 1;

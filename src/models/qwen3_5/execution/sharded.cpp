@@ -174,7 +174,6 @@ void all_gather_logits(const models::ShardedGroup& group, int rank, std::size_t&
     auto* const destination      = static_cast<std::uint8_t*>(full.data);
     const auto* const source     = static_cast<const std::uint8_t*>(local.data);
     const std::size_t row_bytes  = static_cast<std::size_t>(plan.rank_rows) * sizeof(std::uint16_t);
-    std::array<void*, 2> pair{group.logits[0].data, group.logits[1].data};
     for (std::int32_t chunk = 0; chunk < plan.exchanges; ++chunk) {
         const std::int32_t first = chunk * plan.chunk_columns;
         const std::int32_t count = std::min(plan.chunk_columns, columns - first);
@@ -193,6 +192,18 @@ void all_gather_logits(const models::ShardedGroup& group, int rank, std::size_t&
                                        source + static_cast<std::size_t>(first + column) * row_bytes,
                                        row_bytes, cudaMemcpyDeviceToDevice, execution.stream()));
         }
+        // The pair is built PER CHUNK, at the chunk's offset in both buffers. Building it once
+        // outside the loop passed the buffers' bases, so every exchange combined the FIRST chunk's
+        // slice: chunk 0 was re-combined once per later exchange (2^(exchanges-1) on its logits)
+        // and chunk k > 0 never received the peer's half. With one chunk (columns <= chunk_columns)
+        // the buffer base and the chunk offset coincide, which is why every single-chunk consumer
+        // (the text path at T <= 42, the MTP proposal head) matched while the scoring path, the
+        // first consumer wider than one chunk, did not.
+        std::array<void*, 2> pair{
+            static_cast<std::uint8_t*>(group.logits[0].data) +
+                static_cast<std::size_t>(first) * plan.bytes_per_column,
+            static_cast<std::uint8_t*>(group.logits[1].data) +
+                static_cast<std::size_t>(first) * plan.bytes_per_column};
         ops::allreduce_sum_rank(*group.execution, *group.mailbox, rank,
                                 group.mailbox->slot_for(slot, bytes), pair, bytes);
         ++slot;

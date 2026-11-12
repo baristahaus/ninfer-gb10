@@ -148,13 +148,18 @@ constexpr WidthTwoOption kWidthTwoOptions[] = {
     {"--causal-scoring",
      [](const EngineOptions& o) { return o.purpose == EnginePurpose::CausalScoring; },
      false, "",
-     "a two-rank scoring round is WRONG, not merely untested: scored against a recorded width-1 "
-     "reference for the same 27B artifact and token sequence (255 positions, digest-pinned fixture), "
-     "it differs by up to 436.744 nats (mean 11.949, p99 217.2, 60 of 255 positions beyond 0.01) and "
-     "the two routes disagree on the adjudication margin (11.912 vs 10.741). The engine's width-2 "
-     "TEXT path matches its reference token for token on the same host and artifact, so the defect is "
-     "specific to the scoring frame. Evidence: tests/models/qwen3_5/test_engine_score_w2_real.cpp; "
-     "the row is promoted only by a measured round inside 0.12 nats"},
+     "the sharded scoring path is FIXED but still differs from the recorded width-1 reference by "
+     "more than the 0.12-nat tolerance. The gather's chunk-offset defect (sharded.cpp: the exchange "
+     "combined the buffers' bases instead of each chunk's slice, so chunk 0 was re-combined once per "
+     "later exchange and chunk k > 0 never received the peer's half) is fixed; the same 255-position "
+     "fixture now reads max|dlogp|=1.812, mean=0.0363, p99=0.563, 58 of 255 beyond 0.01, margin "
+     "11.912 against 10.667. The 436.744-nat corruption is gone; the residual is the numerical "
+     "divergence between the width-1 full head and the width-2 rank half (different Q8 kernel "
+     "bands), which exceeds both the per-position tolerance and the 1.0-nat margin tolerance. The "
+     "row is promoted only by a measured round inside a tolerance this purpose's own profile can "
+     "justify -- a decision, not a fix. Evidence: tests/models/qwen3_5/test_engine_score_w2_real.cpp; "
+     "the gather regression is tests/test_sharded_logits_gather.cpp at 3, 43, 84, 85 and 128 "
+     "columns"}
     {"prefix reuse / context cache",
      [](const EngineOptions& o) { return o.context_cache.enabled; },
      false, "",

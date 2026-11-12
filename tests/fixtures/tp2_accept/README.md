@@ -23,7 +23,7 @@ neither tokenizes anything, so two hosts cannot disagree about what was prefille
 |---|---|
 | `prompt.ids` | 32 token ids: the `reasoning-short` prompt of [`../prompts/corpus.json`](../prompts/corpus.json), tokenized once with the artifact's own tokenizer (`Engine::tokenize_text`) and checked in as ids |
 | `golden_plain.ids` | the width-1 greedy chain of the plain lane (no speculative backend) |
-| `golden_mtp.ids` | the width-1 greedy chain of the MTP lane (`NINFER_TP2_SPEC=mtp`) — **not recorded yet**, see below |
+| `golden_mtp.ids` | the width-1 greedy chain of the MTP lane (`NINFER_TP2_SPEC=mtp`) |
 
 The prompt text, for the record: *"A box has 3 red and 2 blue balls. One ball is drawn without
 looking. What is the probability it is red? Reply as a fraction."* It was chosen because its greedy
@@ -41,7 +41,8 @@ well as the decode path.
 - Options: greedy (`temperature` 0, `top_k` 1), 32 requested output tokens, `max_context` 2048,
   `kv_capacity` 2048, CUDA graph off, context cache off.
 - Stability: the plain chain was captured twice and reproduced on two further runs, identical each
-  time.
+  time. The MTP chain was captured twice, identical both times, and equals the plain chain: a greedy
+  MTP round verifies and commits the same continuation the plain lane produces.
 
 ## Regenerating
 
@@ -55,16 +56,22 @@ NINFER_TEST_ARTIFACT=/path/to/qwen3_8_27b_nvfp4.v3.ninfer \
 MTP lane. Regenerate only when the reference lane itself changed: a mismatch between hosts is a
 result to report, not a reason to re-record.
 
-## The MTP golden is blocked, not missing by oversight
+## The MTP golden, and the binding defect it exposed
 
-`NINFER_TP2_SPEC=mtp` at width 1 on this artifact throws before producing a token:
+`NINFER_TP2_SPEC=mtp` at width 1 used to throw before producing a token:
 
 ```
 mtp: native input requires one contiguous parent region
      (parts=4, part 1 begins 0 but part 0 ends 31457280, different parents)
 ```
 
-The MTP block's attention input projection is bound as four parts of different parents, and the MTP
-path requires one contiguous parent region. That is a binding defect in the MTP route on this
-artifact, independent of the prompt; the test's MTP selection and its `golden_mtp.ids` path are in
-place, so recording the chain is one capture run once the MTP round runs.
+The artifact binds the MTP block's four attention roles as contiguous ranges of ONE object
+(`mtp/layer/attention/query_key_gate_value`), but the load path materializes each parameter's
+binding as its own request, so the four views arrived in four parents and the MTP Program's fused
+projection could not take them. The MTP block's dense MLP had the same shape: the artifact binds
+gate|up as ranges of one object, and the Q8 role shape `N17408K5120` is not in the Q8 table.
+
+The fix is at the load site (`src/models/qwen3_5/load.cpp`, `materialize_model`): the MTP block's
+four attention roles and its gate|up pair are fused groups, so the gather puts each group back into
+one parent with four (or two) contiguous views — the same mechanism the GDN q|k|v role already
+uses. The chain below was captured with that fix; no other file changed.

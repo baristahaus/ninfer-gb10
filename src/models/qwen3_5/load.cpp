@@ -206,10 +206,16 @@ std::unique_ptr<ModelShard> materialize_model(ResolvedLoadPlan&& plan, DeviceCon
     // A column-sharded weight is many small ranges in its parent, which no consumer can take; the
     // gather turns each into one contiguous parent. The condition is structural (non-contiguous
     // parts in one parent), so width 1 never enters it and needs no guard.
-    // The fused consumers, in the same order the profile enumeration uses: the GDN q|k|v role is
-    // one matrix (query then key then value) and z is a role of its own, so only q|k|v is a group.
-    // At width 1 every member already binds one region of the fused object, so the gather sees a
-    // contiguous view and does nothing.
+    // The fused consumers, in the same order the profile enumeration uses. Three groups exist:
+    // the GDN q|k|v role (query then key then value, z is a role of its own), the MTP block's
+    // attention roles (query, key, gate, value), and the MTP block's dense MLP gate|up. The text
+    // attention path takes its per-role form instead and needs no group.
+    //
+    // Why these fire at width 1 too: the artifact binds each group as contiguous ranges of ONE
+    // object, but the load path materializes each parameter's binding as its own request — a rank's
+    // storage is the parameter's own matrix, not the parent object — so the members arrive in
+    // separate parents. The gather puts them back into one parent, contiguous views, which is the
+    // shape the fused consumer requires. The condition is the load unit, not the width.
     std::vector<FusedGroup> fused;
     const auto add_gdn = [&](const GdnWeights& gdn) {
         fused.push_back({{gdn.query, gdn.key, gdn.value}});
@@ -218,8 +224,19 @@ std::unique_ptr<ModelShard> materialize_model(ResolvedLoadPlan&& plan, DeviceCon
         if (const auto* gdn = std::get_if<GdnWeights>(&layer.mixer)) { add_gdn(*gdn); }
     }
     if (definition->weights().mtp) {
-        if (const auto* gdn = std::get_if<GdnWeights>(&definition->weights().mtp->layer.mixer)) {
+        const auto& mixer = definition->weights().mtp->layer.mixer;
+        if (const auto* attention = std::get_if<AttentionWeights>(&mixer)) {
+            fused.push_back({{attention->query, attention->key, attention->gate,
+                              attention->value}});
+        } else if (const auto* gdn = std::get_if<GdnWeights>(&mixer)) {
             add_gdn(*gdn);
+        }
+        // The MTP block's dense MLP reads gate|up as ONE matrix in its fused form
+        // (`DenseMlpUse::Mtp`, execution/dense_mlp.cpp), so it is a group for the same reason the
+        // attention roles are: the artifact binds both as ranges of one object, the load gives each
+        // its own parent, and the fused consumer needs them back in one.
+        if (const auto* dense = std::get_if<DenseWeights>(&definition->weights().mtp->layer.ffn)) {
+            fused.push_back({{dense->gate, dense->up}});
         }
     }
     RepackedWeights repacked;

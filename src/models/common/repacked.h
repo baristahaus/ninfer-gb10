@@ -23,9 +23,10 @@ namespace ninfer::models {
 // the column axis for every layout in the tree: the target is simply the geometry of the rank's own
 // shape, and each source row contributes a byte range at a constant offset. No per-format code.
 // One fused consumer: several parameters whose bytes form one matrix for the op that reads them.
-// The GDN q|k|v role is the only one in this family today -- its [5120, 5120] rank-2 matrix is
-// query then key then value -- but the list is the same structure the profile enumeration walks
-// (`execution/profile.cpp`'s role profiles), so the two cannot disagree.
+// Three groups exist today: the GDN q|k|v role (query then key then value), the MTP block's
+// attention roles (query, key, gate, value), and the MTP block's dense MLP gate|up. The list is
+// the same structure the profile enumeration walks (`execution/profile.cpp`'s role profiles), so
+// the two cannot disagree.
 struct FusedGroup {
     std::vector<WeightId> members; // in destination row order
 };

@@ -11,6 +11,8 @@ add_test(NAME ninfer_qwen_tool_schema_oracle_test
   COMMAND ${CMAKE_COMMAND} -E env
     "NINFER_TOOL_PROBE=$<TARGET_FILE:ninfer_qwen_tool_constraints_test>"
     ${Python3_EXECUTABLE} -B "${CMAKE_CURRENT_LIST_DIR}/qwen/test_tool_schema.py")
+# The oracle needs the optional `jsonschema` package; absent it reports 77, which is a skip.
+set_tests_properties(ninfer_qwen_tool_schema_oracle_test PROPERTIES SKIP_RETURN_CODE 77)
 
 ninfer_add_test(ninfer_qwen_visual_scatter_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/qwen/test_visual_scatter.cpp"

@@ -6,7 +6,14 @@ from pathlib import Path
 import subprocess
 import unittest
 
-import jsonschema
+try:
+    import jsonschema
+except ModuleNotFoundError:  # pragma: no cover - environmental
+    import sys
+    sys.stderr.write(
+        "SKIP: the jsonschema oracle needs the `jsonschema` package and it is not installed; "
+        "the test did not run; install it with `pip install jsonschema`\n")
+    raise SystemExit(77)
 
 ROOT = Path(__file__).resolve().parents[3]
 PROBE = Path(

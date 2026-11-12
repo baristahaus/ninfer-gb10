@@ -134,8 +134,12 @@ int main() {
     try {
         int count         = 0;
         const auto status = cudaGetDeviceCount(&count);
+        // cudaErrorStubLibrary is what a build linked against the stub driver reports: there is no
+        // device to run on, which is the same situation as no device at all. Failing here reports a
+        // missing GPU as a code defect, and a test that fails for an environmental reason trains
+        // readers to ignore the suite.
         if (status == cudaErrorNoDevice || status == cudaErrorInsufficientDriver ||
-            (status == cudaSuccess && !count)) {
+            status == cudaErrorStubLibrary || (status == cudaSuccess && !count)) {
             std::cerr << "SKIP: no usable CUDA device; the test did not run; supply one with CUDA_VISIBLE_DEVICES (sm_121a on GB10, sm_120a on RTX 5090)\n";
             return 77;
         }

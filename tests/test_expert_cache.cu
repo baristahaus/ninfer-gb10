@@ -562,6 +562,18 @@ void promote_partial_upload(const DeviceContext& device) {
 } // namespace
 
 int main() {
+    // A build linked against the stub driver has no device; that is an absent environment, not a
+    // defect in the expert cache. Report it as a skip so the suite's failures mean something.
+    {
+        int count         = 0;
+        const auto status = cudaGetDeviceCount(&count);
+        if (status == cudaErrorNoDevice || status == cudaErrorInsufficientDriver ||
+            status == cudaErrorStubLibrary || (status == cudaSuccess && !count)) {
+            std::cerr << "SKIP: no usable CUDA device; the expert cache test did not run; supply one "
+                         "with CUDA_VISIBLE_DEVICES (sm_121a on GB10, sm_120a on RTX 5090)\n";
+            return 77;
+        }
+    }
     try {
         DeviceContext device;
         codecs_and_chunks(device);

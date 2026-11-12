@@ -43,3 +43,5 @@ add_test(NAME ninfer_json_schema_oracle_test
   COMMAND ${CMAKE_COMMAND} -E env
     "NINFER_SCHEMA_PROBE=$<TARGET_FILE:ninfer_json_schema_test>"
     ${Python3_EXECUTABLE} -B ${PROJECT_SOURCE_DIR}/tests/text/test_json_schema.py)
+# The oracle needs the optional `jsonschema` package; absent it reports 77, which is a skip.
+set_tests_properties(ninfer_json_schema_oracle_test PROPERTIES SKIP_RETURN_CODE 77)

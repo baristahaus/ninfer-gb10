@@ -287,14 +287,54 @@ def source_registrations(root: Path) -> tuple[set[str], list[re.Pattern]]:
         except ValueError:
             return None
 
+    # A foreach loop variable is not an unconstrained wildcard: it ranges over exactly the items of
+    # the loop that encloses it. Resolving it as a wildcard makes every file in that directory look
+    # registered, so a dead file passes the ownership check - which is how unbuilt remnants survived
+    # several cleanups. Track the enclosing loop per line so two loops that reuse a variable name
+    # (this tree has three `foreach(_f ...)` blocks over .cuh, .cu and .cpp) do not merge.
+    foreach_open = re.compile(r"\bforeach\s*\(\s*([A-Za-z0-9_]+)\s+IN\s+ITEMS\b(.*)")
     exact: set[str] = set()
     patterns: list[re.Pattern] = []
     for path in cmake_files(root):
-        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        active: dict[str, list[str]] = {}
+        index = 0
+        while index < len(lines):
+            line = lines[index]
+            opened = foreach_open.search(line)
+            if opened is not None:
+                variable = opened.group(1)
+                body = opened.group(2)
+                while ")" not in body and index + 1 < len(lines):
+                    index += 1
+                    body += " " + lines[index]
+                body = body[:body.find(")")]
+                active[variable] = candidate.findall(body)
+                index += 1
+                continue
+            if "endforeach" in line:
+                active.clear()
+                index += 1
+                continue
             if line.strip().startswith("#"):
+                index += 1
                 continue
             for token in candidate.findall(line):
                 if not is_path_token(token):
+                    continue
+                expanded = False
+                for variable, items in active.items():
+                    placeholder = "${" + variable + "}"
+                    if placeholder in token and items:
+                        for item in items:
+                            concrete = resolve(token.replace(placeholder, item), path.parent)
+                            if isinstance(concrete, str):
+                                exact.add(concrete)
+                            elif isinstance(concrete, re.Pattern):
+                                patterns.append(concrete)
+                        expanded = True
+                        break
+                if expanded:
                     continue
                 resolved = resolve(token, path.parent)
                 if resolved is None:
@@ -303,6 +343,7 @@ def source_registrations(root: Path) -> tuple[set[str], list[re.Pattern]]:
                     exact.add(resolved)
                 else:
                     patterns.append(resolved)
+            index += 1
     return exact, patterns
 
 

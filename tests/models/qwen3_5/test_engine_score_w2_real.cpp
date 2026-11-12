@@ -175,13 +175,21 @@ bool write_reference(const std::string& path, const Reference& reference) {
     return static_cast<bool>(out);
 }
 
-bool read_reference(const std::string& path, Reference& reference) {
+// The reason a reference was rejected is reported, not just the fact: "could not read the
+// reference" sent one debugging round down a format path when the real fault was a size invariant.
+bool read_reference(const std::string& path, Reference& reference, std::string& error) {
     std::ifstream in(path);
-    if (!in) { return false; }
+    if (!in) {
+        error = "cannot open " + path;
+        return false;
+    }
     std::string magic;
     int version = 0;
     in >> magic >> version;
-    if (magic != "score_w2_reference" || version != 1) { return false; }
+    if (magic != "score_w2_reference" || version != 1) {
+        error = path + " is not a score_w2_reference v1 file";
+        return false;
+    }
     std::string key;
     std::size_t count = 0;
     while (in >> key) {
@@ -203,10 +211,29 @@ bool read_reference(const std::string& path, Reference& reference) {
             reference.altered_logprobs.resize(count);
             for (auto& value : reference.altered_logprobs) in >> value;
         } else {
+            error = "unknown key in " + path + ": " + key;
             return false;
         }
     }
-    return !reference.tokens.empty() && reference.tokens.size() == reference.logprobs.size();
+    // first_target = 1 means the first token has no prediction, so N tokens produce N - first_target
+    // positions. Equality between the two counts is impossible for any correct capture.
+    if (reference.tokens.empty() || reference.first_target == 0 ||
+        reference.first_target >= reference.tokens.size()) {
+        error = "first_target is outside the token sequence";
+        return false;
+    }
+    if (reference.logprobs.size() + reference.first_target != reference.tokens.size()) {
+        error = "logprob count " + std::to_string(reference.logprobs.size()) + " + first_target " +
+                std::to_string(reference.first_target) + " != token count " +
+                std::to_string(reference.tokens.size());
+        return false;
+    }
+    if (reference.altered_logprobs.size() != reference.logprobs.size()) {
+        error = "altered logprob count " + std::to_string(reference.altered_logprobs.size()) +
+                " != logprob count " + std::to_string(reference.logprobs.size());
+        return false;
+    }
+    return true;
 }
 
 // --- engines ---------------------------------------------------------------------------------
@@ -333,8 +360,9 @@ int main() {
     }
 
     Reference reference;
-    if (!read_reference(fixture, reference)) {
-        std::cerr << "could not read the reference at " << fixture << '\n';
+    std::string reference_error;
+    if (!read_reference(fixture, reference, reference_error)) {
+        std::cerr << "REFUSED: the reference could not be read: " << reference_error << '\n';
         return 1;
     }
     if (reference.artifact_sha256 != digest) {

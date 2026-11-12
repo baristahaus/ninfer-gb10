@@ -796,7 +796,8 @@ inline void capture_prefix_kv_page(const char* directory, const DeviceKVPagePool
                 "%s n=%zu diffs=%zu max_abs_diff=%.9g max_abs_current=%.9g "
                 "max_abs_previous=%.9g mean_abs_current_diff=%.9g "
                 "mean_abs_previous_diff=%.9g zero_pattern=%s diff_zero_side=%s "
-                "nonfinite=%zu/%zu/%zu\n",
+                "nonfinite=%zu/%zu/%zu "
+                "ulp=over1:%zu,over4:%zu,over16:%zu,max:%u,worst_col:%u\n",
                 serial, comparison.previous_serial, frontier, logical_page,
                 plane_classification.plane, layout.planes.size(),
                 kv_plane_dtype_name(plane_classification.dtype), plane_classification.domain,

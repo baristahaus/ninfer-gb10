@@ -240,6 +240,16 @@ struct KVPlaneClassification {
     double sum_abs_previous_diff         = 0.0;
     double sum_abs_current_range         = 0.0;
     double sum_abs_previous_range        = 0.0;
+    // The tail, not the maximum. A single max_abs_diff cannot distinguish diffuse rounding (most
+    // elements differ slightly) from a localised defect (a few elements differ a lot), and those
+    // two have opposite implications. The ULP distance is measured against the larger side's own
+    // bf16 spacing at that element, so it is comparable across magnitudes.
+    std::size_t over_one_ulp              = 0;
+    std::size_t over_four_ulp             = 0;
+    std::size_t over_sixteen_ulp          = 0;
+    std::uint32_t max_ulp                 = 0;
+    std::size_t worst_column             = 0;
+    double relative_l2                   = 0.0;
 
     [[nodiscard]] double mean_abs_current_diff() const {
         return finite_diffs == 0 ? std::numeric_limits<double>::quiet_NaN()
@@ -457,6 +467,26 @@ classify_kv_plane_range(const HostKVPageLayout& layout, std::size_t plane_index,
                 out.last_differing_column = column + plane.tokens_per_row - 1U;
                 if (std::isfinite(current_value) && std::isfinite(previous_value)) {
                     out.finite_diffs += 1;
+                    // ULP distance against the larger side's own spacing at this element, so the
+                    // tail is comparable across magnitudes. bf16 spacing is 2^-8 relative, so a
+                    // one-ULP reorder is 1 here and a 5% difference is about 13.
+                    {
+                        const double scale = std::max(std::fabs(current_value),
+                                                      std::fabs(previous_value));
+                        if (scale > 0.0) {
+                            const double ulp =
+                                std::fabs(current_value - previous_value) / (scale / 256.0);
+                            const auto ulp_count = static_cast<std::uint32_t>(
+                                std::min(ulp, 65535.0));
+                            out.over_one_ulp += ulp_count >= 1 ? 1U : 0U;
+                            out.over_four_ulp += ulp_count >= 4 ? 1U : 0U;
+                            out.over_sixteen_ulp += ulp_count >= 16 ? 1U : 0U;
+                            if (ulp_count > out.max_ulp) {
+                                out.max_ulp     = ulp_count;
+                                out.worst_column = column;
+                            }
+                        }
+                    }
                     out.sum_abs_current_diff += std::fabs(current_value);
                     out.sum_abs_previous_diff += std::fabs(previous_value);
                     out.max_abs_current = std::max(out.max_abs_current, std::fabs(current_value));
@@ -776,7 +806,9 @@ inline void capture_prefix_kv_page(const char* directory, const DeviceKVPagePool
                 plane_classification.mean_abs_previous_diff(),
                 kv_zero_pattern(plane_classification), kv_diff_zero_side(plane_classification),
                 plane_classification.nonfinite_current, plane_classification.nonfinite_previous,
-                plane_classification.nonfinite_diffs);
+                plane_classification.nonfinite_diffs, plane_classification.over_one_ulp,
+                plane_classification.over_four_ulp, plane_classification.over_sixteen_ulp,
+                plane_classification.max_ulp, plane_classification.worst_column);
         }
     }
 

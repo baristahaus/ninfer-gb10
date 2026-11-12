@@ -36,6 +36,11 @@ constexpr std::array kShapes{
     shape<Q8N12288K2048>(select_q8_n12288_k2048), shape<Q8N12288K2560>(select_q8_n12288_k2560),
     shape<Q8N14336K5120>(select_q8_n14336_k5120), shape<Q8N16384K2560>(select_q8_n16384_k2560),
     shape<Q8N34816K5120>(select_q8_n34816_k5120), shape<Q8N248320K5120>(select_q8_n248320_k5120),
+    // The width-2 MTP geometries. Appended, never reordered: the lookup is linear first-match, so
+    // every entry above resolves exactly as it did.
+    shape<Q8N7168K5120>(select_q8_n7168_k5120),   shape<Q8N8704K5120>(select_q8_n8704_k5120),
+    shape<Q8N124160K5120>(select_q8_n124160_k5120),
+    shape<Q8N5120K3072>(select_q8_n5120_k3072),   shape<Q8N5120K8704>(select_q8_n5120_k8704),
 };
 } // namespace
 

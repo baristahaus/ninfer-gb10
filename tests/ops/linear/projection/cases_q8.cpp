@@ -34,7 +34,12 @@ const std::array kGeometries{
     Geometry{6144, 2560, 347U},  Geometry{6144, 5120, 227U},  Geometry{9216, 2048, 263U},
     Geometry{10240, 2560, 331U}, Geometry{12288, 2048, 269U}, Geometry{12288, 2560, 313U},
     Geometry{14336, 5120, 229U}, Geometry{16384, 2560, 359U}, Geometry{34816, 5120, 233U},
-    Geometry{248320, 5120, 197U}};
+    Geometry{248320, 5120, 197U},
+    // The width-2 MTP geometries. The sweep below already covers T=1 and every band up to 1024,
+    // which is what the lane presents: draft_tokens 3 makes the verify block four tokens, so the
+    // hot band is T<=4, and prefill of the MTP block re-enters the same ladder from the top.
+    Geometry{7168, 5120, 401U},   Geometry{8704, 5120, 409U}, Geometry{124160, 5120, 419U},
+    Geometry{5120, 3072, 431U},   Geometry{5120, 8704, 433U}};
 
 int q8_workspace_domain(std::int32_t n, std::int32_t k) {
     int failures = 0;

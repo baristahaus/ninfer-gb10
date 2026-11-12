@@ -91,10 +91,10 @@ void validate_reduce(const ExecutionContext& ec, const PeerMailbox& mailbox,
 // One rank's exchange, on that rank's own stream, in a slot the caller has already taken. This is
 // the single primitive both public forms are built from.
 void enqueue_exchange(const ExecutionContext& ec, PeerMailbox& mailbox, int rank, int slot,
-                      std::span<void* const> data, std::size_t bytes) {
+                      std::span<void* const> data, std::size_t bytes, const char* site = "?") {
     const int device = ec.device(rank).device().index();
     (void)with_device(device, [&] {
-        mailbox.enqueue_exchange_sum(rank, slot, data[rank], bytes, ec.device(rank).stream());
+        mailbox.enqueue_exchange_sum(rank, slot, data[rank], bytes, ec.device(rank).stream(), site);
         return 0;
     });
 }
@@ -112,7 +112,7 @@ void allreduce_sum(const ExecutionContext& ec, PeerMailbox& mailbox,
 }
 
 void allreduce_sum_rank(const ExecutionContext& ec, PeerMailbox& mailbox, int rank, int slot,
-                        std::span<void* const> data, std::size_t bytes) {
+                        std::span<void* const> data, std::size_t bytes, const char* site) {
     validate_reduce(ec, mailbox, data, bytes, "allreduce_sum_rank");
     if (rank < 0 || rank >= 2) {
         throw std::invalid_argument("allreduce_sum_rank: rank outside [0,2)");
@@ -123,7 +123,7 @@ void allreduce_sum_rank(const ExecutionContext& ec, PeerMailbox& mailbox, int ra
     // The per-rank form: this rank's own exchange, in the slot the caller chose so that both ranks
     // agree on it. The caller owns `rank`'s stream, so enqueueing this after its projection is what
     // orders the two. `enqueue_exchange_sum` bounds-checks the slot.
-    enqueue_exchange(ec, mailbox, rank, slot, data, bytes);
+    enqueue_exchange(ec, mailbox, rank, slot, data, bytes, site);
 }
 
 } // namespace ninfer::ops

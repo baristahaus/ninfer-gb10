@@ -50,7 +50,8 @@ void require_partial_pair(std::array<Tensor, 2>& partials, const ExecutionContex
 // This rank's half of the cross-rank sum of the two full-width partials, through the collective's
 // per-rank form: one slot and one exchange, on this rank's own stream, after the projection that
 // feeds it. The peer's half is enqueued by the peer's own Program on its own stream.
-void reduce_partials(std::array<Tensor, 2>& partials, const ShardedCollective& collective) {
+void reduce_partials(std::array<Tensor, 2>& partials, const ShardedCollective& collective,
+                     const char* site = "columns") {
     std::array<void*, 2> data{partials[0].data, partials[1].data};
     const std::size_t bytes = partials[0].bytes();
     if (bytes != partials[1].bytes()) {
@@ -63,7 +64,7 @@ void reduce_partials(std::array<Tensor, 2>& partials, const ShardedCollective& c
     if (bytes > collective.mailbox.max_bytes()) {
         throw std::invalid_argument("sharded forward: the partial exceeds the mailbox slot");
     }
-    collective.reduce(data, bytes);
+    collective.reduce(data, bytes, site);
 }
 
 } // namespace
@@ -118,7 +119,8 @@ LogitsGatherPlan plan_logits_gather(std::int32_t vocabulary, std::int32_t rank_r
 }
 
 void all_gather_logits(const models::ShardedGroup& group, int rank, std::size_t& slot,
-                       const Tensor& local, const Tensor& full, CudaExecutionView execution) {
+                       const Tensor& local, const Tensor& full, CudaExecutionView execution,
+                       const char* site) {
     if (group.execution == nullptr || group.mailbox == nullptr) {
         throw std::invalid_argument("logits gather: the sharded group bundle is not built");
     }
@@ -205,7 +207,7 @@ void all_gather_logits(const models::ShardedGroup& group, int rank, std::size_t&
             static_cast<std::uint8_t*>(group.logits[1].data) +
                 static_cast<std::size_t>(first) * plan.bytes_per_column};
         ops::allreduce_sum_rank(*group.execution, *group.mailbox, rank,
-                                group.mailbox->slot_for(slot, bytes), pair, bytes);
+                                group.mailbox->slot_for(slot, bytes), pair, bytes, site);
         ++slot;
     }
 }

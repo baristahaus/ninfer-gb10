@@ -75,6 +75,7 @@ void allreduce_sum(const ExecutionContext& ec, PeerMailbox& mailbox, std::span<v
 // mailbox, a payload set that is not one per rank, a null payload, or bytes that are not a nonzero
 // multiple of 16 within `mailbox.max_bytes()`.
 void allreduce_sum_rank(const ExecutionContext& ec, PeerMailbox& mailbox, int rank, int slot,
-                        std::span<void* const> data, std::size_t bytes);
+                        std::span<void* const> data, std::size_t bytes,
+                        const char* site = "?");
 
 } // namespace ninfer::ops

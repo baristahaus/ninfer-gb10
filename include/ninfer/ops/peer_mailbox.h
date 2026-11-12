@@ -154,7 +154,7 @@ public:
     // take_capture_slot(bytes), with the same `bytes`, inside one capture, and makes `rank`'s
     // device current.
     void enqueue_exchange_sum(int rank, int slot, void* data, std::size_t bytes,
-                              cudaStream_t stream) const;
+                              cudaStream_t stream, const char* site = "?") const;
 
     // The FP32 form of enqueue_exchange_sum(): `data` holds FP32 partials (`bytes` / 4 of them),
     // replaced in place by fl32(partial_0 + partial_1), and, when `bf16_out` is non-null (16-byte
@@ -236,6 +236,13 @@ private:
     // that can enqueue an exchange calls it first: a poller that gave up leaves the round's results
     // diverged, and the lane must fail loudly rather than sample them.
     void require_no_hang(const char* call) const;
+    // DIAGNOSTIC (NINFER_ROUND_TRACE=1): copies both ranks' per-(slot, warp) epoch counters to the
+    // host and prints every lane where they disagree. The epochs are the publish counts the spin
+    // compares (`target = epochs[warp] + 1`, then wait for the peer's flag to reach it), so a lane
+    // where the two ranks disagree by n is n exchanges that one rank executed and the other did not
+    // -- which is the shape of a late peer. Printing the whole array distinguishes "one lane off by
+    // one" (slot reuse order) from "many lanes off" (a different population of exchanges).
+    void dump_exchange_epochs(const char* why) const;
     std::uint32_t* hang_            = nullptr;
     int slots_                      = 0;
     PeerExchangeKernel kernel_      = PeerExchangeKernel::Pipelined;

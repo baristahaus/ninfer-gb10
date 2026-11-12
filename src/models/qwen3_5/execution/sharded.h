@@ -107,9 +107,9 @@ struct ShardedCollective {
 
     // Sums this rank's exchange only. The sharded helpers are the only callers, which is how the
     // single-owner form stays out of the sharded path.
-    void reduce(std::span<void* const> data, std::size_t bytes) const {
+    void reduce(std::span<void* const> data, std::size_t bytes, const char* site = "?") const {
         ops::allreduce_sum_rank(execution, mailbox, rank, mailbox.slot_for(reduce_index, bytes),
-                                data, bytes);
+                                data, bytes, site);
         ++reduce_index;
     }
 };
@@ -195,7 +195,8 @@ struct LogitsGatherPlan {
 // index in the Program's deterministic sequence (`ShardedCollective::reduce_index`); it is advanced
 // by the number of exchanges the plan needs, so the caller passes it straight through.
 void all_gather_logits(const models::ShardedGroup& group, int rank, std::size_t& slot,
-                       const Tensor& local, const Tensor& full, CudaExecutionView execution);
+                       const Tensor& local, const Tensor& full, CudaExecutionView execution,
+                       const char* site = "?");
 
 // This rank's member of the group's full-vocabulary logits pair, viewed at the call's column count.
 // The pair is [vocabulary, logits_columns]; a view at [vocabulary, columns] is its first `columns`

@@ -25,6 +25,7 @@
 
 #include "ops/kernel/peer_exchange.cuh" // detail::peer_exchange_sum_kernel
 
+#include "core/collective_audit.h"
 #include "core/device.h" // CUDA_CHECK
 
 #include <algorithm>
@@ -33,7 +34,16 @@
 #include <cstdlib>
 #include <cstring>
 #include <stdexcept>
+#include <atomic>
+#include <vector>
 #include <string>
+
+namespace ninfer::runtime::detail {
+// Defined in the executor (src/runtime/executor/local_executor.h): 1 while a rank's host thread is
+// inside program().progress(). Declared here so a device-side give-up can report whether the
+// starved rank's host is still enqueueing -- blocked in a launch -- or has returned to its caller.
+extern std::atomic<int> g_progress_active[2];
+} // namespace ninfer::runtime::detail
 
 namespace ninfer::ops {
 
@@ -263,6 +273,8 @@ int take_l2_hint(Hint& hint, int blocks, int threads, detail::PeerPipelinedTunin
 }
 } // namespace
 
+
+
 void PeerMailbox::require_no_hang(const char* call) const {
     // The guard's word is sticky by design: once one poller abandons an exchange, that rank's
     // partial holds only its own operand and its later waits return immediately, so every value it
@@ -277,7 +289,7 @@ void PeerMailbox::require_no_hang(const char* call) const {
 }
 
 void PeerMailbox::enqueue_exchange_sum(int rank, int slot, void* data, std::size_t bytes,
-                                       cudaStream_t stream) const {
+                                       cudaStream_t stream, const char* site) const {
     require_no_hang("enqueue_exchange_sum");
     if (rank < 0 || rank > 1 || slot < 0 || slot >= slots_) {
         throw std::invalid_argument("PeerMailbox: rank or slot out of range");
@@ -292,6 +304,7 @@ void PeerMailbox::enqueue_exchange_sum(int rank, int slot, void* data, std::size
     const std::size_t lane_base =
         static_cast<std::size_t>(slot) * static_cast<std::size_t>(set.lanes);
     const std::size_t flag_slot = lane_base * detail::kPeerFlagStride;
+    ::ninfer::core::audit::record(rank, site);
     const std::size_t vecs      = bytes / sizeof(detail::PeerVec);
     std::uint32_t* words        = set.device_words[rank];
     auto* partial               = static_cast<detail::PeerVecBf16*>(data);
@@ -354,6 +367,7 @@ void PeerMailbox::enqueue_exchange_sum_f32(int rank, int slot, void* data, std::
     const std::size_t lane_base =
         static_cast<std::size_t>(slot) * static_cast<std::size_t>(set.lanes);
     const std::size_t flag_slot = lane_base * detail::kPeerFlagStride;
+    ::ninfer::core::audit::record(rank, "f32");
     const std::size_t vecs      = bytes / sizeof(detail::PeerVec);
     constexpr int kVecsPerLane  = detail::kPeerPipelinedVecsPerLane;
     constexpr int kThreads      = detail::kPeerPipelinedThreads;

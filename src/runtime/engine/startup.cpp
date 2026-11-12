@@ -128,14 +128,15 @@ constexpr WidthTwoOption kWidthTwoOptions[] = {
      [](const EngineOptions& o) { return o.speculative.backend == SpeculativeBackend::Mtp; },
      false, "",
      "width 1 is validated -- arm 1 reproduces tests/fixtures/tp2_accept/golden_mtp.ids on trueno -- "
-     "but width 2 refuses in the Q8 ADD path, not in the projection table: with the binding fixed "
-     "(4e1a9074) and the five rank-sized Q8 geometries registered (1837c230), a width-2 MTP round "
-     "runs and throws 'q8 linear_add: unsupported shape or token extent N5120K8704 T1' (measured on "
-     "hephaestus, arm 2, nvfp4.v3). src/ops/linear/add/dispatch.cpp admits (2048,4096), (2048,6144), "
-     "(5120,6144) and (5120,17408) for Q8 and nothing else, so the fused add that the MTP draft "
-     "block uses has no rank-sized entry for mlp/down's Columns shard. The projection table's five "
-     "shapes were necessary but not sufficient: the add path is a second table, which the same "
-     "commit that flagged it for FP8/NVFP4 left unextended for Q8"},
+     "but width 2 now refuses in the GDN replay fold, after the binding (4e1a9074), the five Q8 "
+     "projection geometries (1837c230) and the two Q8 add geometries were all fixed. Measured on "
+     "hephaestus, arm 2, nvfp4.v3: 'gdn_replay_fold: unsupported record geometry layers=48 "
+     "qk_heads=8 value_heads=24 conv_channels=5120'. select_fold_geometry admits four record "
+     "geometries -- (48,16,48,10240), (36,16,48,10240), (30,16,32,8192) and (36,8,24,5120) -- so it "
+     "has the width-1 48-layer form and the width-2 36-layer form but not their cross, which is "
+     "exactly what a 48-GDN-layer 27B presents at width 2 (8 qk heads, 24 value heads, 5120 conv "
+     "channels). That needs a fifth FoldGeometryId with its own kernel instantiation, not a table "
+     "entry"},
     {"--spec dflash",
      [](const EngineOptions& o) { return o.speculative.backend == SpeculativeBackend::DFlash; },
      false, "",

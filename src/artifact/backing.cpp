@@ -3,7 +3,21 @@
 #include <algorithm>
 #include <map>
 
+
+
 namespace ninfer::artifact {
+
+// The artifact reader opens with O_DIRECT by default: it avoids a page-cache copy and keeps read
+// latency predictable on local storage. On a network filesystem that does not service direct reads
+// promptly the same open turns every read into an uninterruptible stall, which looks like an engine
+// hang and is indistinguishable from one at the call site. So the mode is a decision with an escape:
+// NINFER_ARTIFACT_BUFFERED_IO=1 forces buffered reads, which cost a page-cache copy and always make
+// progress. Set it when the artifact lives on NFS.
+inline ninfer::io::ReadMode artifact_read_mode() {
+    const char* buffered = std::getenv("NINFER_ARTIFACT_BUFFERED_IO");
+    return (buffered != nullptr && *buffered != '\0') ? ninfer::io::ReadMode::Buffered
+                                                       : ninfer::io::ReadMode::Direct;
+}
 
 struct FileBacking::Impl {
     struct Object {
@@ -55,7 +69,7 @@ FileBacking prepare_file_backing(const Reader& reader, std::span<const ObjectHan
         for (auto& segment : entry.segments) {
             auto [it, inserted] = file_indices.try_emplace(segment.file_index, out.owners.size());
             if (inserted) {
-                out.owners.push_back(reader.open_file(segment.file_index, io::ReadMode::Direct));
+                out.owners.push_back(reader.open_file(segment.file_index, artifact_read_mode()));
                 out.files.push_back(out.owners.back().view());
             }
             segment.file_index = it->second;

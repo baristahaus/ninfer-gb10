@@ -68,10 +68,15 @@ Ask this at the start of any pass that will run a real-artifact test:
 2. **Is there room?** ~119 GB for the 125B, ~20.4 GB for the 27B lane artifact, plus the existing
    corpus — and the copy doubles the requirement while it is in flight if the archive path is not the
    one being replaced.
-3. **Is any other process holding the pool?** The 125B needs ~72 GB of ~121 GB. A stale process makes
+3. **For a cross-host comparison, is it the SAME artifact on both hosts?** Confirm by digest, not by
+   path or size. Measured counter-example: the 27B existed on two lane hosts at exactly 21,492,938,224
+   bytes with different sha256 values - different quantizations that happen to share a byte count. A
+   token-for-token comparison across those hosts would fail as a plausible lane defect. Compare
+   `sha256sum` output on both hosts before comparing tokens.
+4. **Is any other process holding the pool?** The 125B needs ~72 GB of ~121 GB. A stale process makes
    the run fail with `resident set exceeds integrated-pool budget`, which reads like a budget bug and
    is not.
-4. **Two engines cannot be resident at once.** A comparison that needs two configurations runs them
+5. **Two engines cannot be resident at once.** A comparison that needs two configurations runs them
    one after the other, not together.
 
 ## Options considered for the future

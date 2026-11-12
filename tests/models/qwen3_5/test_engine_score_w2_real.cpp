@@ -428,6 +428,9 @@ int main() {
         std::cerr << "REFUSED: the reference could not be read: " << reference_error << '\n';
         return 1;
     }
+    // A fixture captured before the sequence selector existed records no sequence; it is the
+    // periodic one by construction, so an empty name means periodic rather than unusable.
+    if (reference.sequence.empty()) reference.sequence = "periodic";
     if (reference.sequence != kind) {
         std::cerr << "REFUSED: the reference was captured for sequence '" << reference.sequence
                   << "' but this run asked for '" << kind << "'\n";

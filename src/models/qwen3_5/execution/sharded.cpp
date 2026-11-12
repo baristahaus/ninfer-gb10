@@ -4,6 +4,8 @@
 #include "ninfer/ops/silu_mul.h"
 
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <cstdint>
 #include <stdexcept>
 #include <string>
@@ -159,6 +161,16 @@ void all_gather_logits(const models::ShardedGroup& group, int rank, std::size_t&
     }
     const auto plan = plan_logits_gather(full.ne[0], local.ne[0], rank, columns,
                                          group.mailbox->max_bytes());
+    if (const char* debug = std::getenv("NINFER_SCORE_DEBUG_GATHER");
+        debug != nullptr && *debug) {
+        // The gather's own plan: a failure that inverts with the column count has to be explained by
+        // these numbers, not by the round or the ring.
+        std::fprintf(stderr,
+                     "logits gather: rank=%d columns=%d chunk_columns=%d exchanges=%d "
+                     "bytes_per_column=%zu slot_bytes=%zu\n",
+                     rank, columns, plan.chunk_columns, plan.exchanges, plan.bytes_per_column,
+                     group.mailbox->max_bytes());
+    }
     auto* const destination      = static_cast<std::uint8_t*>(full.data);
     const auto* const source     = static_cast<const std::uint8_t*>(local.data);
     const std::size_t row_bytes  = static_cast<std::size_t>(plan.rank_rows) * sizeof(std::uint16_t);

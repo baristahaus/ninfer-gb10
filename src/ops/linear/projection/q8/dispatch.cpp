@@ -44,7 +44,11 @@ Q8Launch select_q8_a16_launch(std::int32_t n, std::int32_t k, std::int32_t t) {
     for (const auto& entry : kShapes) {
         if (entry.n == n && entry.k == k) return entry.select(t);
     }
-    throw std::invalid_argument("q8 linear: unsupported shape");
+    // Name the shape and the token extent: on the two-GPU lane the caller is looking at a
+    // rank-sized geometry it did not write by hand, and "unsupported shape" alone does not say
+    // which one. The FP8 dispatch already names its refusals for the same reason.
+    throw std::invalid_argument("q8 linear: unsupported shape N" + std::to_string(n) + "K" +
+                                std::to_string(k) + " T" + std::to_string(t));
 }
 
 } // namespace ninfer::ops::detail

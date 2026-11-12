@@ -120,9 +120,12 @@ constexpr WidthTwoOption kWidthTwoOptions[] = {
     {"--spec mtp",
      [](const EngineOptions& o) { return o.speculative.backend == SpeculativeBackend::Mtp; },
      false, "",
-     "the MTP drafter's proposal logits are row-sharded and its linear_pair call rejects the "
-     "sharded profile at width 2: measured, a width-2 round throws 'linear_pair: invalid matrix "
-     "profile or token interval'"},
+     "the MTP block's projections are Q8 and the Q8 projection table has no rank-sized shape: a "
+     "width-2 round now gets past linear_pair (its N was hard-coded to 1024) and throws "
+     "'q8 linear: unsupported shape N7168K5120 T1' -- the MTP attention projection's packed rows "
+     "at width 2 (14336 halved). The width-2 Q8 set the MTP block needs is N7168K5120 (attention "
+     "in), N5120K3072 (attention out), N8704K5120 (mlp gate/up), N5120K8704 (mlp down) and "
+     "N124160K5120 (mtp/output_head, shared with text/output_head); none is registered"},
     {"--spec dflash",
      [](const EngineOptions& o) { return o.speculative.backend == SpeculativeBackend::DFlash; },
      false, "",

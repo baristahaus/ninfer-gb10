@@ -23,7 +23,11 @@ void require_nonoverlap(const Tensor& x, const Weight& w0, const Weight& w1, con
     const auto range = [](const void* ptr, std::size_t bytes) {
         return operand::range(ptr, bytes, "linear_pair");
     };
-    const std::size_t codes  = std::size_t(1024) * x.ne[0];
+    // The two weights are the same geometry by contract, so the code plane of each is
+    // `n * k` bytes, not a fixed 1024 * k. The 27B's MTP K/V pair is 1024 rows at width 1 and 512
+    // at width 2 (the four KV heads shard by rows); the overlap check must follow the rank's own n
+    // or it would report a false overlap against a neighbouring buffer.
+    const std::size_t codes  = std::size_t(w0.n) * x.ne[0];
     const std::size_t scales = codes / 32 * 2;
     const std::array ranges{range(x.data, x.bytes()),   range(y0.data, y0.bytes()),
                             range(y1.data, y1.bytes()), range(w0.qdata, codes),
@@ -43,8 +47,13 @@ std::size_t linear_pair_workspace_capacity_bytes(const Weight& first, const Weig
 
 std::size_t linear_pair_workspace_capacity_bytes(LinearProfile first, LinearProfile second,
                                                  std::int32_t min_tokens, std::int32_t max_tokens) {
+    // N is the pair's own row count: both weights must agree on it, and the kernel derives its row
+    // grid from it (`select_q8_pair_n1024_k5120`'s `launch_variant` uses `m = first_weight.n`; the
+    // MMA kernel masks `grow < m`). Only the K=2048 adjacent-parent form needs a fixed N, and
+    // `validate_pair_weights` enforces that separately. Requiring 1024 here rejected the width-2
+    // MTP K/V pair, whose rows are the rank's two KV heads, 512.
     if (min_tokens <= 0 || max_tokens < min_tokens || first.qtype != QType::Q8_G32_FP16 ||
-        second.qtype != QType::Q8_G32_FP16 || first.n != 1024 || second.n != 1024 ||
+        second.qtype != QType::Q8_G32_FP16 || first.n <= 0 || first.n != second.n ||
         first.k != second.k) {
         throw std::invalid_argument("linear_pair: invalid matrix profile or token interval");
     }
@@ -56,8 +65,11 @@ void linear_pair(const Tensor& x, const Weight& first, const Weight& second, Ten
                  Tensor& second_out, CudaExecutionView execution) {
     const auto launch = detail::select_linear_pair(x.ne[0], x.ne[1]);
     require_matrix(x, first.k, x.ne[1], execution);
-    require_matrix(first_out, 1024, x.ne[1], execution);
-    require_matrix(second_out, 1024, x.ne[1], execution);
+    // The outputs are the weights' own row count. `first.n` and `second.n` are equal by the pair
+    // contract that `validate_pair_weights` checks below, and both the MMA and the SIMT arm derive
+    // their row extent from the weight/output, so this holds for 1024 at width 1 and 512 at width 2.
+    require_matrix(first_out, first.n, x.ne[1], execution);
+    require_matrix(second_out, first.n, x.ne[1], execution);
     detail::validate_pair_weights(first, second, x.ne[1]);
     if (first.device != execution.device() || second.device != execution.device()) {
         throw std::invalid_argument("linear_pair: weights belong to another device");

@@ -1,0 +1,388 @@
+// Causal scoring at tensor-parallel width 2, compared against a RECORDED width-1 reference.
+//
+// The two-GPU lane's acceptance criterion judges a token disagreement by the reference's top-1
+// margin, so the sharded arm has to be able to score: otherwise a sharded implementation that is
+// confidently wrong in a way the reference cannot see passes. This is the comparison that promotes
+// the --causal-scoring row of the width>1 option gate.
+//
+// No host in this lab holds both the 27B and two 32 GB-class devices, so the reference cannot be
+// co-resident with the sharded arm. The test therefore has two modes:
+//
+//   NINFER_SCORE_MODE=capture   width 1 on one device: scores the fixed sequence and writes the
+//                               per-position log-probabilities to a fixture, with the artifact
+//                               digest, the token ids and the kv profile recorded beside them.
+//   NINFER_SCORE_MODE=compare   width 2 on two devices: reads that fixture, refuses if the artifact
+//                               digest or the token ids differ, scores the same sequence, and
+//                               reports max/mean/p99 |delta log p| plus the adjudication property.
+//
+// A reference that cannot be silently invalidated is the point of the digest: two hosts once
+// carried different 27B quantizations at identical byte counts, and a comparison across them would
+// have read as a lane defect.
+#include "ninfer/engine.h"
+
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cuda_runtime.h>
+#include <fstream>
+#include <iomanip>
+#include <iostream>
+#include <sstream>
+#include <string>
+#include <vector>
+
+namespace {
+
+// 4x the largest route difference measured on the 125B (0.0281 nats), rounded up: a sharded scoring
+// path that is right lands inside it, one that is wrong does not.
+constexpr double kToleranceNats = 0.12;
+constexpr std::uint32_t kMaxContext = 2048;
+constexpr std::size_t kTokenCount   = 256;
+constexpr std::size_t kAlteredIndex = 128;
+
+int failures = 0;
+
+void fail(const std::string& message) {
+    std::cerr << message << '\n';
+    ++failures;
+}
+
+// --- artifact digest: streaming SHA-256 over the whole file --------------------------------
+struct Sha256 {
+    std::array<std::uint32_t, 8> state{0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+                                       0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19};
+    std::array<std::uint8_t, 64> block{};
+    std::size_t filled  = 0;
+    std::uint64_t bytes = 0;
+
+    static std::uint32_t rotr(std::uint32_t x, int n) { return (x >> n) | (x << (32 - n)); }
+
+    void compress() {
+        static constexpr std::array<std::uint32_t, 64> k{
+            0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
+            0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
+            0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
+            0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+            0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
+            0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+            0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
+            0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+            0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+            0xc67178f2};
+        std::array<std::uint32_t, 64> w{};
+        for (int i = 0; i < 16; ++i) {
+            w[i] = (static_cast<std::uint32_t>(block[i * 4]) << 24) |
+                   (static_cast<std::uint32_t>(block[i * 4 + 1]) << 16) |
+                   (static_cast<std::uint32_t>(block[i * 4 + 2]) << 8) |
+                   static_cast<std::uint32_t>(block[i * 4 + 3]);
+        }
+        for (int i = 16; i < 64; ++i) {
+            const std::uint32_t s0 = rotr(w[i - 15], 7) ^ rotr(w[i - 15], 18) ^ (w[i - 15] >> 3);
+            const std::uint32_t s1 = rotr(w[i - 2], 17) ^ rotr(w[i - 2], 19) ^ (w[i - 2] >> 10);
+            w[i]                   = w[i - 16] + s0 + w[i - 7] + s1;
+        }
+        auto a = state[0], b = state[1], c = state[2], d = state[3];
+        auto e = state[4], f = state[5], g = state[6], h = state[7];
+        for (int i = 0; i < 64; ++i) {
+            const std::uint32_t s1 = rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25);
+            const std::uint32_t ch = (e & f) ^ (~e & g);
+            const std::uint32_t t1 = h + s1 + ch + k[i] + w[i];
+            const std::uint32_t s0 = rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22);
+            const std::uint32_t mj = (a & b) ^ (a & c) ^ (b & c);
+            const std::uint32_t t2 = s0 + mj;
+            h = g; g = f; f = e; e = d + t1;
+            d = c; c = b; b = a; a = t1 + t2;
+        }
+        state[0] += a; state[1] += b; state[2] += c; state[3] += d;
+        state[4] += e; state[5] += f; state[6] += g; state[7] += h;
+    }
+
+    void update(const std::uint8_t* data, std::size_t size) {
+        bytes += size;
+        for (std::size_t i = 0; i < size; ++i) {
+            block[filled++] = data[i];
+            if (filled == block.size()) { compress(); filled = 0; }
+        }
+    }
+
+    std::string finish() {
+        const std::uint64_t bits = bytes * 8;
+        std::array<std::uint8_t, 8> length{};
+        for (int i = 0; i < 8; ++i) length[i] = static_cast<std::uint8_t>(bits >> (56 - 8 * i));
+        const std::uint8_t pad = 0x80;
+        update(&pad, 1);
+        const std::uint8_t zero = 0;
+        while (filled != 56) update(&zero, 1);
+        update(length.data(), length.size());
+        std::ostringstream out;
+        out << std::hex << std::setfill('0');
+        for (const auto word : state) out << std::setw(8) << word;
+        return out.str();
+    }
+};
+
+std::string artifact_sha256(const std::string& path) {
+    std::ifstream file(path, std::ios::binary);
+    if (!file) { return {}; }
+    Sha256 hash;
+    std::vector<std::uint8_t> buffer(8u << 20);
+    while (file) {
+        file.read(reinterpret_cast<char*>(buffer.data()), static_cast<std::streamsize>(buffer.size()));
+        const auto read = static_cast<std::size_t>(file.gcount());
+        if (read) hash.update(buffer.data(), read);
+    }
+    return hash.finish();
+}
+
+// --- the fixture ---------------------------------------------------------------------------
+struct Reference {
+    std::string artifact_sha256;
+    std::uint64_t artifact_bytes = 0;
+    std::string kv_dtype;
+    std::uint32_t max_context = 0;
+    std::uint32_t first_target = 0;
+    std::vector<ninfer::TokenId> tokens;
+    std::vector<float> logprobs;
+    std::size_t altered_index = 0;
+    ninfer::TokenId altered_token = 0;
+    std::vector<float> altered_logprobs;
+};
+
+bool write_reference(const std::string& path, const Reference& reference) {
+    std::ofstream out(path, std::ios::trunc);
+    if (!out) { return false; }
+    out << "score_w2_reference 1\n";
+    out << "artifact_sha256 " << reference.artifact_sha256 << '\n';
+    out << "artifact_bytes " << reference.artifact_bytes << '\n';
+    out << "kv_dtype " << reference.kv_dtype << '\n';
+    out << "max_context " << reference.max_context << '\n';
+    out << "first_target " << reference.first_target << '\n';
+    out << "tokens " << reference.tokens.size() << '\n';
+    for (const auto token : reference.tokens) out << token << ' ';
+    out << '\n';
+    out << "logprobs " << reference.logprobs.size() << '\n';
+    out << std::setprecision(9);
+    for (const auto value : reference.logprobs) out << value << ' ';
+    out << '\n';
+    out << "altered " << reference.altered_index << ' ' << reference.altered_token << ' '
+        << reference.altered_logprobs.size() << '\n';
+    for (const auto value : reference.altered_logprobs) out << value << ' ';
+    out << '\n';
+    return static_cast<bool>(out);
+}
+
+bool read_reference(const std::string& path, Reference& reference) {
+    std::ifstream in(path);
+    if (!in) { return false; }
+    std::string magic;
+    int version = 0;
+    in >> magic >> version;
+    if (magic != "score_w2_reference" || version != 1) { return false; }
+    std::string key;
+    std::size_t count = 0;
+    while (in >> key) {
+        if (key == "artifact_sha256") in >> reference.artifact_sha256;
+        else if (key == "artifact_bytes") in >> reference.artifact_bytes;
+        else if (key == "kv_dtype") in >> reference.kv_dtype;
+        else if (key == "max_context") in >> reference.max_context;
+        else if (key == "first_target") in >> reference.first_target;
+        else if (key == "tokens") {
+            in >> count;
+            reference.tokens.resize(count);
+            for (auto& token : reference.tokens) in >> token;
+        } else if (key == "logprobs") {
+            in >> count;
+            reference.logprobs.resize(count);
+            for (auto& value : reference.logprobs) in >> value;
+        } else if (key == "altered") {
+            in >> reference.altered_index >> reference.altered_token >> count;
+            reference.altered_logprobs.resize(count);
+            for (auto& value : reference.altered_logprobs) in >> value;
+        } else {
+            return false;
+        }
+    }
+    return !reference.tokens.empty() && reference.tokens.size() == reference.logprobs.size();
+}
+
+// --- engines ---------------------------------------------------------------------------------
+ninfer::EngineOptions options_for(const char* artifact, int width) {
+    ninfer::EngineOptions options;
+    options.artifact_path         = artifact;
+    options.purpose               = ninfer::EnginePurpose::CausalScoring;
+    options.use_cuda_graph        = false; // width > 1 refuses capture
+    options.context_cache.enabled = false; // unvalidated at width > 1
+    options.max_context           = kMaxContext;
+    // bf16 KV: a quantized pool is its own unvalidated width-2 row and would refuse before scoring
+    // ran, so both arms use the configuration the lane is actually validated for.
+    options.kv_cache              = ninfer::KvCacheStorage::BFloat16;
+    options.kv_capacity           = ninfer::KvCapacityPolicy::explicit_capacity(kMaxContext);
+    if (width > 1) {
+        options.devices = {0, 1};
+    } else {
+        options.device = 0;
+    }
+    return options;
+}
+
+std::vector<ninfer::TokenId> fixed_sequence(const char* artifact) {
+    const std::string paragraph =
+        "The quick brown fox jumps over the lazy dog. NInfer scores every target token from the "
+        "preceding hidden state and compares two routes with a tolerance.\n";
+    std::string text;
+    std::vector<ninfer::TokenId> tokens;
+    ninfer::Engine engine(options_for(artifact, 1));
+    while (tokens.size() < kTokenCount) {
+        text += paragraph;
+        tokens = engine.tokenize_text(text);
+    }
+    tokens.resize(kTokenCount);
+    return tokens;
+}
+
+double percentile(std::vector<double> values, double fraction) {
+    if (values.empty()) { return 0.0; }
+    std::sort(values.begin(), values.end());
+    const auto index = static_cast<std::size_t>(fraction * static_cast<double>(values.size() - 1));
+    return values[std::min(index, values.size() - 1)];
+}
+
+} // namespace
+
+int main() {
+    const char* artifact = std::getenv("NINFER_TEST_ARTIFACT");
+    const char* mode     = std::getenv("NINFER_SCORE_MODE");
+    const char* fixture  = std::getenv("NINFER_SCORE_FIXTURE");
+    int devices          = 0;
+    const cudaError_t status = cudaGetDeviceCount(&devices);
+    const int device_count   = status == cudaSuccess ? devices : 0;
+    const bool capture       = mode != nullptr && std::string(mode) == "capture";
+    const bool compare       = mode != nullptr && std::string(mode) == "compare";
+
+    if (artifact == nullptr || *artifact == '\0' || fixture == nullptr || *fixture == '\0' ||
+        (!capture && !compare)) {
+        std::cerr << "SKIP: set NINFER_TEST_ARTIFACT, NINFER_SCORE_FIXTURE and NINFER_SCORE_MODE="
+                     "capture (width 1, one device) or compare (width 2, two devices)\n";
+        return 77;
+    }
+    if (capture && device_count < 1) {
+        std::cerr << "SKIP: capture mode needs one CUDA device; found " << device_count << '\n';
+        return 77;
+    }
+    if (compare && device_count < 2) {
+        std::cerr << "SKIP: compare mode needs two CUDA devices; found " << device_count << '\n';
+        return 77;
+    }
+    if (compare && std::getenv("NINFER_TP2_UNVALIDATED") == nullptr) {
+        std::cerr << "SKIP: the width-2 arm runs under the lane's inference escape; set "
+                     "NINFER_TP2_UNVALIDATED=1 to opt in\n";
+        return 77;
+    }
+
+    const std::string digest = artifact_sha256(artifact);
+    if (digest.empty()) {
+        std::cerr << "artifact digest could not be computed\n";
+        return 1;
+    }
+    const auto tokens = fixed_sequence(artifact);
+
+    if (capture) {
+        ninfer::Engine engine(options_for(artifact, 1));
+        Reference reference;
+        reference.artifact_sha256 = digest;
+        {
+            std::ifstream probe(artifact, std::ios::binary | std::ios::ate);
+            reference.artifact_bytes = static_cast<std::uint64_t>(probe.tellg());
+        }
+        reference.kv_dtype     = "bf16";
+        reference.max_context  = kMaxContext;
+        reference.first_target = 1;
+        reference.tokens       = tokens;
+        reference.logprobs     = engine.score_tokens(tokens, 1);
+        reference.altered_index = kAlteredIndex;
+        auto altered            = tokens;
+        reference.altered_token = static_cast<ninfer::TokenId>((tokens[kAlteredIndex] + 977) % 150000);
+        altered[kAlteredIndex]  = reference.altered_token;
+        reference.altered_logprobs = engine.score_tokens(altered, 1);
+        if (!write_reference(fixture, reference)) {
+            std::cerr << "could not write the reference to " << fixture << '\n';
+            return 1;
+        }
+        std::cout << "captured " << reference.logprobs.size() << " positions to " << fixture
+                  << " (artifact sha256 " << digest.substr(0, 16) << "...)\n";
+        return 0;
+    }
+
+    Reference reference;
+    if (!read_reference(fixture, reference)) {
+        std::cerr << "could not read the reference at " << fixture << '\n';
+        return 1;
+    }
+    if (reference.artifact_sha256 != digest) {
+        std::cerr << "REFUSED: the reference was captured against artifact sha256 "
+                  << reference.artifact_sha256 << " but this box has " << digest
+                  << ". A comparison across different quantizations reads as a lane defect, so it "
+                     "is refused rather than reported\n";
+        return 1;
+    }
+    if (reference.tokens != tokens) {
+        std::cerr << "REFUSED: the reference's token sequence differs from this box's tokenization\n";
+        return 1;
+    }
+
+    ninfer::Engine engine(options_for(artifact, 2));
+    const std::vector<float> sharded = engine.score_tokens(tokens, 1);
+    if (sharded.size() != reference.logprobs.size()) {
+        fail("the sharded arm returned a different score count");
+        return 1;
+    }
+    std::vector<double> deltas;
+    deltas.reserve(sharded.size());
+    double max_delta = 0.0;
+    double mean_delta = 0.0;
+    for (std::size_t i = 0; i < sharded.size(); ++i) {
+        if (!std::isfinite(sharded[i]) || !std::isfinite(reference.logprobs[i])) {
+            fail("a score was not finite");
+            return 1;
+        }
+        const double delta = std::abs(static_cast<double>(sharded[i]) - reference.logprobs[i]);
+        deltas.push_back(delta);
+        max_delta = std::max(max_delta, delta);
+        mean_delta += delta;
+    }
+    mean_delta /= static_cast<double>(deltas.size());
+    const std::size_t over_0p01 = static_cast<std::size_t>(
+        std::count_if(deltas.begin(), deltas.end(), [](double d) { return d > 0.01; }));
+    const std::size_t over_0p05 = static_cast<std::size_t>(
+        std::count_if(deltas.begin(), deltas.end(), [](double d) { return d > 0.05; }));
+    std::cout << "positions=" << deltas.size() << " max|dlogp|=" << max_delta
+              << " mean|dlogp|=" << mean_delta << " p99|dlogp|=" << percentile(deltas, 0.99)
+              << " over0.01=" << over_0p01 << " over0.05=" << over_0p05 << '\n';
+    if (max_delta > kToleranceNats) {
+        fail("width-2 scoring differs from the recorded width-1 reference beyond the tolerance of " +
+             std::to_string(kToleranceNats) + " nats");
+    }
+
+    // The property adjudication needs: both routes must find the real next token clearly better than
+    // a deliberately altered one, and agree on how much worse.
+    auto altered = tokens;
+    altered[kAlteredIndex] = reference.altered_token;
+    const std::vector<float> sharded_altered = engine.score_tokens(altered, 1);
+    const double reference_margin = static_cast<double>(reference.logprobs[kAlteredIndex]) -
+                                    reference.altered_logprobs[kAlteredIndex];
+    const double sharded_margin =
+        static_cast<double>(sharded[kAlteredIndex]) - sharded_altered[kAlteredIndex];
+    std::cout << "margin reference=" << reference_margin << " sharded=" << sharded_margin << '\n';
+    if (reference_margin <= 0.0 || sharded_margin <= 0.0) {
+        fail("an unambiguous next token was not preferred over the altered one");
+    }
+    if (std::abs(reference_margin - sharded_margin) > kToleranceNats) {
+        fail("the two routes disagree on how much worse the altered token is");
+    }
+
+    if (failures == 0) { std::cout << "ok\n"; }
+    return failures == 0 ? 0 : 1;
+}

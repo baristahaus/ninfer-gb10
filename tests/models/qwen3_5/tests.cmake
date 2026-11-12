@@ -68,6 +68,10 @@ ninfer_add_test(ninfer_qwen3_5_score_real_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/test_engine_score_real.cpp"
   LIBRARIES ninfer_engine)
 
+ninfer_add_test(ninfer_qwen3_5_score_w2_real_test
+  SOURCES "${CMAKE_CURRENT_LIST_DIR}/test_engine_score_w2_real.cpp"
+  LIBRARIES ninfer_engine CUDA::cudart)
+
 ninfer_add_test(ninfer_qwen3_5_vision_workspace_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/test_vision_workspace.cpp"
   LIBRARIES ninfer_model_execution ninfer_engine)

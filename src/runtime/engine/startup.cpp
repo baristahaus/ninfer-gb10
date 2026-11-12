@@ -152,7 +152,7 @@ constexpr WidthTwoOption kWidthTwoOptions[] = {
      [](const EngineOptions& o) { return o.purpose == EnginePurpose::CausalScoring; },
      false, "",
      "the scoring purpose runs a different frame kind and its sharded path has never been "
-     "exercised"},
+     "exercised"},  // PROMOTION PENDING: see task-28
     {"prefix reuse / context cache",
      [](const EngineOptions& o) { return o.context_cache.enabled; },
      false, "",

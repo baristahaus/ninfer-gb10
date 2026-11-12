@@ -401,6 +401,33 @@ int main() {
         std::count_if(deltas.begin(), deltas.end(), [](double d) { return d > 0.01; }));
     const std::size_t over_0p05 = static_cast<std::size_t>(
         std::count_if(deltas.begin(), deltas.end(), [](double d) { return d > 0.05; }));
+    // The distribution is the lead the fix needs: a global offset or a wrong normalisation corrupts
+    // every position, so a SUBSET taking a wrong path points at something positional. Every position
+    // is written to a report beside the fixture, and the worst are printed, so one run answers
+    // "which positions are wrong" without a second run.
+    {
+        const std::string report_path = std::string(fixture) + ".positions";
+        std::ofstream report(report_path, std::ios::trunc);
+        std::vector<std::size_t> order(deltas.size());
+        for (std::size_t i = 0; i < order.size(); ++i) order[i] = i;
+        std::sort(order.begin(), order.end(),
+                  [&](std::size_t a, std::size_t b) { return deltas[a] > deltas[b]; });
+        if (report) {
+            report << "pos target reference sharded delta\n";
+            report << std::setprecision(9);
+            for (std::size_t i = 0; i < deltas.size(); ++i) {
+                report << i << ' ' << tokens[reference.first_target + i] << ' '
+                       << reference.logprobs[i] << ' ' << sharded[i] << ' ' << deltas[i] << '\n';
+            }
+        }
+        std::cout << "worst positions (pos target reference sharded delta):\n";
+        for (std::size_t k = 0; k < std::min<std::size_t>(20, order.size()); ++k) {
+            const std::size_t i = order[k];
+            std::cout << "  " << i << ' ' << tokens[reference.first_target + i] << ' '
+                      << reference.logprobs[i] << ' ' << sharded[i] << ' ' << deltas[i] << '\n';
+        }
+        std::cout << "position report: " << report_path << '\n';
+    }
     std::cout << "positions=" << deltas.size() << " max|dlogp|=" << max_delta
               << " mean|dlogp|=" << mean_delta << " p99|dlogp|=" << percentile(deltas, 0.99)
               << " over0.01=" << over_0p01 << " over0.05=" << over_0p05 << '\n';

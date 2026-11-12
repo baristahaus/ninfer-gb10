@@ -54,6 +54,15 @@ void RankProgramImpl::launch_score(ComputeOperation& operation) {
         logits = execution::sharded_logits_view(*sharded_, collective_->rank,
                                                 frame.spec.output_rows, count);
     }
+    // Diagnostic: NINFER_SCORE_DEBUG_ROUNDS=1 prints this round's shape and how many exchanges its
+    // gather took (reduce_index advances once per exchange). Two runs that fail differently can only
+    // be compared if they make the same number of rounds and exchanges, so this is checked before any
+    // per-position dump is read.
+    if (const char* rounds = std::getenv("NINFER_SCORE_DEBUG_ROUNDS"); rounds != nullptr && *rounds) {
+        std::cerr << "score round: sharded=" << (sharded_ != nullptr ? 1 : 0) << " count=" << count
+                  << " first_column=" << work.first_column << " score_cursor=" << operation.score_cursor
+                  << " reduce_index=" << collective_->reduce_index << '\n';
+    }
     // Diagnostic: NINFER_SCORE_DEBUG_ROW=<id> prints, for every position of this round whose target
     // is that id, the target row's logit and the vocabulary's max logit with its argmax id. It
     // separates "this vocabulary row is wrong" from "another row poisoned the log_softmax

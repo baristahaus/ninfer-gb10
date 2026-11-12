@@ -903,6 +903,83 @@ int exercise_serving_shape(const char* artifact) {
 // Multi-turn shared-prefix reuse under pressure, exercising the demote-then-restore compound's
 // execution path end to end; see the comment inside the exercise for the geometry and for the
 // relief-ordering caveat that decides when the own-source compound is selected.
+// The pressured fixture. Two user messages with a shared-prefix marker after the first, a 120-
+// sentence body so the prompt spans prefill chunks, and a divergent second message so a follow-up
+// can reuse only the shared prefix and never the first turn's private endpoint. Shared by the
+// demote/restore exercises and the route-matched control so all of them drive the same geometry.
+const std::string& pressured_body() {
+    static const std::string body = [] {
+        std::string text;
+        for (int repeat = 0; repeat < 120; ++repeat) {
+            text += "The quick brown fox jumps over the lazy dog. ";
+        }
+        return text;
+    }();
+    return body;
+}
+
+const std::string& pressured_divergent() {
+    static const std::string text = [] {
+        std::string body;
+        for (int repeat = 0; repeat < 120; ++repeat) {
+            body += "Pack my box with five dozen liquor jugs. ";
+        }
+        return body;
+    }();
+    return text;
+}
+
+ninfer::ChatMessage pressured_text_message(std::string text, ninfer::ChatRole role) {
+    ninfer::ChatMessage message;
+    message.role = role;
+    message.parts.push_back(ninfer::MessagePart{.kind = ninfer::MessagePartKind::Text,
+                                                .text = std::move(text),
+                                                .media = {}});
+    return message;
+}
+
+ninfer::PromptCacheMarker pressured_shared_marker() {
+    ninfer::PromptCacheMarker marker;
+    marker.after_message_count = 1;
+    return marker;
+}
+
+// Two user messages put the shared marker boundary mid-prompt: the shared capture publishes while
+// the first turn is still prefilling.
+ninfer::PromptInput pressured_turn_input(bool with_question) {
+    ninfer::PromptInput input;
+    input.messages.push_back(pressured_text_message(pressured_body(), ninfer::ChatRole::User));
+    input.messages.push_back(pressured_text_message(
+        with_question ? pressured_divergent() : pressured_body(), ninfer::ChatRole::User));
+    if (with_question) {
+        input.messages.push_back(pressured_text_message(
+            "Answer with one short sentence about the text above.", ninfer::ChatRole::User));
+    }
+    input.options.enable_thinking = false;
+    input.context_cache.markers.push_back(pressured_shared_marker());
+    return input;
+}
+
+// The pressured engine geometry. Two lanes and no spare slot: the two lane states plus the shared
+// capture contend for the Device StateImage slots, so the follow-up's fork admission always plans
+// under pressure independent of capture timing. The Host quota is set explicitly because a DGX
+// Spark host quota resolves to zero, which would leave no demotion destination at all.
+ninfer::EngineOptions pressured_options(const char* artifact, std::uint32_t device_state_slots) {
+    ninfer::EngineOptions options                = engine_options(artifact);
+    options.max_context                          = 8192;
+    options.kv_capacity                          = ninfer::KvCapacityPolicy::explicit_capacity(8192);
+    options.max_concurrency                      = 2;
+    options.max_pending_requests                 = 2;
+    options.enable_vision                        = false;
+    options.context_cache.device_state_slots     = device_state_slots;
+    options.context_cache.host_state_slots       = 4;
+    options.context_cache.host_kv_capacity_bytes = 1ULL << 30;
+    // Defer the follow-up's long prefill so its admission is planned while the first turn still
+    // runs, deterministic regardless of prefill speed.
+    options.long_prefill_wait_ms                 = 200;
+    return options;
+}
+
 int exercise_own_source_demote_restore(const char* artifact) {
     // Multi-turn shared-prefix reuse under pressure. The pressured engine runs two lanes with no
     // spare Device StateImage slots: the first turn's shared-prefix capture takes the second
@@ -917,62 +994,9 @@ int exercise_own_source_demote_restore(const char* artifact) {
     // ones, so the own-source demote-then-restore compound is selected exactly when no ordinary
     // third-party relief exists; the forced own-source-only geometry is tracked separately.
     const auto options_for = [](const char* artifact, std::uint32_t device_state_slots) {
-        ninfer::EngineOptions options                = engine_options(artifact);
-        options.max_context                          = 8192;
-        options.kv_capacity                          = ninfer::KvCapacityPolicy::explicit_capacity(8192);
-        options.max_concurrency                      = 2;
-        options.max_pending_requests                 = 2;
-        options.enable_vision                        = false;
-        // Two lanes and no spare slot: the two lane states plus the shared capture contend for
-        // two Device StateImage slots, so the follow-up's fork admission always plans under
-        // pressure, independent of capture timing.
-        options.context_cache.device_state_slots     = device_state_slots;
-        options.context_cache.host_state_slots       = 4;
-        options.context_cache.host_kv_capacity_bytes = 1ULL << 30;
-        // Defer the follow-up's long prefill so its admission is planned while the first turn
-        // still runs, deterministic regardless of prefill speed.
-        options.long_prefill_wait_ms                 = 200;
-        return options;
+        return pressured_options(artifact, device_state_slots);
     };
-
-    const std::string sentence = "The quick brown fox jumps over the lazy dog. ";
-    std::string body;
-    for (int repeat = 0; repeat < 120; ++repeat) { body += sentence; }
-    // The follow-up's second message differs, so it matches the shared marker boundary exactly
-    // and can never reuse the first turn's private endpoint.
-    std::string divergent;
-    for (int repeat = 0; repeat < 120; ++repeat) {
-        divergent += "Pack my box with five dozen liquor jugs. ";
-    }
-    const auto text_message = [](std::string text, ninfer::ChatRole role) {
-        ninfer::ChatMessage message;
-        message.role = role;
-        message.parts.push_back(
-            ninfer::MessagePart{.kind = ninfer::MessagePartKind::Text,
-                                .text = std::move(text), .media = {}});
-        return message;
-    };
-    const auto shared_marker = [] {
-        ninfer::PromptCacheMarker marker;
-        marker.after_message_count = 1;
-        return marker;
-    };
-    // Two user messages put the shared marker boundary mid-prompt: the shared capture publishes
-    // while the first turn is still prefilling.
-    const auto turn_input = [&](bool with_question) {
-        ninfer::PromptInput input;
-        input.messages.push_back(text_message(body, ninfer::ChatRole::User));
-        input.messages.push_back(text_message(with_question ? divergent : body,
-                                              ninfer::ChatRole::User));
-        if (with_question) {
-            input.messages.push_back(text_message(
-                "Answer with one short sentence about the text above.",
-                ninfer::ChatRole::User));
-        }
-        input.options.enable_thinking           = false;
-        input.context_cache.markers.push_back(shared_marker());
-        return input;
-    };
+    const auto turn_input = [](bool with_question) { return pressured_turn_input(with_question); };
 
     ninfer::GenerationResult first;
     ninfer::GenerationResult second;
@@ -1357,6 +1381,38 @@ int compare_exact_runs(const char* label, const LogprobRun& a, const LogprobRun&
     return differences;
 }
 
+// One pressured two-request sequence: the first turn publishes the shared capture, the follow-up
+// is admitted while the first turn still runs and forks that shared source. Returns the follow-up's
+// output and the engine's demotion counter, so the caller can assert the Host path was taken.
+struct PressuredRun {
+    std::vector<ninfer::TokenId> tokens;
+    std::vector<ninfer::GeneratedTokenLogprob> logprobs;
+    std::uint64_t d2h              = 0;
+    std::uint32_t reused           = 0;
+    bool first_turn_generated      = false;
+};
+
+PressuredRun run_pressured_sequence(const ninfer::EngineOptions& options) {
+    PressuredRun run;
+    ninfer::Engine engine(options);
+    auto first_handle =
+        engine.submit(engine.prepare(pressured_turn_input(false)), greedy_options(64, true));
+    auto second_handle =
+        engine.submit(engine.prepare(pressured_turn_input(true)), greedy_options(8, true));
+    const auto first  = first_handle.wait();
+    const auto second = second_handle.wait();
+    run.first_turn_generated = !first.generated_token_ids.empty();
+    run.tokens               = second.generated_token_ids;
+    run.logprobs             = second.token_logprobs;
+    run.reused               = second.reused_prompt_tokens;
+    run.d2h                  = engine.runtime_stats().state_d2h_count;
+    return run;
+}
+
+LogprobRun as_logprob_run(const PressuredRun& run) {
+    return LogprobRun{run.tokens, run.logprobs, run.reused};
+}
+
 int exercise_route_matched_control(const char* artifact) {
     const auto& prompt = canonical_prompt();
     const auto options_for = [&](std::uint32_t device_state_slots,
@@ -1402,35 +1458,52 @@ int exercise_route_matched_control(const char* artifact) {
                   << " probability reports, bitwise identical across two runs)\n";
     }
 
-    // 2. The control itself: identical call boundaries, Device-resident checkpoint versus Host.
-    //    The engines are scoped so one resident 125B set exists at a time: two would exceed the
-    //    integrated pool and fail at construction, which is a resource error, not a route result.
-    LogprobRun device_run;
+    // 2. The control itself: the pressured sequence twice, with identical call boundaries and one
+    //    difference - where the shared checkpoint lives. The Device-resident run has spare Device
+    //    state slots, so the capture stays on Device. The Host-forced run has none, so the same
+    //    capture must demote to Host and the follow-up forks it back through the Host-to-Device
+    //    fallback. The canonical 27-token prompt never demotes (measured: d2h 0), which is why the
+    //    pressured fixture drives this half.
+    PressuredRun device_run;
     {
-        ninfer::Engine device_engine(options_for(2, 4));
-        device_run = run_two_request_sequence(device_engine, prompt, kFirstTokens, kSuffixTokens);
+        ninfer::EngineOptions options = pressured_options(artifact, 4);
+        options.token_logprobs        = true;
+        device_run                    = run_pressured_sequence(options);
     }
-    LogprobRun host_run;
-    std::uint64_t host_d2h = 0;
+    PressuredRun host_run;
     {
-        ninfer::Engine host_engine(options_for(0, 4));
-        host_run = run_two_request_sequence(host_engine, prompt, kFirstTokens, kSuffixTokens);
-        host_d2h  = host_engine.runtime_stats().state_d2h_count;
+        ninfer::EngineOptions options = pressured_options(artifact, 0);
+        options.token_logprobs        = true;
+        host_run                      = run_pressured_sequence(options);
     }
-    // The Host path must actually have been taken; a control that did not exercise the state path
-    // under test proves nothing and says so rather than passing.
-    if (host_d2h == 0) {
-        std::cerr << "route-matched control: the Host-forced run never demoted state (d2h 0), so "
-                     "the control did not exercise the path under test\n";
+    // PRECONDITION: the Host-forced run must actually demote. A run that does not demote never
+    // exercised the path under test, and that is a failed precondition, never a pass.
+    if (host_run.d2h == 0) {
+        std::cerr << "route-matched control: the Host-forced pressured run did not demote state "
+                     "(d2h 0), so the control did not exercise the path under test; this is a "
+                     "failed precondition, not a route difference\n";
         return 1;
     }
-    if (device_run.reused_prompt_tokens == 0 || host_run.reused_prompt_tokens == 0) {
-        std::cerr << "route-matched control: a suffix run did not reuse the checkpoint (device "
-                  << device_run.reused_prompt_tokens << ", host " << host_run.reused_prompt_tokens
+    // The follow-up must reuse the shared prefix in both runs, or the state path was not taken.
+    if (device_run.reused == 0 || host_run.reused == 0) {
+        std::cerr << "route-matched control: a follow-up did not reuse the shared prefix (device "
+                  << device_run.reused << ", host " << host_run.reused
                   << "), so the state path was not exercised\n";
         return 1;
     }
-    const int differences = compare_exact_runs("route-matched control", device_run, host_run);
+    if (!device_run.first_turn_generated || !host_run.first_turn_generated) {
+        std::cerr << "route-matched control: a first turn did not generate, so the capture the "
+                     "control depends on was never published\n";
+        return 1;
+    }
+    // Both demotion counters are reported: the Device-resident run must not demote (it has spare
+    // Device slots) and the Host-forced run must, which is what makes the pair a state-path control
+    // rather than two runs of the same configuration.
+    std::cerr << "route-matched control: state paths - device d2h " << device_run.d2h << " (reused "
+              << device_run.reused << " prompt tokens), host d2h " << host_run.d2h << " (reused "
+              << host_run.reused << " prompt tokens)\n";
+    const int differences =
+        compare_exact_runs("route-matched control", as_logprob_run(device_run), as_logprob_run(host_run));
     if (differences != 0) {
         std::cerr << "route-matched control: identical call boundaries with only the state path "
                      "differing produced " << differences << " difference(s)\n";
@@ -1480,11 +1553,27 @@ int exercise_route_matched_control(const char* artifact) {
 // oracle, so the margin report also says whether the prompt discriminates at all.
 constexpr double kOracleLogprobTolerance = 0.12;
 
-int exercise_teacher_forced_tolerance(const char* artifact) {
+// One teacher-forced measurement at one K/V precision. The quantity is the natural-log probability
+// of the same token under the cold prefill route and the decode-built reused route, at every
+// position past the shared prefix.
+struct ToleranceMeasurement {
+    double max_delta          = 0.0;
+    std::size_t compared      = 0;
+    std::size_t flat          = 0;
+    std::size_t diverged      = 0;
+    std::size_t confident_bad = 0;
+    std::size_t positions     = 0;
+    bool ok                   = true;
+};
+
+ToleranceMeasurement measure_teacher_forced(const char* artifact, ninfer::KvCacheStorage storage,
+                                            const char* label) {
+    ToleranceMeasurement out;
     const auto& prompt = canonical_prompt();
     ninfer::EngineOptions options = engine_options(artifact);
     options.token_logprobs        = true;
     options.enable_vision         = false;
+    options.kv_cache              = storage;
     ninfer::Engine engine(options);
     constexpr std::uint32_t kTotalTokens = 12;
     constexpr std::uint32_t kReusedBase  = 4;
@@ -1499,20 +1588,19 @@ int exercise_teacher_forced_tolerance(const char* artifact) {
         engine.generate(engine.prepare_tokens(prompt), greedy_options(kTotalTokens, false));
     if (cold.generated_token_ids.size() != kTotalTokens ||
         cold.token_logprobs.size() != cold.generated_token_ids.size()) {
-        std::cerr << "teacher-forced tolerance: the cold run did not report one probability per "
-                     "generated token\n";
-        return 1;
+        std::cerr << label << ": the cold run did not report one probability per generated token\n";
+        out.ok = false;
+        return out;
     }
     // The continuation is fed the SAME token sequence cold produced, so both routes evaluate the
     // same text.
     if (capture.generated_token_ids !=
         std::vector<ninfer::TokenId>(cold.generated_token_ids.begin(),
                                      cold.generated_token_ids.begin() + kReusedBase)) {
-        std::cerr << "teacher-forced tolerance: the capture run diverged from the cold run inside "
-                     "the shared prefix, so the two routes were not fed the same sequence\n";
-        print_tokens("cold", cold.generated_token_ids);
-        print_tokens("capture", capture.generated_token_ids);
-        return 1;
+        std::cerr << label << ": the capture run diverged from the cold run inside the shared "
+                     "prefix, so the two routes were not fed the same sequence\n";
+        out.ok = false;
+        return out;
     }
     std::vector<ninfer::TokenId> continuation = prompt;
     continuation.insert(continuation.end(), cold.generated_token_ids.begin(),
@@ -1520,21 +1608,19 @@ int exercise_teacher_forced_tolerance(const char* artifact) {
     const auto reused = engine.generate(engine.prepare_tokens(continuation),
                                         greedy_options(kTotalTokens - kReusedBase, true));
     if (reused.reused_prompt_tokens == 0) {
-        std::cerr << "teacher-forced tolerance: the continuation reused nothing, so the two routes "
-                     "are the same route and the comparison proves nothing\n";
-        return 1;
+        std::cerr << label << ": the continuation reused nothing, so the two routes are the same "
+                     "route and the comparison proves nothing\n";
+        out.ok = false;
+        return out;
     }
     if (reused.token_logprobs.size() != reused.generated_token_ids.size()) {
-        std::cerr << "teacher-forced tolerance: the reused run did not report one probability per "
-                     "generated token\n";
-        return 1;
+        std::cerr << label << ": the reused run did not report one probability per generated "
+                     "token\n";
+        out.ok = false;
+        return out;
     }
 
-    double max_delta        = 0.0;
-    std::size_t compared    = 0;
-    std::size_t flat        = 0;
-    std::size_t diverged    = 0;
-    std::size_t confident_bad = 0;
+    out.positions = reused.generated_token_ids.size();
     for (std::size_t step = 0; step < reused.generated_token_ids.size(); ++step) {
         const std::size_t position = kReusedBase + step;
         const auto& cold_report    = cold.token_logprobs[position];
@@ -1547,47 +1633,93 @@ int exercise_teacher_forced_tolerance(const char* artifact) {
             margin = cold_report.top[0].logprob - cold_report.top[1].logprob;
         }
         const bool discriminating = margin > 2.0 * kOracleLogprobTolerance;
-        if (!discriminating) { ++flat; }
+        if (!discriminating) { ++out.flat; }
         if (cold.generated_token_ids[position] != reused.generated_token_ids[step]) {
-            ++diverged;
+            ++out.diverged;
             if (discriminating) {
-                ++confident_bad;
-                std::cerr << "teacher-forced tolerance: a confident choice changed at position "
-                          << position << " (cold " << cold.generated_token_ids[position]
-                          << ", reused " << reused.generated_token_ids[step] << ", margin "
-                          << margin << " nats > " << 2.0 * kOracleLogprobTolerance << ")\n";
+                ++out.confident_bad;
+                std::cerr << label << ": a confident choice changed at position " << position
+                          << " (cold " << cold.generated_token_ids[position] << ", reused "
+                          << reused.generated_token_ids[step] << ", margin " << margin << " nats > "
+                          << 2.0 * kOracleLogprobTolerance << ")\n";
             }
             continue;
         }
         // Same token: the same log-probability must agree within the tolerance.
         const double delta =
             std::abs(static_cast<double>(cold_report.logprob) - reused_report.logprob);
-        max_delta = std::max(max_delta, delta);
-        ++compared;
+        out.max_delta = std::max(out.max_delta, delta);
+        ++out.compared;
         if (delta > kOracleLogprobTolerance) {
-            std::cerr << "teacher-forced tolerance: |delta log p| " << delta << " exceeds "
+            std::cerr << label << ": |delta log p| " << delta << " exceeds "
                       << kOracleLogprobTolerance << " at position " << position << " (cold "
                       << cold_report.logprob << ", reused " << reused_report.logprob << ")\n";
-            return 1;
+            out.ok = false;
         }
     }
-    std::cerr << "teacher-forced tolerance: " << compared << " position(s) compared, max |delta "
-                 "log p| " << max_delta << " nats (tolerance " << kOracleLogprobTolerance
-              << "); " << diverged << " token(s) diverged, " << confident_bad
-              << " at a discriminating position; " << flat << " of "
-              << reused.generated_token_ids.size() << " position(s) have a top-2 margin <= "
-              << 2.0 * kOracleLogprobTolerance << " nats\n";
-    if (confident_bad != 0) { return 1; }
-    if (flat * 2 >= reused.generated_token_ids.size()) {
+    std::cerr << label << ": " << out.compared << " position(s) compared, max |delta log p| "
+              << out.max_delta << " nats (tolerance " << kOracleLogprobTolerance << "); "
+              << out.diverged << " token(s) diverged, " << out.confident_bad
+              << " at a discriminating position; " << out.flat << " of " << out.positions
+              << " position(s) have a top-2 margin <= " << 2.0 * kOracleLogprobTolerance
+              << " nats\n";
+    if (out.confident_bad != 0) { out.ok = false; }
+    if (out.flat * 2 >= out.positions) {
         // Honest power report: most positions cannot discriminate, so this prompt is a weak oracle.
         // The fix is a harder prompt, not a looser tolerance.
-        std::cerr << "teacher-forced tolerance: WARNING the prompt is too flat to be a "
-                     "discriminating oracle (" << flat << " of "
-                  << reused.generated_token_ids.size()
+        std::cerr << label << ": WARNING the prompt is too flat to be a discriminating oracle ("
+                  << out.flat << " of " << out.positions
                   << " positions have a top-2 margin within 2*tolerance); a harder prompt is "
                      "needed, not a looser tolerance\n";
     }
+    return out;
+}
+
+int exercise_teacher_forced_tolerance(const char* artifact) {
+    const ToleranceMeasurement measured =
+        measure_teacher_forced(artifact, ninfer::KvCacheStorage::BFloat16, "teacher-forced tolerance");
+    return measured.ok ? 0 : 1;
+}
+
+// U - precision scaling.
+//
+// QUESTION: does the decode-vs-prefill difference depend on the precision of the stored K/V?
+//
+// Flash-Next supports exactly two K/V profiles - BF16 and FP8 E4M3 with a row-256 scale - so the
+// experiment has two points and both are real precisions rather than a synthetic switch. The
+// measured difference it is asked about is the one from issues ninfer-gb10-53j and ninfer-gb10-e9e:
+// one BF16 ULP in the layer-0 GDN conv/recurrent state, amplified through 36 layers of recurrence to
+// a 21% hidden-state difference and 3407 of 20480 committed-KV bytes at frontier 40.
+//
+// The measurement is the teacher-forced |delta log p| at each precision, because that is the
+// quantity a token decision depends on. The two outcomes mean different things:
+//   - the difference GROWS with the coarser FP8 store: it is precision-limited in the K/V, and the
+//     GDN-state seed is only part of the story;
+//   - the difference is UNCHANGED within the tolerance: the seed enters before the K/V store, which
+//     is what the e9e localisation predicts, and raising K/V precision could not remove it.
+//
+// Neither outcome is a pass or a failure: U reports the two numbers and the ratio. The tolerance
+// still bounds each measurement, because a difference larger than tau at the finer precision would
+// be the same defect T already fails on.
+int report_precision_scaling(const ToleranceMeasurement& bf16, const ToleranceMeasurement& fp8) {
+    if (!bf16.ok || !fp8.ok) { return 1; }
+    const double ratio = bf16.max_delta > 0.0 ? fp8.max_delta / bf16.max_delta : 0.0;
+    std::cerr << "precision scaling: max |delta log p| bf16 " << bf16.max_delta << " nats, fp8 "
+              << fp8.max_delta << " nats, ratio " << ratio << " (fp8/bf16)\n";
+    if (bf16.diverged != 0 || fp8.diverged != 0) {
+        std::cerr << "precision scaling: token divergence at bf16 " << bf16.diverged << ", fp8 "
+                  << fp8.diverged << " (the measurement still bounds the log-probability "
+                     "difference at the positions both routes agree on)\n";
+    }
     return 0;
+}
+
+int exercise_precision_scaling(const char* artifact) {
+    const ToleranceMeasurement bf16 =
+        measure_teacher_forced(artifact, ninfer::KvCacheStorage::BFloat16, "precision scaling bf16");
+    const ToleranceMeasurement fp8 = measure_teacher_forced(
+        artifact, ninfer::KvCacheStorage::Fp8E4M3Row256, "precision scaling fp8");
+    return report_precision_scaling(bf16, fp8);
 }
 
 int main() {
@@ -1610,8 +1742,14 @@ int main() {
             // Both instruments run and both report even when one fails: a focused oracle run exists
             // to produce the two numbers, and stopping at the first failure would hide the second.
             const int control = exercise_route_matched_control(artifact);
-            const int tolerance = exercise_teacher_forced_tolerance(artifact);
-            if (control != 0 || tolerance != 0) { return 1; }
+            // T's BF16 point is U's BF16 point: one measurement serves both, so a focused pass
+            // loads the 125B model once per precision rather than once per instrument.
+            const ToleranceMeasurement bf16 = measure_teacher_forced(
+                artifact, ninfer::KvCacheStorage::BFloat16, "teacher-forced tolerance");
+            const ToleranceMeasurement fp8 = measure_teacher_forced(
+                artifact, ninfer::KvCacheStorage::Fp8E4M3Row256, "precision scaling fp8");
+            const int precision = report_precision_scaling(bf16, fp8);
+            if (control != 0 || !bf16.ok || precision != 0) { return 1; }
             std::cout << "OK Qwen3.8 Flash Next oracle instruments\n";
             return 0;
         }
@@ -1673,6 +1811,7 @@ int main() {
         }
         if (exercise_route_matched_control(artifact) != 0) { return 1; }
         if (exercise_teacher_forced_tolerance(artifact) != 0) { return 1; }
+        if (exercise_precision_scaling(artifact) != 0) { return 1; }
         if (exercise_ordinary_greedy(artifact, canonical_output()) != 0) { return 1; }
         // The serving-shape section needs a 72 GB resident set at a 73728-token context, which this
         // box cannot hold beside the weights. It is skipped deliberately, not by accident, when the

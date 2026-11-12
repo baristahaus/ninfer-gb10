@@ -72,9 +72,12 @@ Both real artifacts are pinned, and both pins were verified against the local co
 
 - `committed:` — the file is in the repository and always present. Its digest is checked on every
   host by `ninfer_test_artifacts_manifest_test`.
-- an absolute path — the maintainer's source of truth for that artifact. The cache is populated
-  from it with `tools/fetch_test_artifacts.py --fetch NAME --link` (a hard link for the 20 GiB and
-  118 GiB entries), then verified with `--check`.
+- an absolute path — the maintainer's source of truth for that artifact, and a distribution location,
+  not a runtime path. The cache is populated from it with
+  `tools/fetch_test_artifacts.py --fetch NAME`, which **copies** it, then verified with `--check`.
+  The copy is the documented route because the engine refuses to read an artifact on a network
+  filesystem; `--link` is an optimization for a source that already sits on the cache's own local
+  filesystem (see [storage requirements](maintainer/test-storage.md)).
 - `not pinned` — no source path and no digest are recorded yet. The tests still skip cleanly; what is
   missing is the pin, not the test.
 

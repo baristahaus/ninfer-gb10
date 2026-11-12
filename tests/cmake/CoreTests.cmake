@@ -141,6 +141,13 @@ if(Python3_EXECUTABLE)
     COMMAND ${Python3_EXECUTABLE} -B ${PROJECT_SOURCE_DIR}/tools/check_docs.py --self-test)
   set_tests_properties(ninfer_docs_guard_self_test PROPERTIES LABELS "host")
 
+  # The artifact-fetch tool's own teeth: --link must not leave a cache entry on a filesystem the
+  # engine's direct-I/O loader refuses, and --check must report one. It runs on temporary trees and
+  # needs no artifact.
+  add_test(NAME ninfer_fetch_artifacts_self_test
+    COMMAND ${Python3_EXECUTABLE} -B ${PROJECT_SOURCE_DIR}/tools/fetch_test_artifacts.py --self-test)
+  set_tests_properties(ninfer_fetch_artifacts_self_test PROPERTIES LABELS "host")
+
   # The repository-weight guard: a tracked file above the per-file limit without an allowlist entry,
   # any tracked profiler trace, or a tracked tree above the total ceiling fails the suite. It exists
   # because a large blob that reaches history cannot be removed without rewriting every commit, so

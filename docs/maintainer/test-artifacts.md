@@ -46,6 +46,7 @@ tools/fetch_test_artifacts.py --all            # every entry
 tools/fetch_test_artifacts.py --pin NAME --from /path/to/artifact
                                                # copy it in and record bytes + sha256 in the manifest
 tools/fetch_test_artifacts.py --print-env      # export lines for every cached entry
+tools/fetch_test_artifacts.py --self-test      # exercise --link and --check on temporary trees
 ```
 
 The cache directory is `--cache`, else `NINFER_TEST_ARTIFACT_CACHE`, else the manifest default
@@ -68,13 +69,26 @@ configure time, or point `NINFER_TEST_ARTIFACT_CACHE` at a directory and re-run 
 
 ```bash
 tools/fetch_test_artifacts.py --list                    # see what is missing
-tools/fetch_test_artifacts.py --fetch qwen3_8_27b_groupwise --link
+tools/fetch_test_artifacts.py --fetch qwen3_8_27b_groupwise
 cmake --preset rtx5090-dev
 cmake --build build/rtx5090-dev -j
 ctest --preset rtx5090-dev -L real
 ```
 
-`--link` hard-links a local source instead of copying it, which matters for a 70 GiB artifact.
+**The route for a large artifact is a real copy.** The engine refuses to read an artifact on a
+network filesystem: its direct-I/O loader can wait uninterruptibly inside the kernel there
+(`src/artifact/reader.cpp`), so the file must be on local storage before a test loads it. Copying
+118 GiB costs disk and time; a cache entry the loader refuses costs the whole run.
+
+`--link` is an optimization for the one case where it is safe: the source and the cache are on the
+same device and that device's filesystem is one the loader accepts. A hard link shares the source's
+inode, so a link from NFS leaves the cache entry on NFS. When the source is on a refused filesystem
+or on another device, the tool says so and copies instead; when the **cache** is on a refused
+filesystem it refuses the fetch, because a copy would land there too.
+
+`--check` verifies a cached entry against the pinned `bytes` and `sha256`, and reports an entry the
+loader cannot open as `UNUSABLE filesystem` rather than verifying a digest for a file that will
+never load.
 
 ## What a fixture cannot do
 

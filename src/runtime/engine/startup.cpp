@@ -128,15 +128,14 @@ constexpr WidthTwoOption kWidthTwoOptions[] = {
      [](const EngineOptions& o) { return o.speculative.backend == SpeculativeBackend::Mtp; },
      false, "",
      "width 1 is validated -- arm 1 reproduces tests/fixtures/tp2_accept/golden_mtp.ids on trueno -- "
-     "but width 2 now refuses in the GDN replay fold, after the binding (4e1a9074), the five Q8 "
-     "projection geometries (1837c230) and the two Q8 add geometries were all fixed. Measured on "
-     "hephaestus, arm 2, nvfp4.v3: 'gdn_replay_fold: unsupported record geometry layers=48 "
-     "qk_heads=8 value_heads=24 conv_channels=5120'. select_fold_geometry admits four record "
-     "geometries -- (48,16,48,10240), (36,16,48,10240), (30,16,32,8192) and (36,8,24,5120) -- so it "
-     "has the width-1 48-layer form and the width-2 36-layer form but not their cross, which is "
-     "exactly what a 48-GDN-layer 27B presents at width 2 (8 qk heads, 24 value heads, 5120 conv "
-     "channels). That needs a fifth FoldGeometryId with its own kernel instantiation, not a table "
-     "entry"},
+     "but width 2 now refuses in split_bf16_features, the fifth geometry gap: with the binding "
+     "(4e1a9074), the five Q8 projection geometries (1837c230), the two Q8 add geometries and the "
+     "fifth GDN fold geometry all fixed, the round throws 'split_bf16_features: invalid shape for "
+     "source' (hephaestus, arm 2, nvfp4.v3). src/ops/indexing/features.cu:115 asserts the WIDTH-1 "
+     "packed attention geometry as literals -- source 14336 rows, first 256x24, second 256x4 -- so at "
+     "width 2, where the Rows shard presents 7168 rows and 256x12 / 256x2, it refuses. Unlike the "
+     "four registries this is not a table: the op's own validation hard-codes one width's shape, and "
+     "the fix is to derive the geometry from the operands the way concat_bf16_features already does"},
     {"--spec dflash",
      [](const EngineOptions& o) { return o.speculative.backend == SpeculativeBackend::DFlash; },
      false, "",

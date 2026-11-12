@@ -128,15 +128,18 @@ constexpr WidthTwoOption kWidthTwoOptions[] = {
      [](const EngineOptions& o) { return o.speculative.backend == SpeculativeBackend::Mtp; },
      false, "",
      "width 1 is validated -- arm 1 reproduces tests/fixtures/tp2_accept/golden_mtp.ids on trueno -- "
-     "but width 2 refuses in a SIXTH geometry gap. With the binding (4e1a9074), the five Q8 "
-     "projection geometries (1837c230), the two Q8 add geometries, the fifth GDN fold geometry and "
-     "the split_bf16_features derivation all fixed, the round throws 'q8 linear: unsupported shape "
-     "N17408K5120 T1' (hephaestus, arm 2, nvfp4.v3). That is the width-2 half of the fused "
-     "34816x5120 mlp gate|up parent that 4e1a9074 introduced: the Rows shard halves 34816 to 17408, "
-     "and the Q8 projection table carries 34816 (width 1) and 8704 (the role split) but not 17408. "
-     "Six gaps in a row now, five of them a registry missing one entry and one an op validating a "
-     "literal width-1 shape: the honest answer for this lane is that MTP at width 2 needs the "
-     "preflight plus the gaps it names, not a seventh one-off"},
+     "but width 2 now refuses in the MTP proposal path, which is not a shape registry: with seven "
+     "geometry gaps fixed (the five Q8 projection geometries, the two Q8 add geometries, the GDN fold "
+     "geometry, the split_bf16_features derivation and Q8N17408K5120), the round throws 'argmax: "
+     "valid_rows must be in [1, logits.ne[0]]' (hephaestus, arm 2, nvfp4.v3). "
+     "src/models/qwen3_5/execution/mtp.cpp:321 already knows the rank's logits are "
+     "output_head.weight.n rows -- 124160 at width 2 -- and its own comment says the rank cannot "
+     "sample its own rows as global ids until they are placed at their vocabulary offset, but it then "
+     "calls argmax with the full public vocabulary (248320) as valid_rows. The fix is the logits "
+     "gather in the MTP proposal path, the all_gather_logits the plain lane already uses (task-12), "
+     "which is a models change rather than an ops registration. This is where the chain ends: MTP at "
+     "width 2 needs the preflight plus the gaps it names, and this one is a missing gather rather "
+     "than a missing entry"},
     {"--spec dflash",
      [](const EngineOptions& o) { return o.speculative.backend == SpeculativeBackend::DFlash; },
      false, "",

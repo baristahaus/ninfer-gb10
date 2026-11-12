@@ -18,21 +18,7 @@
 #include <tuple>
 #include <utility>
 
-
-
 namespace ninfer::artifact {
-
-// The artifact reader opens with O_DIRECT by default: it avoids a page-cache copy and keeps read
-// latency predictable on local storage. On a network filesystem that does not service direct reads
-// promptly the same open turns every read into an uninterruptible stall, which looks like an engine
-// hang and is indistinguishable from one at the call site. So the mode is a decision with an escape:
-// NINFER_ARTIFACT_BUFFERED_IO=1 forces buffered reads, which cost a page-cache copy and always make
-// progress. Set it when the artifact lives on NFS.
-inline ninfer::io::ReadMode artifact_read_mode() {
-    const char* buffered = std::getenv("NINFER_ARTIFACT_BUFFERED_IO");
-    return (buffered != nullptr && *buffered != '\0') ? ninfer::io::ReadMode::Buffered
-                                                       : ninfer::io::ReadMode::Direct;
-}
 namespace {
 
 constexpr std::size_t kReadBlockBytes   = 64ULL * 1024 * 1024;
@@ -657,7 +643,7 @@ MaterializedArtifact materialize(const Reader& reader, MaterializationPlan&& pla
     for (const auto& span : spans) {
         if (!files[span.file]) {
             files[span.file] = std::make_unique<io::ReadOnlyFile>(
-                reader.open_file(span.file, artifact_read_mode()));
+                reader.open_file(span.file, io::ReadMode::Direct));
         }
         const auto bytes = align_up(span.end - span.begin, kPayloadAlignment, "direct range bytes");
         if (!span.host_destination)

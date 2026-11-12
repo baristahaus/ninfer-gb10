@@ -9,9 +9,10 @@
 #
 # It syncs this checkout to the lane host, builds the host's release tree there, and runs the arm
 # with the three NINFER_TP2_* variables and the artifact. It refuses before doing anything if the
-# host is unreachable, if the artifact is not visible on the host, or if the host has no configured
-# build tree -- the last is deliberate: this script does not configure a build, because the lane
-# host's cache and toolchain are its own.
+# host is unreachable, if the artifact is not visible on the host, if the artifact is on a network
+# filesystem (the direct-I/O loader stalls there), or if the host has no configured build tree --
+# the last is deliberate: this script does not configure a build, because the lane host's cache and
+# toolchain are its own.
 #
 # Usage:
 #   tools/lane/run-tp2-arm.sh --arm 1|2 [--host HOST] [--artifact PATH]
@@ -22,7 +23,10 @@ set -euo pipefail
 
 ARM=2
 HOST=172.30.30.15
-ARTIFACT=/nfs/ninfer-gb10/qwen3_8_27b_v3_plain/qwen3_8_27b_v3-plain.ninfer
+# The lane reads the artifact from LOCAL storage on the lane host. The archive copy under
+# /nfs/ninfer-gb10 is the fetch source: copy it across first and verify the size. A network
+# filesystem is a distribution medium, not a runtime one (docs/maintainer/test-storage.md).
+ARTIFACT=/home/barista/artifacts/qwen3_8_27b_v3_plain/qwen3_8_27b_v3-plain.ninfer
 SRC=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 DST=/home/barista/src/wt-tp2
 BUILD=build/rtx5090-release
@@ -79,9 +83,19 @@ fi
 say "   host reachable"
 
 if ! remote test -f "$ARTIFACT" >/dev/null 2>&1; then
-    die "artifact $ARTIFACT is not a file on $HOST. The lane host must see the same NFS path."
+    die "artifact $ARTIFACT is not a file on $HOST. Copy it from the archive to local storage on the lane host first; see docs/maintainer/test-storage.md."
 fi
 say "   artifact present on the host"
+
+# A network filesystem is a distribution medium, not a runtime one. The artifact loader reads with
+# O_DIRECT through io_uring, and on NFS that stalls in nfs_direct_wait in uninterruptible state D -
+# indistinguishable from a deadlock, and not recoverable by SIGKILL. Refuse rather than stall.
+FSTYPE=$(remote stat -f -c %T "$ARTIFACT" 2>/dev/null || true)
+case "$FSTYPE" in
+    nfs*|cifs*|smb*|fuse*|9p*)
+        die "artifact $ARTIFACT is on a $FSTYPE filesystem on $HOST. Copy it to local storage first; a network filesystem stalls the direct-I/O loader. See docs/maintainer/test-storage.md." ;;
+esac
+say "   artifact on local storage${FSTYPE:+ ($FSTYPE)}"
 
 if ! remote test -d "$DST/$BUILD" >/dev/null 2>&1; then
     die "$HOST:$DST/$BUILD is not a configured build tree. Configure it on the host first; this script does not configure builds."

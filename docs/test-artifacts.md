@@ -38,8 +38,8 @@ a green run.
 | Artifact | Environment variable | Cache file | Size | Produced by | Consuming tests | Absent |
 |---|---|---|---|---|---|---|
 | `exl3_codec_ground_truth` | `NINFER_EXL3_FIXTURE` | `exllamav3-1.6.1.json` | 0.0 GiB | committed: `tests/fixtures/exl3/exllamav3-1.6.1.json` | 1 | skip (77) |
-| `qwen3_8_27b_v3_plain` | `NINFER_TEST_ARTIFACT` | `qwen3_8_27b_v3-plain.ninfer` | 20.0 GiB | `/nfs/ninfer-gb10/qwen3_8_27b_v3_plain/qwen3_8_27b_v3-plain.ninfer` (default for a bare `NINFER_TEST_ARTIFACT`) | 16 | skip (77) |
-| `qwen3_8_flash_next_125b_a6b_fp8_mtp` | `NINFER_QWEN38_FLASH_NEXT_WEIGHTS` | `qwen3_8_flash_next_125b_a6b_nvfp4_fp8_mtp.ninfer` | 118.2 GiB | `/nfs/ninfer-gb10/qwen3_8_flash_next_125b_a6b_fp8_mtp/qwen3_8_flash_next_125b_a6b_nvfp4_fp8_mtp.ninfer` (default for a bare `NINFER_TEST_ARTIFACT`) | 4 | skip (77) |
+| `qwen3_8_27b_v3_plain` | `NINFER_TEST_ARTIFACT` | `qwen3_8_27b_v3-plain.ninfer` | 20.0 GiB | `/nfs/ninfer-gb10/qwen3_8_27b_v3_plain/qwen3_8_27b_v3-plain.ninfer` (the **fetch source**, not a runtime path — see [storage requirements](maintainer/test-storage.md)) | 16 | skip (77) |
+| `qwen3_8_flash_next_125b_a6b_fp8_mtp` | `NINFER_QWEN38_FLASH_NEXT_WEIGHTS` | `qwen3_8_flash_next_125b_a6b_nvfp4_fp8_mtp.ninfer` | 118.2 GiB | `/nfs/ninfer-gb10/qwen3_8_flash_next_125b_a6b_fp8_mtp/qwen3_8_flash_next_125b_a6b_nvfp4_fp8_mtp.ninfer` (the **fetch source**, not a runtime path — see [storage requirements](maintainer/test-storage.md)) | 4 | skip (77) |
 | `qwen3_8_flash_next_125b_a6b_dflash2` | `NINFER_QWEN38_FLASH_NEXT_DFLASH2_WEIGHTS` | `qwen3_8_flash_next_125b_a6b_dflash2.ninfer` | not pinned | not pinned | 1 | skip (77) |
 | `qwen3_6_35b_a3b` | `NINFER_TEST_ARTIFACT` | `qwen3_6_35b_a3b.ninfer` | not pinned | not pinned | 3 | skip (77) |
 | `qwen3_8_27b_dflash2` | `NINFER_TEST_ARTIFACT` | `qwen3_8_27b_dflash2.ninfer` | not pinned | not pinned | 2 | skip (77) |

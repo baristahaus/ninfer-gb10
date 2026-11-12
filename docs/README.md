@@ -37,6 +37,7 @@ Flash-Next 125B-A6B NVFP4 is available through [local conversion or v2 upgrade](
 - [Tools](../tools/README.md)
 - [Two-GPU lane](lane.md)
 - [Test-artifact inventory](test-artifacts.md)
+- [Storage requirements for validation](maintainer/test-storage.md) — local storage only; NFS is distribution and archive
 - [Capability evaluation](../eval/README.md)
 
 ## Project records

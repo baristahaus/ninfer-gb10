@@ -32,13 +32,24 @@ acceptance test states that limit rather than hiding it.
 4. **Compare the two lists.** They must agree token for token, in order and in length. That is the
    acceptance criterion; a plausible-looking mismatch is still a failure.
 
-The artifact is the v3 27B:
+The artifact is the v3 27B, read from **local storage on each host**:
 
 ```
-/nfs/ninfer-gb10/qwen3_8_27b_v3_plain/qwen3_8_27b_v3-plain.ninfer
+/home/barista/artifacts/qwen3_8_27b_v3_plain/qwen3_8_27b_v3-plain.ninfer
 ```
 
-Both hosts must see the same NFS path.
+The archive copy under `/nfs/ninfer-gb10/qwen3_8_27b_v3_plain/` is the **fetch source**, not a runtime
+path. Copy it to local storage first and verify the size; a network filesystem stalls the direct-I/O
+artifact loader in `nfs_direct_wait` in uninterruptible state `D`, which is indistinguishable from a
+deadlock. The policy and the measurements are in
+[storage requirements for validation](maintainer/test-storage.md).
+
+Measured on the lane host: `dd bs=4M` from the archive to local NVMe copied 21,492,938,224 bytes in
+97.4 s at 221 MB/s, and the destination size matches the source exactly. Each host keeps its own
+copy; they no longer need to share one path.
+
+The script refuses an artifact that is not a local file, and refuses one on an `nfs`, `cifs`, `smb`,
+`fuse` or `9p` filesystem rather than starting a run that will stall.
 
 ## The script
 

@@ -40,6 +40,8 @@ using Q8N248320K5120 = Q8LinearGeometry<248320, 5120>;
 using Q8N7168K5120   = Q8LinearGeometry<7168, 5120>;
 using Q8N8704K5120   = Q8LinearGeometry<8704, 5120>;
 using Q8N124160K5120 = Q8LinearGeometry<124160, 5120>;
+// The fused mlp gate|up parent's Rows-shard half at width 2: 34816 halved to 17408.
+using Q8N17408K5120  = Q8LinearGeometry<17408, 5120>;
 using Q8N5120K3072   = Q8LinearGeometry<5120, 3072>;
 using Q8N5120K8704   = Q8LinearGeometry<5120, 8704>;
 
@@ -76,6 +78,7 @@ using Q8N5120K8704   = Q8LinearGeometry<5120, 8704>;
 [[nodiscard]] Q8Launch select_q8_n7168_k5120(std::int32_t tokens);
 [[nodiscard]] Q8Launch select_q8_n8704_k5120(std::int32_t tokens);
 [[nodiscard]] Q8Launch select_q8_n124160_k5120(std::int32_t tokens);
+[[nodiscard]] Q8Launch select_q8_n17408_k5120(std::int32_t tokens);
 [[nodiscard]] Q8Launch select_q8_n5120_k3072(std::int32_t tokens);
 [[nodiscard]] Q8Launch select_q8_n5120_k8704(std::int32_t tokens);
 

@@ -39,7 +39,9 @@ const std::array kGeometries{
     // which is what the lane presents: draft_tokens 3 makes the verify block four tokens, so the
     // hot band is T<=4, and prefill of the MTP block re-enters the same ladder from the top.
     Geometry{7168, 5120, 401U},   Geometry{8704, 5120, 409U}, Geometry{124160, 5120, 419U},
-    Geometry{5120, 3072, 431U},   Geometry{5120, 8704, 433U}};
+    Geometry{5120, 3072, 431U},   Geometry{5120, 8704, 433U},
+    // The fused mlp gate|up parent's Rows-shard half at width 2: 34816 halved to 17408.
+    Geometry{17408, 5120, 439U}};
 
 int q8_workspace_domain(std::int32_t n, std::int32_t k) {
     int failures = 0;

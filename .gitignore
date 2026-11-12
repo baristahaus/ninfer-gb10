@@ -84,3 +84,6 @@ Testing/
 
 # Beads / Dolt files (added by bd init)
 *.db
+
+# Per-position scoring diagnostics written by the score_w2 test; scratch, never committed.
+.score-data/

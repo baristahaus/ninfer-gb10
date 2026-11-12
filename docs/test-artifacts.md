@@ -7,6 +7,27 @@ the manifest, the resolution order, the skip rule — is described in
 each test needs, where it is resolved from, how large it is, where it comes from, and what happens
 when it is absent.
 
+## Running the suite on a host without a GPU
+
+The head node has no GPU, so `libcuda.so.1` is not installed and every test binary that links against
+it fails to start:
+
+```
+./tests/ninfer_sampling_defaults_test: error while loading shared libraries: libcuda.so.1: cannot open
+shared object file: No such file or directory
+```
+
+The build provides a stub in the build directory's `cuda-stub` folder, and the link step finds it,
+but the runtime loader does not. Put it on the loader path:
+
+```sh
+LD_LIBRARY_PATH=$PWD/<build-dir>/cuda-stub ctest -j 4 --test-dir <build-dir>
+```
+
+Without this, roughly a hundred tests fail in 0.00 s each and the report looks like a broken build
+rather than a missing driver. The failure is environmental, not a defect: the same suite is 235/235
+with the stub on the path.
+
 **A green test run is not a run where every test ran.** On a host without the cache, the
 real-artifact tests skip with exit 77 and CTest reports them as skipped; the configure step and
 `tools/check_test_artifacts.py` both count how many. The count is the thing to read before believing

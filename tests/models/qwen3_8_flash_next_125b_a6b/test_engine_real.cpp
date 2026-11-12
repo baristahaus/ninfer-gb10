@@ -351,7 +351,14 @@ ninfer::EngineOptions engine_options(const char* artifact) {
     options.artifact_path                    = artifact;
     options.max_context                      = 512;
     options.kv_capacity                      = ninfer::KvCapacityPolicy::explicit_capacity(1024);
-    options.prefill_chunk                    = 256;
+    // The chunk size decides how many prefill calls a prompt takes, and the GDN recurrence is
+    // chunked differently in each. Overriding it is what makes the chunk-invariance comparison
+    // runnable: two runs of the same prompt, one in a single prefill call and one split across
+    // several, with the KV dump compared layer by layer.
+    options.prefill_chunk = 256;
+    if (const char* chunk = std::getenv("NINFER_TEST_PREFILL_CHUNK"); chunk != nullptr && *chunk != '\0') {
+        options.prefill_chunk = static_cast<std::uint32_t>(std::atoi(chunk));
+    }
     options.speculative.backend              = ninfer::SpeculativeBackend::Mtp;
     options.speculative.draft_tokens         = 3;
     options.speculative.proposal_head        = ninfer::ProposalHead::Full;

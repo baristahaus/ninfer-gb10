@@ -275,6 +275,15 @@ std::vector<ninfer::TokenId> sequence_for(ninfer::Engine& engine, const std::str
     const std::string second =
         "A copper kettle whistles on the stove while winter rain drums against the window; the "
         "orchard gate swings, and a grey heron waits beside the frozen pond.\n";
+    const std::string third =
+        "Bricklayers repaired the viaduct in March, hauling limestone by narrowboat; engineers "
+        "measured each arch with brass calipers and recorded the sag in a leather ledger.\n";
+    const std::string fourth =
+        "She translated the pharmacist's instructions from Portuguese, folded the prescription "
+        "twice, and slipped it beneath the porcelain teapot on the kitchen dresser.\n";
+    const std::string fifth =
+        "Quantum tunnelling puzzles undergraduates, yet the mathematics is elementary: a wave "
+        "decays exponentially through a barrier, and the transmitted amplitude falls with width.\n";
     std::vector<ninfer::TokenId> tokens;
     if (kind == "periodic") {
         std::string text;
@@ -285,18 +294,28 @@ std::vector<ninfer::TokenId> sequence_for(ninfer::Engine& engine, const std::str
         tokens.resize(kTokenCount);
         return tokens;
     }
-    // Distinct: walk a longer text and keep only ids not seen yet.
-    std::string text = first + second + first + second;
+    // Distinct: walk a long, varied text and keep only ids not seen yet. The pool is the whole
+    // varied corpus, not two repeated paragraphs: two English paragraphs do not contain 256 distinct
+    // ids, because common words recur and every repeat is dropped.
+    std::string text;
+    for (int pass = 0; pass < 3; ++pass) text += first + second + third + fourth + fifth;
     const auto all   = engine.tokenize_text(text);
     std::vector<bool> seen(250000, false);
     for (const auto token : all) {
         if (tokens.size() == kTokenCount) break;
+        if (token < 0 || static_cast<std::size_t>(token) >= seen.size()) continue;
         if (seen[token]) continue;
         seen[token] = true;
         tokens.push_back(token);
     }
-    if (tokens.size() != kTokenCount) {
-        throw std::runtime_error("the distinct sequence could not be built");
+    // The measurement needs targets that never recur, not a particular count. A shorter distinct
+    // sequence is just as decisive; a pool too small to reach the floor is refused rather than
+    // silently shortened into a weaker measurement.
+    constexpr std::size_t kMinimumDistinct = 96;
+    if (tokens.size() < kMinimumDistinct) {
+        throw std::runtime_error("the distinct sequence has only " + std::to_string(tokens.size()) +
+                                 " unique ids; at least " + std::to_string(kMinimumDistinct) +
+                                 " are needed");
     }
     if (kind == "control") {
         // One target at two deliberately different offsets: the control for the confound.
@@ -388,10 +407,11 @@ int main() {
         reference.first_target = 1;
         reference.tokens       = tokens;
         reference.logprobs     = engine->score_tokens(tokens, 1);
-        reference.altered_index = kAlteredIndex;
+        reference.altered_index = tokens.size() / 2;
         auto altered            = tokens;
-        reference.altered_token = static_cast<ninfer::TokenId>((tokens[kAlteredIndex] + 977) % 150000);
-        altered[kAlteredIndex]  = reference.altered_token;
+        reference.altered_token =
+            static_cast<ninfer::TokenId>((tokens[reference.altered_index] + 977) % 150000);
+        altered[reference.altered_index] = reference.altered_token;
         reference.altered_logprobs = engine->score_tokens(altered, 1);
         if (!write_reference(fixture, reference)) {
             std::cerr << "could not write the reference to " << fixture << '\n';
@@ -487,12 +507,13 @@ int main() {
     // The property adjudication needs: both routes must find the real next token clearly better than
     // a deliberately altered one, and agree on how much worse.
     auto altered = tokens;
-    altered[kAlteredIndex] = reference.altered_token;
+    altered[reference.altered_index] = reference.altered_token;
     const std::vector<float> sharded_altered = engine->score_tokens(altered, 1);
-    const double reference_margin = static_cast<double>(reference.logprobs[kAlteredIndex]) -
-                                    reference.altered_logprobs[kAlteredIndex];
-    const double sharded_margin =
-        static_cast<double>(sharded[kAlteredIndex]) - sharded_altered[kAlteredIndex];
+    const double reference_margin =
+        static_cast<double>(reference.logprobs[reference.altered_index]) -
+        reference.altered_logprobs[reference.altered_index];
+    const double sharded_margin = static_cast<double>(sharded[reference.altered_index]) -
+                                  sharded_altered[reference.altered_index];
     std::cout << "margin reference=" << reference_margin << " sharded=" << sharded_margin << '\n';
     if (reference_margin <= 0.0 || sharded_margin <= 0.0) {
         fail("an unambiguous next token was not preferred over the altered one");

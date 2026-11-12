@@ -1286,7 +1286,21 @@ int main() {
     configure_prefix_state_dump(canonical_prompt(), expected_prefix);
     const CrossPathFixture fixture = cross_path_fixture(recipe);
     try {
-        for (const auto head : {ninfer::ProposalHead::Full, ninfer::ProposalHead::Optimized}) {
+        // The battery normally runs both proposal heads. A dump comparison needs ONE configuration
+        // per process, because the dump metadata records the frontier, page and phase but not which
+        // engine produced it - so two dumps that look identical can come from runs that are not
+        // comparable, and a pair that IS comparable can be silently contaminated by the other head.
+        // NINFER_TEST_PROPOSAL_HEAD=full|optimized runs a single configuration so a dump directory
+        // belongs to exactly one engine.
+        std::vector<ninfer::ProposalHead> heads{ninfer::ProposalHead::Full,
+                                                ninfer::ProposalHead::Optimized};
+        if (const char* only = std::getenv("NINFER_TEST_PROPOSAL_HEAD");
+            only != nullptr && *only != '\0') {
+            heads.clear();
+            heads.push_back(std::string_view(only) == "optimized" ? ninfer::ProposalHead::Optimized
+                                                                  : ninfer::ProposalHead::Full);
+        }
+        for (const auto head : heads) {
             auto options = engine_options(artifact);
             options.speculative.proposal_head = head;
             ninfer::Engine engine(options);

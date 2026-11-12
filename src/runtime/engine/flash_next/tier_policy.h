@@ -9,7 +9,13 @@
 #include <array>
 #include <list>
 #include <cmath>
+#include <atomic>
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
+#include <functional>
 #include <mutex>
+#include <thread>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -34,13 +40,38 @@ public:
     // more than the threshold (cosine distance): the request is atypical for the class
     // and the caller should also store it under a fingerprint-derived key.
     bool observe(std::string_view session, int layer, std::span<const std::uint32_t> counts) {
-        const std::lock_guard lock{mutex_};
+        auto lock = acquire();
         return observe_unlocked(session, layer, counts, 0.0);
+    }
+
+    // Acquire with a bounded wait so a deadlock reports the owning thread instead of hanging with
+    // no evidence. The bounded attempt never changes behaviour: on timeout the same thread blocks
+    // exactly as before, it has only said so first.
+    std::unique_lock<std::timed_mutex> acquire() const {
+        std::unique_lock<std::timed_mutex> lock{mutex_, std::defer_lock};
+        if (lock.try_lock_for(std::chrono::milliseconds(2000))) {
+            owner_tid_.store(self_tid(), std::memory_order_relaxed);
+            return lock;
+        }
+        const auto holder = owner_tid_.load(std::memory_order_relaxed);
+        if (std::getenv("NINFER_TIER_POLICY_LOCK_TRACE") != nullptr) {
+            std::fprintf(stderr,
+                         "tier lock: blocked self=%llu holder=%llu (waited 2000 ms; blocking now)\n",
+                         static_cast<unsigned long long>(self_tid()),
+                         static_cast<unsigned long long>(holder));
+        }
+        lock.lock();
+        owner_tid_.store(self_tid(), std::memory_order_relaxed);
+        return lock;
+    }
+
+    static std::uint64_t self_tid() {
+        return static_cast<std::uint64_t>(std::hash<std::thread::id>{}(std::this_thread::get_id()));
     }
 
     bool observe(std::string_view session, int layer, std::span<const std::uint32_t> counts,
                  double split_threshold) {
-        const std::lock_guard lock{mutex_};
+        auto lock = acquire();
         return observe_unlocked(session, layer, counts, split_threshold);
     }
 
@@ -282,7 +313,11 @@ private:
     // (tier_observe_request). Every public method takes this mutex - an unsynchronized
     // observe during a prefetch torn an unordered_map rehash and hung the submit thread
     // in _Hashtable::find (the 5090 handover's M1).
-    mutable std::mutex mutex_;
+    // Timed so a blocked acquisition can name its owner (see observe). A plain std::mutex would
+    // satisfy the same call sites, but a deadlock in this policy wedged the whole engine with no
+    // diagnostic, and a hang that cannot say who holds the lock costs more than this type does.
+    mutable std::timed_mutex mutex_;
+    mutable std::atomic<std::uint64_t> owner_tid_{0};
 
     int layers_ = 0;
     int experts_ = 0;

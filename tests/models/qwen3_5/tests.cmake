@@ -28,6 +28,7 @@ ninfer_add_test(ninfer_qwen3_5_tp2_accept_real_test NEEDS_SOURCE_DIR
 target_link_options(ninfer_qwen3_5_tp2_accept_real_test PRIVATE
   -Wl,--wrap=cudaLaunchKernel -Wl,--wrap=cudaMemcpyAsync -Wl,--wrap=cudaMemsetAsync
   -Wl,--wrap=cudaGraphLaunch -Wl,--wrap=cudaStreamWaitEvent
+  -Wl,--wrap=cudaMemcpy2DAsync -Wl,--wrap=cudaMemcpy3DAsync
   # The per-site tags live in the model code inside the shared library; a weak symbol referenced
   # from there binds to this executable only if the executable exports it. --export-dynamic is on
   # the TEST binary alone; the shipped library's link line is not touched.

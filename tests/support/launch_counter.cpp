@@ -42,7 +42,9 @@ struct Counts {
     std::uint64_t memset = 0;
     std::uint64_t graph  = 0;
     std::uint64_t wait   = 0;
-    std::uint64_t total() const { return launch + memcpy + memset + graph + wait; }
+    std::uint64_t copy2d = 0;
+    std::uint64_t copy3d = 0;
+    std::uint64_t total() const { return launch + memcpy + memset + graph + wait + copy2d + copy3d; }
 };
 
 Counts g_counts[2];
@@ -73,6 +75,9 @@ cudaError_t __real_cudaMemcpyAsync(void*, const void*, std::size_t, cudaMemcpyKi
 cudaError_t __real_cudaMemsetAsync(void*, int, std::size_t, cudaStream_t);
 cudaError_t __real_cudaGraphLaunch(cudaGraphExec_t, cudaStream_t);
 cudaError_t __real_cudaStreamWaitEvent(cudaStream_t, cudaEvent_t, unsigned int);
+cudaError_t __real_cudaMemcpy2DAsync(void*, std::size_t, const void*, std::size_t, std::size_t,
+                                     std::size_t, cudaMemcpyKind, cudaStream_t);
+cudaError_t __real_cudaMemcpy3DAsync(const cudaMemcpy3DParms*, cudaStream_t);
 
 cudaError_t __wrap_cudaLaunchKernel(const void* func, dim3 grid, dim3 block, void** args,
                                     std::size_t shared, cudaStream_t stream) {
@@ -100,6 +105,22 @@ cudaError_t __wrap_cudaGraphLaunch(cudaGraphExec_t exec, cudaStream_t stream) {
 cudaError_t __wrap_cudaStreamWaitEvent(cudaStream_t stream, cudaEvent_t event, unsigned int flags) {
     bump(&Counts::wait);
     return __real_cudaStreamWaitEvent(stream, event, flags);
+}
+
+// THE STRIDED COPY FAMILY. Not wrapping these was the counter's third blind spot: the GDN conv
+// split issues three cudaMemcpy2DAsync per layer and the traversal issues nine before the round's
+// first exchange, so a per-layer difference would have been invisible in a count that looked
+// complete. 2D and 3D are wrapped together so the family cannot be half-covered.
+cudaError_t __wrap_cudaMemcpy2DAsync(void* dst, std::size_t dpitch, const void* src,
+                                     std::size_t spitch, std::size_t width, std::size_t height,
+                                     cudaMemcpyKind kind, cudaStream_t stream) {
+    bump(&Counts::copy2d);
+    return __real_cudaMemcpy2DAsync(dst, dpitch, src, spitch, width, height, kind, stream);
+}
+
+cudaError_t __wrap_cudaMemcpy3DAsync(const cudaMemcpy3DParms* params, cudaStream_t stream) {
+    bump(&Counts::copy3d);
+    return __real_cudaMemcpy3DAsync(params, stream);
 }
 
 // PER-SITE TAGGING. The API counters above cannot distinguish six sites running once from one
@@ -130,15 +151,19 @@ void ninfer_launch_round_boundary(void) {
                            g_counts[rank].memcpy - g_snapshot[rank].memcpy,
                            g_counts[rank].memset - g_snapshot[rank].memset,
                            g_counts[rank].graph - g_snapshot[rank].graph,
-                           g_counts[rank].wait - g_snapshot[rank].wait};
+                           g_counts[rank].wait - g_snapshot[rank].wait,
+                           g_counts[rank].copy2d - g_snapshot[rank].copy2d,
+                           g_counts[rank].copy3d - g_snapshot[rank].copy3d};
         std::fprintf(stderr,
                      "[launch-count] round=%d rank=%d launch=%llu memcpy=%llu memset=%llu "
-                     "graph=%llu wait=%llu total=%llu\n",
+                     "graph=%llu wait=%llu copy2d=%llu copy3d=%llu total=%llu\n",
                      g_round, rank, static_cast<unsigned long long>(delta.launch),
                      static_cast<unsigned long long>(delta.memcpy),
                      static_cast<unsigned long long>(delta.memset),
                      static_cast<unsigned long long>(delta.graph),
                      static_cast<unsigned long long>(delta.wait),
+                     static_cast<unsigned long long>(delta.copy2d),
+                     static_cast<unsigned long long>(delta.copy3d),
                      static_cast<unsigned long long>(delta.total()));
         g_snapshot[rank] = g_counts[rank];
     }

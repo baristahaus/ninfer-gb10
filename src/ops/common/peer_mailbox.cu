@@ -54,6 +54,16 @@ extern std::atomic<int> g_progress_active[2];
 } // namespace ninfer::runtime::detail
 
 namespace ninfer::ops {
+namespace {
+// NINFER_LANE_TRACE gates every lane diagnostic: the prints are the instruments that produced the
+// phase's exclusions, so they are committed rather than re-written each session, and they cost
+// nothing when the variable is unset.
+bool lane_trace() {
+    static const bool on = std::getenv("NINFER_LANE_TRACE") != nullptr;
+    return on;
+}
+} // namespace
+
 namespace { void record_launch_time(const std::timespec&, const std::timespec&); }
 namespace { void note_mailbox_shape(int, int, int, int); }
 
@@ -348,9 +358,76 @@ void PeerMailbox::require_no_hang(const char* call) const {
                "probe count");
 }
 
+namespace {
+// PER-RANK EXCHANGE COUNT, keyed by payload shape. The mailbox protocol has been measured correct on
+// every axis (flags, epochs, stride, warp index, vecs, target arithmetic, visibility); what remains
+// is whether both ranks ISSUE the same number of exchanges. A counter, not a breakpoint: the
+// question is a call count, and it is the first question in this workstream about the traversal
+// rather than about the protocol.
+struct ExchangeCounts {
+    std::mutex mutex;
+    // THE PATH IS PART OF THE MEASUREMENT. A counter that covers one of two enqueue paths reports a
+    // difference that is a coverage gap, not a difference in behaviour -- which is exactly what the
+    // first version of this counter did. Both paths are counted and both are labelled, so 'the two
+    // ranks use different paths for the same shape' is visible rather than assumed absent.
+    std::uint64_t pipelined_20480[2] = {0, 0};
+    std::uint64_t pipelined_31040[2] = {0, 0};
+    std::uint64_t f32_20480[2]       = {0, 0};
+    std::uint64_t f32_31040[2]       = {0, 0};
+    std::uint64_t total[2]           = {0, 0};
+    // COVERAGE SELF-CHECK: the enqueue paths this counter knows about. Every path must call add()
+    // with its own name; the check below fails loudly if a known path never reported, so a new path
+    // cannot be added silently.
+    bool seen_pipelined = false;
+    bool seen_f32       = false;
+    void add(int rank, std::size_t bytes, bool f32) {
+        if (rank < 0 || rank > 1) { return; }
+        std::lock_guard<std::mutex> lock(mutex);
+        ++total[rank];
+        if (f32) { seen_f32 = true; } else { seen_pipelined = true; }
+        const int vecs = static_cast<int>(bytes / 16);
+        if (f32) {
+            if (vecs == 20480) { ++f32_20480[rank]; }
+            else if (vecs == 31040) { ++f32_31040[rank]; }
+        } else {
+            if (vecs == 20480) { ++pipelined_20480[rank]; }
+            else if (vecs == 31040) { ++pipelined_31040[rank]; }
+        }
+    }
+    void print(int round) {
+        if (!lane_trace()) { return; }
+        std::lock_guard<std::mutex> lock(mutex);
+        for (int rank = 0; rank < 2; ++rank) {
+            std::fprintf(stderr,
+                         "[exchange-count] rank=%d round=%d pipelined_20480=%llu pipelined_31040=%llu "
+                         "f32_20480=%llu f32_31040=%llu total=%llu\n",
+                         rank, round, (unsigned long long)pipelined_20480[rank],
+                         (unsigned long long)pipelined_31040[rank],
+                         (unsigned long long)f32_20480[rank], (unsigned long long)f32_31040[rank],
+                         (unsigned long long)total[rank]);
+            std::fflush(stderr);
+        }
+        // The coverage check: the paths this counter knows about must all have reported. A path that
+        // never reports is either unused (fine) or uninstrumented (the failure mode that cost a
+        // round). Printed every round so it cannot be missed.
+        if (!seen_pipelined) {
+            std::fprintf(stderr, "[exchange-count] COVERAGE: the pipelined path never reported\n");
+        }
+        if (!seen_f32) {
+            std::fprintf(stderr, "[exchange-count] COVERAGE: the f32 path never reported\n");
+        }
+        std::fflush(stderr);
+    }
+};
+ExchangeCounts& exchange_counts() { static ExchangeCounts c; return c; }
+} // namespace
+
+void PeerMailbox::print_exchange_counts(int round) const { exchange_counts().print(round); }
+
 void PeerMailbox::enqueue_exchange_sum(int rank, int slot, void* data, std::size_t bytes,
                                        cudaStream_t stream, const char* site) const {
     require_no_hang("enqueue_exchange_sum");
+    exchange_counts().add(rank, bytes, false);
     if (rank < 0 || rank > 1 || slot < 0 || slot >= slots_) {
         throw std::invalid_argument("PeerMailbox: rank or slot out of range");
     }
@@ -487,6 +564,7 @@ void note_mailbox_shape(int rank, int vecs, int blocks, int threads) {
 void PeerMailbox::enqueue_exchange_sum_f32(int rank, int slot, void* data, std::size_t bytes,
                                            void* bf16_out, cudaStream_t stream) const {
     require_no_hang("enqueue_exchange_sum_f32");
+    exchange_counts().add(rank, bytes, true);
     if (kernel_ != PeerExchangeKernel::Pipelined) {
         throw std::logic_error("PeerMailbox: the FP32 exchange needs the pipelined kernel");
     }

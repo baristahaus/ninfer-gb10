@@ -1,3 +1,5 @@
+#include <cstdlib>
+#include <cstdio>
 #include "models/qwen3_5/program/internal.h"
 #include "models/qwen3_5/execution/linear.h"
 #include "ninfer/ops/argmax.h"
@@ -16,23 +18,61 @@ extern "C" void ninfer_launch_site(const char*) __attribute__((weak));
 #define NINFER_TAG_SITE(name) do { if (&ninfer_launch_site != nullptr) ninfer_launch_site(name); } while (0)
 
 namespace {
+// NINFER_LANE_TRACE gates every lane diagnostic: the prints are the instruments that produced the
+// phase's exclusions, so they are committed rather than re-written each session, and they cost
+// nothing when the variable is unset.
+bool lane_trace() {
+    static const bool on = std::getenv("NINFER_LANE_TRACE") != nullptr;
+    return on;
+}
+} // namespace
+
+namespace {
 Tensor prefix(const Tensor& value, std::initializer_list<std::int32_t> shape) {
     return Tensor({value.data, value.bytes(), value.device}, value.dtype, shape);
+}
+} // namespace
+
+namespace {
+// THE DECISION GATE, one line per rank per round. The accept-path gather runs only when
+// decision_supplied is true, and decision_supplied is set from `constrained`, which is computed from
+// operation.sampling -- a per-rank value deciding a cross-rank action. This print is the
+// confirmation that the two ranks take different branches.
+void print_decision_gate(int rank, const char* why, std::size_t rows, bool constrained,
+                         bool requested, bool supplied) {
+    if (!lane_trace()) { return; }
+    std::fprintf(stderr,
+                 "[decision-gate] rank=%d why=%s sampling_rows=%zu constrained=%d requested=%d "
+                 "supplied=%d\n",
+                 rank, why, rows, constrained ? 1 : 0, requested ? 1 : 0, supplied ? 1 : 0);
+    std::fflush(stderr);
 }
 } // namespace
 
 void RankProgramImpl::request_decision(ComputeOperation& operation) {
     if (operation.decision_requested) return;
     if (const auto* forward = std::get_if<ForwardWork>(&operation.request.work.operation);
-        forward && forward->sample == SamplePurpose::None)
+        forward && forward->sample == SamplePurpose::None) {
+        print_decision_gate(collective_ ? collective_->rank : 0, "sample-none",
+                            operation.sampling.size(), false, operation.decision_requested,
+                            operation.decision_supplied);
         return;
+    }
     const bool constrained = std::any_of(operation.sampling.begin(), operation.sampling.end(),
                                          [](const auto& row) { return row.constrained; });
     if (!constrained) {
         operation.decision_supplied = true;
+        print_decision_gate(collective_ ? collective_->rank : 0, "unconstrained",
+                            operation.sampling.size(), constrained, operation.decision_requested,
+                            operation.decision_supplied);
         return;
     }
-    if (operation.speculative && !drafts_ready.ready()) return;
+    if (operation.speculative && !drafts_ready.ready()) {
+        print_decision_gate(collective_ ? collective_->rank : 0, "drafts-not-ready",
+                            operation.sampling.size(), constrained, operation.decision_requested,
+                            operation.decision_supplied);
+        return;
+    }
     runtime::DecisionRequest request;
     request.stage      = operation.decision_stage;
     request.vocabulary = parameters.profile->public_tokens;
@@ -164,6 +204,20 @@ void RankProgramImpl::readback_decode() {
 }
 
 void RankProgramImpl::launch_decision(ComputeOperation& operation) {
+    // THE WORK VARIANT, per rank per round. `is_decode` and the variant index decide which branch of
+    // the accept path runs, and the accept-path gather lives in one of them. If the two ranks report
+    // different variants for the same round, the gather is taken on one rank and not the other --
+    // and a cross-rank action that one rank skips is a hang by construction.
+    if (collective_.has_value() && lane_trace()) {
+        const bool is_decode = std::holds_alternative<DecodeWork>(operation.request.work.operation);
+        std::fprintf(stderr,
+                     "[decision-variant] rank=%d round=%zu is_decode=%d index=%zu batch=%d "
+                     "width=%d\n",
+                     collective_->rank, collective_->reduce_index, is_decode ? 1 : 0,
+                     operation.request.work.operation.index(), operation.batch,
+                     operation.width ? 1 : 0);
+        std::fflush(stderr);
+    }
     auto& frame          = resources.frame;
     const int batch      = static_cast<int>(operation.batch);
     const int vocabulary = execution::dimension(parameters.profile->public_tokens);

@@ -26,6 +26,17 @@ namespace ninfer::core::audit {
 
 #ifndef NDEBUG
 
+// READ THIS BEFORE CITING THE AUDIT'S SILENCE AS A RESULT. Everything in this namespace is
+// compiled out under NDEBUG, so a release build contains no audit at all. An audit that is
+// COMPILED OUT and an audit that is SILENT are indistinguishable from the outside: both print
+// nothing, and `NINFER_COLLECTIVE_AUDIT=1` has no effect on a release binary because the env gate
+// itself is inside the #ifndef. A run that "did not fire" in a release build is therefore not a
+// negative result -- it is no measurement. Two audit runs in this workstream were read that way
+// before the guard was noticed (the per-round audit and the per-frame audit before it), and they
+// should not be cited as having excluded anything. To make the audit a measurement, build with
+// NDEBUG undefined (a Debug or RelWithDebInfo-with-asserts build) and confirm the run is a debug
+// binary first. See docs/operations.md, `NINFER_COLLECTIVE_AUDIT`.
+
 struct CollectiveCounts {
     std::map<std::string, std::size_t> by_site;
 };

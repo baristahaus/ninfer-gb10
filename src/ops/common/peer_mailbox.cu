@@ -142,6 +142,16 @@ PeerMailbox::PeerMailbox(const ExecutionContext& ec, std::size_t slot_bytes, int
             set.flags[0]   = flags;
             set.flags[1]   = flags + flag_words;
             if (index == 0) { hang_ = flags + 2 * flag_words; }
+            // KNOWN LIMITATION, MEASURED: this instrument cannot be armed everywhere. On hephaestus
+            // (RTX 5070 Ti, driver of 2026-11) cudaHostRegister(mapped, bytes, cudaHostRegisterMapped)
+            // rejects a file-backed mmap with cudaErrorInvalidValue: invalid argument, at both the
+            // 32-byte size the four words need and a page-rounded 4096-byte size, so construction
+            // throws before any kernel runs and the four words stay zero. A zero status word on such
+            // a host means THE INSTRUMENT WAS NEVER ARMED, not that the kernel never reached the
+            // spin; check that the file exists and that the entry counter moved before reading its
+            // silence as evidence. The earlier reading (entry=129, target=65, last_seen=0) cannot
+            // have come from an environment where this constructor throws, so its provenance is
+            // unknown and it is not established fact.
             if (index == 0 && std::getenv("NINFER_STATUS_FILE") != nullptr) {
                 // THE FILE-BACKED STATUS WORD. Four words per rank -- entry counter, published
                 // target, last peer value seen, exit counter -- in a MAP_SHARED file that is

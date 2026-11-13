@@ -11,6 +11,11 @@
 #include <string>
 
 namespace ninfer::models::qwen3_5::execution {
+
+// Weak per-site tag from the launch counter (tests/support/launch_counter.cpp). Null in production.
+extern "C" void ninfer_launch_site(const char*) __attribute__((weak));
+#define NINFER_TAG_SITE(name) do { if (&ninfer_launch_site != nullptr) ninfer_launch_site(name); } while (0)
+
 namespace {
 
 // The two-rank lane is the adopted scope (include/ninfer/ops/allreduce.h), so a width other than 2
@@ -185,11 +190,13 @@ void all_gather_logits(const models::ShardedGroup& group, int rank, std::size_t&
         // Zero the whole slice first: every row outside this rank's half must be an exact BF16 zero
         // for the sum to be the concatenation. The copy below then writes this rank's half back, so
         // it has to come after — the zero-fill must not be the last thing that touches it.
+        NINFER_TAG_SITE("gather.memset");
         CUDA_CHECK(cudaMemsetAsync(base, 0, bytes, execution.stream()));
         auto* const half = base + static_cast<std::size_t>(rank) * row_bytes;
         for (std::int32_t column = 0; column < count; ++column) {
             // One contiguous copy per column: dim 0 is fastest, so a column's rows are contiguous
             // in both buffers, and the destination's column stride is the full vocabulary.
+            NINFER_TAG_SITE("gather.column");
             CUDA_CHECK(cudaMemcpyAsync(half + static_cast<std::size_t>(column) * plan.bytes_per_column,
                                        source + static_cast<std::size_t>(first + column) * row_bytes,
                                        row_bytes, cudaMemcpyDeviceToDevice, execution.stream()));

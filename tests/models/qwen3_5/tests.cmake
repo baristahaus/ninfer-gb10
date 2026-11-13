@@ -27,7 +27,11 @@ ninfer_add_test(ninfer_qwen3_5_tp2_accept_real_test NEEDS_SOURCE_DIR
   LIBRARIES ninfer_engine CUDA::cudart)
 target_link_options(ninfer_qwen3_5_tp2_accept_real_test PRIVATE
   -Wl,--wrap=cudaLaunchKernel -Wl,--wrap=cudaMemcpyAsync -Wl,--wrap=cudaMemsetAsync
-  -Wl,--wrap=cudaGraphLaunch -Wl,--wrap=cudaStreamWaitEvent)
+  -Wl,--wrap=cudaGraphLaunch -Wl,--wrap=cudaStreamWaitEvent
+  # The per-site tags live in the model code inside the shared library; a weak symbol referenced
+  # from there binds to this executable only if the executable exports it. --export-dynamic is on
+  # the TEST binary alone; the shipped library's link line is not touched.
+  -Wl,--export-dynamic)
 set_tests_properties(ninfer_qwen3_5_tp2_accept_real_test PROPERTIES
   SKIP_RETURN_CODE 77 RUN_SERIAL TRUE)
 

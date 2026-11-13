@@ -10,6 +10,11 @@
 #include <stdexcept>
 
 namespace ninfer::models::qwen3_5::detail {
+
+// Weak per-site tag from the launch counter (tests/support/launch_counter.cpp). Null in production.
+extern "C" void ninfer_launch_site(const char*) __attribute__((weak));
+#define NINFER_TAG_SITE(name) do { if (&ninfer_launch_site != nullptr) ninfer_launch_site(name); } while (0)
+
 namespace {
 Tensor prefix(const Tensor& value, std::initializer_list<std::int32_t> shape) {
     return Tensor({value.data, value.bytes(), value.device}, value.dtype, shape);
@@ -134,6 +139,7 @@ void RankProgramImpl::decide_decode(std::uint32_t batch_value, std::uint32_t wid
             auto count = frame.output_counts.slice(0, row, 1);
             ops::set_i32_scalar(count, 1, device.execution_view());
         }
+        NINFER_TAG_SITE("egress.accepted");
         CUDA_CHECK(cudaMemsetAsync(frame.accepted_drafts.data, 0, batch * sizeof(std::int32_t),
                                    device.stream()));
     }
@@ -240,12 +246,14 @@ void RankProgramImpl::launch_decision(ComputeOperation& operation) {
         ops::sample(logits, tokens, vocabulary, frame.sampling, frame.frontiers.slice(0, 0, batch),
                     purpose, resources.work, device.execution_view());
         for (int row = 0; row < batch; ++row) frame.host_egress->counts[row] = 1;
+        NINFER_TAG_SITE("egress.counts");
         CUDA_CHECK(cudaMemcpyAsync(frame.output_counts.data, frame.host_egress->counts.data(),
                                    batch * sizeof(std::int32_t), cudaMemcpyHostToDevice,
                                    device.stream()));
         CUDA_CHECK(cudaMemsetAsync(frame.accepted_drafts.data, 0, batch * sizeof(std::int32_t),
                                    device.stream()));
     }
+    NINFER_TAG_SITE("egress.frame");
     CUDA_CHECK(cudaMemcpyAsync(frame.host_egress, frame.egress.data, sizeof(FrameEgress),
                                cudaMemcpyDeviceToHost, device.stream()));
     gpu_timer.record_result();

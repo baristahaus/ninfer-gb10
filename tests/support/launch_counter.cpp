@@ -20,6 +20,14 @@
 // kernels from inside the shared library, which is not wrapped (and deliberately will not be: a
 // shipped library's link line is not a diagnostic's business). An instrument whose zero is a blind
 // spot rather than an agreement must say so where it is read.
+//
+// THE SECOND BLIND SPOT, same boundary, and it must be read the same way: the per-site tags live in
+// the model code inside the shared library, and a WEAK undefined symbol referenced from a shared
+// library does not bind to a definition in the executable at load -- it stays null. So the site
+// column prints nothing until the executable exports its symbols (`-rdynamic` / `--export-dynamic`,
+// which the test target now passes). An empty site column means the export did not bind, NOT that
+// no tagged site ran. Two documented blind spots in one instrument is an instrument that tells you
+// what it cannot see, which is the thing five rounds of silence could not do.
 
 #include <cuda_runtime.h>
 
@@ -94,6 +102,26 @@ cudaError_t __wrap_cudaStreamWaitEvent(cudaStream_t stream, cudaEvent_t event, u
     return __real_cudaStreamWaitEvent(stream, event, flags);
 }
 
+// PER-SITE TAGGING. The API counters above cannot distinguish six sites running once from one
+// site running six times, and that distinction is the question. Sites tag themselves by calling
+// ninfer_launch_site("name") immediately before their cudaMemcpyAsync; the weak declaration is
+// resolved to null in production.
+static const char* g_site_names[32];
+static std::uint64_t g_site_counts[32][2];
+static int g_site_count = 0;
+
+static int site_index(const char* site) {
+    for (int i = 0; i < g_site_count; ++i)
+        if (g_site_names[i] == site) return i;
+    if (g_site_count == 32) return 0;
+    g_site_names[g_site_count] = site;
+    return g_site_count++;
+}
+
+extern "C" void ninfer_launch_site(const char* site) {
+    g_site_counts[site_index(site)][device_index()] += 1;
+}
+
 // Called by LocalExecutor at each round release. Prints the DELTA per rank for this round, because
 // a cumulative count says nothing after round 1.
 void ninfer_launch_round_boundary(void) {
@@ -119,6 +147,12 @@ void ninfer_launch_round_boundary(void) {
                      "[launch-count] ZERO AFTER A ROUND: the instrument is not counting; do not read "
                      "equal counts as a result\n");
     }
+    for (int i = 0; i < g_site_count; ++i) {
+        std::fprintf(stderr, "[launch-count] round=%d site=%s rank0=%llu rank1=%llu\n", g_round,
+                     g_site_names[i], static_cast<unsigned long long>(g_site_counts[i][0]),
+                     static_cast<unsigned long long>(g_site_counts[i][1]));
+    }
+    for (int i = 0; i < g_site_count; ++i) g_site_counts[i][0] = g_site_counts[i][1] = 0;
     ++g_round;
 }
 

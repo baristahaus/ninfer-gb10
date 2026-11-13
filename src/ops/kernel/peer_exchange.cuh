@@ -439,9 +439,23 @@ __global__ __launch_bounds__(256) void peer_exchange_pipelined_kernel(
                 fault.store(1u, cuda::memory_order_relaxed);
                 published = 0;
                 if (first) {
-                    printf("[mailbox] GAVE UP: rank=%d slot=%d warp=%d saw=%u target=%u spins=%u "
-                           "limit=%u\n",
-                           tuning.rank, tuning.slot, warp, seen, target, spins, tuning.spin_limit);
+                    // THE INVARIANT, NAMED. The line above this kernel states it as an assumption:
+                    // "Both ranks execute the same schedule, so each slot's epochs advance in
+                    // lockstep". It was never checked. The check is the gap between this rank's
+                    // target and the peer's published epoch: the peer may be at most ONE exchange
+                    // behind, because that is what a schedule that agrees everywhere else produces
+                    // while the other rank's last launch is still in flight. A gap greater than one
+                    // is not lateness, it is divergence -- the ranks are counting different
+                    // exchanges -- and the number says how far apart they are.
+                    const std::uint32_t gap = target - seen;
+                    printf("[mailbox] GAVE UP: rank=%d slot=%d warp=%d saw=%u target=%u gap=%u "
+                           "spins=%u limit=%u%s\n",
+                           tuning.rank, tuning.slot, warp, seen, target, gap, spins,
+                           tuning.spin_limit,
+                           gap <= 1u ? ""
+                                     : " [lockstep violation: the peer's epoch counter is more "
+                                       "than one exchange behind; the ranks are counting "
+                                       "different exchanges, not waiting on one]");
                 }
                 break;
             }

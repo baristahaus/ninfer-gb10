@@ -28,6 +28,10 @@
 #include "core/collective_audit.h"
 #include "core/device.h" // CUDA_CHECK
 
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <unistd.h>
+
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
@@ -138,6 +142,36 @@ PeerMailbox::PeerMailbox(const ExecutionContext& ec, std::size_t slot_bytes, int
             set.flags[0]   = flags;
             set.flags[1]   = flags + flag_words;
             if (index == 0) { hang_ = flags + 2 * flag_words; }
+            if (index == 0 && std::getenv("NINFER_STATUS_FILE") != nullptr) {
+                // THE FILE-BACKED STATUS WORD. Four words per rank -- entry counter, published
+                // target, last peer value seen, exit counter -- in a MAP_SHARED file that is
+                // page-locked so the kernel can write it and a SECOND PROCESS can read it while the
+                // stream is hung. Pinned host memory alone is invisible to another process, and the
+                // in-process dump path only runs when a host mailbox call follows a hang, which is
+                // exactly what does not happen when the round hangs with no give-up.
+                const char* path = std::getenv("NINFER_STATUS_FILE");
+                const int fd     = ::open(path, O_RDWR | O_CREAT | O_TRUNC, 0644);
+                if (fd < 0) {
+                    throw std::runtime_error(std::string("mailbox: cannot open the status file ") +
+                                             path);
+                }
+                const std::size_t bytes = 2 * 4 * sizeof(std::uint32_t);
+                if (::ftruncate(fd, static_cast<off_t>(bytes)) != 0) {
+                    ::close(fd);
+                    throw std::runtime_error("mailbox: cannot size the status file");
+                }
+                void* mapped = ::mmap(nullptr, bytes, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+                ::close(fd);
+                if (mapped == MAP_FAILED) {
+                    throw std::runtime_error("mailbox: cannot map the status file");
+                }
+                throw_on_error(cudaHostRegister(mapped, bytes, cudaHostRegisterMapped),
+                               "cudaHostRegister(status)");
+                std::memset(mapped, 0, bytes);
+                status_               = static_cast<std::uint32_t*>(mapped);
+                status_mapping_       = mapped;
+                status_mapping_bytes_ = bytes;
+            }
             for (int rank = 0; rank < 2; ++rank) {
                 ScopedDevice::set(pair[rank]);
                 void* words = nullptr;
@@ -191,6 +225,15 @@ void PeerMailbox::release() noexcept {
 
 PeerMailbox::~PeerMailbox() {
     const ScopedDevice scope;
+    // The status file's mapping is released after the devices have retired their launches, so the
+    // kernel cannot write into an unmapped range.
+    if (status_mapping_ != nullptr) {
+        (void)cudaHostUnregister(status_mapping_);
+        (void)::munmap(status_mapping_, status_mapping_bytes_);
+        status_mapping_       = nullptr;
+        status_mapping_bytes_ = 0;
+        status_               = nullptr;
+    }
     // The owner destroys every graph executable first, but a launch may still be in flight: the
     // pinned slabs and the counters are released only once both devices retired it.
     for (int rank = 0; rank < 2; ++rank) {
@@ -322,6 +365,7 @@ void PeerMailbox::enqueue_exchange_sum(int rank, int slot, void* data, std::size
         constexpr int kThreads     = detail::kPeerPipelinedThreads;
         const int blocks           = detail::peer_pipelined_blocks(vecs, kVecsPerLane, kThreads);
         auto tuning                = pipelined_tuning(release_dependents_);
+        tuning.status              = status_ != nullptr ? status_ + 4 * rank : nullptr;
         tuning.rank                = rank;
         tuning.slot                = slot;
         // This rank's FIRST exchange is the one place where a healthy peer can be legitimately late:

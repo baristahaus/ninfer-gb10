@@ -251,6 +251,21 @@ private:
     // one" (slot reuse order) from "many lanes off" (a different population of exchanges).
     void dump_exchange_epochs(const char* why) const;
     std::uint32_t* hang_            = nullptr;
+    // DIAGNOSTIC (NINFER_STATUS_FILE=<path>): four words per rank in a MAP_SHARED, page-locked
+    // file -- [0] entry counter, [1] published target, [2] last peer value seen, [3] exit counter --
+    // written from the exchange kernel and readable from a SEPARATE PROCESS while a stream is hung.
+    // That is what makes it work in both failure surfaces: a round that hangs with no give-up, and a
+    // round that gives up at the spin budget. Null unless the variable is set; nothing is allocated
+    // and the kernel writes nothing when it is null.
+    //
+    // Read it as: entry did not advance -> the kernel never STARTED; entry advanced with last-seen
+    // below target and the peer's word showing a target -> the write is not VISIBLE; entry and exit
+    // both advanced -> the kernel RAN TO COMPLETION and the publish was lost; entry advanced with
+    // last-seen never changing -> the kernel is stuck BEFORE THE SPIN, in the publish sequence.
+    std::uint32_t* status_          = nullptr;
+    // The mapping and its length, so the destructor can unregister and unmap it.
+    void* status_mapping_           = nullptr;
+    std::size_t status_mapping_bytes_ = 0;
     int slots_                      = 0;
     PeerExchangeKernel kernel_      = PeerExchangeKernel::Pipelined;
     int devices_[2]                 = {0, 0};

@@ -304,6 +304,9 @@ inline int peer_prefetch_blocks(const PeerL2Prefetch& prefetch, int threads) {
 
 // Launch knobs of one pipelined exchange. Production passes the defaults; the standalone probe
 // varies them and, with kTimed, collects every warp's phase timestamps.
+// How often a kernel publishes the last peer value it observed into the status word.
+inline constexpr std::uint32_t kPeerStatusProbe = 4096u;
+
 struct PeerPipelinedTuning {
     std::uint32_t spin_limit   = kPeerSpinLimit;
     std::uint32_t sleep_ns     = kPeerPollSleepNs;
@@ -314,6 +317,10 @@ struct PeerPipelinedTuning {
     // exchange of a rank -- what the host log cannot show, because it records the arguments passed
     // rather than the values the kernel computed from them. Off in production.
     bool trace      = false;
+    // DIAGNOSTIC: four words this launch writes -- entry counter, published target, last peer value
+    // seen, exit counter -- in a mapped file, so a second process can read them while the stream is
+    // hung. Null unless NINFER_STATUS_FILE is set.
+    std::uint32_t* status = nullptr;
     // Which exchange this launch is, for the give-up line below and for the trace dump.
     int rank        = -1;
     int slot        = -1;
@@ -376,6 +383,14 @@ __global__ __launch_bounds__(256) void peer_exchange_pipelined_kernel(
     std::uint32_t seen   = 0;
     if (lane == 0) {
         target = epochs[warp] + 1u;
+        if (tuning.status != nullptr && blockIdx.x == 0 && warp == 0) {
+            // One store at entry: this kernel STARTED. A reader that sees no advance here knows the
+            // kernel never ran, which is the binary fork this instrument exists to settle.
+            tuning.status[0] = tuning.status[0] + 1u;
+            tuning.status[1] = target;
+            tuning.status[2] = 0u;
+            tuning.status[3] = 0u;
+        }
         if constexpr (kPoll == kPeerPollEarlyFence) {
             seen = SystemWord(peer_flags[warp * kPeerFlagStride]).load(cuda::memory_order_relaxed);
         }
@@ -433,12 +448,19 @@ __global__ __launch_bounds__(256) void peer_exchange_pipelined_kernel(
             }
             seen = peer.load(kPoll == kPeerPollAcquire ? cuda::memory_order_acquire
                                                        : cuda::memory_order_relaxed);
+            if (tuning.status != nullptr && blockIdx.x == 0 && warp == 0 &&
+                spins % kPeerStatusProbe == 0u) {
+                tuning.status[2] = seen;
+            }
         }
         if constexpr (kPoll == kPeerPollEarlyFence) {
             // Acquire: the peer payload reads below are ordered after the observed release.
             cuda::atomic_thread_fence(cuda::memory_order_acquire, cuda::thread_scope_system);
         }
         epochs[warp] = target;
+        if (tuning.status != nullptr && blockIdx.x == 0 && warp == 0) {
+            tuning.status[3] = tuning.status[3] + 1u; // exit marker
+        }
         if (timed) { stamp[4] = clock64(); }
         if (tuning.trace && blockIdx.x == 0 && warp == 0) {
             const int warps = (vecs + 32 * G - 1) / (32 * G);

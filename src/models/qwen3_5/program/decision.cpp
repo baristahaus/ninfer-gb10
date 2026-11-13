@@ -1,4 +1,5 @@
 #include <cstdlib>
+#include <ctime>
 #include <cstdio>
 #include "models/qwen3_5/program/internal.h"
 #include "models/qwen3_5/execution/linear.h"
@@ -17,6 +18,17 @@ namespace ninfer::models::qwen3_5::detail {
 extern "C" void ninfer_launch_site(const char*) __attribute__((weak));
 #define NINFER_TAG_SITE(name) do { if (&ninfer_launch_site != nullptr) ninfer_launch_site(name); } while (0)
 
+
+namespace {
+void lane_stamp(int rank, const char* where, int round) {
+    if (std::getenv("NINFER_LANE_TRACE") == nullptr) { return; }
+    std::timespec ts{};
+    (void)::clock_gettime(CLOCK_MONOTONIC, &ts);
+    std::fprintf(stderr, "[lane-time] rank=%d at=%s round=%d ns=%lld\n", rank, where, round,
+                 (long long)ts.tv_sec * 1000000000LL + (long long)ts.tv_nsec);
+    std::fflush(stderr);
+}
+} // namespace
 namespace {
 // NINFER_LANE_TRACE gates every lane diagnostic: the prints are the instruments that produced the
 // phase's exclusions, so they are committed rather than re-written each session, and they cost
@@ -92,6 +104,8 @@ void RankProgramImpl::request_decision(ComputeOperation& operation) {
 }
 
 void RankProgramImpl::project_decode(std::uint32_t batch_value, std::uint32_t width_value) {
+    lane_stamp(collective_ ? collective_->rank : 0, "project_decode",
+               static_cast<int>(collective_ ? collective_->reduce_index : 0));
     auto& frame     = resources.frame;
     const int batch = static_cast<int>(batch_value), width = static_cast<int>(width_value);
     const int rows       = frame.spec.output_rows;
@@ -209,6 +223,16 @@ void RankProgramImpl::launch_decision(ComputeOperation& operation) {
     // different variants for the same round, the gather is taken on one rank and not the other --
     // and a cross-rank action that one rank skips is a hang by construction.
     if (collective_.has_value() && lane_trace()) {
+        // THE LATENESS NUMBER. A timestamp at the decision entry and one at the gather entry give
+        // rank 1's lateness directly, instead of inferring it from counters. The counters show both
+        // ranks issuing the same 128 pipelined_20480 exchanges, so the lateness is in the traversal's
+        // structure, not its count.
+        std::timespec ts{};
+        (void)::clock_gettime(CLOCK_MONOTONIC, &ts);
+        std::fprintf(stderr, "[lane-time] rank=%d at=launch_decision_ns=%lld\n",
+                     collective_->rank,
+                     (long long)ts.tv_sec * 1000000000LL + (long long)ts.tv_nsec);
+        std::fflush(stderr);
         const bool is_decode = std::holds_alternative<DecodeWork>(operation.request.work.operation);
         std::fprintf(stderr,
                      "[decision-variant] rank=%d round=%zu is_decode=%d index=%zu batch=%d "

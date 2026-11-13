@@ -172,14 +172,21 @@ void all_gather_logits(const models::ShardedGroup& group, int rank, std::size_t&
     // THE SHARED GUARD AT BOTH ENDS. The hang word is shared across ranks and can change an
     // enqueue's outcome without being read; printing it at entry and after the gather says whether
     // it changed DURING this gather, which is the case a per-rank value cannot explain.
-    const auto hang_word = [&](const char* where) {
+    const auto hang_word = [&](const char* where, const char* site) {
         if (!group.mailbox || !lane_trace()) { return; }
-        std::fprintf(stderr, "[gather-hang] rank=%d site=%s at=%s hang=%d round=%u\n", rank,
-                     site, where, group.mailbox->hang_reported() ? 1 : 0,
-                     group.mailbox->round_index());
+        // site= makes the offset attributable to a CALL SITE. A counter that says which rank but not
+        // which site can only narrow the question to 'somewhere in this function', which is what
+        // cost the phase seven rounds on the width-2 gather offset.
+        std::timespec ts{};
+        (void)::clock_gettime(CLOCK_MONOTONIC, &ts);
+        std::fprintf(stderr,
+                     "[gather-hang] rank=%d at=%s site=%s hang=%d round=%u ns=%lld\n", rank, where,
+                     site, group.mailbox->hang_reported() ? 1 : 0,
+                     group.mailbox->round_index(),
+                     (long long)ts.tv_sec * 1000000000LL + (long long)ts.tv_nsec);
         std::fflush(stderr);
     };
-    hang_word("entry");
+    hang_word("entry", site);
     if (group.mailbox) {
         group.mailbox->clear_hang();
     }

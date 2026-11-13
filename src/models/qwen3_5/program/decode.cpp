@@ -1,3 +1,5 @@
+#include <cstdio>
+#include <cstdlib>
 #include "models/qwen3_5/program/internal.h"
 #include "models/qwen3_5/execution/draft.h"
 #include "models/qwen3_5/execution/text.h"
@@ -139,6 +141,18 @@ void RankProgramImpl::begin_target(ComputeOperation& operation) {
             !operation.speculative &&
             std::none_of(operation.sampling.begin(), operation.sampling.end(),
                          [](const auto& row) { return row.constrained; });
+        // THE SEVENTH INSTANCE OF THE CROSS-RANK INVARIANT. `fused_decision` decides whether
+        // project_decode runs (execution.cpp:84-92), and project_decode GATHERS at decision.cpp:81.
+        // If it differs between ranks, one rank gathers there and the other does not -- a per-rank
+        // flag deciding a collective action. Both inputs are per-rank: `sampling` (measured equal)
+        // and `speculative` (not yet measured).
+        if (std::getenv("NINFER_LANE_TRACE") != nullptr) {
+            std::fprintf(stderr,
+                         "[fused-decision] rank=%d speculative=%d fused=%d sampling_rows=%zu\n",
+                         static_cast<int>(device.device().index()), operation.speculative ? 1 : 0,
+                         operation.fused_decision ? 1 : 0, operation.sampling.size());
+            std::fflush(stderr);
+        }
         const auto phase       = operation.speculative      ? GraphPhase::Verify
                                  : operation.fused_decision ? GraphPhase::Ordinary
                                                             : GraphPhase::Main;

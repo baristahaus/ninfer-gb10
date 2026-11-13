@@ -95,6 +95,9 @@ struct Timing {
 Timing g_timing[2];
 int g_round = 0;
 bool g_printed_startup = false;
+// False until the phase marker fires: the first bucket spans process start to the first release and
+// INCLUDES startup, so it is labelled startup+round0 rather than round.
+bool g_phase_labelled = false;
 
 int device_index() {
     int device = 0;
@@ -219,6 +222,22 @@ extern "C" void ninfer_launch_site(const char* site) {
     g_site_counts[site_index(site)][device_index()] += 1;
 }
 
+// PHASE MARKER. Called once every rank is materialised. Resets the counters so the first per-round
+// bucket cannot include startup traffic, and prints the marker so a reader can see the boundary.
+// The eighth blind spot this closes: a number that carries no phase label gets attributed to the
+// wrong phase, which is how a 15.6 GB reading taken during materialisation was read as 'call 288 of
+// round 0'.
+extern "C" void ninfer_launch_phase_marker(const char* marker) {
+    for (int rank = 0; rank < 2; ++rank) {
+        g_snapshot[rank]    = g_counts[rank];
+        g_timing[rank]      = Timing{};
+        g_site_counts[rank][0] = 0;
+    }
+    g_phase_labelled = true;
+    std::fprintf(stderr, "[launch-count] phase_marker=%s (counters reset; later rounds are rounds)\n",
+                 marker);
+}
+
 // Called by LocalExecutor at each round release. Prints the DELTA per rank for this round, because
 // a cumulative count says nothing after round 1.
 void ninfer_launch_round_boundary(void) {
@@ -245,7 +264,7 @@ void ninfer_launch_round_boundary(void) {
         std::fprintf(stderr,
                      "[launch-count] round=%d rank=%d gap_total_us=%llu gap_max_us=%llu "
                      "gap_max_at_call=%llu calls=%llu gap_kind=%s gap_before=%s "
-                     "gap_before2=%s gap_free_mb=%llu gap_device=%d\n",
+                     "gap_before2=%s gap_free_mb=%llu gap_device=%d phase=%s\n",
                      g_round, rank, static_cast<unsigned long long>(g_timing[rank].total_ns / 1000),
                      static_cast<unsigned long long>(g_timing[rank].max_ns / 1000),
                      static_cast<unsigned long long>(g_timing[rank].max_index),
@@ -253,7 +272,8 @@ void ninfer_launch_round_boundary(void) {
                      g_timing[rank].gap_kind, g_timing[rank].gap_before,
                      g_timing[rank].gap_before2,
                      static_cast<unsigned long long>(g_timing[rank].gap_free_mb),
-                     g_timing[rank].gap_device);
+                     g_timing[rank].gap_device,
+                     g_phase_labelled ? "round" : "startup+round0");
         g_timing[rank] = Timing{};
     }
     // THE BOUND PROBE: each rank's free memory read from a thread explicitly bound to that rank,

@@ -18,6 +18,9 @@
 #include <utility>
 #include <vector>
 
+// Weak phase marker from the launch counter (tests/support/launch_counter.cpp). Null in production.
+extern "C" void ninfer_launch_phase_marker(const char*) __attribute__((weak));
+
 namespace ninfer::flashnext_runtime {
 namespace {
 using Clock = std::chrono::steady_clock;
@@ -282,6 +285,12 @@ ConstructedFlashNextModel construct_flash_next(EngineOptions& options, artifact:
         materialize_phase.complete();
         rank_weights.push_back({std::move(rank_plan), std::move(backing)});
     }
+    // PHASE MARKER: every rank is materialised at this point. The launch counter resets here so its
+    // first per-round bucket cannot silently include startup traffic -- the eighth blind spot, and
+    // the one that attributed a 15.6 GB reading taken during materialisation to 'call 288 of round
+    // 0'. Weak symbol, null in production.
+    if (&ninfer_launch_phase_marker != nullptr) { ninfer_launch_phase_marker("startup_done"); }
+
     const auto stats = rank_weights.front().backing.stats();
     auto model = Model::construct_loaded_model(std::move(rank_weights.front().plan),
                                                std::move(rank_weights.front().backing));

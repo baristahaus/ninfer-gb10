@@ -106,6 +106,21 @@ void RankProgramImpl::request_decision(ComputeOperation& operation) {
 void RankProgramImpl::project_decode(std::uint32_t batch_value, std::uint32_t width_value) {
     lane_stamp(collective_ ? collective_->rank : 0, "project_decode",
                static_cast<int>(collective_ ? collective_->reduce_index : 0));
+    // SIX TIMESTAMPS, NOT FOUR: project_decode contains TWO collectives. `execution::project` runs
+    // through the sharded path (sharded_project_columns -> reduce_partials -> allreduce_sum_rank), so
+    // the window between entry and linear_done CONTAINS a mailbox exchange; and
+    // all_gather_logits(..., "decision.sample") is a second one. "The 1 s is in the linear" and "the
+    // 1 s is in the linear's reduce" are different findings, so both boundaries are stamped.
+    const auto pd_stamp = [&](const char* where) {
+        if (std::getenv("NINFER_LANE_TRACE") == nullptr) { return; }
+        std::timespec ts{};
+        (void)::clock_gettime(CLOCK_MONOTONIC, &ts);
+        std::fprintf(stderr, "[pd-time] rank=%d at=%s ns=%lld\n",
+                     collective_ ? collective_->rank : 0, where,
+                     (long long)ts.tv_sec * 1000000000LL + (long long)ts.tv_nsec);
+        std::fflush(stderr);
+    };
+    pd_stamp("entry");
     auto& frame     = resources.frame;
     const int batch = static_cast<int>(batch_value), width = static_cast<int>(width_value);
     const int rows       = frame.spec.output_rows;
@@ -129,13 +144,17 @@ void RankProgramImpl::project_decode(std::uint32_t batch_value, std::uint32_t wi
         const int rank_rows = parameters.text.output_head.weight.n;
         auto scope          = resources.work.scope();
         Tensor scratch      = resources.work.alloc(DType::BF16, {rank_rows, columns});
+        pd_stamp("linear_before");
         execution::project(flat_hidden, parameters.text.output_head, scratch, resources.work,
                            device.execution_view());
+        pd_stamp("linear_after");
         Tensor full = (*sharded_).logits[static_cast<std::size_t>(collective_->rank)];
         execution::all_gather_logits(*sharded_, collective_->rank, collective_->reduce_index,
                                      scratch, full, device.execution_view(), "decision.sample");
+        pd_stamp("gather_after");
         flat_logits = execution::sharded_logits_view(*sharded_, collective_->rank, rows, columns);
     }
+    pd_stamp("exit");
     if (width == 1) return;
     Tensor argmax      = prefix(frame.target_argmax, {width, batch});
     Tensor flat_argmax = argmax.view({width * batch});

@@ -184,6 +184,9 @@ public:
     // round it failed in.
     void clear_hang() noexcept;
     [[nodiscard]] std::uint32_t round_index() const noexcept;
+    // DIAGNOSTIC (NINFER_LANE_TRACE): one line per rank per round, split by shape and by enqueue
+    // path, with a coverage self-check so a difference cannot be a coverage gap.
+    void print_exchange_counts(int round) const;
 
     // DIAGNOSTIC: the base of `rank`'s pinned host payload slab. A device buffer that aliased this
     // would be written by a kernel as if it were VRAM; the group dump asserts it does not.

@@ -174,8 +174,9 @@ void all_gather_logits(const models::ShardedGroup& group, int rank, std::size_t&
     // it changed DURING this gather, which is the case a per-rank value cannot explain.
     const auto hang_word = [&](const char* where) {
         if (!group.mailbox || !lane_trace()) { return; }
-        std::fprintf(stderr, "[gather-hang] rank=%d at=%s hang=%d round=%u\n", rank, where,
-                     group.mailbox->hang_reported() ? 1 : 0, group.mailbox->round_index());
+        std::fprintf(stderr, "[gather-hang] rank=%d site=%s at=%s hang=%d round=%u\n", rank,
+                     site, where, group.mailbox->hang_reported() ? 1 : 0,
+                     group.mailbox->round_index());
         std::fflush(stderr);
     };
     hang_word("entry");

@@ -2,6 +2,8 @@
 #include "ninfer/ops/sampling.h"
 
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <array>
 
 namespace ninfer::models::qwen3_5::detail {
@@ -82,6 +84,32 @@ void RankProgramImpl::launch_commit(ComputeOperation& operation) {
         const auto hidden =
             frame.input_view(static_cast<int>(operation.width), static_cast<int>(operation.batch))
                 .hidden;
+        // THE FOLD-SITE READ, and it is host-side only: host_egress is the D2H copy readback_decode
+        // already made, and accepted_tokens is host data, so this prints both arrays for both ranks
+        // with no wrap machinery, no weak symbols and no tags. Gated by NINFER_FOLD_TRACE.
+        //
+        // WHY IT MATTERS: the fold predicate is `accepted < host_egress->counts[i]` and its result
+        // sets device_work, which decides whether the frame parks in Retiring or retires
+        // immediately. counts is produced by the DEVICE SAMPLING KERNEL, not set on the host, so a
+        // per-rank difference in it means the two ranks SAMPLED DIFFERENT COUNTS -- a correctness
+        // bug upstream of the mailbox. accepted was measured identical earlier; the pair (identical
+        // accepted, divergent counts) is the fingerprint.
+        if (const char* trace = std::getenv("NINFER_FOLD_TRACE"); trace != nullptr && *trace) {
+            const int rank = collective_ ? collective_->rank : 0;
+            for (std::size_t row = 0; row < row_count; ++row) {
+                std::fprintf(stderr,
+                             "[fold] rank=%d row=%zu accepted=%u counts=%d fold=%d\n", rank, row,
+                             static_cast<unsigned>(value.rows[row].accepted_tokens),
+                             static_cast<int>(frame.host_egress->counts[row]),
+                             (value.rows[row].accepted_tokens != 0 &&
+                              (backend == SpeculativeBackend::Mtp ||
+                               value.rows[row].accepted_tokens <
+                                   static_cast<std::uint32_t>(
+                                       frame.host_egress->counts[row])))
+                                 ? 1
+                                 : 0);
+            }
+        }
         for (std::size_t i = 0; i < row_count; ++i) {
             const auto accepted = value.rows[i].accepted_tokens;
             if (!accepted) continue;

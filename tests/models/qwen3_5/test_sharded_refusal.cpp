@@ -32,6 +32,7 @@ void expect(bool condition, const char* what) {
 } // namespace
 
 int main() {
+    using ninfer::models::qwen3_5::detail::kShardedForwardWired;
     using ninfer::models::qwen3_5::detail::sharded_forward_refusal;
 
     const std::string refused = sharded_forward_refusal(true, false);
@@ -50,6 +51,17 @@ int main() {
     // A sharded lane whose forward IS wired must run: the refusal must not outlive its reason.
     expect(sharded_forward_refusal(true, true).empty(),
            "a sharded lane with a wired forward must not be refused");
+
+    // THE CASE dee06f5d GOT WRONG. Mirrors present AND the group bundle present (so `sharded_` is
+    // non-null, which is what dee06f5d passed as the 'wired' input) but the forward is NOT
+    // implemented: dee06f5d's caller passed `sharded_ != nullptr` == true here and the refusal
+    // returned empty, so the round would have RUN the unwired forward. The flag says what it means,
+    // so this case refuses.
+    expect(!sharded_forward_refusal(true, kShardedForwardWired).empty(),
+           "mirrors + group bundle + forward NOT wired must refuse (the case dee06f5d ran)");
+    expect(sharded_forward_refusal(true, kShardedForwardWired).find(
+               "sharded forward is not wired") != std::string::npos,
+           "that refusal names the reason");
 
     if (failures != 0) {
         std::cerr << failures << " assertion(s) failed\n";

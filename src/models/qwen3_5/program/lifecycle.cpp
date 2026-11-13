@@ -371,6 +371,12 @@ void attach_rank_mirrors(RankProgram& origin, RankProgram& peer, DeviceContext& 
         origin_pages.mirror_origin(), peer_pages.mirror_origin(), where);
     origin.impl_->peer_text_kv_tables = std::make_unique<tp2::MirroredKVExecutionTables>(
         *origin.impl_->peer_text_kv, origin_tables.table_origin(), peer_tables.table_origin());
+    // ONE-WAY BY CONSTRUCTION, AND THEREFORE ONE-SIDED. The mirror object is owned by the ORIGIN
+    // rank and targets the PEER's device: it addresses rank 0's pages by index and replays them onto
+    // rank 1. Rank 1 is the mirror's TARGET, not its owner, so it correctly carries no mirror object
+    // of its own. This is why `peer_text_kv` is non-null on exactly one rank -- and why the round
+    // entry's refusal (which reads that pointer) fires on that rank only. That asymmetry is the
+    // design, not a divergence: a refusal on one rank stops the round for the group.
     origin_pages.attach_mirror(*origin.impl_->peer_text_kv);
     origin_tables.attach_mirror(*origin.impl_->peer_text_kv_tables);
     // The row leases live on the control side, so the same mirror is attached to the session's

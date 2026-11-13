@@ -1,6 +1,7 @@
 #pragma once
 
 #include "runtime/executor/executor.h"
+#include "runtime/executor/poll_decision.h"
 #include "runtime/executor/rank_worker.h"
 #include "runtime/executor/round_trace.h"
 #include "runtime/observability/snapshot.h"
@@ -336,43 +337,43 @@ public:
                     // "issued the same round" and "completed the same round" coincide; the MTP lane
                     // is the first consumer to set device_work at commit and so the first to park.
                     observe_host_call(host_.progress_ns, [&]() -> std::optional<Event> {
-                        bind_rank(0);
-                        auto rank0_event = program().poll();
-                        trace_poll_result(0, rank0_event);
-                        if (!rank0_event) { return std::nullopt; }
-                        if (std::holds_alternative<ExecutionFailed>(*rank0_event)) {
-                            return rank0_event;
-                        }
-                        const auto ticket =
-                            std::visit([](const auto& value) { return value.ticket; }, *rank0_event);
-                        for (std::size_t rank = 1; rank < workers_.size(); ++rank) {
+                        // Poll every rank and reduce each result to the three facts the decision
+                        // needs, then let the pure decision say what to do. The decision itself
+                        // lives in poll_decision.h so it can be unit-tested without a Device; see
+                        // decide_poll for the six rules and why rank 0's event alone is not enough.
+                        std::vector<std::optional<Event>> polled(workers_.size());
+                        std::vector<PolledRank> summary(workers_.size());
+                        for (std::size_t rank = 0; rank < workers_.size(); ++rank) {
                             bind_rank(rank);
-                            auto peer_event = workers_[rank]->program().poll();
-                            trace_poll_result(rank, peer_event);
-                            if (!peer_event) {
-                                // The peer is still working on this ticket. Report no progress so
-                                // the caller's poll loop retries; do not release the round.
-                                return std::nullopt;
-                            }
-                            if (std::holds_alternative<ExecutionFailed>(*peer_event)) {
-                                // A peer's failure is the ticket's failure: it used to be
-                                // discarded, which made a peer failure invisible here.
-                                return peer_event;
-                            }
-                            const auto peer_ticket = std::visit(
-                                [](const auto& value) { return value.ticket; }, *peer_event);
-                            if (peer_ticket != ticket) {
-                                if (round_trace_enabled()) {
-                                    round_trace(
-                                        "poll.peer.ticket rank=%zu peer=%llu rank0=%llu (the peer "
-                                        "reported a different ticket; holding the round)",
-                                        rank, static_cast<unsigned long long>(peer_ticket.id),
-                                        static_cast<unsigned long long>(ticket.id));
-                                }
-                                return std::nullopt;
-                            }
+                            polled[rank] = rank == 0 ? program().poll()
+                                                     : workers_[rank]->program().poll();
+                            trace_poll_result(rank, polled[rank]);
+                            if (!polled[rank]) { continue; }
+                            summary[rank].has_event = true;
+                            summary[rank].failed =
+                                std::holds_alternative<ExecutionFailed>(*polled[rank]);
+                            summary[rank].ticket_id = std::visit(
+                                [](const auto& value) { return value.ticket.id; }, *polled[rank]);
                         }
-                        return rank0_event;
+                        const PollDecision decision = decide_poll(summary);
+                        switch (decision.outcome) {
+                        case PollOutcome::Fail:
+                            return polled[decision.failing_rank];
+                        case PollOutcome::Release:
+                            return polled[0];
+                        case PollOutcome::Wait:
+                            break;
+                        }
+                        if (decision.ticket_mismatch && round_trace_enabled()) {
+                            round_trace(
+                                "poll.peer.ticket rank=%zu peer=%llu rank0=%llu (the peer reported "
+                                "a different ticket; holding the round)",
+                                decision.mismatch_rank,
+                                static_cast<unsigned long long>(
+                                    summary[decision.mismatch_rank].ticket_id),
+                                static_cast<unsigned long long>(summary[0].ticket_id));
+                        }
+                        return std::nullopt;
                     });
                 if (!event) return {};
                 if (std::holds_alternative<ExecutionFailed>(*event)) {

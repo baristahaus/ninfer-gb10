@@ -18,6 +18,10 @@ ninfer_add_test(ninfer_width_two_options_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/../runtime/test_width_two_options.cpp"
   LIBRARIES ninfer_engine ninfer_core ninfer_model_execution)
 
+ninfer_add_test(ninfer_poll_decision_test
+  SOURCES "${CMAKE_CURRENT_LIST_DIR}/../runtime/test_poll_decision.cpp"
+  LIBRARIES ninfer_runtime_support)
+
 ninfer_add_test(ninfer_sampling_defaults_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/../runtime/test_sampling_defaults.cpp"
   LIBRARIES ninfer_engine ninfer_core)

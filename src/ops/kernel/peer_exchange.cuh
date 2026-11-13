@@ -439,6 +439,14 @@ __global__ __launch_bounds__(256) void peer_exchange_pipelined_kernel(
                 fault.store(1u, cuda::memory_order_relaxed);
                 published = 0;
                 if (first) {
+                    // READ `slot` AS THE MAILBOX SLOT, NOT AS THE STREAM POSITION. It is the slot
+                    // the caller took from PeerMailbox::slot_for, and slot 0 is the FIRST EXCHANGE
+                    // OF THE ROUND -- not the first launch on this rank's stream. The round
+                    // enqueues its traversal, its projection and its decision work before the
+                    // exchange, so a rank can be at slot 0 while its stream still holds several
+                    // launches from this round or the previous one. Every reading of this line that
+                    // treated slot=0 as 'the first thing on the stream' was reading it wrong.
+                    //
                     // THE INVARIANT, NAMED. The line above this kernel states it as an assumption:
                     // "Both ranks execute the same schedule, so each slot's epochs advance in
                     // lockstep". It was never checked. The check is the gap between this rank's

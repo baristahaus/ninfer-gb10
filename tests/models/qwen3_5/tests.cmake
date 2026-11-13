@@ -26,7 +26,7 @@ ninfer_add_test(ninfer_qwen3_5_tp2_accept_real_test NEEDS_SOURCE_DIR
           "${CMAKE_CURRENT_LIST_DIR}/../../support/launch_counter.cpp"
   LIBRARIES ninfer_engine CUDA::cudart)
 target_link_options(ninfer_qwen3_5_tp2_accept_real_test PRIVATE
-  -Wl,--wrap=cudaLaunchKernel -Wl,--wrap=__cudaLaunchKernel -Wl,--wrap=cudaLaunchKernelExC -Wl,--wrap=cuLaunchKernel -Wl,--wrap=cuLaunchKernelEx -Wl,--wrap=cudaMemcpyAsync -Wl,--wrap=cudaMemsetAsync
+  -Wl,--wrap=cudaLaunchKernel -Wl,--wrap=__cudaLaunchKernel -Wl,--wrap=cudaLaunchKernelExC -Wl,--wrap=cudaMemcpyAsync -Wl,--wrap=cudaMemsetAsync
   -Wl,--wrap=cudaGraphLaunch -Wl,--wrap=cudaStreamWaitEvent
   -Wl,--wrap=cudaMemcpy2DAsync -Wl,--wrap=cudaMemcpy3DAsync
   # The per-site tags live in the model code inside the shared library; a weak symbol referenced

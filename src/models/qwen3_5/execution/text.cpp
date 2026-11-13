@@ -445,6 +445,20 @@ void TextRun::capture_features(std::uint32_t layer) {
 }
 
 void TextRun::finish() {
+    // NO COLLECTIVE IN THIS FUNCTION: a conditional copy_bytes_async and one ops::rmsnorm (the final
+    // norm, unsharded). So a 1 s cost bracketed here is host-side work or an enqueue that blocks,
+    // NOT a collective question -- which is why two timestamps suffice and why the read differs from
+    // project_decode's six.
+    const auto fin_stamp = [&](const char* where) {
+        if (std::getenv("NINFER_LANE_TRACE") == nullptr) { return; }
+        std::timespec ts{};
+        (void)::clock_gettime(CLOCK_MONOTONIC, &ts);
+        std::fprintf(stderr, "[fin-time] rank=%d at=%s ns=%lld\n",
+                     view_.collective ? view_.collective->rank : 0, where,
+                     (long long)ts.tv_sec * 1000000000LL + (long long)ts.tv_nsec);
+        std::fflush(stderr);
+    };
+    fin_stamp("entry");
     if (features_ && !features_->residency_slots.data && features_->positions.data) {
         const auto bytes = std::size_t(residual_.ne[1]) * sizeof(std::int32_t);
         copy_bytes_async({features_->positions.data, bytes, features_->positions.device},
@@ -455,6 +469,7 @@ void TextRun::finish() {
     const auto& parameters = view_.parameters;
     ops::rmsnorm(residual_, parameters.text.final_norm,
                  parameters.profile->config.text.rms_norm_eps, true, hidden, view_.execution);
+    fin_stamp("exit");
 }
 
 bool TextRun::start() {

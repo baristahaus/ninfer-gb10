@@ -10,6 +10,15 @@
 // boundary, so it must not perturb the timing. If the lane behaves differently with it linked, that
 // is itself information: it says the failure is marginal in timing.
 //
+// THE INSTRUMENT RULE THIS INSTRUMENT EARNED SEVEN TIMES: A NUMBER THAT CARRIES NO CONTEXT CAN BE
+// ATTRIBUTED TO THE WRONG THING. Free memory with no device (this file's gap probe, until
+// 8ce16c00), a gap with no call kind (until 40a31d21), a count with no family (launch=0 before the
+// shared-library boundary was documented), an audit with one label for five gather sites
+// (86255cdc), a status word with no armed check (75b9f63d), a launch count with a family left
+// unwrapped (df981276), and a zero with no distinction between 'could not see' and 'agreed'.
+// EVERY PROBE HERE PRINTS THE DEVICE, THE KIND AND THE INDEX IT MEASURED. Keep it that way: a
+// number that needs its neighbour to be interpreted is one refactor away from being wrong.
+//
 // ARMED CHECK: the boundary hook prints every round, including round 0, so a run that prints
 // nothing or prints zeros is a run where the instrument was NOT linked -- check that before reading
 // equal counts as a result.

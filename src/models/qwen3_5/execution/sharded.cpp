@@ -159,7 +159,22 @@ void all_gather_logits(const models::ShardedGroup& group, int rank, std::size_t&
     // sticky ACROSS rounds too, which made one transient failure disable every later round and made
     // the first failure unreadable after the fact. This is the round boundary for the mailbox's
     // purposes: the gather runs once per round, after the previous round has completed.
-    if (group.mailbox) { group.mailbox->clear_hang(); }
+    // THE SHARED GUARD AT BOTH ENDS. The hang word is shared across ranks and can change an
+    // enqueue's outcome without being read; printing it at entry and after the gather says whether
+    // it changed DURING this gather, which is the case a per-rank value cannot explain.
+    const auto hang_word = [&](const char* where) {
+        if (!group.mailbox) { return; }
+        std::fprintf(stderr, "[gather-hang] rank=%d at=%s hang=%d round=%u\n", rank, where,
+                     group.mailbox->hang_reported() ? 1 : 0, group.mailbox->round_index());
+        std::fflush(stderr);
+    };
+    hang_word("entry");
+    if (group.mailbox) {
+        group.mailbox->clear_hang();
+        // One line per rank per round: the mailbox is correct on every axis, so the remaining
+        // question is whether both ranks ISSUE the same number of exchanges.
+        group.mailbox->print_exchange_counts(static_cast<int>(group.mailbox->round_index()));
+    }
     const std::int32_t columns = local.ne[1];
     if (full.ne[0] != group.logits[0].ne[0] || local.ne[0] != full.ne[0] / 2) {
         throw std::invalid_argument(

@@ -337,16 +337,38 @@ public:
                     // "issued the same round" and "completed the same round" coincide; the MTP lane
                     // is the first consumer to set device_work at commit and so the first to park.
                     observe_host_call(host_.progress_ns, [&]() -> std::optional<Event> {
-                        // Poll every rank and reduce each result to the three facts the decision
-                        // needs, then let the pure decision say what to do. The decision itself
-                        // lives in poll_decision.h so it can be unit-tested without a Device; see
-                        // decide_poll for the six rules and why rank 0's event alone is not enough.
+                        // POLL RANK 0 FIRST AND RETURN BEFORE TOUCHING A PEER WHEN IT HAS NO
+                        // EVENT. program().poll() is not a readiness query: it advances the model's
+                        // traversal and enqueues device work (qwen3_5's TextRun::poll walks layers,
+                        // issuing mixer() and moe->start()). Polling a peer on every host poll
+                        // therefore runs that rank ahead of the lockstep order -- it reaches its
+                        // exchange before the leading rank has reached the same round, the round
+                        // never releases, and the give-up counter no longer fires because the two
+                        // ranks are not at the same exchange. The decision in poll_decision.h is
+                        // pure; its INPUTS are not, so the caller has to preserve the precondition
+                        // that makes them meaningful: a peer is polled only because rank 0 was ready.
+                        bind_rank(0);
+                        auto rank0_event = program().poll();
+                        trace_poll_result(0, rank0_event);
+                        if (!rank0_event) { return std::nullopt; }
+                        if (std::holds_alternative<ExecutionFailed>(*rank0_event)) {
+                            return rank0_event;
+                        }
+                        // Rank 0 is ready, so every peer below is polled at a point where the
+                        // lockstep order has been reached. Reduce each result to the three facts the
+                        // decision needs, then let the pure decision say what to do. The decision
+                        // itself lives in poll_decision.h so it can be unit-tested without a Device;
+                        // see decide_poll for the six rules and why rank 0's event alone is enough
+                        // only when it is the leading rank's.
                         std::vector<std::optional<Event>> polled(workers_.size());
                         std::vector<PolledRank> summary(workers_.size());
-                        for (std::size_t rank = 0; rank < workers_.size(); ++rank) {
+                        polled[0]               = std::move(rank0_event);
+                        summary[0].has_event    = true;
+                        summary[0].ticket_id    = std::visit(
+                            [](const auto& value) { return value.ticket.id; }, *polled[0]);
+                        for (std::size_t rank = 1; rank < workers_.size(); ++rank) {
                             bind_rank(rank);
-                            polled[rank] = rank == 0 ? program().poll()
-                                                     : workers_[rank]->program().poll();
+                            polled[rank] = workers_[rank]->program().poll();
                             trace_poll_result(rank, polled[rank]);
                             if (!polled[rank]) { continue; }
                             summary[rank].has_event = true;

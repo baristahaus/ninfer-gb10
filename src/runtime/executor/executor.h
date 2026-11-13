@@ -20,6 +20,12 @@ public:
     virtual void supply(ExecutionTicket, DecisionInput)                                      = 0;
     [[nodiscard]] virtual CommitReceipt commit(ExecutionTicket, typename Types::Commit)      = 0;
     virtual void discard(ExecutionTicket)                                                    = 0;
+    // NOT A READINESS QUERY. poll() ADVANCES the program's traversal and ENQUEUES device work
+    // (qwen3_5's TextRun::poll walks layers, issuing mixer() and moe->start()). It is therefore
+    // not free and it must not be called speculatively on a rank that has not been reached by
+    // the lockstep order: a peer polled before the leading rank completed the same round runs
+    // ahead, meets its exchange early, and the round never releases. Every caller polls the
+    // leading rank first and touches a peer only once that rank has reported an event.
     [[nodiscard]] virtual std::optional<ExecutionEvent<Types>> poll()                        = 0;
     virtual void flush()                                                                     = 0;
     // Closes submission and completes all physical readers before control owners are released.

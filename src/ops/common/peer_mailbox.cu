@@ -33,6 +33,10 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <ctime>
+#include <cstdio>
+#include <mutex>
+#include <vector>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -50,6 +54,8 @@ extern std::atomic<int> g_progress_active[2];
 } // namespace ninfer::runtime::detail
 
 namespace ninfer::ops {
+namespace { void record_launch_time(const std::timespec&, const std::timespec&); }
+
 
 namespace {
 
@@ -392,14 +398,58 @@ void PeerMailbox::enqueue_exchange_sum(int rank, int slot, void* data, std::size
             if (trace_) { tuning.trace = true; }
         }
         const int prefetch_blocks  = take_l2_hint(l2_hint_[rank], blocks, kThreads, tuning);
+        // THE ENGINE'S OWN CLOCK AROUND THE LAUNCH. Every other number in this workstream came from
+        // nsys or a harness; this is the engine timing itself, so it can be compared with the
+        // harness's 1.2 us tight loop on the same terms. Percentiles are printed because the
+        // question is whether the 128 us median was a real median or a profiler-inflated tail.
+        std::timespec launch_t0{}, launch_t1{};
+        (void)::clock_gettime(CLOCK_MONOTONIC, &launch_t0);
         detail::peer_exchange_pipelined_kernel<kVecsPerLane>
             <<<blocks + prefetch_blocks, kThreads, 0, stream>>>(
                 partial, mine_payload, set.flags[rank] + flag_slot, peer_payload,
                 set.flags[1 - rank] + flag_slot, words + lane_base, hang_, static_cast<int>(vecs),
                 tuning);
+        (void)::clock_gettime(CLOCK_MONOTONIC, &launch_t1);
+        record_launch_time(launch_t0, launch_t1);
     }
     CUDA_CHECK(cudaGetLastError());
 }
+
+namespace {
+// Launch-time histogram for the mailbox kernel, in microseconds. Static because the measurement is
+// per process, and printed once at exit so the run's distribution is available without a profiler.
+struct LaunchTimes {
+    std::mutex mutex;
+    std::vector<double> us;
+    void add(double v) {
+        std::lock_guard<std::mutex> lock(mutex);
+        us.push_back(v);
+    }
+    ~LaunchTimes() {
+        if (us.empty()) {
+            std::fprintf(stderr, "[mailbox-launch] no samples\n");
+            return;
+        }
+        std::sort(us.begin(), us.end());
+        const auto at = [&](double q) { return us[(std::size_t)(q * (us.size() - 1))]; };
+        std::size_t above = 0;
+        double total = 0;
+        for (double v : us) { total += v; if (v > 100.0) ++above; }
+        std::fprintf(stderr,
+                     "[mailbox-launch] n=%zu p50=%.2f p90=%.2f p99=%.2f max=%.2f us above100=%zu "
+                     "total=%.1f ms\n",
+                     us.size(), at(0.50), at(0.90), at(0.99), us.back(), above, total / 1000.0);
+    }
+};
+LaunchTimes& launch_times() {
+    static LaunchTimes times;
+    return times;
+}
+void record_launch_time(const std::timespec& t0, const std::timespec& t1) {
+    const double us = (double)(t1.tv_sec - t0.tv_sec) * 1e6 + (double)(t1.tv_nsec - t0.tv_nsec) / 1e3;
+    launch_times().add(us);
+}
+} // namespace
 
 void PeerMailbox::enqueue_exchange_sum_f32(int rank, int slot, void* data, std::size_t bytes,
                                            void* bf16_out, cudaStream_t stream) const {

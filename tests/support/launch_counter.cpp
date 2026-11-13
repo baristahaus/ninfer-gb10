@@ -33,6 +33,7 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <ctime>
 
 namespace {
 
@@ -49,6 +50,27 @@ struct Counts {
 
 Counts g_counts[2];
 Counts g_snapshot[2];
+
+// THE INTER-ENQUEUE TIMING. The enqueued-work measures all agree and the outcome still differs, so
+// the difference is in WHEN, not WHAT -- and no enqueue counter can see that. One clock_gettime per
+// intercepted call (tens of nanoseconds against calls that are already microseconds), and the gap
+// between consecutive calls per rank. The LARGEST gap and its INDEX are printed, not just the
+// total: a total says a rank was slow somewhere, the index says where.
+//
+// LIMITATION, and it must be read before the number: this measures gaps between the EXECUTABLE'S
+// calls. Kernel launches inside libninfer_ops.so are invisible (the same shared-library boundary
+// that makes launch=0 a blind spot), so a host-side delay INSIDE an op shows as one large gap --
+// which is the signal we want -- but a delay BETWEEN two library-internal launches would not be
+// seen. Acceptable for 'is one rank waiting between enqueues'; not a general profiler.
+struct Timing {
+    std::timespec last{};
+    bool have_last          = false;
+    std::uint64_t calls     = 0;
+    std::uint64_t total_ns  = 0;
+    std::uint64_t max_ns    = 0;
+    std::uint64_t max_index = 0;
+};
+Timing g_timing[2];
 int g_round = 0;
 bool g_printed_startup = false;
 
@@ -59,7 +81,25 @@ int device_index() {
 }
 
 void bump(std::uint64_t Counts::*member) {
-    g_counts[device_index()].*member += 1;
+    const int device = device_index();
+    g_counts[device].*member += 1;
+    std::timespec now{};
+    (void)::clock_gettime(CLOCK_MONOTONIC, &now);
+    Timing& timing = g_timing[device];
+    if (timing.have_last) {
+        const std::int64_t seconds = static_cast<std::int64_t>(now.tv_sec) - timing.last.tv_sec;
+        const std::int64_t nanos   = static_cast<std::int64_t>(now.tv_nsec) - timing.last.tv_nsec;
+        const std::uint64_t gap_ns =
+            static_cast<std::uint64_t>(seconds * 1000000000LL + nanos);
+        timing.total_ns += gap_ns;
+        if (gap_ns > timing.max_ns) {
+            timing.max_ns    = gap_ns;
+            timing.max_index = timing.calls;
+        }
+    }
+    timing.last      = now;
+    timing.have_last = true;
+    ++timing.calls;
     if (!g_printed_startup) {
         g_printed_startup = true;
         std::fprintf(stderr, "[launch-count] armed: the wrap shims are linked and counting\n");
@@ -166,6 +206,14 @@ void ninfer_launch_round_boundary(void) {
                      static_cast<unsigned long long>(delta.copy3d),
                      static_cast<unsigned long long>(delta.total()));
         g_snapshot[rank] = g_counts[rank];
+        std::fprintf(stderr,
+                     "[launch-count] round=%d rank=%d gap_total_us=%llu gap_max_us=%llu "
+                     "gap_max_at_call=%llu calls=%llu\n",
+                     g_round, rank, static_cast<unsigned long long>(g_timing[rank].total_ns / 1000),
+                     static_cast<unsigned long long>(g_timing[rank].max_ns / 1000),
+                     static_cast<unsigned long long>(g_timing[rank].max_index),
+                     static_cast<unsigned long long>(g_timing[rank].calls));
+        g_timing[rank] = Timing{};
     }
     if (g_counts[0].total() + g_counts[1].total() == 0) {
         std::fprintf(stderr,

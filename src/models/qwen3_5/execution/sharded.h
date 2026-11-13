@@ -59,6 +59,20 @@
 
 #include "core/arena.h"
 #include "core/device.h"
+// THE INVARIANT THAT PREVENTS THE SIXTH INSTANCE: every cross-rank action must be a function of
+// round-level inputs only. Five instances of its violation have been found in three files --
+// (1) the gather's chunk OFFSET (299cf5e7), (2) the gather's chunk COUNT (both ranks must read the
+// same columns), (3) the ROUND INDEX label (a value called "round" that counted gathers), (4) the
+// ACCEPT GATE (decision_supplied computed from a per-rank `constrained`), (5) the WORK VARIANT
+// (is_decode/index inferred from each rank's local work). Each was a quantity that must agree across
+// ranks derived from a local, per-rank value.
+// COROLLARY for shared state, a different shape: a guard shared across ranks must be cleared at a
+// point both ranks agree on, and its state must be readable before it can change an action -- the
+// mailbox hang word is shared, was sticky across rounds, and could change an enqueue's outcome
+// without being read (see PeerMailbox::clear_hang).
+// Write the invariant down when you find the FIRST instance: the first is evidence of a class, the
+// fifth is evidence of a habit.
+
 #include "models/common/sharded_group.h"
 #include "models/qwen3_5/execution/linear.h"
 #include "models/qwen3_5/execution/parameters.h"

@@ -1,3 +1,6 @@
+#include <cstdio>
+#include <cstdlib>
+#include <ctime>
 #include "models/qwen3_5/program/internal.h"
 #include "models/qwen3_5/execution/draft.h"
 #include "models/qwen3_5/execution/text.h"
@@ -5,6 +8,17 @@
 #include <algorithm>
 
 namespace ninfer::models::qwen3_5::detail {
+namespace {
+void lane_stamp(int rank, const char* where, int round) {
+    if (std::getenv("NINFER_LANE_TRACE") == nullptr) { return; }
+    std::timespec ts{};
+    (void)::clock_gettime(CLOCK_MONOTONIC, &ts);
+    std::fprintf(stderr, "[lane-time] rank=%d at=%s round=%d ns=%lld\n", rank, where, round,
+                 (long long)ts.tv_sec * 1000000000LL + (long long)ts.tv_nsec);
+    std::fflush(stderr);
+}
+} // namespace
+
 
 std::string sharded_forward_refusal(bool has_peer_mirrors, bool forward_wired) {
     if (!has_peer_mirrors) { return {}; }  // the single-device lane
@@ -17,6 +31,8 @@ std::string sharded_forward_refusal(bool has_peer_mirrors, bool forward_wired) {
 }
 
 void RankProgramImpl::progress() {
+    lane_stamp(collective_ ? collective_->rank : 0, "round_entry",
+               static_cast<int>(collective_ ? collective_->reduce_index : 0));
     // THE REFUSAL THE DECLARATION PROMISES. internal.h:190-194 says the peer mirrors' presence is
     // the sharded-lane flag the round entry refuses on, because the sharded forward is not wired and
     // a round would project sharded weights through the unsharded path and produce wrong numbers.
@@ -91,6 +107,8 @@ void RankProgramImpl::progress() {
                         project_decode(operation.batch, operation.width);
                         operation.projected = true;
                     }
+                    lane_stamp(collective_ ? collective_->rank : 0, "traversal_done",
+                               static_cast<int>(collective_ ? collective_->reduce_index : 0));
                     operation.stage = ComputeStage::AwaitDecision;
                 }
                 break;

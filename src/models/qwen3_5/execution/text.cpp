@@ -1,3 +1,6 @@
+#include <ctime>
+#include <cstdio>
+#include <cstdlib>
 #include "models/qwen3_5/execution/text.h"
 
 #include "core/nvtx.h"
@@ -473,7 +476,39 @@ void TextRun::complete_layer() {
 }
 
 bool TextRun::poll() {
-    if (stage_ == Stage::Done) return true;
+    // THE COOPERATIVE-LOOP COUNTER. The traversal advances one layer per call and may return false,
+    // meaning 'call me again'. How many calls a rank needs per layer is decided by try_before_layer
+    // and moe->start on PER-RANK MoE state, so a rank whose MoE returns false more often needs more
+    // iterations for the same layers and takes longer wall-clock. That is legitimate cooperative
+    // scheduling, not a collective action -- but it is how a per-rank value becomes a per-rank
+    // WALL-CLOCK cost, which is what the 1 s delta at launch_decision looks like.
+    struct PollCounts {
+        std::uint64_t calls = 0;
+        std::uint64_t try_before_false = 0;
+        std::uint64_t start_false = 0;
+        std::uint64_t layers_done = 0;
+        int rank = 0;
+    };
+    static thread_local PollCounts poll_counts;
+    if (std::getenv("NINFER_LANE_TRACE") != nullptr) {
+        ++poll_counts.calls;
+        // PRINT ON THRESHOLD, NOT ON COMPLETION. A failing round never reaches Stage::Done, so a
+        // print placed there measures nothing on the path that fails. The counter is monotonic, so a
+        // partial trace is enough to compare the two ranks' RATES -- and a rate difference is the
+        // finding.
+        if (poll_counts.calls % 10 == 0) {
+            std::fprintf(stderr,
+                         "[lane-poll] rank=%d calls=%llu try_before_false=%llu start_false=%llu "
+                         "layers_done=%llu layer=%zu\n",
+                         view_.collective ? view_.collective->rank : 0,
+                         (unsigned long long)poll_counts.calls,
+                         (unsigned long long)poll_counts.try_before_false,
+                         (unsigned long long)poll_counts.start_false,
+                         (unsigned long long)poll_counts.layers_done, layer_);
+            std::fflush(stderr);
+        }
+    }
+    if (stage_ == Stage::Done) { return true; }
     if (stage_ != Stage::Layer && stage_ != Stage::PostMixer)
         throw std::logic_error("Main traversal is not active");
     if (stage_ == Stage::PostMixer) {
@@ -483,9 +518,25 @@ bool TextRun::poll() {
     const auto& parameters = view_.parameters;
     const auto& config     = parameters.profile->config.text;
     while (layer_ < parameters.text.layers.size()) {
+        // ONE LINE PER LAYER PER RANK, no threshold and no deduplication: ~35 layers x 2 ranks is
+        // 70 lines, which is readable -- and it cannot be silenced by a count smaller than its
+        // period because there is no period. The per-layer deltas distinguish a flat cost (post-loop
+        // path), a single-layer jump (that layer), and a steadily growing cost (each layer a little
+        // more on one rank).
+        if (std::getenv("NINFER_LANE_TRACE") != nullptr) {
+            std::timespec layer_ts{};
+            (void)::clock_gettime(CLOCK_MONOTONIC, &layer_ts);
+            std::fprintf(stderr, "[lane-layer] rank=%d layer=%zu ns=%lld\n",
+                         view_.collective ? view_.collective->rank : 0, layer_,
+                         (long long)layer_ts.tv_sec * 1000000000LL + (long long)layer_ts.tv_nsec);
+            std::fflush(stderr);
+        }
         const auto& block  = parameters.text.layers[layer_];
         const auto* routed = std::get_if<moe::Parameters>(&block.ffn);
-        if (view_.moe && routed && !view_.moe->try_before_layer(routed->bank)) return false;
+        if (view_.moe && routed && !view_.moe->try_before_layer(routed->bank)) {
+            if (std::getenv("NINFER_LANE_TRACE") != nullptr) { ++poll_counts.try_before_false; }
+            return false;
+        }
         mixer(layer_);
         if (view_.moe && routed) {
             post_mixer_scope_.emplace(view_.workspace.scope());
@@ -495,8 +546,10 @@ bool TextRun::poll() {
                          post_mixer_hidden_, view_.execution);
             stage_ = Stage::PostMixer;
             if (!view_.moe->start(routed->bank, post_mixer_hidden_, residual_, view_.workspace,
-                                  next_projection_hints(layer_)))
+                                  next_projection_hints(layer_))) {
+                if (std::getenv("NINFER_LANE_TRACE") != nullptr) { ++poll_counts.start_false; }
                 return false;
+            }
         } else {
             post_mixer(layer_);
         }

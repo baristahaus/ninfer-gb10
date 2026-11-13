@@ -50,6 +50,15 @@ std::atomic<int> ninfer_moe_parity_window{0};
 namespace ninfer::ops {
 namespace {
 
+// NINFER_MTP_DUMP MAY BE UNSET. std::string(nullptr) is undefined behaviour -- in practice a throw
+// or a segfault -- so the pointer is checked before the string is built. An unset or empty variable
+// yields an empty string, which makes the dump's fopen fail and the dump be skipped rather than
+// crash: a diagnostic must not fail exactly when someone is trying to use it.
+static std::string dump_directory() {
+    const char* directory = std::getenv("NINFER_MTP_DUMP");
+    return directory != nullptr ? std::string(directory) : std::string{};
+}
+
 constexpr int kHidden                 = 2560;
 constexpr int kExperts                = 512;
 constexpr int kTop                    = 10;
@@ -1120,7 +1129,7 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
         if (dump_ready && n < 2) {
             auto rdump = [&](const char* nm, const void* p, std::size_t by) {
                 if (p == nullptr || by == 0) { return; }
-                std::string path = std::string(std::getenv("NINFER_MTP_DUMP")) + "/" + nm + ".bin";
+                std::string path = dump_directory() + "/" + nm + ".bin";
                 if (FILE* f = fopen(path.c_str(), "wb"); f != nullptr) {
                     void* host = std::malloc(by);
                     CUDA_CHECK(cudaMemcpyAsync(host, p, by, cudaMemcpyDeviceToHost, stream));
@@ -1269,7 +1278,7 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
                     auto gdump = [&](const char* nm, const void* p, std::size_t by) {
                         if (p == nullptr || by == 0) { return; }
                         std::string path =
-                            std::string(std::getenv("NINFER_MTP_DUMP")) + "/" + nm + ".bin";
+                            dump_directory() + "/" + nm + ".bin";
                         if (FILE* f = fopen(path.c_str(), "wb"); f != nullptr) {
                             void* host = std::malloc(by);
                             CUDA_CHECK(cudaMemcpyAsync(host, p, by, cudaMemcpyDeviceToHost, stream));
@@ -1348,7 +1357,7 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
                     auto qdump = [&](const char* nm, const void* p, std::size_t by) {
                         if (p == nullptr || by == 0) { return; }
                         std::string path =
-                            std::string(std::getenv("NINFER_MTP_DUMP")) + "/" + nm + ".bin";
+                            dump_directory() + "/" + nm + ".bin";
                         if (FILE* f = fopen(path.c_str(), "wb"); f != nullptr) {
                             void* host = std::malloc(by);
                             CUDA_CHECK(cudaMemcpyAsync(host, p, by, cudaMemcpyDeviceToHost, stream));

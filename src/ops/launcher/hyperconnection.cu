@@ -24,6 +24,15 @@ std::atomic<int> ninfer_mtp_phase{0};
 namespace ninfer::ops {
 namespace {
 
+// NINFER_MTP_DUMP MAY BE UNSET. std::string(nullptr) is undefined behaviour -- in practice a throw
+// or a segfault -- so the pointer is checked before the string is built. An unset or empty variable
+// yields an empty string, which makes the dump's fopen fail and the dump be skipped rather than
+// crash: a diagnostic must not fail exactly when someone is trying to use it.
+static std::string dump_directory() {
+    const char* directory = std::getenv("NINFER_MTP_DUMP");
+    return directory != nullptr ? std::string(directory) : std::string{};
+}
+
 using detail::hyperconnection::kHidden;
 using detail::hyperconnection::kHyper;
 using detail::hyperconnection::kInjectionPartialsPerToken;
@@ -635,7 +644,7 @@ void hyperconnection_mix(const Tensor& hyper, const HyperConnectionWeights& weig
         int capN = 0; cudaStreamIsCapturing(stream, (cudaStreamCaptureStatus*)&capN);
     if (capN == 0 && mix_dump_n.load() > 0 && mix_dump_n.load() <= 64) {
             const int n = mix_dump_n.load() - 1;
-            std::string path = std::string(std::getenv("NINFER_MTP_DUMP")) + "/mpre" +
+            std::string path = dump_directory() + "/mpre" +
                                std::to_string(n) + "_hyper.bin";
             if (FILE* f = fopen(path.c_str(), "wb"); f != nullptr) {
                 void* host = std::malloc(hyper.bytes());
@@ -655,7 +664,7 @@ void hyperconnection_mix(const Tensor& hyper, const HyperConnectionWeights& weig
     int capM = 0; cudaStreamIsCapturing(stream, (cudaStreamCaptureStatus*)&capM);
     if (capM == 0 && mix_dump_n.load() > 0 && mix_dump_n.load() <= 64) {
         const int n = mix_dump_n.load() - 1;
-        std::string path = std::string(std::getenv("NINFER_MTP_DUMP")) + "/mn" +
+        std::string path = dump_directory() + "/mn" +
                            std::to_string(n) + "_normalized.bin";
         if (FILE* f = fopen(path.c_str(), "wb"); f != nullptr) {
             void* host = std::malloc(normalized.bytes());

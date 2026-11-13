@@ -171,9 +171,6 @@ void all_gather_logits(const models::ShardedGroup& group, int rank, std::size_t&
     hang_word("entry");
     if (group.mailbox) {
         group.mailbox->clear_hang();
-        // One line per rank per round: the mailbox is correct on every axis, so the remaining
-        // question is whether both ranks ISSUE the same number of exchanges.
-        group.mailbox->print_exchange_counts(static_cast<int>(group.mailbox->round_index()));
     }
     const std::int32_t columns = local.ne[1];
     if (full.ne[0] != group.logits[0].ne[0] || local.ne[0] != full.ne[0] / 2) {

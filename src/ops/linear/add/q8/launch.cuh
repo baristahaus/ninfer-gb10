@@ -49,4 +49,13 @@ void launch_q8_add_mma(const Tensor& x, const Weight& weight, Tensor& residual,
     launch_q8_a16_mma<Schedule>(q8_linear_operands(x, weight), output, Q8AddMmaEpilogue{}, stream);
 }
 
+
+// One instantiation point per schedule. Both add/q8 n2048 shape files select these two MMA
+// schedules, so each instantiation used to be emitted in both translation units and the module
+// registered the same __global__ kernel twice. The definitions live in instances.cu.
+extern template void launch_q8_add_mma<Q8A16MmaSchedule<32, 128, 64, 32, 16, 2, 2>>(
+    const Tensor& x, const Weight& weight, Tensor& residual, cudaStream_t stream);
+extern template void launch_q8_add_mma<Q8A16MmaSchedule<64, 128, 64, 64, 16, 2, 2>>(
+    const Tensor& x, const Weight& weight, Tensor& residual, cudaStream_t stream);
+
 } // namespace ninfer::ops::detail

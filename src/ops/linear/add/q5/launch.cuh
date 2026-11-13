@@ -2,6 +2,7 @@
 
 #include "ops/common/numeric/convert.cuh"
 #include "ops/common/cuda/memory.cuh"
+#include "ops/linear/kernels/q5/q5_instances.cuh"
 #include "ops/linear/kernels/q5/q5_mma_launch.cuh"
 #include "ops/linear/kernels/q5/q5_sliced_k_launch.cuh"
 #include "ops/linear/kernels/q5/q5_simt_launch.cuh"
@@ -108,5 +109,30 @@ void launch_q5_add_simt(const Tensor& x, const Weight& w, Tensor& residual, cuda
                                         LinearBf16StridedOutput{data, stride, 0},
                                         LinearResidualAddEpilogue{{data, stride, 0}}, stream);
 }
+
+
+// One instantiation point per schedule. Both add/q5 shape files select the same sliced-K, collective
+// and pointwise schedules, so each template instantiation used to be emitted in both translation
+// units; with separable device compilation the module then registered the same __global__ kernel
+// twice, which is what made compute-sanitizer and cuda-gdb refuse the binary. The definitions live in
+// instances.cu and these declarations keep every other translation unit from emitting them again.
+extern template void launch_q5_add_sliced<q5_instances::SlicedR16T8W4S2>(
+    const Tensor& x, const Weight& w, Tensor& residual, cudaStream_t stream);
+extern template void launch_q5_add_sliced<q5_instances::SlicedR16T16W4S2>(
+    const Tensor& x, const Weight& w, Tensor& residual, cudaStream_t stream);
+extern template void launch_q5_add_sliced<q5_instances::SlicedR16T24W4S2>(
+    const Tensor& x, const Weight& w, Tensor& residual, cudaStream_t stream);
+extern template void launch_q5_add_sliced<q5_instances::SlicedR32T24W4S2Pairwise>(
+    const Tensor& x, const Weight& w, Tensor& residual, cudaStream_t stream);
+extern template void launch_q5_add_sliced<q5_instances::SlicedR32T32W2S2>(
+    const Tensor& x, const Weight& w, Tensor& residual, cudaStream_t stream);
+extern template void launch_q5_add_sliced<q5_instances::SlicedR32T32W4S2>(
+    const Tensor& x, const Weight& w, Tensor& residual, cudaStream_t stream);
+extern template void launch_q5_add_sliced<q5_instances::SlicedR32T64W2S1>(
+    const Tensor& x, const Weight& w, Tensor& residual, cudaStream_t stream);
+extern template void launch_q5_add_collective<q5_instances::MmaR64T128>(
+    const Tensor& x, const Weight& w, Tensor& residual, cudaStream_t stream);
+extern template void launch_q5_add_pointwise<q5_instances::MmaR32T128>(
+    const Tensor& x, const Weight& w, Tensor& residual, cudaStream_t stream);
 
 } // namespace ninfer::ops::detail

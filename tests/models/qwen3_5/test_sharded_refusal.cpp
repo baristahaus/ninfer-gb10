@@ -34,15 +34,22 @@ void expect(bool condition, const char* what) {
 int main() {
     using ninfer::models::qwen3_5::detail::sharded_forward_refusal;
 
-    const std::string refused = sharded_forward_refusal(true);
+    const std::string refused = sharded_forward_refusal(true, false);
     expect(!refused.empty(), "a rank with the peer mirrors must be refused");
     expect(refused.find("sharded forward is not wired") != std::string::npos,
            "the refusal names the reason: the sharded forward is not wired");
     expect(refused.find("Refusing the round") != std::string::npos,
            "the refusal says the round is refused");
 
-    const std::string allowed = sharded_forward_refusal(false);
-    expect(allowed.empty(), "a rank without the peer mirrors must not be refused");
+    // A rank without the mirrors is the single-device lane: never refused, wired or not.
+    expect(sharded_forward_refusal(false, false).empty(),
+           "a rank without the peer mirrors must not be refused");
+    expect(sharded_forward_refusal(false, true).empty(),
+           "a single-device lane with a wired forward must not be refused");
+
+    // A sharded lane whose forward IS wired must run: the refusal must not outlive its reason.
+    expect(sharded_forward_refusal(true, true).empty(),
+           "a sharded lane with a wired forward must not be refused");
 
     if (failures != 0) {
         std::cerr << failures << " assertion(s) failed\n";

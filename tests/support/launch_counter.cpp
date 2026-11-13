@@ -164,6 +164,26 @@ cudaError_t __wrap_cudaLaunchKernel(const void* func, dim3 grid, dim3 block, voi
     return __real_cudaLaunchKernel(func, grid, block, args, shared, stream);
 }
 
+// THE ACTUAL SYMBOL. In CUDA 13 `cudaLaunchKernel` is a macro that expands to `__cudaLaunchKernel`,
+// and the extended form is `cudaLaunchKernelExC`. Wrapping `cudaLaunchKernel` therefore wraps
+// NOTHING, which is why the launch column was zero in every run so far -- a third blind spot in the
+// same instrument, and the reason the column looked like agreement. These two are the real entry
+// points; both are wrapped so the family cannot be half-covered.
+cudaError_t __real___cudaLaunchKernel(const void*, dim3, dim3, void**, std::size_t, cudaStream_t);
+cudaError_t __real_cudaLaunchKernelExC(const cudaLaunchConfig_t*, const void*, void**);
+
+cudaError_t __wrap___cudaLaunchKernel(const void* func, dim3 grid, dim3 block, void** args,
+                                      std::size_t shared, cudaStream_t stream) {
+    bump(&Counts::launch, "launch");
+    return __real___cudaLaunchKernel(func, grid, block, args, shared, stream);
+}
+
+cudaError_t __wrap_cudaLaunchKernelExC(const cudaLaunchConfig_t* config, const void* func,
+                                       void** args) {
+    bump(&Counts::launch, "launch_ex");
+    return __real_cudaLaunchKernelExC(config, func, args);
+}
+
 cudaError_t __wrap_cudaMemcpyAsync(void* dst, const void* src, std::size_t bytes,
                                    cudaMemcpyKind kind, cudaStream_t stream) {
     bump(&Counts::memcpy, "memcpy");

@@ -12,8 +12,14 @@ target_link_libraries(ninfer_ops PUBLIC ninfer_core PRIVATE ninfer_ops_non_rdc)
 # rewrites its own CUDA calls is a liability, and a diagnostic must not change what ships.
 option(NINFER_WRAP_OPS_LAUNCHES "Wrap the ops library's CUDA calls for the launch counter (test-only)" OFF)
 if(NINFER_WRAP_OPS_LAUNCHES)
+  # THE DRIVER API MUST STAY LINKED. Adding --wrap changed the link enough that the driver-API
+  # symbols (cuTensorMapEncodeTiled, cuGetErrorName) became undefined: libcuda was dropped as
+  # apparently unused under --as-needed. Name it explicitly and disable as-needed around it, so the
+  # wrap cannot silently remove a dependency the library actually has.
+  target_link_libraries(ninfer_ops PRIVATE
+    -Wl,--no-as-needed CUDA::cuda_driver -Wl,--as-needed)
   target_link_options(ninfer_ops PRIVATE
-    -Wl,--wrap=cudaLaunchKernel -Wl,--wrap=cudaMemcpyAsync -Wl,--wrap=cudaMemsetAsync
+    -Wl,--wrap=cudaLaunchKernel -Wl,--wrap=__cudaLaunchKernel -Wl,--wrap=cudaLaunchKernelExC -Wl,--wrap=cudaMemcpyAsync -Wl,--wrap=cudaMemsetAsync
     -Wl,--wrap=cudaMemcpy2DAsync -Wl,--wrap=cudaMemcpy3DAsync -Wl,--wrap=cudaGraphLaunch
     -Wl,--wrap=cudaStreamWaitEvent)
   message(STATUS "ninfer_ops: CUDA calls wrapped for the launch counter (test-only build)")

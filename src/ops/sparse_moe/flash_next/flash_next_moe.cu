@@ -1550,6 +1550,18 @@ void swap_expert_tier_with_residency(const FlashNextExpertBank& bank, int promot
             "swap_expert_tier_with_residency: tiered bank has no swap staging buffer");
     }
     cudaStream_t stream = execution.stream();
+    // THE COPIES BELOW ARE GENUINELY ASYNCHRONOUS, and that was checked rather than assumed: the
+    // warm mini-bank is a PINNED host buffer (materializer.h:72 `std::optional<PinnedHostBuffer>
+    // pinned`, materializer.cpp:556 `storage.host = WeightParent{..., storage.pinned->data(), ...}`),
+    // so the H2D and D2H copies do not block the host thread despite being host-involved. The
+    // staging buffer is device memory (materializer.cpp:576), so the D2D never touches host.
+    //
+    // That closes the 'blocking copy' explanation for a rank that swaps more being delayed. It does
+    // NOT close the per-rank variability: the number of swaps is decided by the tier policy from
+    // THAT rank's own cache state, so two ranks can legitimately issue different numbers of these
+    // copies. The mailbox tolerates that -- it spins on epochs rather than comparing schedules, so
+    // a tiered lane and a lockstep mailbox are NOT in conflict at the design level -- and the cost
+    // is latency on the swapping rank, not a protocol violation.
 
     if ((promote_entry & 0x80000000u) == 0) {
         throw std::invalid_argument(

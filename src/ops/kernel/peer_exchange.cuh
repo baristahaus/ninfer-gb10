@@ -439,6 +439,14 @@ __global__ __launch_bounds__(256) void peer_exchange_pipelined_kernel(
                 fault.store(1u, cuda::memory_order_relaxed);
                 published = 0;
                 if (first) {
+                    // READ THE RANK AS THE POLLER, NOT AS THE LEADER. `tuning.rank` is the rank
+                    // that is SPINNING here -- the one that reached this exchange first and is
+                    // waiting for its peer to publish. It says nothing about which rank is doing
+                    // more work or which rank's stream is further along: the peer may be ahead in
+                    // work and still arrive later. 'rank=0' in this line has been read as 'rank 0
+                    // leads' and that reading shaped four rounds of reasoning; the question the
+                    // line supports is 'why is the OTHER rank late', not 'why is this rank ahead'.
+                    //
                     // READ `slot` AS THE MAILBOX SLOT, NOT AS THE STREAM POSITION. It is the slot
                     // the caller took from PeerMailbox::slot_for, and slot 0 is the FIRST EXCHANGE
                     // OF THE ROUND -- not the first launch on this rank's stream. The round

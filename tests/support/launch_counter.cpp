@@ -76,6 +76,10 @@ struct Timing {
     const char* gap_before    = "none";
     const char* gap_before2   = "none";
     std::uint64_t gap_free_mb = 0; // cudaMemGetInfo free memory at the gap, for a reclaim check
+    // THE DEVICE THE PROBE ACTUALLY READ, printed with the number rather than inherited from the
+    // counter's attribution: cudaMemGetInfo reports the CALLING THREAD'S current device, so a
+    // number that carries no device can be attributed to the wrong rank.
+    int gap_device = -1;
     const char* previous      = "none";
     const char* previous2     = "none";
 };
@@ -110,9 +114,12 @@ void bump(std::uint64_t Counts::*member, const char* kind) {
             // Free device memory at the gap: a seven-second wait is the shape of a reclaim, and
             // this distinguishes a wait from a reclaim in the same line.
             std::size_t free_bytes = 0, total_bytes = 0;
+            int probe_device = -1;
+            (void)cudaGetDevice(&probe_device);
             if (cudaMemGetInfo(&free_bytes, &total_bytes) == cudaSuccess) {
                 timing.gap_free_mb = free_bytes / (1024u * 1024u);
             }
+            timing.gap_device = probe_device;
         }
     }
     timing.previous2 = timing.previous;
@@ -229,15 +236,37 @@ void ninfer_launch_round_boundary(void) {
         std::fprintf(stderr,
                      "[launch-count] round=%d rank=%d gap_total_us=%llu gap_max_us=%llu "
                      "gap_max_at_call=%llu calls=%llu gap_kind=%s gap_before=%s "
-                     "gap_before2=%s gap_free_mb=%llu\n",
+                     "gap_before2=%s gap_free_mb=%llu gap_device=%d\n",
                      g_round, rank, static_cast<unsigned long long>(g_timing[rank].total_ns / 1000),
                      static_cast<unsigned long long>(g_timing[rank].max_ns / 1000),
                      static_cast<unsigned long long>(g_timing[rank].max_index),
                      static_cast<unsigned long long>(g_timing[rank].calls),
                      g_timing[rank].gap_kind, g_timing[rank].gap_before,
                      g_timing[rank].gap_before2,
-                     static_cast<unsigned long long>(g_timing[rank].gap_free_mb));
+                     static_cast<unsigned long long>(g_timing[rank].gap_free_mb),
+                     g_timing[rank].gap_device);
         g_timing[rank] = Timing{};
+    }
+    // THE BOUND PROBE: each rank's free memory read from a thread explicitly bound to that rank,
+    // so the number cannot inherit a device from a neighbouring line. This is the discriminator for
+    // whether the free-memory asymmetry is the engine's or the instrument's.
+    for (int rank = 0; rank < 2; ++rank) {
+        if (cudaSetDevice(rank) != cudaSuccess) {
+            std::fprintf(stderr, "[launch-count] round=%d bound_probe rank=%d cudaSetDevice FAILED\n",
+                         g_round, rank);
+            continue;
+        }
+        std::size_t free_bytes = 0, total_bytes = 0;
+        int bound = -1;
+        (void)cudaGetDevice(&bound);
+        if (cudaMemGetInfo(&free_bytes, &total_bytes) == cudaSuccess) {
+            std::fprintf(stderr,
+                         "[launch-count] round=%d bound_probe rank=%d device=%d free_mb=%llu "
+                         "total_mb=%llu\n",
+                         g_round, rank, bound,
+                         static_cast<unsigned long long>(free_bytes / (1024u * 1024u)),
+                         static_cast<unsigned long long>(total_bytes / (1024u * 1024u)));
+        }
     }
     if (g_counts[0].total() + g_counts[1].total() == 0) {
         std::fprintf(stderr,

@@ -19,7 +19,7 @@ if(NINFER_WRAP_OPS_LAUNCHES)
   target_link_libraries(ninfer_ops PRIVATE
     -Wl,--no-as-needed CUDA::cuda_driver -Wl,--as-needed)
   target_link_options(ninfer_ops PRIVATE
-    -Wl,--wrap=cudaLaunchKernel -Wl,--wrap=__cudaLaunchKernel -Wl,--wrap=cudaLaunchKernelExC -Wl,--wrap=cudaMemcpyAsync -Wl,--wrap=cudaMemsetAsync
+    -Wl,--wrap=cudaLaunchKernel -Wl,--wrap=__cudaLaunchKernel -Wl,--wrap=cudaLaunchKernelExC -Wl,--wrap=cuLaunchKernel -Wl,--wrap=cuLaunchKernelEx -Wl,--wrap=cudaMemcpyAsync -Wl,--wrap=cudaMemsetAsync
     -Wl,--wrap=cudaMemcpy2DAsync -Wl,--wrap=cudaMemcpy3DAsync -Wl,--wrap=cudaGraphLaunch
     -Wl,--wrap=cudaStreamWaitEvent)
   message(STATUS "ninfer_ops: CUDA calls wrapped for the launch counter (test-only build)")

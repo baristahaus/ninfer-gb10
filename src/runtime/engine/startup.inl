@@ -531,6 +531,12 @@ BuiltModel<typename Setup::Types> build_local_model(const artifact::Reader& read
     // `workers_.front()`, and the peers follow in rank order.
     workers.push_back(std::make_unique<RankWorker<Types>>(device, std::move(instance)));
     if (peer_worker) { workers.push_back(std::move(peer_worker)); }
+    // PHASE MARKER at a point this lane is known to reach: the executor exists by construction (the
+    // counter and the give-up line both prove it runs). Placed HERE rather than in a startup
+    // function the lane may not use -- the previous placement in construct_flash_next never fired,
+    // which is how the launch counter's first bucket stayed labelled startup+round0. Everything
+    // before this point is startup; everything after is round traffic.
+    if (&ninfer_launch_phase_marker != nullptr) { ninfer_launch_phase_marker("executor_created"); }
     auto executor =
         std::make_unique<LocalExecutor<Types>>(std::move(workers), next_session_epoch());
     auto inference = std::make_unique<InferenceInstance<Types>>(

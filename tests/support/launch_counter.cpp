@@ -288,6 +288,8 @@ extern "C" void ninfer_launch_phase_marker(const char* marker) {
 // runtime-API wrap, which is the most likely explanation for a launch column that stays zero while
 // the runtime symbols are demonstrably wired. Both driver entry points are wrapped so the path
 // cannot be half-covered.
+cudaError_t __real_cuLaunchKernel(CUfunction, unsigned, unsigned, unsigned, unsigned, unsigned,
+                                  unsigned, unsigned, CUstream, void**, void**);
 
 
 

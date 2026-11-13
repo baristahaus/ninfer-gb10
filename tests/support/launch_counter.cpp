@@ -69,6 +69,15 @@ struct Timing {
     std::uint64_t total_ns  = 0;
     std::uint64_t max_ns    = 0;
     std::uint64_t max_index = 0;
+    // The WINDOW around the largest gap: the kind of the call that was about to be issued when the
+    // gap ended, the kind just before it (what the host was returning from), and the kind before
+    // that. The gap's own kind says WHAT blocked; the neighbours say WHERE in the round it was.
+    const char* gap_kind      = "none";
+    const char* gap_before    = "none";
+    const char* gap_before2   = "none";
+    std::uint64_t gap_free_mb = 0; // cudaMemGetInfo free memory at the gap, for a reclaim check
+    const char* previous      = "none";
+    const char* previous2     = "none";
 };
 Timing g_timing[2];
 int g_round = 0;
@@ -80,7 +89,7 @@ int device_index() {
     return device;
 }
 
-void bump(std::uint64_t Counts::*member) {
+void bump(std::uint64_t Counts::*member, const char* kind) {
     const int device = device_index();
     g_counts[device].*member += 1;
     std::timespec now{};
@@ -95,8 +104,19 @@ void bump(std::uint64_t Counts::*member) {
         if (gap_ns > timing.max_ns) {
             timing.max_ns    = gap_ns;
             timing.max_index = timing.calls;
+            timing.gap_kind    = kind;
+            timing.gap_before  = timing.previous;
+            timing.gap_before2 = timing.previous2;
+            // Free device memory at the gap: a seven-second wait is the shape of a reclaim, and
+            // this distinguishes a wait from a reclaim in the same line.
+            std::size_t free_bytes = 0, total_bytes = 0;
+            if (cudaMemGetInfo(&free_bytes, &total_bytes) == cudaSuccess) {
+                timing.gap_free_mb = free_bytes / (1024u * 1024u);
+            }
         }
     }
+    timing.previous2 = timing.previous;
+    timing.previous  = kind;
     timing.last      = now;
     timing.have_last = true;
     ++timing.calls;
@@ -121,29 +141,29 @@ cudaError_t __real_cudaMemcpy3DAsync(const cudaMemcpy3DParms*, cudaStream_t);
 
 cudaError_t __wrap_cudaLaunchKernel(const void* func, dim3 grid, dim3 block, void** args,
                                     std::size_t shared, cudaStream_t stream) {
-    bump(&Counts::launch);
+    bump(&Counts::launch, "launch");
     return __real_cudaLaunchKernel(func, grid, block, args, shared, stream);
 }
 
 cudaError_t __wrap_cudaMemcpyAsync(void* dst, const void* src, std::size_t bytes,
                                    cudaMemcpyKind kind, cudaStream_t stream) {
-    bump(&Counts::memcpy);
+    bump(&Counts::memcpy, "memcpy");
     return __real_cudaMemcpyAsync(dst, src, bytes, kind, stream);
 }
 
 cudaError_t __wrap_cudaMemsetAsync(void* dst, int value, std::size_t bytes,
                                    cudaStream_t stream) {
-    bump(&Counts::memset);
+    bump(&Counts::memset, "memset");
     return __real_cudaMemsetAsync(dst, value, bytes, stream);
 }
 
 cudaError_t __wrap_cudaGraphLaunch(cudaGraphExec_t exec, cudaStream_t stream) {
-    bump(&Counts::graph);
+    bump(&Counts::graph, "graph");
     return __real_cudaGraphLaunch(exec, stream);
 }
 
 cudaError_t __wrap_cudaStreamWaitEvent(cudaStream_t stream, cudaEvent_t event, unsigned int flags) {
-    bump(&Counts::wait);
+    bump(&Counts::wait, "wait");
     return __real_cudaStreamWaitEvent(stream, event, flags);
 }
 
@@ -154,12 +174,12 @@ cudaError_t __wrap_cudaStreamWaitEvent(cudaStream_t stream, cudaEvent_t event, u
 cudaError_t __wrap_cudaMemcpy2DAsync(void* dst, std::size_t dpitch, const void* src,
                                      std::size_t spitch, std::size_t width, std::size_t height,
                                      cudaMemcpyKind kind, cudaStream_t stream) {
-    bump(&Counts::copy2d);
+    bump(&Counts::copy2d, "copy2d");
     return __real_cudaMemcpy2DAsync(dst, dpitch, src, spitch, width, height, kind, stream);
 }
 
 cudaError_t __wrap_cudaMemcpy3DAsync(const cudaMemcpy3DParms* params, cudaStream_t stream) {
-    bump(&Counts::copy3d);
+    bump(&Counts::copy3d, "copy3d");
     return __real_cudaMemcpy3DAsync(params, stream);
 }
 
@@ -208,11 +228,15 @@ void ninfer_launch_round_boundary(void) {
         g_snapshot[rank] = g_counts[rank];
         std::fprintf(stderr,
                      "[launch-count] round=%d rank=%d gap_total_us=%llu gap_max_us=%llu "
-                     "gap_max_at_call=%llu calls=%llu\n",
+                     "gap_max_at_call=%llu calls=%llu gap_kind=%s gap_before=%s "
+                     "gap_before2=%s gap_free_mb=%llu\n",
                      g_round, rank, static_cast<unsigned long long>(g_timing[rank].total_ns / 1000),
                      static_cast<unsigned long long>(g_timing[rank].max_ns / 1000),
                      static_cast<unsigned long long>(g_timing[rank].max_index),
-                     static_cast<unsigned long long>(g_timing[rank].calls));
+                     static_cast<unsigned long long>(g_timing[rank].calls),
+                     g_timing[rank].gap_kind, g_timing[rank].gap_before,
+                     g_timing[rank].gap_before2,
+                     static_cast<unsigned long long>(g_timing[rank].gap_free_mb));
         g_timing[rank] = Timing{};
     }
     if (g_counts[0].total() + g_counts[1].total() == 0) {

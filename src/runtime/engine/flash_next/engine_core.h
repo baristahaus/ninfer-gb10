@@ -504,6 +504,7 @@ private:
                                                  demote_entry, device_.execution_view());
             ops::swap_expert_tier_with_residency(down, promote[i], demote[i], promote_entry,
                                                  demote_entry, device_.execution_view());
+            ++tier_swaps_last_;
             std::fprintf(stderr, "[tierprof] layer=%d promote=%d demote=%d\n", layer, promote[i],
                          demote[i]);
         }
@@ -571,12 +572,26 @@ private:
             tier_apply_layer_swaps(layer, *bank, *down, ordered, hot, protect, budget,
                                    residency);
         }
-        std::fprintf(stderr, "[tierprof] prefetch_us=%lld pass1_us=%lld\n",
+        // PER-RANK, ONCE PER REQUEST: the swap count and the drain time, because the asymmetric
+        // wait this instrument exists to measure is HOST-SIDE WAITING BETWEEN ENQUEUES, which no
+        // enqueue counter can see. The rank is the device ordinal.
+        //
+        // WHAT ITS ZERO MEANS: on the 27B nvfp4.v3 lane tier_banks_ is 0 (engine_core.h:79 reads
+        // instance.model->tier_bank_count()), so tier_prefetch returns before pass 1 and this line
+        // never prints. That is an INACTIVITY, not an agreement -- do not read the absence of
+        // [tierprof] lines as 'the tier drains are harmless'. They are not dead code: they are
+        // correct reasoning about a configuration this lane does not have, and when the tiered lane
+        // is exercised the cudaStreamSynchronize at engine_core.h:534 and the one at
+        // flash_next_moe.cu:1541 are waiting for it. The cost here is nothing; on a tiered lane it
+        // is one fprintf per request.
+        std::fprintf(stderr, "[tierprof] rank=%d swaps=%zu prefetch_us=%lld pass1_us=%lld\n",
+                     device_.device().index(), tier_swaps_last_,
                      static_cast<long long>(std::chrono::duration_cast<std::chrono::microseconds>(
                                                 std::chrono::steady_clock::now() -
                                                 prefetch_start)
                                                 .count()),
                      static_cast<long long>(pass1_us));
+        tier_swaps_last_ = 0;
     }
 
     // SP-4 tier policy: the global pin pass. Every `NINFER_TIER_PIN_EVERY` requests,
@@ -2854,6 +2869,9 @@ private:
     const std::chrono::milliseconds long_prefill_wait_;
     ResourceManagement resources_;
 
+    // Diagnostic only: how many tier swaps this rank applied in the current request, printed with
+    // the drain time at the end of tier_prefetch. Not read by any decision.
+    mutable std::size_t tier_swaps_last_ = 0;
     mutable std::mutex execution_mutex_;
     mutable std::mutex queue_mutex_;
     mutable std::mutex stats_mutex_;

@@ -1,3 +1,7 @@
+ninfer_add_test(ninfer_sharded_refusal_test
+  SOURCES "${CMAKE_CURRENT_LIST_DIR}/test_sharded_refusal.cpp"
+  LIBRARIES ninfer_model_execution)
+
 ninfer_add_test(ninfer_sharded_group_test
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/test_sharded_group.cpp"
   LIBRARIES ninfer_model_execution)

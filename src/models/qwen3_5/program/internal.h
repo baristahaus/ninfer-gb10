@@ -89,6 +89,13 @@ struct ContextOperation {
     runtime::CommandSequence last_command;
 };
 
+// The sharded-lane refusal, as a pure function so it can be tested without constructing a whole
+// sharded program. It returns the refusal message when the peer mirrors are present (the flag the
+// round entry refuses on) and an empty string otherwise. RankProgramImpl::progress() calls it with
+// `peer_text_kv != nullptr`; the test calls it with both values. It does NOT cover the attach path
+// that makes the mirrors present -- that is the fixture this test deliberately avoids.
+[[nodiscard]] std::string sharded_forward_refusal(bool has_peer_mirrors);
+
 class RankProgramImpl {
 public:
     // `sharded` is the group-scoped resource bundle of a two-GPU lane — the ONE mailbox and the

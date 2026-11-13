@@ -13,6 +13,11 @@
 #include <type_traits>
 #include <vector>
 
+// A weak hook the per-rank launch counter defines (tests/support/launch_counter.cpp, linked with
+// -Wl,--wrap). Absent in production, where the symbol resolves to null and costs one test. It fires
+// once per released round so the counter can print that round's DELTA per rank.
+extern "C" void ninfer_launch_round_boundary(void) __attribute__((weak));
+
 namespace ninfer::runtime {
 
 template <class Types>
@@ -410,6 +415,8 @@ public:
                      !std::holds_alternative<ResultReady<Protocol>>(*event)))
                     break;
             }
+            // The launch counter's per-round boundary: a weak symbol, null in production.
+            if (&ninfer_launch_round_boundary != nullptr) { ninfer_launch_round_boundary(); }
             if (round_trace_enabled()) {
                 round_trace("poll.return rank=0 ticket=%llu event=%s (every rank's event matched)",
                             static_cast<unsigned long long>(trace_event_ticket(*event)),

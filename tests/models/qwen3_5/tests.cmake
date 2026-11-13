@@ -16,9 +16,18 @@ ninfer_add_test(ninfer_qwen3_5_loading_test
 # NEEDS_SOURCE_DIR: the test reads its prompt and goldens from tests/fixtures/tp2_accept/, so both
 # arms consume the same token ids without a tokenizer and the reference chain is recorded rather
 # than only compared across hosts.
+# The per-rank launch counter is linked into this test only: -Wl,--wrap makes every
+# cudaLaunchKernel/cudaMemcpyAsync/cudaMemsetAsync/cudaGraphLaunch/cudaStreamWaitEvent in the
+# process go through the shims in tests/support/launch_counter.cpp, which count per device (the
+# device ordinal IS the rank here) and print the per-round delta at LocalExecutor's round
+# boundary. It exists because the collective audit counts labels, not launches.
 ninfer_add_test(ninfer_qwen3_5_tp2_accept_real_test NEEDS_SOURCE_DIR
   SOURCES "${CMAKE_CURRENT_LIST_DIR}/test_engine_tp2_accept_real.cpp"
+          "${CMAKE_CURRENT_LIST_DIR}/../../support/launch_counter.cpp"
   LIBRARIES ninfer_engine CUDA::cudart)
+target_link_options(ninfer_qwen3_5_tp2_accept_real_test PRIVATE
+  -Wl,--wrap=cudaLaunchKernel -Wl,--wrap=cudaMemcpyAsync -Wl,--wrap=cudaMemsetAsync
+  -Wl,--wrap=cudaGraphLaunch -Wl,--wrap=cudaStreamWaitEvent)
 set_tests_properties(ninfer_qwen3_5_tp2_accept_real_test PROPERTIES
   SKIP_RETURN_CODE 77 RUN_SERIAL TRUE)
 

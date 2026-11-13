@@ -4,7 +4,10 @@
 #include "ninfer/ops/linear.h"
 #include "ninfer/ops/linear_split.h"
 
+#include "core/device.h"
+
 #include <algorithm>
+#include <string>
 
 namespace ninfer::models::qwen3_5::execution {
 
@@ -43,6 +46,29 @@ std::size_t gdn_record_workspace_bytes(const GdnProfile& parameters, std::int32_
 
 void gdn_projection(const Tensor& hidden, const GdnParameters& parameters, Tensor& qkv, Tensor& z,
                     MemoryArena& workspace, CudaExecutionView execution) {
+    // THE ASSERTION AT THE SITE THE TOOL NAMED. compute-sanitizer reported
+    // "CUDA Stream does not belong to the expected context" three times on the stack
+    // TextRun::poll -> mixer -> gdn -> gdn_projection -> fp8_dispatch, i.e. HERE, and the lane's
+    // mailbox give-up (rank 0 spinning a million probes without seeing the peer's epoch) is what a
+    // launch on a stream from the other rank's context would produce. The exchange path already
+    // asserts this for its own launches; that assertion says nothing about this path, which is why
+    // the earlier exclusion did not cover it. Check both facts the dispatch depends on: the calling
+    // thread must be bound to the view's device, and the view's stream must belong to that device.
+    {
+        const Device expected = execution.device();
+        int current           = -1;
+        CUDA_CHECK(cudaGetDevice(&current));
+        int stream_device = -1;
+        CUDA_CHECK(cudaStreamGetDevice(execution.stream(), &stream_device));
+        if (expected.type() == DeviceType::CUDA &&
+            (current != expected.index() || stream_device != expected.index())) {
+            throw std::runtime_error(
+                "gdn projection: the execution view's stream does not belong to its device (expected "
+                "device " + std::to_string(expected.index()) + ", current device " +
+                std::to_string(current) + ", stream's device " + std::to_string(stream_device) +
+                "); a dispatch on this stream would launch in the wrong context");
+        }
+    }
     if (parameters.role_rows) {
         // Separate (qkv, z) parents (plan 4a): one linear per role into the same
         // planes the fused route produces.

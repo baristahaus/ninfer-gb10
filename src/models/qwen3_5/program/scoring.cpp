@@ -50,7 +50,7 @@ void RankProgramImpl::launch_score(ComputeOperation& operation) {
                            device.execution_view());
         Tensor full = (*sharded_).logits[static_cast<std::size_t>(collective_->rank)];
         execution::all_gather_logits(*sharded_, collective_->rank, collective_->reduce_index,
-                                     scratch, full, device.execution_view());
+                                     scratch, full, device.execution_view(), "scoring.logits");
         logits = execution::sharded_logits_view(*sharded_, collective_->rank,
                                                 frame.spec.output_rows, count);
     }

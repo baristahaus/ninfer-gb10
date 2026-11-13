@@ -327,7 +327,7 @@ void mtp_propose(MtpExecutionView state, const Tensor& hidden, Tensor& full_logi
             const int rank = state.collective->rank;
             Tensor full    = state.group->logits[static_cast<std::size_t>(rank)];
             all_gather_logits(*state.group, rank, state.collective->reduce_index, scratch, full,
-                              state.execution);
+                              state.execution, "mtp.logits");
             Tensor gathered = sharded_logits_view(*state.group, rank, vocabulary, columns);
             ops::argmax(gathered, ids, vocabulary, state.execution);
             return;

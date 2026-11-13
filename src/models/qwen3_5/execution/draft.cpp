@@ -486,7 +486,7 @@ void propose_batch_impl(DraftExecutionView& execution, const DraftInputs& inputs
                 const int rank = execution.collective->rank;
                 Tensor full    = execution.group->logits[static_cast<std::size_t>(rank)];
                 all_gather_logits(*execution.group, rank, execution.collective->reduce_index,
-                                  scratch, full, execution.cuda);
+                                  scratch, full, execution.cuda, "draft.logits");
                 Tensor gathered =
                     sharded_logits_view(*execution.group, rank, vocabulary, columns);
                 ops::argmax(gathered, flat_drafts, vocabulary, execution.cuda);

@@ -74,7 +74,7 @@ void RankProgramImpl::project_decode(std::uint32_t batch_value, std::uint32_t wi
                            device.execution_view());
         Tensor full = (*sharded_).logits[static_cast<std::size_t>(collective_->rank)];
         execution::all_gather_logits(*sharded_, collective_->rank, collective_->reduce_index,
-                                     scratch, full, device.execution_view());
+                                     scratch, full, device.execution_view(), "decision.sample");
         flat_logits = execution::sharded_logits_view(*sharded_, collective_->rank, rows, columns);
     }
     if (width == 1) return;
@@ -233,7 +233,7 @@ void RankProgramImpl::launch_decision(ComputeOperation& operation) {
                                device.execution_view());
             Tensor full = (*sharded_).logits[static_cast<std::size_t>(collective_->rank)];
             execution::all_gather_logits(*sharded_, collective_->rank, collective_->reduce_index,
-                                         scratch, full, device.execution_view());
+                                         scratch, full, device.execution_view(), "decision.accept");
             logits = execution::sharded_logits_view(*sharded_, collective_->rank, rows, batch);
         }
         Tensor tokens = prefix(frame.output_tokens, {batch});

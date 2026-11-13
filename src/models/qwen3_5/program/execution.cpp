@@ -169,7 +169,22 @@ void RankProgramImpl::progress() {
             if (!compute) return;
             break;
         case ComputeStage::Retiring:
-            if (!compute_retired.ready()) return;
+            // THE RETIREMENT WAITS FOR THE ROUND'S LAST ENQUEUE, NOT FOR THE COMMIT POINT.
+            // compute_retired is recorded at commit.cpp:145, which is BEFORE the decision/accept
+            // stage enqueues the round's gather and its egress copy (decision.cpp:189-252). Waiting
+            // on it alone therefore retires the compute frame -- and lets the next round start --
+            // while this round's last launches are still in flight on this rank's stream. The next
+            // round's first exchange then queues behind them and starts one launch later than the
+            // other rank's, which is exactly the width-2 lane's 'peer epoch one below the target'
+            // (gap=1 at slot=0).
+            //
+            // result_ready is the ROUND-END event: it is recorded after the last enqueue of the
+            // round on the decision path (decision.cpp:252) and after the fused path's final graph
+            // launch. Requiring it here makes the release criterion 'every launch the round
+            // enqueued has completed' rather than 'the launches up to the commit point have
+            // completed'. compute_retired keeps its own job: the Retiring stage still starts only
+            // once the commit's launches are done, and both conditions are required.
+            if (!compute_retired.ready() || !result_ready.ready()) return;
             retire_compute();
             return;
         }

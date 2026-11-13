@@ -60,6 +60,14 @@
 // exchanges of successive graph launches are separated by the launches themselves (a graph
 // launch completes on both devices before the next launch on the same stream starts).
 //
+// THIS ARGUMENT DEPENDS ON THE MAILBOX HAVING AT LEAST TWO SLOTS, and on `slot_for` mapping
+// consecutive exchanges onto different slots -- which `index % slots_` does exactly when
+// slots_ >= 2. With one slot, exchange k + 1 reuses the slot exchange k is still reading, and the
+// flag means "I have published", not "I have consumed", so the writer can overwrite a payload or
+// flag the reader has not consumed. PeerMailbox rejects a slot count below two at construction;
+// that check is the precondition this argument rests on, not incidental validation, and lowering
+// the slot count must not remove it.
+//
 // HANG GUARD. A poller gives up after kPeerSpinLimit probes, or earlier once another exchange
 // already reported a hang, sets the pinned hang word and skips its combine. The Program reads the
 // word after every round's device synchronization and fails the round (PeerMailbox::

@@ -225,6 +225,13 @@ private:
     };
 
     // The set that carries `bytes`: the ordinary slots when they fit, else the wide ones.
+    // PRECONDITION: the mailbox has at least two slots, enforced at construction. The exchange
+    // protocol's slot-reuse argument -- see SLOT REUSE in src/ops/kernel/peer_exchange.cuh --
+    // depends on it: with one slot the next exchange reuses the slot the previous one is still
+    // reading, and the flag means "I have published" rather than "I have consumed", so the writer
+    // can overwrite a payload or flag the reader has not yet consumed. Do not lower it to one.
+    [[nodiscard]] int slots() const noexcept { return slots_; }
+
     [[nodiscard]] int set_for(std::size_t bytes) const noexcept {
         return bytes <= sets_[0].slot_bytes || sets_[1].slot_bytes == 0 ? 0 : 1;
     }

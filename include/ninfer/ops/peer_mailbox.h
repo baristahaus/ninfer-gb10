@@ -47,7 +47,9 @@
 //
 // FAULTS. A poller that waits too long for its peer (kPeerSpinLimit, qualified below the 2 s
 // display watchdog by test_allreduce) gives up, skips its combine and sets a sticky hang word;
-// hang_reported() exposes it to the owner, which fails that round and every later one.
+// hang_reported() exposes it to the owner, which fails THAT ROUND. The word is cleared at each
+// round boundary (clear_hang) so a transient failure cannot permanently disable the lane: a
+// guard that stops every later round cannot distinguish a transient from a permanent fault.
 //
 // ENTRY. A rank may reach its first captured exchange only after the peer has finished every
 // cross-device copy still owed from it: under WSL2 an outstanding copy stalls behind the peer's
@@ -174,6 +176,14 @@ public:
     // True once an exchange's poller gave up waiting for its peer. Sticky: the two ranks' results
     // diverged, so the owner must not trust any later round.
     [[nodiscard]] bool hang_reported() const noexcept;
+    // THE GUARD IS PER-ROUND, NOT PER-RUN. Its word is sticky within a round on purpose: a rank
+    // whose poller abandoned an exchange produces wrong values from then on, and a wrong number
+    // nobody can see is the worst outcome. But leaving it set across rounds makes a transient
+    // failure permanent -- every later round is refused before it runs, and the first failure is
+    // never readable again. The owner decides whether the run stops; the mailbox only fails the
+    // round it failed in.
+    void clear_hang() noexcept;
+    [[nodiscard]] std::uint32_t round_index() const noexcept;
 
     // DIAGNOSTIC: the base of `rank`'s pinned host payload slab. A device buffer that aliased this
     // would be written by a kernel as if it were VRAM; the group dump asserts it does not.
@@ -251,6 +261,7 @@ private:
     // one" (slot reuse order) from "many lanes off" (a different population of exchanges).
     void dump_exchange_epochs(const char* why) const;
     std::uint32_t* hang_            = nullptr;
+    std::uint32_t round_index_      = 0;
     // DIAGNOSTIC (NINFER_STATUS_FILE=<path>): four words per rank in a MAP_SHARED, page-locked
     // file -- [0] entry counter, [1] published target, [2] last peer value seen, [3] exit counter --
     // written from the exchange kernel and readable from a SEPARATE PROCESS while a stream is hung.

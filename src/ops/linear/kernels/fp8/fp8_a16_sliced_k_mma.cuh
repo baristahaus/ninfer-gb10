@@ -37,7 +37,7 @@ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void fp8_a16_sl
     constexpr int kWarps         = Schedule::kKWarps;
     constexpr int kBlockRows     = Schedule::kBlockRows;
     constexpr int kBlockK        = Schedule::kBlockK;
-    const int kGroups            = kHidden / kBlockK;
+    const int kGroups            = (kHidden + kBlockK - 1) / kBlockK;
     constexpr int kBlockTokens   = Schedule::kBlockTokens;
     constexpr int kTokenMmas     = kBlockTokens / 8;
     static_assert(ActiveTokens >= 1 && ActiveTokens <= kBlockTokens);
@@ -70,6 +70,7 @@ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void fp8_a16_sl
         MaskedColumns ? min(ActiveTokens, operands.tokens - token_begin) : ActiveTokens;
 
     const auto stage_activation = [&](int stage, int group_k0) {
+        if (group_k0 + warp * kTileK >= kHidden) return;
         constexpr auto kActivationCache = Schedule::kActivationCache;
         constexpr bool kPadded     = Schedule::kActivationStage == Fp8ActivationStage::PaddedZero;
         constexpr int kStageTokens = kPadded ? kBlockTokens : ActiveTokens;
@@ -96,10 +97,11 @@ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void fp8_a16_sl
 
     const auto stage_codes = [&](int stage, int group_k0) {
         constexpr auto kWeightCache = Schedule::kWeightCache;
+        const int group_chunks      = min(kBlockK, kHidden - group_k0) / 16;
 #pragma unroll
         for (int row_item = 0; row_item < Schedule::kRowsPerLoaderWarp; ++row_item) {
             const int row = warp * Schedule::kRowsPerLoaderWarp + row_item;
-            for (int chunk = lane; chunk < kBlockK / 16; chunk += 32) {
+            for (int chunk = lane; chunk < group_chunks; chunk += 32) {
                 const int swizzled_chunk = chunk ^ (row & 7);
                 common::cp_async<16, kWeightCache>(
                     &code_shared[stage][row][swizzled_chunk * 16],
@@ -132,6 +134,8 @@ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void fp8_a16_sl
         else
             common::cp_wait<0>();
         __syncthreads();
+        const bool warp_in_k = group_index * kBlockK + warp_k0 < kHidden;
+        if (warp_in_k) {
 #pragma unroll
         for (int k_step = 0; k_step < kTileK / 16; ++k_step) {
             const int code_col        = k_step * 16 + lid * 2;
@@ -162,6 +166,7 @@ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void fp8_a16_sl
                                  accumulators[token_mma][2], accumulators[token_mma][3], a0, a1, a2,
                                  a3, b0, b1);
             }
+        }
         }
 
         __syncthreads();

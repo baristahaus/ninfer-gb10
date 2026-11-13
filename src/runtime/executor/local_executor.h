@@ -17,6 +17,11 @@
 // -Wl,--wrap). Absent in production, where the symbol resolves to null and costs one test. It fires
 // once per released round so the counter can print that round's DELTA per rank.
 extern "C" void ninfer_launch_round_boundary(void) __attribute__((weak));
+// The phase marker: called once at a point the lane is known to reach (the executor's creation), so
+// the launch counter can label everything before it as startup and everything after as round. A
+// marker placed in a function the lane does not use never fires, which is how the first bucket stayed
+// labelled startup+round0.
+extern "C" void ninfer_launch_phase_marker(const char*) __attribute__((weak));
 
 namespace ninfer::runtime {
 

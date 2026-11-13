@@ -103,7 +103,7 @@ struct ShimUse {
 };
 ShimUse g_shims[8] = {{"cudaLaunchKernel", 0}, {"__cudaLaunchKernel", 0},
                       {"cudaLaunchKernelExC", 0}, {"cuLaunchKernel", 0},
-                      {"cuLaunchKernelEx", 0},   {"cudaMemcpyAsync", 0},
+                      {"cudaMemcpyAsync", 0},
                       {"cudaMemcpy2DAsync", 0},  {"cudaGraphLaunch", 0}};
 int g_shim_count = 0;
 
@@ -290,7 +290,6 @@ extern "C" void ninfer_launch_phase_marker(const char* marker) {
 // cannot be half-covered.
 cudaError_t __real_cuLaunchKernel(CUfunction, unsigned, unsigned, unsigned, unsigned, unsigned,
                                   unsigned, unsigned, CUstream, void**, void**);
-cudaError_t __real_cuLaunchKernelEx(const CUlaunchConfig*, CUfunction, void**, void**);
 
 cudaError_t __wrap_cuLaunchKernel(CUfunction f, unsigned gx, unsigned gy, unsigned gz, unsigned bx,
                                   unsigned by, unsigned bz, unsigned shared, CUstream stream,
@@ -300,12 +299,6 @@ cudaError_t __wrap_cuLaunchKernel(CUfunction f, unsigned gx, unsigned gy, unsign
     return __real_cuLaunchKernel(f, gx, gy, gz, bx, by, bz, shared, stream, params, extra);
 }
 
-cudaError_t __wrap_cuLaunchKernelEx(const CUlaunchConfig* config, CUfunction f, void** params,
-                                    void** extra) {
-    note_shim("cuLaunchKernelEx");
-    bump(&Counts::launch, "cu_launch_ex");
-    return __real_cuLaunchKernelEx(config, f, params, extra);
-}
 
 // Called by LocalExecutor at each round release. Prints the DELTA per rank for this round, because
 // a cumulative count says nothing after round 1.

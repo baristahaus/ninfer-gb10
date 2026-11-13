@@ -123,6 +123,16 @@ LogitsGatherPlan plan_logits_gather(std::int32_t vocabulary, std::int32_t rank_r
     return plan;
 }
 
+namespace {
+// NINFER_LANE_TRACE gates every lane diagnostic: the prints are the instruments that produced the
+// phase's exclusions, so they are committed rather than re-written each session, and they cost
+// nothing when the variable is unset.
+bool lane_trace() {
+    static const bool on = std::getenv("NINFER_LANE_TRACE") != nullptr;
+    return on;
+}
+} // namespace
+
 void all_gather_logits(const models::ShardedGroup& group, int rank, std::size_t& slot,
                        const Tensor& local, const Tensor& full, CudaExecutionView execution,
                        const char* site) {
@@ -163,7 +173,7 @@ void all_gather_logits(const models::ShardedGroup& group, int rank, std::size_t&
     // enqueue's outcome without being read; printing it at entry and after the gather says whether
     // it changed DURING this gather, which is the case a per-rank value cannot explain.
     const auto hang_word = [&](const char* where) {
-        if (!group.mailbox) { return; }
+        if (!group.mailbox || !lane_trace()) { return; }
         std::fprintf(stderr, "[gather-hang] rank=%d at=%s hang=%d round=%u\n", rank, where,
                      group.mailbox->hang_reported() ? 1 : 0, group.mailbox->round_index());
         std::fflush(stderr);

@@ -55,6 +55,7 @@ extern std::atomic<int> g_progress_active[2];
 
 namespace ninfer::ops {
 namespace { void record_launch_time(const std::timespec&, const std::timespec&); }
+namespace { void note_mailbox_shape(int, int, int, int); }
 
 
 namespace {
@@ -398,6 +399,12 @@ void PeerMailbox::enqueue_exchange_sum(int rank, int slot, void* data, std::size
             if (trace_) { tuning.trace = true; }
         }
         const int prefetch_blocks  = take_l2_hint(l2_hint_[rank], blocks, kThreads, tuning);
+        // THE SHAPE, FROM THE HOST, WHERE IT CANNOT BE LOST. A device-side printf is buffered and
+        // flushed at sync, and the give-up kills the process before that happens, which is why rank
+        // 1's shape never appeared. This is written to unbuffered stderr at the enqueue site, once
+        // per distinct (rank, vecs, blocks, warps) shape -- a diagnostic whose output is
+        // proportional to the number of calls cannot be read.
+        note_mailbox_shape(rank, vecs, blocks + prefetch_blocks, kThreads);
         // THE ENGINE'S OWN CLOCK AROUND THE LAUNCH. Every other number in this workstream came from
         // nsys or a harness; this is the engine timing itself, so it can be compared with the
         // harness's 1.2 us tight loop on the same terms. Percentiles are printed because the
@@ -448,6 +455,32 @@ LaunchTimes& launch_times() {
 void record_launch_time(const std::timespec& t0, const std::timespec& t1) {
     const double us = (double)(t1.tv_sec - t0.tv_sec) * 1e6 + (double)(t1.tv_nsec - t0.tv_nsec) / 1e3;
     launch_times().add(us);
+}
+} // namespace
+
+namespace {
+// One line per distinct launch shape, per rank. The give-up is always at a high warp number, so the
+// question is whether the other rank's grid even HAS that warp: a warp that exists on one side and
+// not the other spins forever on a publish no thread will make.
+void note_mailbox_shape(int rank, int vecs, int blocks, int threads) {
+    struct Key {
+        int rank, vecs, blocks, threads;
+        bool operator==(const Key& o) const {
+            return rank == o.rank && vecs == o.vecs && blocks == o.blocks && threads == o.threads;
+        }
+    };
+    static std::mutex mutex;
+    static std::vector<Key> seen;
+    const Key key{rank, vecs, blocks, threads};
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (std::find(seen.begin(), seen.end(), key) != seen.end()) { return; }
+        seen.push_back(key);
+    }
+    const int warps = (blocks * threads) / 32;
+    std::fprintf(stderr, "[mailbox-shape] rank=%d vecs=%d blocks=%d threads=%d warps=%d\n", rank,
+                 vecs, blocks, threads, warps);
+    std::fflush(stderr);
 }
 } // namespace
 

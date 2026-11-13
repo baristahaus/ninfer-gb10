@@ -6,8 +6,9 @@
 
 namespace ninfer::models::qwen3_5::detail {
 
-std::string sharded_forward_refusal(bool has_peer_mirrors) {
-    if (!has_peer_mirrors) { return {}; }
+std::string sharded_forward_refusal(bool has_peer_mirrors, bool forward_wired) {
+    if (!has_peer_mirrors) { return {}; }  // the single-device lane
+    if (forward_wired) { return {}; }      // sharded lane, forward wired: run it
     return "qwen3.5 sharded lane: this rank carries the peer's KV mirrors, which is the flag that "
            "the sharded forward is not wired; a round would project sharded weights through the "
            "unsharded path and produce wrong numbers. Refusing the round. See "
@@ -22,7 +23,9 @@ void RankProgramImpl::progress() {
     // The flag was documented and never checked: the mirrors are attached to the ORIGIN rank only
     // (lifecycle.cpp:370-376), so one rank ran the unsharded path while the other did not, and the
     // mailbox reported the divergence as a give-up rather than as the unwired lane it is.
-    if (const auto refusal = sharded_forward_refusal(peer_text_kv != nullptr); !refusal.empty()) {
+    if (const auto refusal = sharded_forward_refusal(peer_text_kv != nullptr,
+                                                   sharded_ != nullptr);
+        !refusal.empty()) {
         throw std::logic_error(refusal);
     }
     if (context_operation && context_ready.ready()) {

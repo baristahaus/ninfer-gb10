@@ -193,10 +193,15 @@ public:
     std::optional<execution::ShardedCollective> collective_;
     Resources resources;
     std::unique_ptr<context::ContextStorage> storage;
-    // tp 2: rank 1's mirrors, owned here so they outlive every mutation they replay. Null on the
-    // single-device lane. Their presence is also the sharded-lane flag the round entry refuses on:
-    // the sharded forward is not wired, so a round would project sharded weights through the
-    // unsharded path and produce wrong numbers.
+    // tp 2: rank 1's mirrors, owned here so they outlive every mutation they replay. Non-null on the
+    // ORIGIN rank only (attach_rank_mirrors): the mirror is a one-way projection of this rank's pages
+    // onto the peer's device, so the peer is its target, not its owner. Null on the single-device
+    // lane and on the target rank.
+    //
+    // Their presence is the sharded-lane flag the round entry refuses on (RankProgramImpl::progress,
+    // via sharded_forward_refusal): the sharded forward is not wired, so a round would project
+    // sharded weights through the unsharded path and produce wrong numbers. The refusal fires on the
+    // owning rank, which stops the group's round.
     std::unique_ptr<tp2::MirroredKVPagePool> peer_text_kv;
     std::unique_ptr<tp2::MirroredKVExecutionTables> peer_text_kv_tables;
     std::unique_ptr<context::ContextMigration> compute_actions;

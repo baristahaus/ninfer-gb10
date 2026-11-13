@@ -98,6 +98,12 @@ struct ContextOperation {
 // forward that is only half wired -- a guard outliving its reason, which this phase has hit twice.
 // The refusal fires only when the lane is sharded AND the forward is not wired. A fully wired
 // sharded lane returns empty and runs; a single-device lane returns empty and runs.
+// THE ONE FLAG THAT MEANS WHAT IT SAYS: is the sharded forward IMPLEMENTED? False today, because it
+// is not. It is deliberately NOT derived from `sharded_` -- that pointer says the group bundle
+// exists, which is true on this lane and was therefore the wrong input for this question. A
+// predicate whose input is described by a name it does not measure is wrong in both directions.
+inline constexpr bool kShardedForwardWired = false;
+
 [[nodiscard]] std::string sharded_forward_refusal(bool has_peer_mirrors, bool forward_wired);
 
 class RankProgramImpl {

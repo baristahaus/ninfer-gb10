@@ -24,7 +24,7 @@ void RankProgramImpl::progress() {
     // (lifecycle.cpp:370-376), so one rank ran the unsharded path while the other did not, and the
     // mailbox reported the divergence as a give-up rather than as the unwired lane it is.
     if (const auto refusal = sharded_forward_refusal(peer_text_kv != nullptr,
-                                                   sharded_ != nullptr);
+                                                   kShardedForwardWired);
         !refusal.empty()) {
         throw std::logic_error(refusal);
     }

@@ -155,6 +155,11 @@ void all_gather_logits(const models::ShardedGroup& group, int rank, std::size_t&
         full.ne[3] != 1 || local.ne[2] != 1 || local.ne[3] != 1) {
         throw std::invalid_argument("logits gather: the operands must be rank-2 BF16");
     }
+    // PER-ROUND GUARD RESET. The mailbox's hang word is sticky within a round by design, but it was
+    // sticky ACROSS rounds too, which made one transient failure disable every later round and made
+    // the first failure unreadable after the fact. This is the round boundary for the mailbox's
+    // purposes: the gather runs once per round, after the previous round has completed.
+    if (group.mailbox) { group.mailbox->clear_hang(); }
     const std::int32_t columns = local.ne[1];
     if (full.ne[0] != group.logits[0].ne[0] || local.ne[0] != full.ne[0] / 2) {
         throw std::invalid_argument(
@@ -173,9 +178,10 @@ void all_gather_logits(const models::ShardedGroup& group, int rank, std::size_t&
         // The gather's own plan: a failure that inverts with the column count has to be explained by
         // these numbers, not by the round or the ring.
         std::fprintf(stderr,
-                     "logits gather: rank=%d columns=%d chunk_columns=%d exchanges=%d "
+                     "logits gather: round=%u rank=%d columns=%d chunk_columns=%d exchanges=%d "
                      "bytes_per_column=%zu slot_bytes=%zu\n",
-                     rank, columns, plan.chunk_columns, plan.exchanges, plan.bytes_per_column,
+                     group.mailbox ? group.mailbox->round_index() : 0u, rank, columns,
+                     plan.chunk_columns, plan.exchanges, plan.bytes_per_column,
                      group.mailbox->max_bytes());
     }
     auto* const destination      = static_cast<std::uint8_t*>(full.data);

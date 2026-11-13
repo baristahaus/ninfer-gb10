@@ -555,4 +555,14 @@ bool PeerMailbox::hang_reported() const noexcept {
 
 void PeerMailbox::report_hang() noexcept { *static_cast<volatile std::uint32_t*>(hang_) = 1u; }
 
+void PeerMailbox::clear_hang() noexcept {
+    // One write suffices: the word is in the shared pinned slab, mapped into both ranks' devices.
+    // Callers must ensure both ranks are past the previous round's boundary before either enqueues,
+    // which is what the round boundary already guarantees.
+    *static_cast<volatile std::uint32_t*>(hang_) = 0u;
+    ++round_index_;
+}
+
+std::uint32_t PeerMailbox::round_index() const noexcept { return round_index_; }
+
 } // namespace ninfer::ops

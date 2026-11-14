@@ -189,11 +189,15 @@ Quality gates on the FP8 artifact, same harness as the development record:
 
 | branch | position | contents |
 |---|---|---|
-| `master` | `9b6d1f17` | the product line: the Flash-Next 125B serving lane on GB10, the merged work line (EXL3/Trellis, tiering, telemetry and constrained decoding), and the recent serving and security review |
+| `master` | `d6c5e97d` | the product line: the Flash-Next 125B serving lane on GB10, the merged work line (EXL3/Trellis, tiering, telemetry and constrained decoding), the recent serving and security review, and the two-GPU lane's sharded forward and its two-rank executor |
 | `5090-test` | `3d2de369` | the tiering lane: the model-load tier drive and the SP-4 adaptive-cache runtime that consume the merged tiering machinery |
-| `feat/tp2-program` | `33e79d81` | the two-GPU lane: `ExecutionContext`, the sharding vocabulary, the Flash-Next placement table, shard binding ranges and the binder shard transform |
+| `feat/tp2-program` | `cfb8bb8a` | where the two-GPU lane started: `ExecutionContext`, the sharding vocabulary, the Flash-Next placement table, shard binding ranges and the binder shard transform. Merged into `master`; the branch is kept as the point the lane's scaffolding landed |
 | `dev` | `3ea7de40` | the `/metrics` work line |
 | `archive/*` tags | October 2026 | older work-line and verification branches, archived |
+
+Positions are where each branch stood when this table was last reviewed; they move. The two-GPU
+lane itself, including what has been measured and what has not, is
+[`docs/lane.md`](docs/lane.md).
 
 ### The two hardware lanes
 

@@ -660,10 +660,14 @@ private:
             // vector whose destructor would call std::terminate. Join what exists, then report the
             // spawn failure; the ticket fails either way.
             for (auto& thread : threads) thread.join();
-        // THE join() COMPARISON: a timestamp immediately after join() returns. Compared with the
+            throw;
+        }
+        for (auto& thread : threads) thread.join();
+        // THE join() COMPARISON: a timestamp immediately after join() returns. Compared with each
         // thread's own last timestamp, it distinguishes 'rank 1 is slow' from 'rank 0 is WAITING for
         // a rank 1 that finished later' -- two things the phase has never separated, and the
-        // distinction changes the fix.
+        // distinction changes the fix. It used to sit inside the catch block above, so a SUCCESSFUL
+        // round -- the only kind this comparison is about -- never printed it.
         if (std::getenv("NINFER_LANE_TRACE") != nullptr) {
             std::timespec ts{};
             (void)::clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -671,9 +675,6 @@ private:
                          (long long)ts.tv_sec * 1000000000LL + (long long)ts.tv_nsec);
             std::fflush(stderr);
         }
-            throw;
-        }
-        for (auto& thread : threads) thread.join();
         for (auto& error : errors)
             if (error) std::rethrow_exception(error);
         ::ninfer::core::audit::verify("the frame's enqueue phase");

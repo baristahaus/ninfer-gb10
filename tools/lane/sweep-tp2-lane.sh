@@ -203,13 +203,13 @@ run_arm() {
     # SHARDED arm is deliberately NOT pinned: it genuinely needs both devices on hephaestus.
     local visible=""
     if [ "$arm" = "1" ]; then visible="CUDA_VISIBLE_DEVICES=0 "; fi
-    local command="cd '$DST' && ${visible}NINFER_TP2_ACCEPT=1 NINFER_TP2_CAPTURE=1 NINFER_TP2_ARM=$arm \
+    local command="cd '$DST' && timeout $ARM_TIMEOUT env ${visible}NINFER_TP2_ACCEPT=1 NINFER_TP2_CAPTURE=1 NINFER_TP2_ARM=$arm \
         NINFER_TP2_PROMPT='$prompt' NINFER_TEST_ARTIFACT='$artifact' \
         ./'$BUILD'/tests/ninfer_qwen3_5_tp2_accept_real_test"
     # One run per arm: the chain and the log come from the same execution, so a length costs two GPU
     # rounds plus at most one adjudication, not double that.
     local raw
-    raw=$(printf '\n== %s arm %s %s\n' "$host" "$arm" "$prompt"; remote "$host" "timeout $ARM_TIMEOUT $command" 2>&1 || true)
+    raw=$(printf '\n== %s arm %s %s\n' "$host" "$arm" "$prompt"; remote "$host" "$command" 2>&1 || true)
     printf '%s\n' "$raw" >> "$WORK/sweep.log"
     printf '%s\n' "$raw" | sed -n "s/^arm $arm tokens ([0-9]*): //p" | tail -1 > "$out"
     if [ ! -s "$out" ] && printf '%s\n' "$raw" | grep -qE "exit (124|137)|Terminated|timed out"; then

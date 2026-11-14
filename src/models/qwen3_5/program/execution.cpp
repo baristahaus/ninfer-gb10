@@ -1,5 +1,7 @@
 #include <cstdio>
 #include <cstdlib>
+#include <thread>
+#include <functional>
 #include <ctime>
 #include "models/qwen3_5/program/internal.h"
 #include "models/qwen3_5/execution/draft.h"
@@ -9,6 +11,16 @@
 
 namespace ninfer::models::qwen3_5::detail {
 namespace {
+void stage_stamp(int rank, const char* where) {
+    if (std::getenv("NINFER_LANE_TRACE") == nullptr) { return; }
+    std::timespec ts{};
+    (void)::clock_gettime(CLOCK_MONOTONIC, &ts);
+    std::fprintf(stderr, "[stage-time] rank=%d at=%s ns=%lld thread=%zu\n", rank, where,
+                 (long long)ts.tv_sec * 1000000000LL + (long long)ts.tv_nsec,
+                 std::hash<std::thread::id>{}(std::this_thread::get_id()));
+    std::fflush(stderr);
+}
+
 void lane_stamp(int rank, const char* where, int round) {
     if (std::getenv("NINFER_LANE_TRACE") == nullptr) { return; }
     std::timespec ts{};
@@ -31,6 +43,7 @@ std::string sharded_forward_refusal(bool has_peer_mirrors, bool forward_wired) {
 }
 
 void RankProgramImpl::progress() {
+    stage_stamp(collective_ ? collective_->rank : 0, "progress_entry");
     lane_stamp(collective_ ? collective_->rank : 0, "round_entry",
                static_cast<int>(collective_ ? collective_->reduce_index : 0));
     // THE REFUSAL THE DECLARATION PROMISES. internal.h:190-194 says the peer mirrors' presence is
@@ -109,7 +122,9 @@ void RankProgramImpl::progress() {
                     }
                     lane_stamp(collective_ ? collective_->rank : 0, "traversal_done",
                                static_cast<int>(collective_ ? collective_->reduce_index : 0));
+                    stage_stamp(collective_ ? collective_->rank : 0, "traversal_return");
                     operation.stage = ComputeStage::AwaitDecision;
+                    stage_stamp(collective_ ? collective_->rank : 0, "await_decision");
                 }
                 break;
             }

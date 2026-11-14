@@ -421,6 +421,16 @@ __global__ __launch_bounds__(256) void peer_exchange_pipelined_kernel(
 
     int published       = 1;
     std::uint32_t spins = 0;
+    // THE BUDGET IS A TIME, NOT AN ITERATION COUNT. `spins > tuning.spin_limit` with a 100 ns
+    // __nanosleep is a 100 ms nominal budget, but a spin also loads the peer flag from system-scope
+    // host-mapped memory and costs ~17 us in practice -- so 1e6 spins take ~17 s, a 170x overrun that
+    // turns a bounded wait into an effectively unbounded one (filed P2). The deadline below is
+    // measured with peer_globaltimer() in nanoseconds, so the give-up happens after the stated
+    // duration regardless of what a spin costs.
+    const unsigned long long spin_deadline_ns =
+        peer_globaltimer() +
+        static_cast<unsigned long long>(tuning.spin_limit) *
+            static_cast<unsigned long long>(kPeerPollSleepNs);
     if (lane == 0) {
         SystemWord(mine_flags[warp * kPeerFlagStride]).store(target, cuda::memory_order_release);
         if (timed) { stamp[3] = clock64(); }
@@ -431,7 +441,8 @@ __global__ __launch_bounds__(256) void peer_exchange_pipelined_kernel(
             __nanosleep(tuning.sleep_ns);
             ++spins;
             if (spins % kPeerHangProbe == 0u &&
-                (spins > tuning.spin_limit || fault.load(cuda::memory_order_relaxed) != 0u)) {
+                (peer_globaltimer() > spin_deadline_ns ||
+                 fault.load(cuda::memory_order_relaxed) != 0u)) {
                 // The FIRST poller to give up names itself; the sticky word explains every later
                 // one. This exchange is abandoned, the partial will hold only this rank's operand,
                 // and the caller turns the word into a failed round.

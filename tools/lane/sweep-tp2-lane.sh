@@ -290,10 +290,19 @@ for length in $LENGTHS; do
     # only), so the reference host scores both candidates at their first divergence.
     remote "$REF_HOST" "mkdir -p ${REMOTE_WORK}/chains"
     scp -q -F "$SSH_CONFIG" -o BatchMode=yes "$arm2" "barista@$REF_HOST:${REMOTE_WORK}/chains/T$length.arm2.ids"
-    adjudication=$(remote "$REF_HOST" "cd '$DST' && CUDA_VISIBLE_DEVICES=0 NINFER_TP2_ACCEPT=1 NINFER_TP2_ARM=1 \
+    # THE ADJUDICATION IS BOUNDED TOO. It runs the same binary as the reference arm, so it gets the
+    # same bound: without one it was the last place in the sweep that could sit forever, and a
+    # single unbounded step is enough to hang the whole profile.
+    adjudication=$(remote "$REF_HOST" "cd '$DST' && timeout $ARM_TIMEOUT env CUDA_VISIBLE_DEVICES=0 \
+        NINFER_TP2_ACCEPT=1 NINFER_TP2_ARM=1 \
         NINFER_TP2_PROMPT='$prompt' NINFER_TP2_COMPARE='${REMOTE_WORK}/chains/T$length.arm2.ids' \
         NINFER_TEST_ARTIFACT='$REF_ART' ./'$BUILD'/tests/ninfer_qwen3_5_tp2_accept_real_test" 2>&1 || true)
     printf '\n== adjudication T=%s\n%s\n' "$length" "$adjudication" >> "$WORK/sweep.log"
+    if ! printf '%s\n' "$adjudication" | grep -qE "disagreement at position|near-tie on the reference|CONFIDENT disagreement"; then
+        printf '%s\tno\t-\t-\tadjudication-inconclusive: bound %ss or no verdict\n' "$length" "$ARM_TIMEOUT" >> "$TSV"
+        say "   T=$length  adjudication produced no verdict within the ${ARM_TIMEOUT}s bound -> recorded"
+        continue
+    fi
     position=$(printf '%s\n' "$adjudication" | sed -n 's/.*disagreement at position \([0-9]*\):.*/\1/p' | head -1)
     margin=$(printf '%s\n' "$adjudication" | sed -n 's/.*margin \([0-9.eE+-]*\) nats.*/\1/p' | head -1)
     if printf '%s\n' "$adjudication" | grep -q "is a near-tie on the reference"; then

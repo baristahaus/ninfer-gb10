@@ -95,6 +95,10 @@ public:
 
     void progress() { implementation.progress(); }
 
+    // Single-rank fixture: no collectives, so the count is always zero. It is part of the executor's
+    // rank contract, so the fake has to provide it.
+    [[nodiscard]] std::size_t collective_count() const { return 0; }
+
     void supply(runtime::ExecutionTicket ticket, runtime::CommandSequence command,
                 runtime::DecisionInput&& input) {
         implementation.supply(ticket, command, std::move(input));

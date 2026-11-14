@@ -56,6 +56,10 @@ public:
 
     void progress() { implementation.progress(); }
 
+    // The fixture drives one rank and issues no collectives; the count is part of the executor's rank
+    // contract, so it is present here even though it can only be zero.
+    [[nodiscard]] std::size_t collective_count() const { return 0; }
+
     void supply(runtime::ExecutionTicket ticket, runtime::CommandSequence command,
                 runtime::DecisionInput&& input) {
         implementation.supply(ticket, command, std::move(input));

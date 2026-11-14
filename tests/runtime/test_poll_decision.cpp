@@ -95,6 +95,45 @@ void case_empty() {
     expect_outcome(decide_poll(one), PollOutcome::Release, "one rank completes -> Release");
 }
 
+// WHICH PEERS A MISSING RANK-0 EVENT MUST ADVANCE. This is the regression test for the width-2
+// deadlock: poll() used to return on a missing rank-0 event without touching any peer, and one
+// Program::progress() call can carry rank 0 into a cross-rank collective, so the peer rank 0 was
+// waiting on was never advanced. On the old rule every case below that expects a peer to be advanced
+// expected nothing.
+void case_peers_behind() {
+    using ninfer::runtime::peers_behind;
+    const auto expect_mask = [](std::uint64_t actual, std::uint64_t wanted, const char* label) {
+        expect(actual == wanted, label);
+    };
+
+    // Level: nobody is behind, so nobody is advanced. This is the healthy round, and it is what keeps
+    // the original 'never run a peer ahead of rank 0' guarantee.
+    const std::array<std::size_t, 2> level{129, 129};
+    expect_mask(peers_behind(level), 0, "level counts advance no peer");
+
+    // Rank 1 one collective behind rank 0: it has not issued the collective rank 0 waits for.
+    const std::array<std::size_t, 2> behind{129, 128};
+    expect_mask(peers_behind(behind), std::uint64_t{1} << 1, "a peer one behind is advanced");
+
+    // Rank 1 ahead: it is not waiting on rank 0's collective, and advancing it further would be the
+    // 'run a peer ahead' failure the original rule was written to prevent.
+    const std::array<std::size_t, 2> ahead{128, 129};
+    expect_mask(peers_behind(ahead), 0, "a peer ahead is not advanced");
+
+    // Three ranks, the middle one behind: only that one is advanced, and the index is not hard-coded.
+    const std::array<std::size_t, 3> middle{5, 4, 5};
+    expect_mask(peers_behind(middle), std::uint64_t{1} << 1, "only the behind rank is advanced");
+    const std::array<std::size_t, 3> last_behind{5, 5, 4};
+    expect_mask(peers_behind(last_behind), std::uint64_t{1} << 2, "the last behind rank is advanced");
+
+    // A rank with no collective at all (the single-device lane, and a family that issues none): a
+    // leader count of zero puts nobody behind it, so a width-1 round behaves exactly as before.
+    const std::array<std::size_t, 2> none{0, 0};
+    expect_mask(peers_behind(none), 0, "no collectives -> no peer advanced");
+    const std::vector<std::size_t> empty;
+    expect_mask(peers_behind(empty), 0, "no ranks -> no peer advanced");
+}
+
 } // namespace
 
 int main() {
@@ -105,6 +144,7 @@ int main() {
     case_5_ticket_mismatch();
     case_6_three_ranks_middle_fails();
     case_empty();
+    case_peers_behind();
     if (failures != 0) {
         std::cerr << "poll decision test failed with " << failures << " failure(s)\n";
         return 1;

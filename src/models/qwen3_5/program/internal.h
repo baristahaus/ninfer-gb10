@@ -27,6 +27,12 @@ class TextRun;
 
 namespace ninfer::models::qwen3_5::detail {
 
+// THE LANE'S TWO STAGE STAMPS, DEFINED ONCE. They were duplicated verbatim in execution.cpp and
+// decision.cpp, so a change to the diagnostic had to be made twice, and a bound added to one copy
+// would have left the other unbounded. Declared here, defined in execution.cpp.
+void stage_stamp(int rank, const char* where);
+void lane_stamp(int rank, const char* where, int round);
+
 struct Residency {
     runtime::ResidencyId id;
     runtime::SequenceId sequence;
@@ -166,6 +172,12 @@ public:
     void publish_result(ComputeOperation&);
     void retire_compute();
     void progress();
+    // THIS RANK'S POSITION IN THE DETERMINISTIC COLLECTIVE SEQUENCE: the number of collectives it has
+    // issued (mailbox exchanges and the gathers built on them). Always on, not a diagnostic: it is the
+    // count a group executor needs to tell "this rank is waiting on a peer's collective" from "this
+    // rank is waiting on its own device work", and those need different responses. Zero on the
+    // single-device lane, which issues none.
+    [[nodiscard]] std::size_t collective_count() const noexcept;
     [[nodiscard]] ComputeOperation& require_compute(runtime::ExecutionTicket);
     [[nodiscard]] const ComputeOperation& require_compute(runtime::ExecutionTicket) const;
     [[nodiscard]] ops::SamplingConfig sampling_config(const ExecutionRow&, const SamplingInput&,

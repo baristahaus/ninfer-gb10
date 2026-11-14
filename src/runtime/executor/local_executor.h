@@ -360,7 +360,31 @@ public:
                         bind_rank(0);
                         auto rank0_event = program().poll();
                         trace_poll_result(0, rank0_event);
-                        if (!rank0_event) { return std::nullopt; }
+                        if (!rank0_event) {
+                            // RANK 0 HAS NO EVENT, BUT IT MAY BE WAITING ON A PEER'S COLLECTIVE, AND
+                            // THE RULE ABOVE WOULD THEN STARVE THE VERY PEER IT IS WAITING FOR. The
+                            // rule is stated for a rank that is waiting on its own device work: a
+                            // peer polled at that moment would run ahead of the lockstep order. But
+                            // one Program::progress() call runs the stage machine in a loop, so a
+                            // single call can carry rank 0 from a stage that merely waits on its own
+                            // stream into one that enqueues a collective (measured: History ->
+                            // AwaitDecision -> launch_decision, whose gather is a collective). Rank 0
+                            // then has no event precisely BECAUSE it is in a rendezvous, and refusing
+                            // to advance any peer leaves that rendezvous unanswered forever -- the
+                            // peer is parked one stage behind, its collective is never issued, rank
+                            // 0's device never completes, and the round never releases. Measured as a
+                            // 585 s spin on rank 0 with not one line from rank 1.
+                            //
+                            // The distinction the rule actually needs is "waiting on the device" vs
+                            // "waiting on a peer", and the collective count is exactly that: a rank
+                            // whose count is behind rank 0's has not yet issued the collective rank 0
+                            // is waiting for. Advancing ONLY those ranks keeps the original rule's
+                            // guarantee (no peer is run ahead of rank 0) and removes the deadlock it
+                            // created. It is also self-limiting: once the peer's count catches up it
+                            // stops being advanced, so a healthy round is unchanged.
+                            advance_peers_behind_rank0();
+                            return std::nullopt;
+                        }
                         if (std::holds_alternative<ExecutionFailed>(*rank0_event)) {
                             return rank0_event;
                         }
@@ -532,6 +556,24 @@ private:
     // A group-wide bind is not a per-rank bind -- the last rank wins. This selects one rank's
     // device so the caller can touch that rank's Program; see bind_to_current_thread above.
     void bind_rank(std::size_t rank) { workers_[rank]->bind_to_current_thread(); }
+
+    // Advance exactly the ranks that have issued fewer collectives than rank 0. See the call site in
+    // poll() for why the count, and only the count, is the right gate.
+    void advance_peers_behind_rank0() {
+        const std::size_t ranks = workers_.size();
+        if (ranks < 2 || ranks > 64) return;  // a group the mask cannot express advances nobody
+        std::array<std::size_t, 64> counts{};
+        for (std::size_t rank = 0; rank < ranks; ++rank) {
+            counts[rank] = workers_[rank]->program().collective_count();
+        }
+        const std::uint64_t behind =
+            peers_behind(std::span<const std::size_t>(counts.data(), ranks));
+        for (std::size_t rank = 1; rank < ranks; ++rank) {
+            if ((behind & (std::uint64_t{1} << rank)) == 0) continue;
+            bind_rank(rank);
+            workers_[rank]->program().progress();
+        }
+    }
 
     // Runs every rank's stage machine concurrently. This is the second phase of submit's
     // dispatch; see the invariant there for why a serial loop is not enough. Width 1 runs inline:

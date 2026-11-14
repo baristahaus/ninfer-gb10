@@ -75,4 +75,32 @@ struct PollDecision {
     return decision;
 }
 
+// WHICH PEERS TO ADVANCE WHEN RANK 0 HAS NO EVENT, as a bitmask (bit r = advance rank r).
+//
+// poll() may not advance a peer on every host poll: a rank's progress() advances its traversal and
+// enqueues device work, so an ungated peer poll runs that rank ahead of the lockstep order. But the
+// ungated rule deadlocks. One progress() call runs the stage machine in a loop, so rank 0 can enter a
+// cross-rank collective within a single poll; its missing event is then not idleness, it is a
+// rendezvous the peer must answer, and refusing to touch any peer leaves it unanswered forever. The
+// peer parked one stage behind never issues its collective, rank 0's device never completes, and the
+// round never releases.
+//
+// The distinction the rule needs is 'waiting on the device' versus 'waiting on a peer', and the
+// collective count is exactly that: a peer is polled when its count is BEHIND rank 0's, i.e. it has
+// not yet issued the collective rank 0 is waiting for. A peer level with or ahead of rank 0 is not
+// touched, so the original guarantee is preserved and the deadlock is removed. The rule is also
+// self-limiting: once the peer's count catches up it stops being advanced, so a healthy round is
+// unchanged.
+//
+// `counts` is one entry per rank and counts[0] is the leader. Pure, so it is tested without Devices.
+[[nodiscard]] inline std::uint64_t peers_behind(std::span<const std::size_t> counts) {
+    std::uint64_t mask = 0;
+    if (counts.empty()) { return mask; }
+    const std::size_t leader = counts[0];
+    for (std::size_t rank = 1; rank < counts.size() && rank < 64; ++rank) {
+        if (counts[rank] < leader) { mask |= std::uint64_t{1} << rank; }
+    }
+    return mask;
+}
+
 } // namespace ninfer::runtime

@@ -20,25 +20,7 @@ extern "C" void ninfer_launch_site(const char*) __attribute__((weak));
 
 
 namespace {
-void stage_stamp(int rank, const char* where) {
-    if (std::getenv("NINFER_LANE_TRACE") == nullptr) { return; }
-    std::timespec ts{};
-    (void)::clock_gettime(CLOCK_MONOTONIC, &ts);
-    std::fprintf(stderr, "[stage-time] rank=%d at=%s ns=%lld\n", rank, where,
-                 (long long)ts.tv_sec * 1000000000LL + (long long)ts.tv_nsec);
-    std::fflush(stderr);
-}
-
-void lane_stamp(int rank, const char* where, int round) {
-    if (std::getenv("NINFER_LANE_TRACE") == nullptr) { return; }
-    std::timespec ts{};
-    (void)::clock_gettime(CLOCK_MONOTONIC, &ts);
-    std::fprintf(stderr, "[lane-time] rank=%d at=%s round=%d ns=%lld\n", rank, where, round,
-                 (long long)ts.tv_sec * 1000000000LL + (long long)ts.tv_nsec);
-    std::fflush(stderr);
-}
-} // namespace
-namespace {
+// The stamps themselves live in execution.cpp, defined once; see internal.h.
 // NINFER_LANE_TRACE gates every lane diagnostic: the prints are the instruments that produced the
 // phase's exclusions, so they are committed rather than re-written each session, and they cost
 // nothing when the variable is unset.

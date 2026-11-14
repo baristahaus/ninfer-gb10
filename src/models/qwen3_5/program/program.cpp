@@ -38,6 +38,8 @@ void RankProgram::start(runtime::ExecutionRequest<ExecutionTypes>&& request) {
 
 void RankProgram::progress() { impl_->progress(); }
 
+std::size_t RankProgram::collective_count() const { return impl_->collective_count(); }
+
 void RankProgram::supply(runtime::ExecutionTicket ticket, runtime::CommandSequence command,
                          runtime::DecisionInput&& input) {
     impl_->supply(ticket, command, std::move(input));

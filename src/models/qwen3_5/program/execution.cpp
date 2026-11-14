@@ -3,6 +3,8 @@
 #include <thread>
 #include <functional>
 #include <ctime>
+#include <map>
+#include <mutex>
 #include "models/qwen3_5/program/internal.h"
 #include "models/qwen3_5/execution/draft.h"
 #include "models/qwen3_5/execution/text.h"
@@ -11,8 +13,39 @@
 
 namespace ninfer::models::qwen3_5::detail {
 namespace {
+// A SPIN MUST NOT BE ABLE TO FILL THE DISK. These two stamps are printed at the top of the stage
+// machine, and a stalled round enters it millions of times a second: one arm-2 run wrote 53.7 GB in
+// 585 s, so the diagnostic cost more than the defect it was meant to explain and buried its own
+// useful lines. The rule is 'suppress an IDENTICAL line repeated within 100 ms', not 'suppress this
+// site': a stamp whose value changed always prints, so the round sequence is never thinned, while a
+// stall produces at most ten lines a second.
+constexpr long long kStampPeriodNs = 100'000'000;
+
+bool stamp_due(int rank, const char* where, int round) {
+    static const bool on = std::getenv("NINFER_LANE_TRACE") != nullptr;
+    if (!on) { return false; }
+    std::timespec ts{};
+    (void)::clock_gettime(CLOCK_MONOTONIC, &ts);
+    const long long now = static_cast<long long>(ts.tv_sec) * 1000000000LL + (long long)ts.tv_nsec;
+    struct Last {
+        int rank   = -1;
+        int round  = 0;
+        long long ns = 0;
+    };
+    static std::mutex mutex;
+    static std::map<const char*, Last> last;
+    std::lock_guard<std::mutex> lock(mutex);
+    Last& slot = last[where];
+    if (slot.rank == rank && slot.round == round && slot.ns != 0 && now - slot.ns < kStampPeriodNs) {
+        return false;
+    }
+    slot = Last{rank, round, now};
+    return true;
+}
+} // namespace
+
 void stage_stamp(int rank, const char* where) {
-    if (std::getenv("NINFER_LANE_TRACE") == nullptr) { return; }
+    if (!stamp_due(rank, where, 0)) { return; }
     std::timespec ts{};
     (void)::clock_gettime(CLOCK_MONOTONIC, &ts);
     std::fprintf(stderr, "[stage-time] rank=%d at=%s ns=%lld thread=%zu\n", rank, where,
@@ -22,14 +55,13 @@ void stage_stamp(int rank, const char* where) {
 }
 
 void lane_stamp(int rank, const char* where, int round) {
-    if (std::getenv("NINFER_LANE_TRACE") == nullptr) { return; }
+    if (!stamp_due(rank, where, round)) { return; }
     std::timespec ts{};
     (void)::clock_gettime(CLOCK_MONOTONIC, &ts);
     std::fprintf(stderr, "[lane-time] rank=%d at=%s round=%d ns=%lld\n", rank, where, round,
                  (long long)ts.tv_sec * 1000000000LL + (long long)ts.tv_nsec);
     std::fflush(stderr);
 }
-} // namespace
 
 
 std::string sharded_forward_refusal(bool has_peer_mirrors, bool forward_wired) {
@@ -40,6 +72,14 @@ std::string sharded_forward_refusal(bool has_peer_mirrors, bool forward_wired) {
            "unsharded path and produce wrong numbers. Refusing the round. See "
            "RankProgramImpl::peer_text_kv (models/qwen3_5/program/internal.h) and "
            "attach_rank_mirrors (models/qwen3_5/program/lifecycle.cpp).";
+}
+
+std::size_t RankProgramImpl::collective_count() const noexcept {
+    // The collective is the only thing that makes one rank's progress depend on another's, so its
+    // counter is the rank's position in the group's rendezvous order. `reduce_index` is advanced by
+    // ShardedCollective::reduce at ENQUEUE time (execution/sharded.h), which is what the executor
+    // needs: the question is what this rank has asked its peer for, not what the device has finished.
+    return collective_ ? collective_->reduce_index : 0;
 }
 
 void RankProgramImpl::progress() {

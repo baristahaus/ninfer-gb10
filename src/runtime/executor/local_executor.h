@@ -567,11 +567,14 @@ private:
                             std::fprintf(stderr, "[lane-bind] rank=%zu at=%s ns=%lld thread=%s\n",
                                          rank, where,
                                          (long long)ts.tv_sec * 1000000000LL + (long long)ts.tv_nsec,
-                                         [&] {
+                                         ([&] {
                                              std::ostringstream out;
                                              out << std::this_thread::get_id();
-                                             return out.str().c_str();
-                                         }());
+                                             // HOLD THE STRING IN A LOCAL: c_str() of a temporary
+                                             // std::string dangles on return, which printed garbage.
+                                             const auto id = out.str();
+                                             return id;
+                                         })().c_str());
                             std::fflush(stderr);
                         };
                         bind_stamp("thread_created");

@@ -422,6 +422,20 @@ public:
             }
             // The launch counter's per-round boundary: a weak symbol, null in production.
             if (&ninfer_launch_round_boundary != nullptr) { ninfer_launch_round_boundary(); }
+            // THE BOUNDARY COUNT, LABELLED. A number called 'round' that actually counts gathers is
+            // the ambiguous-label error this phase has paid for repeatedly: the gather count says how
+            // often one rank reached all_gather_logits, not how many rounds the run has advanced.
+            // Printing them under different labels keeps the two claims apart.
+            {
+                // The boundary is ONE event for the whole executor: release() advances every rank
+                // together, so both ranks share this count by construction. Printing it with the
+                // width says so explicitly, and keeps 'rounds advanced' apart from 'gathers run',
+                // which are different claims and were being conflated under one label.
+                static std::atomic<int> boundary{0};
+                const int n = ++boundary;
+                std::fprintf(stderr, "[round] boundary=%d width=%zu\n", n, workers_.size());
+                std::fflush(stderr);
+            }
             if (round_trace_enabled()) {
                 round_trace("poll.return rank=0 ticket=%llu event=%s (every rank's event matched)",
                             static_cast<unsigned long long>(trace_event_ticket(*event)),
@@ -540,7 +554,30 @@ private:
             for (std::size_t rank = 0; rank < workers_.size(); ++rank) {
                 threads.emplace_back([&, rank] {
                     try {
+                        // THE SMALLEST INSTRUMENT OF THE INVESTIGATION: this thread is created fresh
+                        // every round (threads.emplace_back per rank per round) and its first act is
+                        // a device bind. A per-round create+join whose startup includes a context
+                        // attach is the shape of a fixed per-round cost that no instrument measuring
+                        // work INSIDE the thread could have seen. RAW thread id, not the hash: a
+                        // 64-bit hash cannot distinguish 'same thread' from 'collision'.
+                        const auto bind_stamp = [&](const char* where) {
+                            if (std::getenv("NINFER_LANE_TRACE") == nullptr) { return; }
+                            std::timespec ts{};
+                            (void)::clock_gettime(CLOCK_MONOTONIC, &ts);
+                            std::fprintf(stderr, "[lane-bind] rank=%zu at=%s ns=%lld thread=%s\n",
+                                         rank, where,
+                                         (long long)ts.tv_sec * 1000000000LL + (long long)ts.tv_nsec,
+                                         [&] {
+                                             std::ostringstream out;
+                                             out << std::this_thread::get_id();
+                                             return out.str().c_str();
+                                         }());
+                            std::fflush(stderr);
+                        };
+                        bind_stamp("thread_created");
+                        bind_stamp("before");
                         bind_rank(rank);
+                        bind_stamp("after");
                         workers_[rank]->program().progress();
                     } catch (...) { errors[rank] = std::current_exception(); }
                 });

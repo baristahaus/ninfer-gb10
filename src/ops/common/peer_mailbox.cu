@@ -441,6 +441,19 @@ void PeerMailbox::enqueue_exchange_sum(int rank, int slot, void* data, std::size
     const std::size_t lane_base =
         static_cast<std::size_t>(slot) * static_cast<std::size_t>(set.lanes);
     const std::size_t flag_slot = lane_base * detail::kPeerFlagStride;
+    // THE RENDEZVOUS ADDRESSES, FROM BOTH SIDES, BEFORE ANY EPOCH IS COMPARED. Both ranks poll a
+    // slot in the other's mapped slab; this rank writes `mine` and polls `peer`. If the two ranks
+    // disagree about which word is whose, the poll never completes and every other instrument
+    // (counts, epochs, status words) reports a symptom rather than the cause. The pointers come off
+    // the host-mapped slab, so this is a direct host read with no copy and no fence.
+    if (std::getenv("NINFER_LANE_TRACE") != nullptr) {
+        std::fprintf(stderr,
+                     "[flag-addr] rank=%d site=%s slot=%d lane_base=%zu flag_slot=%zu mine=%p peer=%p\n",
+                     rank, site, slot, lane_base, flag_slot,
+                     static_cast<void*>(set.flags[rank] + flag_slot),
+                     static_cast<void*>(set.flags[1 - rank] + flag_slot));
+        std::fflush(stderr);
+    }
     ::ninfer::core::audit::record(rank, site);
     const std::size_t vecs      = bytes / sizeof(detail::PeerVec);
     std::uint32_t* words        = set.device_words[rank];

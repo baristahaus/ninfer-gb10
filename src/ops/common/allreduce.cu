@@ -93,6 +93,15 @@ void validate_reduce(const ExecutionContext& ec, const PeerMailbox& mailbox,
 void enqueue_exchange(const ExecutionContext& ec, PeerMailbox& mailbox, int rank, int slot,
                       std::span<void* const> data, std::size_t bytes, const char* site = "?") {
     const int device = ec.device(rank).device().index();
+    // THE STREAM THE EXCHANGE IS ENQUEUED ON, printed beside the device it claims to belong to. A
+    // launch into a stream belonging to a DIFFERENT device reports success and never executes, and
+    // the phase has verified device INDICES but never the stream's own device. The width-1 arm is the
+    // known-good control: same prints, and the pointers can be compared in one line each.
+    if (std::getenv("NINFER_LANE_TRACE") != nullptr) {
+        std::fprintf(stderr, "[stream] rank=%d exchange=%p device=%d site=%s\n", rank,
+                     static_cast<void*>(ec.device(rank).stream()), device, site);
+        std::fflush(stderr);
+    }
     (void)with_device(device, [&] {
         mailbox.enqueue_exchange_sum(rank, slot, data[rank], bytes, ec.device(rank).stream(), site);
         return 0;

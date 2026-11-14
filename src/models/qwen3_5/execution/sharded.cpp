@@ -236,6 +236,15 @@ void all_gather_logits(const models::ShardedGroup& group, int rank, std::size_t&
             // One contiguous copy per column: dim 0 is fastest, so a column's rows are contiguous
             // in both buffers, and the destination's column stride is the full vocabulary.
             NINFER_TAG_SITE("gather.column");
+            // THE STREAM THE COPIES USE. Compared with the exchange's stream above: same pointer means
+            // the stream hypothesis is dead and the next step is cudaStreamQuery; different means the
+            // exchange runs on a stream the copies never touch, which is the defect and a one-argument
+            // fix.
+            if (std::getenv("NINFER_LANE_TRACE") != nullptr) {
+                std::fprintf(stderr, "[stream] rank=%d copy=%p\n", rank,
+                             static_cast<void*>(execution.stream()));
+                std::fflush(stderr);
+            }
             CUDA_CHECK(cudaMemcpyAsync(half + static_cast<std::size_t>(column) * plan.bytes_per_column,
                                        source + static_cast<std::size_t>(first + column) * row_bytes,
                                        row_bytes, cudaMemcpyDeviceToDevice, execution.stream()));

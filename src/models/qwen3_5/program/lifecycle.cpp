@@ -1,3 +1,4 @@
+#include <ctime>
 #include "models/qwen3_5/program/internal.h"
 #include "models/qwen3_5/session/session.h"
 #include "models/qwen3_5/execution/text.h"
@@ -329,8 +330,25 @@ void RankProgramImpl::drain() {
             throw std::runtime_error(std::string("Qwen3.5 stream drain: ") +
                                      cudaGetErrorString(status));
     };
+    // THE FIRST POINT THAT WAITS FOR THE GPU. Every host-side bracket in this investigation measured
+    // microseconds because the host is not doing the work: the 1 s is the GPU executing rank 1's
+    // queued traversal, and it surfaces here, at the first cudaStreamSynchronize. The brackets could
+    // not see it because they measure host time between enqueues and the GPU is asynchronous -- the
+    // instruments were measuring the wrong side of an asynchronous boundary.
+    const auto sync_stamp = [&](const char* where) {
+        if (std::getenv("NINFER_LANE_TRACE") == nullptr) { return; }
+        std::timespec ts{};
+        (void)::clock_gettime(CLOCK_MONOTONIC, &ts);
+        std::fprintf(stderr, "[drain-sync] rank=%d at=%s ns=%lld\n",
+                     collective_ ? collective_->rank : 0, where,
+                     (long long)ts.tv_sec * 1000000000LL + (long long)ts.tv_nsec);
+        std::fflush(stderr);
+    };
+    sync_stamp("before_transfer_sync");
     attempt([&] { wait_stream(device.transfer_stream()); });
+    sync_stamp("before_stream_sync");
     attempt([&] { wait_stream(device.stream()); });
+    sync_stamp("after_stream_sync");
     compute.reset();
     context_operation.reset();
     events.clear();

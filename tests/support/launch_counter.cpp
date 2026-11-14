@@ -341,10 +341,26 @@ void ninfer_launch_round_boundary(void) {
     // THE BOUND PROBE: each rank's free memory read from a thread explicitly bound to that rank,
     // so the number cannot inherit a device from a neighbouring line. This is the discriminator for
     // whether the free-memory asymmetry is the engine's or the instrument's.
+    int visible_devices = 0;
+    (void)cudaGetDeviceCount(&visible_devices);
     for (int rank = 0; rank < 2; ++rank) {
+        // THE PROBE MUST NOT PROBE A DEVICE THAT DOES NOT EXIST. On a one-GPU host
+        // cudaSetDevice(1) FAILS and leaves cudaErrorInvalidDevice set in the thread's error state;
+        // the next CUDA_CHECK(cudaGetLastError()) in the program then reports that stale error
+        // against a launch that was fine. That is exactly how 13 identical arm1-failed rows were
+        // produced by a diagnostic poisoning the code it was measuring. Skip, say so, and clear.
+        if (rank >= visible_devices) {
+            std::fprintf(stderr,
+                         "[launch-count] round=%d bound_probe rank=%d skipped (%d visible device%s)\n",
+                         g_round, rank, visible_devices, visible_devices == 1 ? "" : "s");
+            continue;
+        }
         if (cudaSetDevice(rank) != cudaSuccess) {
             std::fprintf(stderr, "[launch-count] round=%d bound_probe rank=%d cudaSetDevice FAILED\n",
                          g_round, rank);
+            // A DIAGNOSTIC THAT LEAVES GLOBAL ERROR STATE BEHIND IS A DIAGNOSTIC THAT CHANGES WHAT IT
+            // MEASURES.
+            (void)cudaGetLastError();
             continue;
         }
         std::size_t free_bytes = 0, total_bytes = 0;
@@ -358,6 +374,8 @@ void ninfer_launch_round_boundary(void) {
                          static_cast<unsigned long long>(free_bytes / (1024u * 1024u)),
                          static_cast<unsigned long long>(total_bytes / (1024u * 1024u)));
         }
+        // The probe leaves NO error state behind, successful or not.
+        (void)cudaGetLastError();
     }
     std::fprintf(stderr, "[launch-count] round=%d shim_use", g_round);
     for (int i = 0; i < 8; ++i) {

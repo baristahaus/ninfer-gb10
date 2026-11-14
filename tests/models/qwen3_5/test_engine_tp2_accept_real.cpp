@@ -26,6 +26,8 @@
 //
 // Needs two GPUs and a 27B artifact; skips otherwise.
 
+#include <unistd.h>
+#include <cuda_runtime_api.h>
 #include "ninfer/engine.h"
 
 #include <cuda_runtime.h>
@@ -222,6 +224,17 @@ int main() {
     // THE DEVICE REQUIREMENT FOLLOWS THE ARM. The reference arm runs on ONE device by definition, so
     // requiring two would skip it on exactly the host the arm mode exists for; the sharded arm and
     // the two-arm comparison both need two.
+    // THE DEVICE CONTROL, PRINTED UNCONDITIONALLY. A device number with no control is a number that
+    // can be attributed to the wrong thing, so the same line is read on BOTH hosts: the lane works on
+    // hephaestus, so hephaestus is the control that makes trueno's number meaningful.
+    {
+        int initial_device = -1, visible = 0;
+        (void)cudaGetDevice(&initial_device);
+        (void)cudaGetDeviceCount(&visible);
+        std::fprintf(stderr, "[dev-control] pid=%d initial_cuda_device=%d visible=%d\n",
+                     static_cast<int>(::getpid()), initial_device, visible);
+        std::fflush(stderr);
+    }
     const char* arm_env = std::getenv("NINFER_TP2_ARM");
     const int arm_width = arm_env != nullptr ? std::atoi(arm_env) : 0;
     const int needed    = arm_env != nullptr && arm_width <= 1 ? 1 : 2;

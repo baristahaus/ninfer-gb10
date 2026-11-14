@@ -141,6 +141,18 @@ if [ "$NO_BUILD" -eq 0 ]; then
         rsync -a -e "ssh -F $SSH_CONFIG -o BatchMode=yes" --delete --exclude=.git --exclude=build --exclude=.agents --exclude=.agent-tmp \
               "$SRC/" "barista@$host:$DST/" >> "$WORK/sweep.log" 2>&1
     done
+    # THE SHARDED ARM RUNS A PATH THAT MASTER DOES NOT ENABLE BY DEFAULT. kShardedForwardWired is the
+    # compile-time switch for the sharded forward; master leaves it false, so a freshly synced lane
+    # host would run the width-2 arm on the fallback path and never exercise the code under test. The
+    # precondition is applied here, on the sharded host only, and printed into the run's own log, so
+    # the meaning of a row is recorded with the row instead of living in someone's memory of a
+    # hand-edited file. Idempotent: the pattern matches only the false spelling.
+    say "== wire the sharded forward on the sharded host"
+    remote "$LANE_HOST" "cd '$DST' && \
+        sed -i 's/inline constexpr bool kShardedForwardWired = false;/inline constexpr bool kShardedForwardWired = true;/' \
+            src/models/qwen3_5/program/internal.h && \
+        grep -n 'kShardedForwardWired' src/models/qwen3_5/program/internal.h" 2>&1 |
+        tee -a "$WORK/sweep.log" | sed 's/^/   /'
     say "== build both hosts"
     for host in "$REF_HOST" "$LANE_HOST"; do
         # The presence test is on the generated build file, not on the directory: an interrupted

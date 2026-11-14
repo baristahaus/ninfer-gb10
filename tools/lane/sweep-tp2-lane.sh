@@ -26,7 +26,13 @@
 set -euo pipefail
 
 LENGTHS="8 10 12 16 17 20 24 28 31 32 40 48 64"
-WORK=${WORK:-/tmp/tp2-lane-sweep}
+# THE WORK DIRECTORY IS PERSISTENT AND PER-RUN. It used to default to /tmp, which is wrong twice
+# over: on a host whose /tmp is a tmpfs the directory can vanish with the process that made it, and a
+# tsv whose age cannot be told from its contents WILL be misread -- it was, and a day-old table was
+# reported as the current run's. The run id is in the directory name so the table's age is in its
+# path rather than something a reader has to check with stat.
+RUN_ID=$(date +%Y%m%dT%H%M%S)
+WORK=${WORK:-/home/barista/ninferno/tp2-sweep/run-$RUN_ID}
 REF_HOST=172.30.30.16
 REF_ART=/home/barista/ninfer/models/qwen3_8_27b_nvfp4.v3.ninfer
 LANE_HOST=172.30.30.15
@@ -184,7 +190,13 @@ wait_idle() {
 
 run_arm() {
     local host="$1" artifact="$2" arm="$3" prompt="$4" out="$5"
-    local command="cd '$DST' && NINFER_TP2_ACCEPT=1 NINFER_TP2_CAPTURE=1 NINFER_TP2_ARM=$arm \
+    # THE REFERENCE ARM IS PINNED TO DEVICE 0. trueno has ONE GPU and the binary's default ordinal
+    # is 1, so every width-1 round died at embedding.cu:341 with cudaErrorInvalidDevice: invalid
+    # device ordinal -- 13 identical failures that a precondition should have caught once. The
+    # SHARDED arm is deliberately NOT pinned: it genuinely needs both devices on hephaestus.
+    local visible=""
+    if [ "$arm" = "1" ]; then visible="CUDA_VISIBLE_DEVICES=0 "; fi
+    local command="cd '$DST' && ${visible}NINFER_TP2_ACCEPT=1 NINFER_TP2_CAPTURE=1 NINFER_TP2_ARM=$arm \
         NINFER_TP2_PROMPT='$prompt' NINFER_TEST_ARTIFACT='$artifact' \
         ./'$BUILD'/tests/ninfer_qwen3_5_tp2_accept_real_test"
     # One run per arm: the chain and the log come from the same execution, so a length costs two GPU
@@ -203,6 +215,15 @@ run_arm() {
         return 1
     fi
 }
+
+# A PRECONDITION THAT FAILS 13 TIMES IDENTICALLY SHOULD FAIL ONCE, LOUDLY, BEFORE THE SWEEP STARTS.
+# The reference arm binds device 0 (pinned above); assert the host actually exposes it, and name both
+# numbers when it does not.
+ref_devices=$(remote "$REF_HOST" "nvidia-smi -L | wc -l" 2>/dev/null | tr -d ' ')
+if [ "${ref_devices:-0}" -lt 1 ]; then
+    die "the reference host exposes ${ref_devices:-0} devices; the width-1 arm needs device 0. Refusing to run a sweep that would fail every length for the same reason."
+fi
+say "   reference host exposes $ref_devices device(s); width-1 arm pinned to device 0"
 
 say "== sweep"
 for length in $LENGTHS; do
@@ -229,7 +250,7 @@ for length in $LENGTHS; do
     # only), so the reference host scores both candidates at their first divergence.
     remote "$REF_HOST" "mkdir -p /home/barista/tp2-sweep/chains"
     scp -q -F "$SSH_CONFIG" -o BatchMode=yes "$arm2" "barista@$REF_HOST:/home/barista/tp2-sweep/chains/T$length.arm2.ids"
-    adjudication=$(remote "$REF_HOST" "cd '$DST' && NINFER_TP2_ACCEPT=1 NINFER_TP2_ARM=1 \
+    adjudication=$(remote "$REF_HOST" "cd '$DST' && CUDA_VISIBLE_DEVICES=0 NINFER_TP2_ACCEPT=1 NINFER_TP2_ARM=1 \
         NINFER_TP2_PROMPT='$prompt' NINFER_TP2_COMPARE='/home/barista/tp2-sweep/chains/T$length.arm2.ids' \
         NINFER_TEST_ARTIFACT='$REF_ART' ./'$BUILD'/tests/ninfer_qwen3_5_tp2_accept_real_test" 2>&1 || true)
     printf '\n== adjudication T=%s\n%s\n' "$length" "$adjudication" >> "$WORK/sweep.log"

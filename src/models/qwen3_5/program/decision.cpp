@@ -20,6 +20,15 @@ extern "C" void ninfer_launch_site(const char*) __attribute__((weak));
 
 
 namespace {
+void stage_stamp(int rank, const char* where) {
+    if (std::getenv("NINFER_LANE_TRACE") == nullptr) { return; }
+    std::timespec ts{};
+    (void)::clock_gettime(CLOCK_MONOTONIC, &ts);
+    std::fprintf(stderr, "[stage-time] rank=%d at=%s ns=%lld\n", rank, where,
+                 (long long)ts.tv_sec * 1000000000LL + (long long)ts.tv_nsec);
+    std::fflush(stderr);
+}
+
 void lane_stamp(int rank, const char* where, int round) {
     if (std::getenv("NINFER_LANE_TRACE") == nullptr) { return; }
     std::timespec ts{};
@@ -281,7 +290,14 @@ void RankProgramImpl::launch_decision(ComputeOperation& operation) {
         }
         events.emplace_back(std::move(consumed));
     }
+    // THE UNCONDITIONAL WORKSPACE RESET, BRACKETED. This is not a call the stage machine makes, it is
+    // a SIDE EFFECT of entering the stage -- which is why every bracket placed at a stage transition
+    // missed it. A workspace reset on a large allocation is a free/alloc pair, and a free/alloc pair
+    // that round-trips the driver can cost a second on one rank while costing milliseconds on
+    // another whose pool is warm. The same call can produce both numbers.
+    stage_stamp(collective_ ? collective_->rank : 0, "work_reset_before");
     resources.work.reset();
+    stage_stamp(collective_ ? collective_->rank : 0, "work_reset_after");
     if (std::holds_alternative<DecodeWork>(operation.request.work.operation)) {
         if (!operation.projected) project_decode(operation.batch, operation.width);
         if (graphs) {

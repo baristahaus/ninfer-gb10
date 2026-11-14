@@ -42,6 +42,13 @@ BUILD=build/rtx5090-release
 SRC=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 DRY_RUN=0
 NO_BUILD=0
+# THE PER-ARM BOUND. The harness had NO bound on an arm: the only budget was wait_idle's 1200 s
+# precondition wait, so a hanging sharded arm hung the sweep forever -- measured: 11+ minutes on one
+# length, 0 rows, 24 GB resident across both cards, 0% utilisation, and it would have sat there
+# indefinitely. A bound that is assumed but not enforced is a bound that does not exist.
+# Derived from measurement, not guessed: the reference arm takes ~8 min (67 rounds, arm 1 tokens (32)
+# on trueno), so 1200 s is 2.5x that and generous enough for the sharded arm to finish if it can.
+ARM_TIMEOUT=${ARM_TIMEOUT:-1200}
 # This workstation's /etc/ssh/ssh_config.d carries a file with wrong ownership, so the default system
 # config makes every ssh fail with "Bad owner or permissions" before it reaches the host. The lane
 # hosts are addressed by IP, so an empty config is both sufficient and reproducible; SSH_CONFIG can
@@ -202,9 +209,14 @@ run_arm() {
     # One run per arm: the chain and the log come from the same execution, so a length costs two GPU
     # rounds plus at most one adjudication, not double that.
     local raw
-    raw=$(printf '\n== %s arm %s %s\n' "$host" "$arm" "$prompt"; remote "$host" "$command" 2>&1 || true)
+    raw=$(printf '\n== %s arm %s %s\n' "$host" "$arm" "$prompt"; remote "$host" "timeout $ARM_TIMEOUT $command" 2>&1 || true)
     printf '%s\n' "$raw" >> "$WORK/sweep.log"
     printf '%s\n' "$raw" | sed -n "s/^arm $arm tokens ([0-9]*): //p" | tail -1 > "$out"
+    if [ ! -s "$out" ] && printf '%s\n' "$raw" | grep -qE "exit (124|137)|Terminated|timed out"; then
+        printf '%s\tno\t-\t-\tarm%s-timeout: bound %ss exceeded\n' "$length" "$arm" "$ARM_TIMEOUT" >> "$TSV"
+        say "   T=$length  arm $arm EXCEEDED the ${ARM_TIMEOUT}s bound -> recorded as arm-timeout"
+        return 1
+    fi
     if [ ! -s "$out" ]; then
         # A length whose arm produced no chain is a row, not a gap: the sweep's deliverable is the
         # profile, and "the sharded arm could not run at this length" is part of it. The reason is the
@@ -224,6 +236,7 @@ if [ "${ref_devices:-0}" -lt 1 ]; then
     die "the reference host exposes ${ref_devices:-0} devices; the width-1 arm needs device 0. Refusing to run a sweep that would fail every length for the same reason."
 fi
 say "   reference host exposes $ref_devices device(s); width-1 arm pinned to device 0"
+say "   per-arm bound: ${ARM_TIMEOUT}s (a hanging arm is recorded as arm-timeout, not as an anonymous failure)"
 
 say "== sweep"
 for length in $LENGTHS; do

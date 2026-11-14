@@ -52,10 +52,21 @@ appended once that length's verdict is known. Prompts are slices of `tests/fixtu
 (`prompt.ids` extended by `golden_plain.ids` beyond 32 ids), so neither host tokenizes anything and
 both arms read the same ids. The test's `NINFER_TP2_PROMPT` names the ids file for one length.
 
+## The sharded host's build switch
+
+The width-2 arm only exercises the sharded forward when `kShardedForwardWired`
+(`src/models/qwen3_5/program/internal.h`) is `true`; the repository leaves it `false`. The sweep
+applies it on the sharded host after the sync and prints the resulting line into the run's log, so a
+row's meaning travels with the row. The reference host keeps the default, which is what the
+comparison needs.
+
 ## Recorded sweep
 
-`sweep-results.tsv` is the table from the 13-length sweep (2026-11-12, 27B nvfp4.v3, artifact
-sha256 `044fc2f0…` on both hosts), and `sweep-results.txt` is the script's own summary. Nine lengths
+`sweep-results.tsv` is the table from the 13-length sweep, and `sweep-results.txt` is the script's own
+summary for the 2026-11-14 run (27B nvfp4.v3, artifact sha256 `044fc2f0…` on both hosts). Nine lengths
 were exact, four were tie-only (20, 31, 32, 48) and none was a confident disagreement; the largest
-margin was 0.375 nats against the 1.0-nat tolerance. Lengths above 32 are the captured prompt
-extended by the reference's own greedy continuation, so they are not independent samples.
+margin was 0.375 nats against the 1.0-nat tolerance. The 2026-11-14 run reproduced the 2026-11-12
+table to the position and the margin on a different executor.
+
+Lengths above 32 are the captured prompt extended by the reference's own greedy continuation, so they
+are not independent samples.

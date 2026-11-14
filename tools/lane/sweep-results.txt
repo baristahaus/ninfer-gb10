@@ -1,18 +1,15 @@
-== lane sweep
+== lane sweep (2026-11-14, executor b71f09c8 + c6e78803)
    lengths  8 10 12 16 17 20 24 28 31 32 40 48 64
-   work     /home/barista/ninferno/wtJ/lane-sweep/.sweep-work
+   work     /home/barista/ninferno/work/lane/run-20261114T133302
    reference 172.30.30.16 (/home/barista/ninfer/models/qwen3_8_27b_nvfp4.v3.ninfer)
    sharded   172.30.30.15 (/home/barista/artifacts/27b-v3-nvfp4/qwen3_8_27b_nvfp4.v3.ninfer)
-   checkout  /home/barista/ninferno/wtJ/lane-sweep -> /home/barista/src/wt-tp2
-== artifact digests
-   reference 044fc2f0a164bdff8355a3a871010db8f526365a4672bd4a791e1a8808278561
-   sharded   044fc2f0a164bdff8355a3a871010db8f526365a4672bd4a791e1a8808278561
-wrote 13 prompt files from 64 available ids
-== prompts to both hosts
+   artifact 044fc2f0a164bdff8355a3a871010db8f526365a4672bd4a791e1a8808278561 on both hosts
+   sharded host built with kShardedForwardWired = true (applied by the sweep, printed in the run log)
+   per-arm bound: 1200s (a hanging arm is recorded as arm-timeout, not as an anonymous failure)
 == sweep
-   T=8  already recorded, skipped
-   T=10  already recorded, skipped
-   T=12  already recorded, skipped
+   T=8  exact match over 32 tokens
+   T=10  exact match over 32 tokens
+   T=12  exact match over 32 tokens
    T=16  exact match over 32 tokens
    T=17  exact match over 32 tokens
    T=20  mismatch at 6, margin 0.375 nats -> tie
@@ -39,8 +36,10 @@ length  match  position  margin_nats  classification
 48      no     1         0.125        tie
 64      exact  -         0            verified
 
-   exact:      8 10 12 16 17 24 28 40 64 
-   tie-only:   20 31 32 48 
-   defective:  
-   table at /home/barista/ninferno/wtJ/lane-sweep/.sweep-work/sweep.tsv
-EXIT=0
+   exact:      8 10 12 16 17 24 28 40 64
+   tie-only:   20 31 32 48
+   defective:
+
+   T=28 stopped at ten tokens on BOTH arms; the tenth token is the end-of-sequence token.
+   This table reproduces the 2026-11-12 table (same positions, same margins) on a different
+   executor. See docs/lane.md.

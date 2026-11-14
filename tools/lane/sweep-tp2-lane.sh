@@ -26,7 +26,13 @@
 set -euo pipefail
 
 LENGTHS="8 10 12 16 17 20 24 28 31 32 40 48 64"
-WORK=${WORK:-/tmp/tp2-lane-sweep}
+# THE WORK DIRECTORY IS PERSISTENT AND PER-RUN. It used to default to /tmp, which is wrong twice
+# over: on a host whose /tmp is a tmpfs the directory can vanish with the process that made it, and a
+# tsv whose age cannot be told from its contents WILL be misread -- it was, and a day-old table was
+# reported as the current run's. The run id is in the directory name so the table's age is in its
+# path rather than something a reader has to check with stat.
+RUN_ID=$(date +%Y%m%dT%H%M%S)
+WORK=${WORK:-/home/barista/ninferno/tp2-sweep/run-$RUN_ID}
 REF_HOST=172.30.30.16
 REF_ART=/home/barista/ninfer/models/qwen3_8_27b_nvfp4.v3.ninfer
 LANE_HOST=172.30.30.15

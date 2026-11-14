@@ -53,6 +53,10 @@ enum class ComputeStage : std::uint8_t {
     Retiring,
 };
 
+// The stage machine's stage names, for diagnostics that must say WHICH stage a rank is parked in.
+// Defined in lifecycle.cpp; declared here because the stamps in execution.cpp print them.
+[[nodiscard]] const char* compute_stage_name(ComputeStage stage);
+
 struct ComputeOperation {
     runtime::ExecutionRequest<ExecutionTypes> request;
     runtime::CommandSequence last_command;

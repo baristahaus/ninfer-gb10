@@ -13,7 +13,6 @@
 #include <vector>
 
 namespace ninfer::models::qwen3_5::detail {
-namespace {
 
 // DIAGNOSTIC (NINFER_ROUND_TRACE=1): the stage names in `start.return`; the integer stage is also
 // printed so a mismatch between the name and the enum is visible.
@@ -30,8 +29,6 @@ const char* compute_stage_name(ComputeStage stage) {
     }
     return "unknown";
 }
-
-} // namespace
 
 RankProgramImpl::RankProgramImpl(const execution::Parameters& values, const SequencePlanImpl& plan,
                                  DeviceContext& context, const StartupObserver& observer,

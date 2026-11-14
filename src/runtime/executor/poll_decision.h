@@ -78,27 +78,34 @@ struct PollDecision {
 // WHICH PEERS TO ADVANCE WHEN RANK 0 HAS NO EVENT, as a bitmask (bit r = advance rank r).
 //
 // poll() may not advance a peer on every host poll: a rank's progress() advances its traversal and
-// enqueues device work, so an ungated peer poll runs that rank ahead of the lockstep order. But the
-// ungated rule deadlocks. One progress() call runs the stage machine in a loop, so rank 0 can enter a
-// cross-rank collective within a single poll; its missing event is then not idleness, it is a
-// rendezvous the peer must answer, and refusing to touch any peer leaves it unanswered forever. The
-// peer parked one stage behind never issues its collective, rank 0's device never completes, and the
-// round never releases.
+// enqueues device work, so an ungated peer poll can run that rank ahead of the lockstep order. But
+// the ungated rule deadlocks in two different ways, both measured on the width-2 lane:
+//
+//   1. ONE progress() CALL CAN ENTER A COLLECTIVE. The stage machine runs in a loop, so a single call
+//      can carry rank 0 from a stage that waits on its own stream into one that enqueues a cross-rank
+//      collective. Rank 0 then has no event precisely BECAUSE it is in a rendezvous, and refusing to
+//      touch any peer leaves that rendezvous unanswered: the peer parked one stage behind never
+//      issues its collective, rank 0's device never completes, the round never releases.
+//   2. A PEER CAN HOLD THE EVENT THE ROUND NEEDS. Symmetrically, a peer that has finished its work
+//      publishes ResultReady and stops. Its event is only collected when it is polled, and it is
+//      polled only when rank 0 has an event -- which rank 0 does not, because it is waiting for the
+//      round to release. The peer's event is stranded and the round hangs with every rank idle.
 //
 // The distinction the rule needs is 'waiting on the device' versus 'waiting on a peer', and the
-// collective count is exactly that: a peer is polled when its count is BEHIND rank 0's, i.e. it has
-// not yet issued the collective rank 0 is waiting for. A peer level with or ahead of rank 0 is not
-// touched, so the original guarantee is preserved and the deadlock is removed. The rule is also
-// self-limiting: once the peer's count catches up it stops being advanced, so a healthy round is
-// unchanged.
+// collective count is the rank's position in the rendezvous order. A peer is polled when it is NOT
+// AHEAD of rank 0: behind means it has not yet issued the collective rank 0 waits for, and level
+// means it may already hold the event the round needs. A peer ahead of rank 0 is not touched, which
+// is the original guarantee, and the rule is self-limiting: advancing a level peer that has nothing
+// left to do is a no-op, and one that does run ahead is then ahead and stops being polled until rank
+// 0 catches up. Rank 0 is polled on every host poll regardless, so it always catches up.
 //
 // `counts` is one entry per rank and counts[0] is the leader. Pure, so it is tested without Devices.
-[[nodiscard]] inline std::uint64_t peers_behind(std::span<const std::size_t> counts) {
+[[nodiscard]] inline std::uint64_t peers_to_advance(std::span<const std::size_t> counts) {
     std::uint64_t mask = 0;
     if (counts.empty()) { return mask; }
     const std::size_t leader = counts[0];
     for (std::size_t rank = 1; rank < counts.size() && rank < 64; ++rank) {
-        if (counts[rank] < leader) { mask |= std::uint64_t{1} << rank; }
+        if (counts[rank] <= leader) { mask |= std::uint64_t{1} << rank; }
     }
     return mask;
 }

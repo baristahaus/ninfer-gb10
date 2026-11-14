@@ -5,6 +5,7 @@
 #include <ctime>
 #include <map>
 #include <mutex>
+#include <utility>
 #include "models/qwen3_5/program/internal.h"
 #include "models/qwen3_5/execution/draft.h"
 #include "models/qwen3_5/execution/text.h"
@@ -27,15 +28,18 @@ bool stamp_due(int rank, const char* where, int round) {
     std::timespec ts{};
     (void)::clock_gettime(CLOCK_MONOTONIC, &ts);
     const long long now = static_cast<long long>(ts.tv_sec) * 1000000000LL + (long long)ts.tv_nsec;
+    // THE KEY INCLUDES THE RANK. With the site alone, two ranks alternating on the same site each
+    // saw the other's entry as 'a different value' and both printed every time -- the throttle was
+    // defeated exactly when it was needed, and one stalled run wrote 89.7 GB.
     struct Last {
         int rank   = -1;
         int round  = 0;
         long long ns = 0;
     };
     static std::mutex mutex;
-    static std::map<const char*, Last> last;
+    static std::map<std::pair<int, const char*>, Last> last;
     std::lock_guard<std::mutex> lock(mutex);
-    Last& slot = last[where];
+    Last& slot = last[std::make_pair(rank, where)];
     if (slot.rank == rank && slot.round == round && slot.ns != 0 && now - slot.ns < kStampPeriodNs) {
         return false;
     }
@@ -63,6 +67,22 @@ void lane_stamp(int rank, const char* where, int round) {
     std::fflush(stderr);
 }
 
+// THE STAGE IS WHAT DISTINGUISHES 'WAITING' FROM 'BLOCKED'. The entry stamp used to say only that
+// progress() had been entered, so a rank spinning in Readback and a rank spinning in AwaitDecision
+// produced identical lines, and a rank blocked INSIDE progress() produced none at all -- which reads
+// exactly like a rank that is never polled. Naming the stage makes the three cases distinguishable
+// from the log alone, which is what the width-2 lane needs: its stalls have been read as 'rank 1 is
+// never polled' and as 'rank 1 is blocked' and those want different fixes.
+void stage_entry_stamp(int rank, const char* stage) {
+    if (!stamp_due(rank, stage, 0)) { return; }
+    std::timespec ts{};
+    (void)::clock_gettime(CLOCK_MONOTONIC, &ts);
+    std::fprintf(stderr, "[stage-entry] rank=%d stage=%s ns=%lld thread=%zu\n", rank, stage,
+                 (long long)ts.tv_sec * 1000000000LL + (long long)ts.tv_nsec,
+                 std::hash<std::thread::id>{}(std::this_thread::get_id()));
+    std::fflush(stderr);
+}
+
 
 std::string sharded_forward_refusal(bool has_peer_mirrors, bool forward_wired) {
     if (!has_peer_mirrors) { return {}; }  // the single-device lane
@@ -83,8 +103,9 @@ std::size_t RankProgramImpl::collective_count() const noexcept {
 }
 
 void RankProgramImpl::progress() {
-    stage_stamp(collective_ ? collective_->rank : 0, "progress_entry");
-    lane_stamp(collective_ ? collective_->rank : 0, "round_entry",
+    const int rank = collective_ ? collective_->rank : 0;
+    stage_entry_stamp(rank, compute ? compute_stage_name(compute->stage) : "no-compute");
+    lane_stamp(rank, "round_entry",
                static_cast<int>(collective_ ? collective_->reduce_index : 0));
     // THE REFUSAL THE DECLARATION PROMISES. internal.h:190-194 says the peer mirrors' presence is
     // the sharded-lane flag the round entry refuses on, because the sharded forward is not wired and

@@ -9,8 +9,10 @@
 
 #include <array>
 #include <exception>
+#include <optional>
 #include <thread>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 // A weak hook the per-rank launch counter defines (tests/support/launch_counter.cpp, linked with
@@ -42,6 +44,7 @@ public:
           pool_(workers_.front()->program().capacity()),
           compute_(pool_.capacity().compute_frames), context_(pool_.capacity().context_frames) {
         if (workers_.empty()) { throw std::invalid_argument("executor needs at least one rank"); }
+        held_.resize(workers_.size());
         this->observations_.resize(workers_.size());
         for (std::size_t rank = 0; rank < workers_.size(); ++rank) {
             this->observations_[rank].hardware = workers_[rank]->device_name();
@@ -357,8 +360,25 @@ public:
                         // ranks are not at the same exchange. The decision in poll_decision.h is
                         // pure; its INPUTS are not, so the caller has to preserve the precondition
                         // that makes them meaningful: a peer is polled only because rank 0 was ready.
+                        // AN EVENT THAT IS POLLED AND NOT DELIVERED IS LOST. program().poll()
+                        // POPS the event, so a decision that holds the round (Wait) has to keep
+                        // what it polled: the rank that produced it will not produce it again, and
+                        // its stage machine has already moved on. Measured: one rank published
+                        // ResultReady a few milliseconds before its peer, the decision returned
+                        // Wait, the event was discarded, and the round then spun at AwaitCommit
+                        // for the rest of the run with both ranks idle and no error anywhere.
+                        // `held_` is that kept event per rank; `take` advances the stage machine
+                        // either way, so holding an event never freezes the rank it came from.
+                        const auto take = [&](std::size_t rank) -> std::optional<Event> {
+                            bind_rank(rank);
+                            if (held_[rank]) {
+                                workers_[rank]->program().progress();
+                                return std::exchange(held_[rank], std::nullopt);
+                            }
+                            return workers_[rank]->program().poll();
+                        };
                         bind_rank(0);
-                        auto rank0_event = program().poll();
+                        auto rank0_event = take(0);
                         trace_poll_result(0, rank0_event);
                         if (!rank0_event) {
                             // RANK 0 HAS NO EVENT, BUT IT MAY BE WAITING ON A PEER'S COLLECTIVE, AND
@@ -375,14 +395,15 @@ public:
                             // 0's device never completes, and the round never releases. Measured as a
                             // 585 s spin on rank 0 with not one line from rank 1.
                             //
-                            // The distinction the rule actually needs is "waiting on the device" vs
-                            // "waiting on a peer", and the collective count is exactly that: a rank
-                            // whose count is behind rank 0's has not yet issued the collective rank 0
-                            // is waiting for. Advancing ONLY those ranks keeps the original rule's
-                            // guarantee (no peer is run ahead of rank 0) and removes the deadlock it
-                            // created. It is also self-limiting: once the peer's count catches up it
-                            // stops being advanced, so a healthy round is unchanged.
-                            advance_peers_behind_rank0();
+                            // The distinction the rule needs is "waiting on the device" vs
+                            // "waiting on a peer", and the collective count is the rank's position in
+                            // the rendezvous order: a peer is advanced when it is NOT AHEAD of rank
+                            // 0. Behind means it has not yet issued the collective rank 0 waits for;
+                            // level means it may already hold the event the round needs (measured:
+                            // rank 1 published ResultReady and was never polled again, so the round
+                            // hung with every rank idle). A peer ahead of rank 0 is not touched, which
+                            // is the original rule's guarantee. See peers_to_advance.
+                            advance_peers_not_ahead_of_rank0();
                             return std::nullopt;
                         }
                         if (std::holds_alternative<ExecutionFailed>(*rank0_event)) {
@@ -401,8 +422,7 @@ public:
                         summary[0].ticket_id    = std::visit(
                             [](const auto& value) { return value.ticket.id; }, *polled[0]);
                         for (std::size_t rank = 1; rank < workers_.size(); ++rank) {
-                            bind_rank(rank);
-                            polled[rank] = workers_[rank]->program().poll();
+                            polled[rank] = take(rank);
                             trace_poll_result(rank, polled[rank]);
                             if (!polled[rank]) { continue; }
                             summary[rank].has_event = true;
@@ -418,6 +438,10 @@ public:
                         case PollOutcome::Release:
                             return polled[0];
                         case PollOutcome::Wait:
+                            // Keep every polled event for the next poll; see `held_` above.
+                            for (std::size_t rank = 0; rank < workers_.size(); ++rank) {
+                                held_[rank] = std::move(polled[rank]);
+                            }
                             break;
                         }
                         if (decision.ticket_mismatch && round_trace_enabled()) {
@@ -531,6 +555,7 @@ public:
         pool_.retire_submitted();
         std::fill(compute_.begin(), compute_.end(), Flight{});
         std::fill(context_.begin(), context_.end(), Flight{});
+        std::fill(held_.begin(), held_.end(), std::nullopt);
         if (error) std::rethrow_exception(error);
     }
 
@@ -557,19 +582,22 @@ private:
     // device so the caller can touch that rank's Program; see bind_to_current_thread above.
     void bind_rank(std::size_t rank) { workers_[rank]->bind_to_current_thread(); }
 
-    // Advance exactly the ranks that have issued fewer collectives than rank 0. See the call site in
+    // Events polled but not yet delivered, one per rank; see the comment at `take` in poll().
+    std::vector<std::optional<Event>> held_;
+
+    // Advance every rank that is not ahead of rank 0 in the collective sequence. See the call site in
     // poll() for why the count, and only the count, is the right gate.
-    void advance_peers_behind_rank0() {
+    void advance_peers_not_ahead_of_rank0() {
         const std::size_t ranks = workers_.size();
         if (ranks < 2 || ranks > 64) return;  // a group the mask cannot express advances nobody
         std::array<std::size_t, 64> counts{};
         for (std::size_t rank = 0; rank < ranks; ++rank) {
             counts[rank] = workers_[rank]->program().collective_count();
         }
-        const std::uint64_t behind =
-            peers_behind(std::span<const std::size_t>(counts.data(), ranks));
+        const std::uint64_t advance =
+            peers_to_advance(std::span<const std::size_t>(counts.data(), ranks));
         for (std::size_t rank = 1; rank < ranks; ++rank) {
-            if ((behind & (std::uint64_t{1} << rank)) == 0) continue;
+            if ((advance & (std::uint64_t{1} << rank)) == 0) continue;
             bind_rank(rank);
             workers_[rank]->program().progress();
         }

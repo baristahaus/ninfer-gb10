@@ -66,6 +66,10 @@ bool lane_trace() {
 
 namespace { void record_launch_time(const std::timespec&, const std::timespec&); }
 namespace { void note_mailbox_shape(int, int, int, int); }
+// Forward-declared because the guard that needs it runs before the counter's definition. The counter
+// lives next to the enqueue path it counts; the guard lives next to the throw it precedes, so one of
+// the two has to be reached by declaration rather than by position.
+namespace { void print_exchange_counts_give_up(const char* call); }
 
 
 namespace {
@@ -351,6 +355,12 @@ void PeerMailbox::require_no_hang(const char* call) const {
     // produces from here on is wrong. A wrong number nobody can see is the worst outcome in the
     // lane, so the next mailbox call stops the round instead of continuing to compute.
     if (!hang_reported()) { return; }
+    // THE COUNT AT THE MOMENT OF THE GIVE-UP, NOT AT THE ROUND BOUNDARY. The round-boundary print
+    // reports equal totals on both ranks, and that equality is what made the missing exchange look
+    // impossible. Printed here, before the throw, the two numbers say whether one rank issued
+    // FEWER exchanges or the same number with one that never executed -- which are different
+    // defects with different fixes, and the only place they can be told apart is at the give-up.
+    print_exchange_counts_give_up(call);
     throw std::runtime_error(
         std::string("mailbox: a poller gave up in an earlier exchange of this round, so the ranks' "
                     "results have diverged and ") +
@@ -418,8 +428,44 @@ struct ExchangeCounts {
         }
         std::fflush(stderr);
     }
+    // THE COUNT AT THE MOMENT OF THE GIVE-UP, READ BEFORE THE ROUND IS ABANDONED. The round-boundary
+    // print reports equal totals on both ranks, and that equality is what made a missing exchange
+    // look impossible. Read here instead, the two totals separate the two remaining explanations:
+    // different totals mean one rank ISSUED fewer exchanges; equal totals mean it issued the same
+    // number and one of them never executed. Those are different defects with different fixes, and
+    // this is the only point in time where they can be told apart, because the round-boundary print
+    // runs after the abandoned round has already stopped enqueueing on one side.
+    void print_give_up(const char* call) {
+        if (!lane_trace()) { return; }
+        std::lock_guard<std::mutex> lock(mutex);
+        std::fprintf(stderr, "[exchange-count] GIVE-UP call=%s\n", call);
+        for (int rank = 0; rank < 2; ++rank) {
+            std::fprintf(stderr,
+                         "[exchange-count] GIVE-UP rank=%d pipelined_20480=%llu "
+                         "pipelined_31040=%llu f32_20480=%llu f32_31040=%llu total=%llu\n",
+                         rank, (unsigned long long)pipelined_20480[rank],
+                         (unsigned long long)pipelined_31040[rank],
+                         (unsigned long long)f32_20480[rank], (unsigned long long)f32_31040[rank],
+                         (unsigned long long)total[rank]);
+        }
+        // The decision number: positive means rank 0 issued more exchanges than rank 1, negative
+        // means rank 1 issued more, zero means both issued the same number. Printed as one signed
+        // value so the reading is not left to the operator's subtraction.
+        std::fprintf(stderr, "[exchange-count] GIVE-UP delta_total=%lld (rank0 - rank1)\n",
+                     (long long)total[0] - (long long)total[1]);
+        if (!seen_pipelined) {
+            std::fprintf(stderr, "[exchange-count] GIVE-UP COVERAGE: the pipelined path never "
+                                 "reported, so a total of zero is uninstrumented, not inactive\n");
+        }
+        if (!seen_f32) {
+            std::fprintf(stderr, "[exchange-count] GIVE-UP COVERAGE: the f32 path never reported, "
+                                 "so a total of zero is uninstrumented, not inactive\n");
+        }
+        std::fflush(stderr);
+    }
 };
 ExchangeCounts& exchange_counts() { static ExchangeCounts c; return c; }
+void print_exchange_counts_give_up(const char* call) { exchange_counts().print_give_up(call); }
 } // namespace
 
 void PeerMailbox::print_exchange_counts(int round) const { exchange_counts().print(round); }

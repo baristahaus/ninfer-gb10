@@ -18,11 +18,17 @@
 # sweep is continued by running the same command again. Partial rows are never written; a row is
 # appended only once the length's verdict is known.
 #
-# Outputs, under $WORK (default /tmp/tp2-lane-sweep):
-#   sweep.tsv           length, match, position, margin_nats, classification
-#   chains/T<N>.arm{1,2}.ids   the two token chains
-#   prompts/T<N>.ids    the prompt both arms were given
-#   sweep.log           every arm's raw output
+# Outputs are split across the two sides of the sweep, and neither side uses /tmp:
+#   $WORK (here, default /home/barista/ninferno/work/lane/run-<id>):
+#     sweep.tsv              length, match, position, margin_nats, classification
+#     prompts/T<N>.ids       the prompt both arms were given (the local copy)
+#     chains/T<N>.arm{1,2}.ids   the two token chains
+#     sweep.log              every arm's raw output
+#   $REMOTE_WORK (on both lane hosts, default /home/barista/src/wt-tp2.work):
+#     prompts/               the same prompts, staged for the arm binaries
+#     chains/                the sharded chain staged for the reference host's adjudication
+# /tmp is deliberately absent: on a host whose /tmp is a tmpfs it is RAM, not storage, and filling it
+# breaks every subprocess on the box -- which is exactly what happened and cost a session.
 set -euo pipefail
 
 LENGTHS="8 10 12 16 17 20 24 28 31 32 40 48 64"
@@ -32,7 +38,11 @@ LENGTHS="8 10 12 16 17 20 24 28 31 32 40 48 64"
 # reported as the current run's. The run id is in the directory name so the table's age is in its
 # path rather than something a reader has to check with stat.
 RUN_ID=$(date +%Y%m%dT%H%M%S)
-WORK=${WORK:-/home/barista/ninferno/tp2-sweep/run-$RUN_ID}
+WORK=${WORK:-/home/barista/ninferno/work/lane/run-$RUN_ID}
+# The lane hosts keep their run inputs next to the checkout they run, for the same reason this host
+# does: a scratch directory that is adjacent to the code it belongs to can be found, aged and cleaned
+# by whoever owns the code, and it is never the shared tmpfs.
+REMOTE_WORK=${REMOTE_WORK:-/home/barista/src/wt-tp2.work}
 REF_HOST=172.30.30.16
 REF_ART=/home/barista/ninfer/models/qwen3_8_27b_nvfp4.v3.ninfer
 LANE_HOST=172.30.30.15
@@ -167,8 +177,8 @@ PY
 
 say "== prompts to both hosts"
 for host in "$REF_HOST" "$LANE_HOST"; do
-    remote "$host" "mkdir -p /home/barista/tp2-sweep/prompts"
-    rsync -a -e "ssh -F $SSH_CONFIG -o BatchMode=yes" "$WORK/prompts/" "barista@$host:/home/barista/tp2-sweep/prompts/" >> "$WORK/sweep.log" 2>&1
+    remote "$host" "mkdir -p ${REMOTE_WORK}/prompts"
+    rsync -a -e "ssh -F $SSH_CONFIG -o BatchMode=yes" "$WORK/prompts/" "barista@$host:${REMOTE_WORK}/prompts/" >> "$WORK/sweep.log" 2>&1
 done
 
 # The test prints "arm <w> tokens (<n>): <ids>"; that line is the chain, and it is the only thing
@@ -203,7 +213,12 @@ run_arm() {
     # SHARDED arm is deliberately NOT pinned: it genuinely needs both devices on hephaestus.
     local visible=""
     if [ "$arm" = "1" ]; then visible="CUDA_VISIBLE_DEVICES=0 "; fi
-    local command="cd '$DST' && timeout $ARM_TIMEOUT env ${visible}NINFER_TP2_ACCEPT=1 NINFER_TP2_CAPTURE=1 NINFER_TP2_ARM=$arm \
+    # The lane's diagnostics are opt-in and travel with the arm. Setting NINFER_LANE_TRACE in the
+    # sweep's environment turns the instrument on for both arms, so the mechanism behind a row can be
+    # read from the same run that produced the row instead of from a separate reproduction.
+    local trace=""
+    if [ -n "${NINFER_LANE_TRACE:-}" ]; then trace="NINFER_LANE_TRACE=$NINFER_LANE_TRACE "; fi
+    local command="cd '$DST' && timeout $ARM_TIMEOUT env ${visible}${trace}NINFER_TP2_ACCEPT=1 NINFER_TP2_CAPTURE=1 NINFER_TP2_ARM=$arm \
         NINFER_TP2_PROMPT='$prompt' NINFER_TEST_ARTIFACT='$artifact' \
         ./'$BUILD'/tests/ninfer_qwen3_5_tp2_accept_real_test"
     # One run per arm: the chain and the log come from the same execution, so a length costs two GPU
@@ -244,7 +259,7 @@ for length in $LENGTHS; do
         say "   T=$length  already recorded, skipped"
         continue
     fi
-    prompt="/home/barista/tp2-sweep/prompts/T$length.ids"
+    prompt="${REMOTE_WORK}/prompts/T$length.ids"
     local_prompt="$WORK/prompts/T$length.ids"
     arm1="$WORK/chains/T$length.arm1.ids"
     arm2="$WORK/chains/T$length.arm2.ids"
@@ -261,10 +276,10 @@ for length in $LENGTHS; do
 
     # The sharded arm cannot adjudicate its own disagreement (the scoring route is single-device
     # only), so the reference host scores both candidates at their first divergence.
-    remote "$REF_HOST" "mkdir -p /home/barista/tp2-sweep/chains"
-    scp -q -F "$SSH_CONFIG" -o BatchMode=yes "$arm2" "barista@$REF_HOST:/home/barista/tp2-sweep/chains/T$length.arm2.ids"
+    remote "$REF_HOST" "mkdir -p ${REMOTE_WORK}/chains"
+    scp -q -F "$SSH_CONFIG" -o BatchMode=yes "$arm2" "barista@$REF_HOST:${REMOTE_WORK}/chains/T$length.arm2.ids"
     adjudication=$(remote "$REF_HOST" "cd '$DST' && CUDA_VISIBLE_DEVICES=0 NINFER_TP2_ACCEPT=1 NINFER_TP2_ARM=1 \
-        NINFER_TP2_PROMPT='$prompt' NINFER_TP2_COMPARE='/home/barista/tp2-sweep/chains/T$length.arm2.ids' \
+        NINFER_TP2_PROMPT='$prompt' NINFER_TP2_COMPARE='${REMOTE_WORK}/chains/T$length.arm2.ids' \
         NINFER_TEST_ARTIFACT='$REF_ART' ./'$BUILD'/tests/ninfer_qwen3_5_tp2_accept_real_test" 2>&1 || true)
     printf '\n== adjudication T=%s\n%s\n' "$length" "$adjudication" >> "$WORK/sweep.log"
     position=$(printf '%s\n' "$adjudication" | sed -n 's/.*disagreement at position \([0-9]*\):.*/\1/p' | head -1)

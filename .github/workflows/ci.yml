@@ -1,0 +1,85 @@
+# Repository checks.
+#
+# Two jobs, because the project has two kinds of check and they need different machines.
+#
+# `guards` runs the host-side guards. They are Python only and need no CUDA, so they run on a
+# hosted runner and finish in seconds. This job is the one that must stay green on every change:
+# it is the only thing that stops a documentation, weight, provenance, test-skip or formatting
+# regression from reaching `master`.
+#
+# `build-and-test` compiles the engine and runs the test suite. It uses the CUDA development image
+# that `Dockerfile` already validates, and it runs the suite against the build's own CUDA stub, so
+# no GPU is needed. Tests that need a device report `SKIP: no usable CUDA device` and ctest counts
+# them as skipped, not as failures. Expect roughly 130 of 241 tests to skip on this runner; that is
+# the designed behaviour, not a failure. The GPU-bearing lanes are validated on the project's own
+# hardware (see `docs/lane.md` and `AGENTS.md`).
+name: checks
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  guards:
+    name: repository guards
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: install clang-format
+        # Pinned: the tree is formatted with this major version, and clang-format output changes
+        # between majors. `tools/check_format.py` prints the version it used.
+        run: pip install --disable-pip-version-check "clang-format==23.1.1"
+      - name: documentation and source guard
+        run: python3 tools/check_docs.py .
+      - name: repository weight guard
+        run: python3 tools/check_repo_weight.py .
+      - name: provenance guard
+        run: python3 tools/check_provenance.py .
+      - name: test-artifact guard
+        run: python3 tools/check_test_artifacts.py .
+      - name: test-skip guard
+        run: python3 tools/check_test_skips.py .
+      - name: formatting guard
+        run: python3 tools/check_format.py .
+
+  build-and-test:
+    name: build and ctest (CUDA stub, no GPU)
+    runs-on: ubuntu-24.04
+    container:
+      image: nvidia/cuda:13.4.92-devel-ubuntu24.04
+    timeout-minutes: 300
+    steps:
+      - name: install build dependencies
+        # `git` is here because the checkout step runs inside this container.
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends \
+            ca-certificates cmake git libavcodec-dev libavformat-dev libavutil-dev \
+            libcurl4-openssl-dev libhwloc-dev libswscale-dev ninja-build pkg-config
+          rm -rf /var/lib/apt/lists/*
+      - uses: actions/checkout@v4
+      - name: configure
+        run: cmake --preset rtx5090-dev
+      - name: build
+        run: cmake --build build/rtx5090-dev -j "$(nproc)"
+      - name: ctest
+        run: |
+          LD_LIBRARY_PATH="$PWD/build/rtx5090-dev/cuda-stub" \
+            ctest --test-dir build/rtx5090-dev -j "$(nproc)" --output-on-failure
+      - name: report the skip count
+        if: always()
+        run: |
+          if [ -f build/rtx5090-dev/Testing/Temporary/LastTest.log ]; then
+            grep -c 'SKIP:' build/rtx5090-dev/Testing/Temporary/LastTest.log || true
+          fi

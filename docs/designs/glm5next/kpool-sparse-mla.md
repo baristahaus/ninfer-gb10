@@ -1,71 +1,80 @@
-# Kpool Sparse MLA 实现设计
+# Kpool Sparse MLA implementation design
 
-性质：待落地的完整链路接口与状态交接设计。决策、实现状态和任务范围见
-[设计索引](README.md)。模型数学由[模型参考](../../maintainer/glm5next-model.md#4-sparse-mla-与-kpool4-indexer)
-维护，精度、codec 和表示边界由[数值政策](../../maintainer/glm5next-quantization.md#3-mlaindexer-cache-与计算政策)
-维护；本文定义具体权重合并、page、views、写域、选择与接受前缀接口。
+Nature: a complete-chain interface and state handoff design that still has to land. The
+[design index](README.md) holds the decisions, the implementation status and the task scope. The
+[model reference](../../maintainer/glm5next-model.md#4-sparse-mla-and-the-kpool4-indexer) maintains
+the model mathematics. The
+[numerical policy](../../maintainer/glm5next-quantization.md#3-mlaindexer-cache-and-compute-policy)
+maintains the precision, the codec and the representation boundaries. This document defines the
+concrete weight merge, the page, the views, the write domain, the selection and the accepted-prefix
+interface.
 
-所有权沿用[Engine 架构](../../maintainer/engine-architecture.md)和
-[Paged KV context store](../../maintainer/paged-kv-cache.md)，资格遵循
-[Op development](../../maintainer/op-development.md)。本设计不扩展[基础清单](op-checklist.md)的实施范围。
+Ownership follows the [Engine architecture](../../maintainer/engine-architecture.md) and the
+[Paged KV context store](../../maintainer/paged-kv-cache.md). Qualification follows
+[Op development](../../maintainer/op-development.md). This design does not extend the implementation
+scope of the [base checklist](op-checklist.md).
 
-## 1. 使用范围与几何
+## 1. Scope of use and geometry
 
-| 项目 | 合同 |
+| Item | Contract |
 |---|---|
-| 首个部署 | 双 Spark，MLA/Indexer 按请求 DP2；owner 计算完整 heads |
-| 使用位置 | Main 11 个 MLA 层，MTP 1 个 MLA 层；各层独立 cache/selection |
-| Input / Q bottleneck | hidden=4096，Q bottleneck=1536 |
-| MLA | 64 heads，Q/K/V head dim=256，latent dim=512，NoPE |
-| Indexer | 32 query heads，dim=128，kpool=4，Top512 完整 pools |
-| 有效上下文 | 至多 1048576 个原 tokens |
-| 本地批次 | B=1..8；T 为任意正的物理宽度，受可用 views/storage 约束 |
+| first deployment | dual Spark, MLA/Indexer DP2 by request; the owner computes the complete heads |
+| use sites | the 11 MLA layers of Main and the 1 MLA layer of MTP; each layer has its own cache and selection |
+| Input / Q bottleneck | hidden=4096, Q bottleneck=1536 |
+| MLA | 64 heads, Q/K/V head dim=256, latent dim=512, NoPE |
+| Indexer | 32 query heads, dim=128, kpool=4, Top512 complete pools |
+| valid context | at most 1048576 original tokens |
+| local batch | B=1..8; T is any positive physical width, limited by the available views and storage |
 
-本 family 使用数值文档已定的 BF16／E4M3FN-G128-FP32-scale latent profiles、固定
-BF16 Indexer 及相同计算精度。Decode、verify 与 prefill 使用同一语义；kernel 数量、
-tile、流水和合法路线分派属于实现选择，不增加精度模式。
+This family uses the BF16 and E4M3FN-G128-FP32-scale latent profiles, the fixed BF16 Indexer and the
+same compute precision that the numerical document already fixed. Decode, verify and prefill use the
+same semantics. The kernel count, the tiles, the pipeline and the legal route dispatch are
+implementation choices and add no precision mode.
 
-## 2. 权重、投影与执行链
+## 2. Weights, projections and the execution chain
 
-矩阵使用逻辑 `W[N,K]` 记法；native Tensor 第零维连续，`M=T*B`、
-`column=t+T*b`。x 是外部 attention input norm 之后的 BF16 `[4096,T,B]`；
-本 family 不重复执行 block input norm，也不接收 mHC 的四流 residual。
+Matrices use the logical `W[N,K]` notation. Native Tensor dimension zero is contiguous, `M=T*B` and
+`column=t+T*b`. x is the BF16 `[4096,T,B]` after the external attention input norm. This family does
+not run the block input norm again and does not receive the four-stream residual of mHC.
 
-### 2.1 固定权重布局
+### 2.1 The fixed weight layout
 
-Prepare 接收一个 BF16 contiguous `W_A[2336,4096]`，行序为：
+Prepare receives one BF16 contiguous `W_A[2336,4096]` with this row order:
 
-| 行区间 | 源角色 | 输出用途 |
+| Row range | Source role | Output use |
 |---|---|---|
-| [0,1536) | q_a_proj | Q bottleneck，1536 维 RMSNorm |
-| [1536,2048) | kv_a_proj_with_mqa | latent，512 维 RMSNorm |
-| [2048,2176) | indexer.wk | 128 维 affine LayerNorm |
-| [2176,2304) | index_kpool_compress_gate | raw pool gate |
+| [0,1536) | q_a_proj | the Q bottleneck, 1536-wide RMSNorm |
+| [1536,2048) | kv_a_proj_with_mqa | the latent, 512-wide RMSNorm |
+| [2048,2176) | indexer.wk | 128-wide affine LayerNorm |
+| [2176,2304) | index_kpool_compress_gate | the raw pool gate |
 | [2304,2336) | indexer.weights_proj | FP32 raw head coefficients |
 
-最后 32 行直接保留 FP32 出口，不能随其他投影转换成 BF16。它们不包含 sigmoid、
-softmax、query scale 或 `1/sqrt(32)`。
+The last 32 rows keep the FP32 exit directly and must not be converted to BF16 together with the other
+projections. They contain no sigmoid, no softmax, no query scale and no `1/sqrt(32)`.
 
-Q 投影使用 BF16 contiguous `W_B[20480,1536]`：前 16384 行为 MLA Q_b，后 4096 行
-为 Indexer Q。普通调用通过 Linear/split 直接写两个独立连续输出；MTP 复用 selection
-时只使用前 16384 行的只读 view，无运行时 packing 或重复驻留权重。
+The Q projection uses a BF16 contiguous `W_B[20480,1536]`: the first 16384 rows are the MLA Q_b and the
+last 4096 rows are the Indexer Q. An ordinary call writes two independent contiguous outputs directly
+through Linear/split. When MTP reuses a selection it uses only a read-only view of the first 16384
+rows, with no runtime packing and no duplicated resident weight.
 
-KV_b 保留因子表示，分别按 head 保存 U_K/U_V：每个 head 逻辑 `[256,512]`，
-native BF16 `[512,256,64]`，latent 轴连续。源 KV_b 每个 head 的行序为
-`[K256,V256]`，converter 按此映射保留 words。U_K/U_V 不与 Q_b/O 相乘生成更大权重。
-最终 `W_O[4096,16384]` 为独立 BF16 Linear。
+KV_b keeps the factor representation and stores U_K/U_V separately per head. Each head is logically
+`[256,512]` and natively BF16 `[512,256,64]`, with the latent axis contiguous. The row order of the
+source KV_b within each head is `[K256,V256]`, and the converter keeps the words by this mapping. U_K
+and U_V are not multiplied with Q_b/O to make a larger weight. The final `W_O[4096,16384]` is an
+independent BF16 Linear.
 
-Norm gain/bias 和 pool APE 均保留源 BF16 words，使用直接 gamma/affine，不采用
-Qwen4Exp 的 `1+weight`。APE native 布局为 `[128,4]`，计算时升 FP32。
+The norm gain and bias and the pool APE keep the source BF16 words and use a direct gamma or affine.
+They do not use the `1+weight` of Qwen4Exp. The APE native layout is `[128,4]` and is raised to FP32
+during computation.
 
-### 2.2 链路
+### 2.2 The chain
 
 ```text
 x + W_A
     → prepare_record / prepare_update
         → q_r BF16 [1536,T,B]
         → head_coeff FP32 [32,T,B]
-        → latent cache、完整 pooled keys、records 或目标 tail
+        → latent cache, complete pooled keys, records or the destination tail
     → W_B Linear/split(q_r)
         → query BF16 [256,64,T,B]
         → index_query BF16 [128,32,T,B]
@@ -77,31 +86,34 @@ x + W_A
         → block output BF16 [4096,T,B]
 ```
 
-Prepare 是包含 projection、norm 与 cache/state 效果的完整融合 Op。它可复用 Linear
-的私有计算机制，但不要求先调用公共 Linear 并物化 BF16 的 W_A 输出。
-W_B 与 W_O 的纯投影继续属于 Linear family。
+Prepare is a complete fused Op that contains the projection, the norm and the cache/state effect. It
+can reuse the private compute mechanism of Linear, but it does not require calling the public Linear
+first and materializing a BF16 W_A output. The pure projections of W_B and W_O still belong to the
+Linear family.
 
-## 3. 64-token page 与四 token 连续加载
+## 3. The 64-token page and four-token contiguous loading
 
-P 固定为 64 个原 tokens，每页 16 个 pools。单层 page-major planes：
+P is fixed at 64 original tokens, with 16 pools per page. The per-layer page-major planes are:
 
 | Profile / plane | Native Tensor | tokens_per_row |
 |---|---|---:|
 | BF16 latent | BF16 [512,64,1,Npage] | 1 |
 | FP8 latent codes | E4M3FN [512,64,1,Npage] | 1 |
 | FP8 latent scales | FP32 [4,64,1,Npage] | 1 |
-| Indexer pooled keys，两个 profile 均使用 | BF16 [128,16,1,Npage] | 4 |
+| Indexer pooled keys, used by both profiles | BF16 [128,16,1,Npage] | 4 |
 
-只实例化所选 latent profile 的 planes。所有 plane 起点 256 B 对齐，页内各行紧密
-排列：latent row stride 分别为 1024/512 B，FP8 scale row stride 为 16 B，
-index row stride 为 256 B。Page stride 覆盖完整页 payload、保持 256 B 对齐，可保留
-显式外层页间距；不在相邻 token 的 latent 数据之间插入 scale 或 metadata。
+Instantiate only the planes of the selected latent profile. Every plane start is aligned to 256 B and
+the rows inside a page are packed tightly. The latent row stride is 1024/512 B, the FP8 scale row
+stride is 16 B and the index row stride is 256 B. The page stride covers the complete page payload and
+keeps the 256 B alignment, and can keep an explicit outer page gap. Do not insert a scale or metadata
+between the latent data of adjacent tokens.
 
-同一个 pool 的全部层/planes 共用 page-group ID、原 token frontier 和 block table。
-`block_tables` 为 Device I32 `[logical_pages,table_rows]`，页项连续、行跨度显式。
-Physical IDs 可任意排列，不要求多个 logical pages 在物理上连续。
+All layers and planes of one pool share the page-group ID, the original token frontier and the block
+table. `block_tables` is Device I32 `[logical_pages,table_rows]`, with contiguous page entries and an
+explicit row span. Physical IDs can be arranged arbitrarily, and several logical pages are not
+required to be physically contiguous.
 
-选中 logical pool g：
+For a selected logical pool g:
 
 ```text
 logical_page  = g / 16
@@ -112,19 +124,21 @@ index row     = pool_in_page
 latent rows   = 4*pool_in_page + {0,1,2,3}
 ```
 
-一次页表寻址定位四条连续 latent，不跨 KV page。四 token payload 为 BF16 4096 B，
-或 FP8 codes 2048 B＋另一 plane 的 64 B scales；data 起点自然保持 256 B 对齐。
-完整 pool 可整组搬运，未完成 tail 必须按有效 token 数 mask，不读无效第四条。
-Selection 不展开成 2048 个零散 token IDs，也不要求先构造全局 gather buffer。
+One page-table lookup locates four consecutive latents and does not cross a KV page. The four-token
+payload is BF16 4096 B, or FP8 codes 2048 B plus 64 B of scales in another plane. The data start keeps
+the 256 B alignment naturally. A complete pool can move as one group. An unfinished tail must be
+masked by the valid token count and must not read an invalid fourth entry. Selection is not expanded
+into 2048 scattered token IDs and does not require a global gather buffer to be built first.
 
-Main 的 11 层与 MTP 的 1 层属于不同 growing pools，各有自己的 page namespace、
-block table 与 frontier；同一 pool 内的 latent/scales/index 一起 reserve、保护、
-截短与释放。现有 `tokens_per_row=1/4` geometry 可承载这些 planes，但消费者使用
-专门的 MLA/Indexer typed views，不伪装成普通 K/V pair。
+The 11 layers of Main and the 1 layer of MTP belong to different growing pools and each has its own
+page namespace, block table and frontier. The latent, the scales and the index inside one pool are
+reserved, protected, shortened and released together. The existing `tokens_per_row=1/4` geometry can
+carry these planes, but the consumer uses dedicated MLA/Indexer typed views and does not disguise them
+as an ordinary K/V pair.
 
-## 4. 公共 views、metadata 与身份
+## 4. Public views, metadata and identity
 
-### 4.1 Batch 与 cache views
+### 4.1 Batch and cache views
 
 ```cpp
 enum class KpoolMlaStorage {
@@ -133,20 +147,20 @@ enum class KpoolMlaStorage {
 };
 
 struct KpoolMlaBatchView {
-    Tensor positions;      // Device I32 [T,B], 原 token ordinal。
-    Tensor valid_columns;  // Device I32 [B], 0 <= n[b] <= T。
-    Tensor table_rows;     // Device I32 [B]。
+    Tensor positions;      // Device I32 [T,B], original token ordinal.
+    Tensor valid_columns;  // Device I32 [B], 0 <= n[b] <= T.
+    Tensor table_rows;     // Device I32 [B].
 };
 
 struct KpoolMlaLatentCacheView {
-    Tensor data;           // 第 3 节的 latent data plane。
-    Tensor scales;         // BF16 profile 为空；FP8 profile 为 FP32 [4,64,1,Npage]。
+    Tensor data;           // the latent data plane of section 3.
+    Tensor scales;         // empty for the BF16 profile; FP32 [4,64,1,Npage] for the FP8 profile.
     Tensor block_tables;
     KpoolMlaStorage storage;
 };
 
 struct KpoolIndexCacheView {
-    Tensor keys;           // BF16 [128,16,1,Npage]。
+    Tensor keys;           // BF16 [128,16,1,Npage].
     Tensor block_tables;
 };
 
@@ -156,114 +170,124 @@ struct KpoolMlaCacheView {
 };
 
 struct KpoolExecutionEnvelope {
-    uint32_t max_visible_tokens; // 0..1048576，Host 资源上界。
+    uint32_t max_visible_tokens; // 0..1048576, the Host resource upper bound.
 };
 ```
 
-组合 cache 的两份 tables 必须为相同 address/shape/strides，Npage 相同。MLA 与
-Indexer 的单独只读入口只接收实际需要的 view，未使用的 plane 不被读取。
+The two tables of a combined cache must have the same address, shape and strides, and the same Npage.
+The separate read-only entries of MLA and of the Indexer receive only the view they actually need, and
+an unused plane is not read.
 
-活跃行的 positions 连续且非负；padding 不消耗 ordinal。每个有效 `p+1<=1048576`，
-并在对应 tables 与资源 envelope 覆盖内。Envelope=0 只允许所有行无效，不是
-数学 mask 或第二份 sequence frontier。B=0 时调用者不提交该 Op。
+The positions of the active rows are contiguous and non-negative. Padding consumes no ordinal. Every
+valid `p+1<=1048576` and lies inside the matching tables and the resource envelope. Envelope=0 allows
+only every row to be invalid. It is not a mathematical mask and not a second sequence frontier. When
+B=0 the caller does not submit this Op.
 
-State slot、table row、batch row、record row、selection row 是不同身份，显式映射。
-Op 不接收 request ID、rank、world size 或 communicator；调用者保证这些视图属于
-同一请求、同一层及正确的历史。
+A state slot, a table row, a batch row, a record row and a selection row are different identities and
+are mapped explicitly. The Op receives no request ID, no rank, no world size and no communicator. The
+caller guarantees that these views belong to the same request, the same layer and the correct history.
 
-### 4.2 Tail 与 records
+### 4.2 Tail and records
 
 ```cpp
 struct KpoolTailStateView {
-    Tensor raw_keys;        // BF16 [128,3,Slots]，本层。
-    Tensor raw_gates;       // BF16 [128,3,Slots]，不含 APE。
-    Tensor slots;          // Device I32 [B]。
+    Tensor raw_keys;        // BF16 [128,3,Slots], this layer.
+    Tensor raw_gates;       // BF16 [128,3,Slots], without APE.
+    Tensor slots;          // Device I32 [B].
 };
 
 struct KpoolRawRecordWriteView {
-    Tensor raw_keys;        // BF16 [128,W,B]，本层。
-    Tensor raw_gates;       // BF16 [128,W,B]。
-    Tensor offsets;        // Device I32 [B]。
+    Tensor raw_keys;        // BF16 [128,W,B], this layer.
+    Tensor raw_gates;       // BF16 [128,W,B].
+    Tensor offsets;        // Device I32 [B].
 };
 
 struct KpoolTailAllLayersView {
-    Tensor raw_keys;        // BF16 [128,3,L,Slots]。
-    Tensor raw_gates;       // BF16 [128,3,L,Slots]。
-    Tensor slots;          // Device I32 [B]，各层共同选择 state image。
+    Tensor raw_keys;        // BF16 [128,3,L,Slots].
+    Tensor raw_gates;       // BF16 [128,3,L,Slots].
+    Tensor slots;          // Device I32 [B], all layers select the same state image.
 };
 
 struct KpoolRawRecordReadView {
-    Tensor raw_keys;        // BF16 [128,W,L*R]。
-    Tensor raw_gates;       // BF16 [128,W,L*R]。
-    Tensor base_positions;  // Device I32 [R]，F0，record column 0 的位置。
-    Tensor valid_columns;   // Device I32 [R]，u，有效 record 前缀。
-    int32_t layers;         // L。
-    int32_t record_capacity;// R，1..8；本次 B<=R。
+    Tensor raw_keys;        // BF16 [128,W,L*R].
+    Tensor raw_gates;       // BF16 [128,W,L*R].
+    Tensor base_positions;  // Device I32 [R], F0, the position of record column 0.
+    Tensor valid_columns;   // Device I32 [R], u, the valid record prefix.
+    int32_t layers;         // L.
+    int32_t record_capacity;// R, 1..8; this call has B<=R.
 };
 ```
 
-L 为调用包含的层数，支持单层 view 与全部 Main MLA 层；Main/MTP 的不同 frontier
-不混入一次 tail 提取。跨层 records 的 outer index 固定为 `layer*R+b`，不能误用
-活动 B 作 layer stride。Prepare 获得该层前 B 行的 view；物理 record 行从生产直到
-接受结果退役保持身份不变。
+L is the layer count that the call contains and supports a single-layer view and all Main MLA layers.
+The different frontiers of Main and MTP do not mix inside one tail extraction. The outer index of a
+cross-layer record is fixed at `layer*R+b`, and the active B must not be mistaken for the layer stride.
+Prepare receives the view of the first B rows of that layer. A physical record row keeps its identity
+from production until the acceptance result retires.
 
-W 为正的 record 宽度；写入要求 `0<=offset[b]` 且 `offset[b]+n[b]<=W`。
-连续累积 records 时，当前起点为 `base_positions[b]+offset[b]`。有效长度及来源
-身份由调用者管理，Op 不自行发布这些 metadata。Tail/record 只要求 feature 连续，
-其他 strides 显式、正且不重叠；不能假设 layer、field 或 slot 紧邻。
+W is a positive record width. A write requires `0<=offset[b]` and `offset[b]+n[b]<=W`. When records
+accumulate consecutively, the current start is `base_positions[b]+offset[b]`. The caller manages the
+valid length and the source identity, and the Op does not publish this metadata itself. A tail and a
+record require only the feature axis to be contiguous. The other strides are explicit, positive and
+non-overlapping. Do not assume that a layer, a field or a slot is adjacent.
 
 ### 4.3 Selection
 
 ```cpp
 struct KpoolBlockSelection {
-    Tensor pool_ids;        // Device I32 [512,Nselection]。
-    Tensor pool_counts;     // Device I32 [Nselection]。
-    Tensor selection_end;   // Device I32 [Nselection]。
+    Tensor pool_ids;        // Device I32 [512,Nselection].
+    Tensor pool_counts;     // Device I32 [Nselection].
+    Tensor selection_end;   // Device I32 [Nselection].
 };
 ```
 
-Indexer 输出 `Nselection=T*B`，行号为 `t+T*b`。Sparse MLA 另接收 Device I32
-`selection_rows[T,B]`，可引用不同宽度、仍有效的 selection 表，包括 MTP 首步结果。
-Selection 是执行 frame 数据，不能替代其 cache 的 read lease 或 checkpoint 身份。
+The Indexer outputs `Nselection=T*B`, with row number `t+T*b`. Sparse MLA also receives a Device I32
+`selection_rows[T,B]`, which can reference a still-valid selection table of a different width,
+including the first-step result of MTP. A selection is execution frame data and cannot replace the
+read lease or the checkpoint identity of its cache.
 
-## 5. Prepare 的完整计算
+## 5. The complete Prepare computation
 
-### 5.1 参数与表示边界
+### 5.1 Parameters and representation boundaries
 
 ```cpp
 struct KpoolMlaPrepareParameters {
-    Weight a_projection;   // BF16 contiguous W_A[2336,4096]，固定 A16。
-    Tensor query_norm;     // BF16 [1536]。
-    Tensor latent_norm;    // BF16 [512]。
-    Tensor index_norm;     // BF16 [128]。
-    Tensor index_bias;     // BF16 [128]。
-    Tensor pool_ape;        // BF16 [128,4]。
+    Weight a_projection;   // BF16 contiguous W_A[2336,4096], fixed A16.
+    Tensor query_norm;     // BF16 [1536].
+    Tensor latent_norm;    // BF16 [512].
+    Tensor index_norm;     // BF16 [128].
+    Tensor index_bias;     // BF16 [128].
+    Tensor pool_ape;        // BF16 [128,4].
 };
 ```
 
-五类投影结果按[准备数值边界](../../maintainer/glm5next-quantization.md#42-mlaindexer-输入准备)
-产生 q_r、latent encoder 输入、raw K/gate 和 FP32 head_coeff；norm、pooling 和
-records 共同消费已规定的表示，不在本接口引入额外舍入。
+The five projection results are produced by the
+[preparation numerical boundaries](../../maintainer/glm5next-quantization.md#42-mlaindexer-input-preparation):
+q_r, the latent encoder input, the raw K/gate and the FP32 head_coeff. The norm, the pooling and the
+records consume the representation already specified together, and this interface adds no extra
+rounding.
 
-公开 q_r 为 BF16 `[1536,T,B]`，head_coeff 为 FP32 `[32,T,B]`，连续、16 B 对齐。
-W_A 输出在 norm 前没有强制 BF16 落点。k_raw/g_raw 是 pooling、records 与 tail 的
-共同表示：同一个 pool 的四个 tokens 即使全部处于本次调用，也必须使用这些 BF16
-words，不能绕过边界而改用未舍入的 FP32 values。
+The public q_r is BF16 `[1536,T,B]` and head_coeff is FP32 `[32,T,B]`, contiguous and aligned to
+16 B. The W_A output has no forced BF16 landing point before the norm. k_raw/g_raw is the common
+representation of the pooling, the records and the tail: even when all four tokens of one pool are
+inside the current call, these BF16 words must be used. Do not bypass the boundary and use the
+unrounded FP32 values instead.
 
-### 5.2 Pooling 与写域
+### 5.2 Pooling and the write domain
 
-设活跃行起点 `F=positions[0,b]`、长度 n，before 是 F 处的 canonical tail。
-每个新完成的 `g in [floor(F/4),floor((F+n)/4))`，对每个 channel d：
+Let the start of an active row be `F=positions[0,b]` and its length be n. before is the canonical tail
+at F. For each newly completed `g in [floor(F/4),floor((F+n)/4))`, and for each channel d:
 
-按模型的逐 channel 四 token weighted pooling 计算 pooled key，数值顺序遵循
-数值文档。早于 F 的 raw words 从 before 取得，其余使用本次实际产生的 words。
-APE 只在 pooling 时加入；LayerNorm 位于 pooling 之前。
+Compute the pooled key by the per-channel four-token weighted pooling of the model, and follow the
+numerical document for the numerical order. The raw words earlier than F come from before, and the
+rest use the words that this call actually produced. APE is added only during pooling. The LayerNorm
+is before the pooling.
 
-Prepare 写 `[F,F+n)` 的 latent、上述完整 pool 范围，以及所选状态出口。
-未完成 pool 没有 index cache 写入。允许提前准备整个窗口，但各 query 的可见集合
-由第 6 节独立决定，不能使用窗口末端的 coverage 替代逐 query 的因果边界。
+Prepare writes the latent of `[F,F+n)`, the complete pool range above and the selected state exit. An
+unfinished pool gets no index cache write. Preparing the whole window in advance is allowed, but
+section 6 decides the visible set of each query independently. Do not use the coverage at the end of
+the window in place of the per-query causal boundary.
 
-### 5.3 两种状态出口
+### 5.3 The two state exits
 
 ```cpp
 void kpool_mla_prepare_record(
@@ -281,20 +305,22 @@ void kpool_mla_prepare_update(
     CudaExecutionView execution);
 ```
 
-Record 出口逐 word 保存本次实际 k_raw/g_raw 到 `offset[b]+t`，保留 before 不变。
-有效 raw words 是唯一记录来源，不用缩短 T 或其他 producer 重跑来恢复接受前缀。
-Verify 保留这些 records 直到决定退役；它们不进入长期 checkpoint。
+The record exit saves the actual k_raw/g_raw of this call word by word at `offset[b]+t` and keeps
+before unchanged. The valid raw words are the only record source. Do not shorten T or rerun another
+producer to restore an accepted prefix. Verify keeps these records until the decision retires. They do
+not enter a long-term checkpoint.
 
-Update 出口按第 8 节直接生成 F+n 处的 after，无需持久保存整段 raw records。
-普通 prefill/decode 使用 update；MTP provisional draft state 也可以更新自己的独立
-目标。两种出口使用相同计算公式与表示边界，不因出口改变数值政策。
+The update exit generates after at F+n directly by section 8 and does not need to keep the whole raw
+record range persistently. An ordinary prefill or decode uses update. An MTP provisional draft state
+can also update its own independent target. The two exits use the same computation formula and
+representation boundary and do not change the numerical policy because of the exit.
 
-n=0 时 q_r/head_coeff 写精确正零，不写 cache、records 或 after，不读取 state、
-positions 或 table selectors 的 payload。矩阵投影允许读取物理 padding x，因此
-所有物理 x columns 必须是有效有限 BF16 数据；padding 不得影响有效输出。
-无效 record 后缀和未寻址 cache 保持原样。
+When n=0, q_r/head_coeff write exact positive zero and no cache, record or after is written. No payload
+of the state, the positions or the table selectors is read. The matrix projection is allowed to read
+the physical padding x, so every physical x column must be valid finite BF16 data, and the padding
+must not affect the valid output. An invalid record suffix and an unaddressed cache stay as they are.
 
-## 6. Indexer 与分组 selection
+## 6. The Indexer and grouped selection
 
 ```cpp
 void kpool_indexer(
@@ -304,36 +330,41 @@ void kpool_indexer(
     KpoolBlockSelection& out, CudaExecutionView execution);
 ```
 
-输入 index_query 为连续 BF16 `[128,32,T,B]`，head_coeff 为连续 FP32 `[32,T,B]`。
-对有效 query p，`E=p+1`、`C=floor(E/4)`，只评价 `g in [0,C)`：
+The input index_query is contiguous BF16 `[128,32,T,B]` and head_coeff is contiguous FP32
+`[32,T,B]`. For a valid query p, `E=p+1` and `C=floor(E/4)`, and only `g in [0,C)` is evaluated:
 
 ```text
 dot[h,g] = sum_d(FP32(index_query[d,h]) * FP32(index.K[d,g]))
 S[g]     = sum_h(head_coeff[h] * ReLU(dot[h,g]))
 ```
 
-Q/K 点积的操作数为 BF16，accumulator、head 乘法与归约为 FP32。
-S 与模型第 4 节的数学分数只差公共正因子 1/64，省略它是本合同的一部分。
-Coefficients 带符号，不能移到 ReLU 内；最终分数可以为负。非法候选直接排除，
-不能补零并参与 TopK。Indexer scores 只参与选择，不进入 MLA logits。
+The operands of the Q/K dot product are BF16, and the accumulator, the head multiplication and the
+reduction are FP32. S differs from the mathematical score of section 4 of the model only by the common
+positive factor 1/64, and omitting it is part of this contract. The coefficients are signed and must
+not move inside the ReLU. The final score can be negative. An illegal candidate is excluded directly.
+Do not zero-fill it and let it join the TopK. The Indexer scores take part in the selection only and do
+not enter the MLA logits.
 
-固定选择 `min(512,C)` 个不同 pools；计算分数相同时优先较小 logical g。
-输出顺序不规定，不要求按分数或 ID 排序。C<=512 直接全选，不读取 query、
-coefficients、keys 或 tables payload；仍输出正确 count 与 E。此优化覆盖 E<=2051。
+Select a fixed `min(512,C)` distinct pools. When two scores are equal, the smaller logical g wins. The
+output order is not specified and is not required to sort by score or ID. When C<=512, select
+everything directly, read no payload of the query, the coefficients, the keys or the tables, and still
+output the correct count and E. This optimisation covers E<=2051.
 
-有效输出行 `m=t+T*b` 的 count 为上述选择数，end 为 E。只有前 count 个 IDs 有效，
-之后内容不规定。无效行 count/end 写 I32 零，不读 positions、query、coefficients、
-cache 或 table selectors；IDs 内容不规定。所有输入/cache 保持不变。
+For a valid output row `m=t+T*b`, the count is the selection count above and end is E. Only the first
+count IDs are valid, and the content after them is unspecified. An invalid row writes I32 zero to
+count/end and reads no positions, query, coefficients, cache or table selector. The ID content is
+unspecified. Every input and cache stays unchanged.
 
-不做近似 TopK。实现可分区、归并或私有排序，但必须满足同一 Top512/同分规则。
-只有未完成 pool 的 tail 被强制加入后续 attention；最新的完整 pool 不额外强制入选。
+Do not approximate the TopK. The implementation can partition, merge or privately sort, but it must
+satisfy the same Top512 rule and the same tie rule. Only the tail of an unfinished pool is forced into
+the later attention. The newest complete pool is not forced in as well.
 
-## 7. Sparse MLA 与冻结 tail 边界
+## 7. Sparse MLA and the frozen tail boundary
 
 ```cpp
 struct KpoolMlaFactors {
-    Tensor key_up;         // BF16 [512,256,64]，逻辑 U_K[h][256,512]。
-    Tensor value_up;       // BF16 [512,256,64]，逻辑 U_V[h][256,512]。
+    Tensor key_up;         // BF16 [512,256,64], logically U_K[h][256,512].
+    Tensor value_up;       // BF16 [512,256,64], logically U_V[h][256,512].
 };
 
 void kpool_sparse_mla(
@@ -344,47 +375,54 @@ void kpool_sparse_mla(
     Tensor& out, CudaExecutionView execution);
 ```
 
-Query/out 为连续 BF16 `[256,64,T,B]`；selection_rows 为连续 Device I32 `[T,B]`。
-有效 query 从指定 selection 行取得 E、count 与 IDs，要求：
+Query/out are contiguous BF16 `[256,64,T,B]` and selection_rows is contiguous Device I32 `[T,B]`. A
+valid query takes E, count and the IDs from the given selection row and requires:
 
-- `0<=E<=p+1`，且 selection 属于同一请求、同一层和正确 cache 历史；
-- `0<=count<=min(512,floor(E/4))`；
-- 前 count 个 IDs 不同、非负且小于 floor(E/4)。
+- `0<=E<=p+1`, and the selection belongs to the same request, the same layer and the correct cache history;
+- `0<=count<=min(512,floor(E/4))`;
+- the first count IDs are distinct, non-negative and smaller than floor(E/4).
 
-消费者可独立接收任意合法集合，不要求它恰为当前 query 的实际 TopK。
-令 J 为所选每个 g 的四个 tokens，再并入 `[4*floor(E/4),E)`。
-这两个部分不重叠，至多 2051 tokens。E 是 selection 的冻结边界，不能替换成当前
-query 的 p+1。只有有效选中行和有效 tail 被读取。
+The consumer can receive any legal set independently and does not require it to be exactly the actual
+TopK of the current query. Let J be the four tokens of each selected g, and merge in
+`[4*floor(E/4),E)`. These two parts do not overlap and hold at most 2051 tokens. E is the frozen
+boundary of the selection and must not be replaced by p+1 of the current query. Only a valid selected
+row and a valid tail are read.
 
-对每个 head：
+For each head:
 
-Query 经 U_K 映射、latent attention 和 U_V 映射后产生 BF16 heads，完整数学与
-舍入顺序见[latent attention 数值政策](../../maintainer/glm5next-quantization.md#43-latent-域-attention)。
+The query produces BF16 heads after the U_K mapping, the latent attention and the U_V mapping. The
+complete mathematics and rounding order are in the
+[latent attention numerical policy](../../maintainer/glm5next-quantization.md#43-attention-in-the-latent-domain).
 
-c 来自所选 cache，FP8 profile 遵守
-[数值文档的 cache 消费规则](../../maintainer/glm5next-quantization.md#33-消费)。Scale 固定为 1/16，与训练的
-256 维 QK 匹配，不因 latent=512 改变。没有 RoPE、attention bias、output gate、
-额外 sink 或额外强制 self token。
+c comes from the selected cache, and the FP8 profile follows the
+[cache consumption rule of the numerical document](../../maintainer/glm5next-quantization.md#33-consumption).
+The scale is fixed at 1/16 and matches the 256-wide QK of training. It does not change because
+latent=512. There is no RoPE, no attention bias, no output gate, no extra sink and no extra forced
+self token.
 
-QK、加权累加、因子投影与私有 q_latent/u 均遵循上述数值政策。公共输出为完整
-U_V 映射后的 BF16 heads，最终 O projection 不在本 Op 中。
+QK, the weighted accumulation, the factor projection and the private q_latent/u all follow the
+numerical policy above. The public output is the BF16 heads after the complete U_V mapping. The final O
+projection is not in this Op.
 
-空 J 与无效 query 输出精确 BF16 正零，不读取 query/factors/cache payload；
-无效 query 还不读取 positions、selection 或 table selectors。输入、selection、
-metadata 和 cache 保持不变。Private tiling 不改变这一读域；不加载无效第四条 tail。
+An empty J and an invalid query output exact BF16 positive zero and read no query, factor or cache
+payload. An invalid query also reads no positions, selection or table selector. The inputs, the
+selection, the metadata and the cache stay unchanged. Private tiling does not change this read domain.
+Do not load an invalid fourth tail entry.
 
-## 8. Canonical tail 与精确前缀提取
+## 8. The canonical tail and exact prefix extraction
 
-### 8.1 状态
+### 8.1 State
 
-每层在前沿 F 的 source slot，前 `F%4` 个 raw K/gate columns 为未完成 pool，
-按时间顺序存放；其余 columns 为 BF16 正零。相位由 F 推导，不在每层保存另一份
-计数。F=0 时两 planes 全零。APE 不存入 raw gate。
+At the source slot of frontier F, the first `F%4` raw K/gate columns of each layer are the unfinished
+pool and are stored in time order. The other columns are BF16 positive zero. The phase is derived from
+F and no second counter is stored per layer. When F=0 both planes are all zero. APE is not stored in
+the raw gate.
 
-StateImage 持有 tail；完整 pools 留在 growing pool。Active image、不可变 checkpoint
-及目标 image 的选择、复制和保护由现有目录负责。Tail 无法从 MLA latent 反推恢复。
+The StateImage holds the tail and the complete pools stay in the growing pool. The existing directory
+owns the selection, the copy and the protection of the active image, the immutable checkpoint and the
+target image. The tail cannot be recovered backwards from the MLA latent.
 
-### 8.2 提取与零接受
+### 8.2 Extraction and zero acceptance
 
 ```cpp
 void kpool_tail_extract(
@@ -393,11 +431,12 @@ void kpool_tail_extract(
     CudaExecutionView execution);
 ```
 
-accepted_columns 为 Device I32 `[B]`。每行要求 `0<=a<=u<=W`，before 对应 F0，
-`F0+u<=1048576`。L、record_capacity 与 views 匹配；before/after 的 slot 数可以不同。
-可用 L=1 的 view 提取一层，或一次覆盖 Main 全部 MLA 层；不由模型逐 token 回放。
+accepted_columns is Device I32 `[B]`. Each row requires `0<=a<=u<=W`, before corresponds to F0 and
+`F0+u<=1048576`. L, record_capacity and the views match. The slot counts of before and after can
+differ. A view with L=1 extracts one layer, or one call covers all Main MLA layers. The model does not
+replay token by token.
 
-对 a>0：
+For a>0:
 
 ```text
 F1 = F0 + a
@@ -415,24 +454,29 @@ for j in [0,3):
         after.K/G[:,j] = records.K/G[:,s+j-F0]
 ```
 
-这是精确 word 复制/零填充，无浮点运算；保留复制 words 的位模式。只读取所需
-接受前缀，不能读取 rejected suffix 或扫描更早完成的 pools。
+This is an exact word copy and zero fill with no floating-point operation, and it keeps the bit
+pattern of a copied word. Read only the accepted prefix that is needed. Do not read a rejected suffix
+and do not scan pools that completed earlier.
 
-a=0 为严格 no-op：不读写任何 state/record payload，即使 source!=destination
-也不复制。该行继续采用原 image，不能采用未写的目标。此处明确不同于现有 QSA
-tail_extract 的异址零接受复制行为，与已定 KDA 提交的零接受规则一致。
+a=0 is a strict no-op. It reads and writes no state or record payload and copies nothing even when
+source!=destination. That row keeps using the original image and must not adopt an unwritten target.
+This differs explicitly from the cross-address zero-acceptance copy behaviour of the existing QSA
+tail_extract and agrees with the zero-acceptance rule of the agreed KDA commit.
 
-允许同一行原位提取，结果使用原始 source words。目标区域互不重叠，不能覆盖
-其他活动行的 source 或任何 records/metadata；只读 source 可共享。Alias 按实际
-选中地址定义，不按 view 对象或 slot 编号推断。仅修改本 family 的 tail 字段，
-不触碰 KDA、hidden 或其他 StateImage fields。无全局 scratch 或隐藏分配。
+An in-place extraction of the same row is allowed and uses the original source words. The target
+regions do not overlap and must not overwrite the source of another active row or any record or
+metadata. A read-only source can be shared. The alias is defined by the address actually selected and
+is not inferred from a view object or a slot number. Only the tail fields of this family are modified,
+and KDA, hidden and the other StateImage fields are not touched. There is no global scratch and no
+hidden allocation.
 
-Prepare/update 对有效 n 采用同一 tail 公式，将本次实际 raw words 视作临时记录；
-n=0 同样不写目标。它不需要向调用者暴露或保留整段 records。
+Prepare/update uses the same tail formula for a valid n and treats the actual raw words of this call
+as a temporary record. n=0 likewise writes no target. It does not need to expose or keep the whole
+record range to the caller.
 
-### 8.3 Growing cache 的采用
+### 8.3 Adoption of the growing cache
 
-F1=F0+a 处的有效范围：
+The valid range at F1=F0+a is:
 
 ```text
 latent       : [0,F1)
@@ -440,46 +484,54 @@ pooled keys  : [0,floor(F1/4))
 tail         : [4*floor(F1/4),F1)
 ```
 
-例如 F0=63、本轮准备到 69、只接受到 65：pool [60,64) 有效；[64,68) 即使已物理
-写入也不可见，新 tail 只保存位置 64 的 raw words。Rejected suffix 不扩大 coverage。
-共享页的保护/COW、reservations、table 更新和 frontier 发布由调用者负责。
-完整 checkpoint 同时持有正确的 growing prefix、tail 以及其他模型状态。
+For example, F0=63, this round prepares up to 69 and only 65 is accepted: pool [60,64) is valid.
+[64,68) is not visible even when it was physically written, and the new tail keeps only the raw words
+at position 64. A rejected suffix does not widen the coverage. The caller owns the protection and the
+copy-on-write of a shared page, the reservations, the table update and the frontier publication. A
+complete checkpoint holds the correct growing prefix, the tail and the other model state together.
 
-## 9. MTP 与 DP owner 交接
+## 9. MTP and the DP owner handoff
 
-Main/MTP cache 和 tail 分离、owner 相同，不跨请求或跨层共享 selection。
-一轮 MTP draft 首步正常生成 selection，后续 steps 复用 pool IDs、count 和 E；
-不能仅冻结 pools 后按新位置重算 tail。
+The Main and MTP caches and tails are separate, the owner is the same, and no selection is shared
+across requests or layers. The first step of an MTP draft round generates the selection normally, and
+the later steps reuse the pool IDs, the count and E. Do not freeze only the pools and then recompute
+the tail at a new position.
 
-后续 steps 省去 Index Q projection、评分与 TopK，MLA Q 使用 W_B 前 16384 行。
-Prepare 仍维护独立 provisional latent、pooled keys 与 tail，并按接口产生
-head_coeff；复用步不消费该 coefficient。这样 grouped planes 的 provisional 内容
-保持完整。Selection 及其映射存于 frame，cache read leases 保持到最后消费者退役；
-新 selection 写入不能覆盖仍被引用的冻结行。
+The later steps omit the Index Q projection, the scoring and the TopK, and the MLA Q uses the first
+16384 rows of W_B. Prepare still maintains an independent provisional latent, pooled key and tail and
+produces head_coeff by the interface. A reuse step does not consume that coefficient. In this way the
+provisional content of the grouped planes stays complete. The selection and its mapping live in the
+frame, and the cache read leases stay until the last consumer retires. A new selection write must not
+overwrite a frozen row that is still referenced.
 
-Canonical MTP 历史按真实 Main conditioning 更新。递归 draft 的 hidden 不因 token
-被接受就等于真实 Main hidden；需要重建的接受部分使用正常 prepare/update 链路，
-不能通过截短 draft cache 直接采用这些状态。Family 使用调用者提供的各自 ordinal、
-状态与 cache views，不自行推导 Main/MTP 前沿偏移、输入 token 或 conditioning。
+The canonical MTP history updates from the real Main conditioning. A recursive draft hidden does not
+equal a real Main hidden because its token was accepted. The accepted part that needs rebuilding uses
+the normal prepare/update chain and must not adopt these states by shortening the draft cache. The
+family uses the ordinal, state and cache views that the caller provides and does not derive the
+Main/MTP frontier offset, the input token or the conditioning itself.
 
-RankProgram 持有固定 backing、frames、workspace 与 Graph；ModelSession 选择
-source/destination、接受长度、前沿、checkpoint 及分布式采用关系。Op 不分配页，
-不选 owner，不执行通信。Owner 的完整 block output 由模型执行交给后续 TP/EP；
-KDA 仍使用两 ranks 的独立 TP state 分片。
+RankProgram holds the fixed backing, the frames, the workspace and the Graph. ModelSession selects the
+source/destination, the accepted length, the frontier, the checkpoint and the distributed adoption
+relation. The Op allocates no page, chooses no owner and runs no communication. The model execution
+hands the complete block output of the owner to the later TP/EP. KDA still uses the independent TP
+state shard of the two ranks.
 
-## 10. 内存、workspace 与 Graph
+## 10. Memory, workspace and Graph
 
-Activation/output 连续且至少 16 B 对齐，BF16/FP32 参数向量自然对齐；Device I32
-metadata 连续并自然对齐。State/record feature 连续，允许正的显式外层 strides，
-访问跨度必须可表示且不重叠；cache 页内布局严格遵守第 3 节。
+The activation and the output are contiguous and aligned to at least 16 B, and the BF16/FP32 parameter
+vectors are naturally aligned. The Device I32 metadata is contiguous and naturally aligned. The
+state/record feature axis is contiguous and positive explicit outer strides are allowed. The access
+span must be representable and must not overlap. The layout inside a cache page strictly follows
+section 3.
 
-除第 8 节明确允许的同一行 tail 原位更新，所有写区域与读取区域不重叠。
-Read-only views 可共享 backing；输出、metadata、cache、records 和活跃 scratch
-的实际访问区域不得发生非法 write/read overlap。Host 检查可见的 dtype、shape、
-stride、alignment、capacity、device 和固定地址关系；Device counts、selectors、
-可读页及选择后 alias 关系由调用者保证，不回读 Device metadata。
+Apart from the in-place tail update of the same row that section 8 explicitly allows, every write
+region and read region do not overlap. Read-only views can share backing. The regions actually
+accessed by an output, metadata, cache, record and active scratch must not have an illegal write or
+read overlap. The Host checks the visible dtype, shape, stride, alignment, capacity, device and fixed
+address relation. The caller guarantees the device counts, the selectors, the readable pages and the
+post-selection alias relation, and the implementation does not read device metadata back.
 
-Prepare/Indexer/sparse MLA 分别提供 caller-owned workspace capacity query：
+Prepare, Indexer and sparse MLA each provide a caller-owned workspace capacity query:
 
 ```cpp
 size_t kpool_mla_prepare_record_workspace_capacity_bytes(
@@ -497,71 +549,84 @@ size_t kpool_sparse_mla_workspace_capacity_bytes(
     int32_t multiprocessor_count);
 ```
 
-Query 覆盖固定 profile/B/envelope 下整个正 T 区间，包括分派边界；以 256 B 对齐的
-Op-local cursor 计内部峰值和对齐间隙，不含输出/cache/state/records backing，也不含
-末端 padding。SM count 与 execution 相同。执行与 sizing 共用分派及分配规则。
+The query covers the whole positive T range under the fixed profile, B and envelope, including the
+dispatch boundaries. It counts the internal peak and the alignment gaps with an Op-local cursor
+aligned to 256 B and excludes the output, cache, state and record backing and the trailing padding.
+The SM count is the same as for execution. Execution and sizing share the dispatch and the allocation
+rules.
 
-Scratch 使用有界 query windows；不要求物化 [query,head,context] 的完整 Indexer
-分数，不建立全局展开的 BF16 latent cache。独立的 records/selection 由 frame 保持
-到其最后读者退役，不能作为已经可复用的临时 arena 空间。
+The scratch uses bounded query windows. Do not materialize the complete Indexer score of
+[query,head,context] and do not build a globally expanded BF16 latent cache. The frame keeps the
+independent records and selection until their last reader retires, and they cannot serve as reusable
+temporary arena space.
 
-同一固定 T/B、profile、views、envelope 与 device facts 的 Graph replay 从 Device
-读取新的 counts、positions、slots、page mappings 与 selection mappings。无 Host
-readback、隐藏分配或依赖 Device 值改变的 Host launch 拓扑。改变 Host envelope 时准备
-符合资源上界的 capture/update；改写 Host 变量不会修改已经捕获的 Graph。
-操作提交到 execution.stream()，同流顺序或显式依赖保证生产/消费可见性。Workspace、
-records、state 和 page leases 的实际 device lifetime 由调用者保持。
+A Graph replay with the same fixed T/B, profile, views, envelope and device facts reads the new
+counts, positions, slots, page mappings and selection mappings from the device. There is no Host
+readback, no hidden allocation and no Host launch topology that depends on a changed device value. When
+the Host envelope changes, prepare a capture or an update that meets the resource upper bound.
+Rewriting a Host variable does not modify an already captured Graph. The operation submits to
+execution.stream(), and the same-stream order or an explicit dependency makes production and
+consumption visible. The caller keeps the actual device lifetime of the workspace, the records, the
+state and the page leases.
 
-## 11. 容量与性能口径
+## 11. Capacity and performance criteria
 
-1M growing cache、请求 tail、TP2 KDA state 和执行资源的统一预算见
-[并行资源设计](parallel.md#3-1m-上下文的持久状态容量)。Raw records、selection 和
-workspace 按本设计的实际 T/B/容量及第 10 节 sizing 单独计费，不能只按 cache
-payload 估算启动内存。
+The unified budget of the 1M growing cache, the request tail, the TP2 KDA state and the execution
+resources is in the
+[parallel resource design](parallel.md#3-persistent-state-capacity-for-a-1m-context). The raw records,
+the selection and the workspace are charged separately by the actual T/B/capacity of this design and
+by the sizing of section 10. Do not estimate the startup memory from the cache payload alone.
 
-性能比较覆盖完整 prepare/indexer/sparse-MLA/tail 链路，区分 BF16 与 FP8 latent
-存储，记录实际上下文、T/B、有效长度、selection 复用和 Graph 条件。FP8 收益需
-计入 scale 读取、片上解码及分支投影，四 token 连续加载的收益需在完整消费者上
-测量；局部 kernel 数据不能替代双机模型结果。
+The performance comparison covers the complete prepare/indexer/sparse-MLA/tail chain, separates BF16
+and FP8 latent storage, and records the actual context, T/B, valid length, selection reuse and Graph
+condition. An FP8 gain must count the scale read, the on-chip decode and the branch projection, and the
+gain of four-token contiguous loading must be measured on the complete consumer. Local kernel data
+cannot replace a two-host model result.
 
-测量通过完整公开 Op，固定硬件/toolchain、输入、T/B、context、storage、selection
-与运行条件，分别报告 prepare 两种出口、Indexer、sparse MLA、tail 提取及必要的组合。
-覆盖四种相位、短上下文全选、长上下文扫描与 MTP 冻结选择；报告临时空间、分布、
-最差变化与例外。对照和工作负载在评估前固定，不以微基准替代双机模型性能。
+Measure through the complete public Op with fixed hardware/toolchain, input, T/B, context, storage,
+selection and run conditions, and report the two prepare exits, the Indexer, sparse MLA, the tail
+extraction and the necessary combinations separately. Cover the four phases, the short-context
+select-everything case, the long-context scan and the MTP frozen selection. Report the temporary space,
+the distribution, the worst change and the exceptions. The control and the workloads are fixed before
+the evaluation, and a microbenchmark does not replace two-host model performance.
 
-## 12. 验收合同与实现边界
+## 12. Acceptance contract and implementation boundary
 
-| 对象 | 验收依据 |
+| Object | Acceptance basis |
 |---|---|
-| Projection、norm、pooling、MLA | 从 represented inputs 出发的独立 FP64 数学 oracle，融合按完整公式检查 |
-| FP8 encoder | 给定 FP32 输入的独立精确 codec oracle，覆盖舍入、零、极小值及饱和 |
-| Tail、raw record 保存、无效区域 | 逐 word/byte 精确检查，包括未触碰范围 |
-| Indexer | 独立评分 oracle；明确同分 cases 精确匹配，近同分按 FP32 点积/head 归约误差界检查 |
-| FP8 MLA 消费 | 独立解读实际 code/scale；存储误差与 attention 算术误差分开，不因 FP8 cache 降低计算政策 |
+| projection, norm, pooling, MLA | an independent FP64 mathematical oracle from the represented inputs; the fusion is checked against the complete formula |
+| FP8 encoder | an independent exact codec oracle for a given FP32 input, covering rounding, zero, the smallest values and saturation |
+| tail, raw record save, invalid regions | an exact word/byte check, including the untouched range |
+| Indexer | an independent scoring oracle; an explicit tie case must match exactly, and a near tie is checked against the FP32 dot-product/head-reduction error bound |
+| FP8 MLA consumption | an independent interpretation of the actual code/scale; the storage error and the attention arithmetic error are separate, and the FP8 cache does not lower the compute policy |
 
-真实产生的 BF16 raw K/gate 是可观察状态边界；验证该生产计算的数学正确性后，
-tail 提取必须精确复制同一物理窗口的实际 words。缩短 T 重跑、另一个 kernel 的
-近似输出或可读生成结果不能替代这两个独立要求。
+The actually produced BF16 raw K/gate is an observable state boundary. After the mathematical
+correctness of that production computation is verified, the tail extraction must copy the actual words
+of the same physical window exactly. Rerunning with a shorter T, the approximate output of another
+kernel or a readable generated result cannot replace these two independent requirements.
 
-有限 conformance cases 覆盖：
+The finite conformance cases cover:
 
-- 两种 MLA storage、两个 prepare 出口、五个语义入口及实际生产分派边界；
-- 四种 pool 相位、任意 chunk 起点、跨页/跨 chunk、混合长度、零长度行；
-- E=2051/2052 的全选边界、负 coefficients、同分、不同 selection row 映射、
-  最新完整 pool 可被排除与未完成 tail 必须加入；
-- 1M 索引域、任意 physical page 排列，以及未来已写 pool 对早期 query 不可见；
-- 零接受、短接受、全接受、原位/异位、共享只读源、非法跨行覆盖；
-- 同一物理窗口 actual records、rejected suffix 改写不影响提交、未寻址区域与 guards；
-- MTP 首步和冻结 E 复用、真实 conditioning 重建、Graph metadata 改变后的行为。
+- both MLA storage profiles, both prepare exits, the five semantic entries and the actual production dispatch boundaries;
+- the four pool phases, an arbitrary chunk start, a page or chunk crossing, mixed lengths and a zero-length row;
+- the select-everything boundary at E=2051/2052, negative coefficients, a tie, a different selection-row mapping, a newest complete pool that can be excluded and an unfinished tail that must be included;
+- the 1M index domain, an arbitrary physical page arrangement, and a pool already written being invisible to an earlier query;
+- zero acceptance, short acceptance, full acceptance, in-place and out-of-place, a shared read-only source and an illegal cross-row overwrite;
+- the actual records of the same physical window, a rejected suffix whose rewrite does not affect the commit, unaddressed regions and the guards;
+- the first MTP step and the frozen-E reuse, the real-conditioning rebuild, and the behaviour after a Graph metadata change.
 
-浮点归约不要求不同合法路线逐位相同；固定数值政策的数学验收不能按 T/B、storage
-或私有路线选择性放宽。Exact codec、copy 与 no-op 仍逐位验证。本合同未声明任何
-已测精度损失或性能收益。
+A floating-point reduction is not required to agree bit for bit across different legal routes. The
+mathematical acceptance of a fixed numerical policy must not be relaxed selectively by T/B, by storage
+or by a private route. An exact codec, a copy and a no-op are still verified bit for bit. This contract
+claims no measured accuracy loss and no measured performance gain.
 
-实现归属固定为 `include/ninfer/ops/kpool_sparse_mla.h` 和对应
-`src/ops/softmax_attention/kpool_sparse_mla/` family；纯 Q/O 投影留在 Linear。
-Core 管理非 owning views、checked layout 和固定 storage，模型执行只经公开合同
-调用。Header、Core views/layout、codec 和资格测试落地后分别接管对应合同；
-模型接入完成后由实际执行代码及当前执行说明接管组合关系。其余部分继续保留，
-全部接管后删除本文。实施状态与任务范围只在设计索引和基础清单维护；文档迁移
-不授权执行 agent 重新选择 codec、布局或状态语义。
+Implementation ownership is fixed at `include/ninfer/ops/kpool_sparse_mla.h` and the matching
+`src/ops/softmax_attention/kpool_sparse_mla/` family. The pure Q/O projections stay in Linear. Core
+manages the non-owning views, the checked layout and the fixed storage, and the model execution calls
+only through the public contract. After the header, the Core views/layout, the codec and the
+qualification tests land, each takes over its matching contract. After the model integration
+completes, the actual execution code and the current execution note take over the combination
+relation. The remaining parts stay in this document. After everything is taken over, delete this
+document. The implementation status and the task scope are maintained only in the design index and the
+base checklist, and a document pass does not authorize an execution agent to re-select the codec, the
+layout or the state semantics.

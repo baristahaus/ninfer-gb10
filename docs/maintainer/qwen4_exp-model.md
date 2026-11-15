@@ -1,89 +1,88 @@
-# Qwen4Exp 模型与权重
+# Qwen4Exp model and weights
 
-本文维护 Qwen4Exp 的模型结构、Flash Next 实例、量化 recipe 和持久权重布局。
-当前执行能力、资源所有权与状态恢复见[执行与状态](qwen4_exp-execution.md)；
-转换命令见[权重转换](../weight-conversion.md)。通用数值表示、字节布局和文件合同分别由
-[数值格式](tensor-formats.md)、[存储布局](storage-layouts.md)、
-[V3 容器](artifact-container.md)维护。
+This document maintains the Qwen4Exp model structure, the Flash Next instance, the quantization recipe and the persistent weight layout.
+Current execution capability, resource ownership and state recovery appear in [Execution and state](qwen4_exp-execution.md).
+Conversion commands appear in [Weight conversion](../weight-conversion.md). The generic numeric representations, byte layouts and file contracts are maintained by
+[Numeric formats](tensor-formats.md), [Storage layouts](storage-layouts.md) and
+[V3 container](artifact-container.md) respectively.
 
-## 1. 架构与实例
+## 1. Architecture and instance
 
-Qwen3.8-Flash-Next 使用 `Qwen4ExpForCausalLM / qwen4_exp_text`。
-Converter 接受源 `Qwen4ExpForConditionalGeneration` 或 `Qwen4ExpForCausalLM`，
-统一输出这一架构；Vision 和原生 MTP 是 target 为 `text` 的可选组件。
-Qwen3.8-27B 使用另一套 Qwen3.5 架构，两者不因名称相近而共用 Text 层实现。
+Qwen3.8-Flash-Next uses `Qwen4ExpForCausalLM / qwen4_exp_text`.
+The Converter accepts the source `Qwen4ExpForConditionalGeneration` or `Qwen4ExpForCausalLM`
+and uniformly outputs this architecture. Vision and native MTP are optional components whose target is `text`.
+Qwen3.8-27B uses a different Qwen3.5 architecture, and the two do not share a Text layer implementation just because their names are similar.
 
-下表是 Flash Next checkpoint 的实例值。模型执行从 config 读取层序和几何，
-Binding 描述实际权重，Parameters/Ops 决定可执行表示与 shape；recipe 名称不参与执行注册。
+The table below holds the instance values of the Flash Next checkpoint. Model execution reads the layer order and the geometry
+from the config. Binding describes the actual weights, Parameters/Ops decide the executable representation and the shape, and a recipe name takes no part in execution registration.
 
-| 参数 | Flash Next |
+| Parameter | Flash Next |
 |---|---|
-| Text hidden / vocabulary | 2560 / 248320；embedding 与 head 不绑权重 |
-| Main | 48 层；零基层号 `l%4==3` 为 QSA，共 12 层，其余 36 层为 GDN |
-| HC streams / lowrank | 4 / 320；residual 宽度 10240 |
-| GDN heads / dimension | Q/K 16 heads、V 48 heads，维度均为 128；每组 Q/K 服务连续三个 V heads |
-| GDN QKV / Z / convolution | 10240 / 6144；4 taps、dilation=1 |
-| QSA Q / KV | 24 / 2 heads，head dimension=256 |
-| QSA indexer | 4 个 query heads、1 个 key head，dimension=128 |
-| QSA compression / selection | 四 token 一块；最多 512 个完整块，另加未完成块的至多三个可见 token |
-| Routed experts | 每层 512 个，top-10，intermediate=640 |
-| Shared expert | 每层一个 SwiGLU，intermediate=640，独立标量 sigmoid gate |
-| PLE 位置 | 零基第 1 层的 attention HC 之前；源 `ple_layer_ids=[2]` 规范化为 `[1]` |
-| PLE heads / embedding | 2-gram、3-gram 各 8 heads；16 行 × 160 维，拼成 2560 维 |
-| PLE table | 128 个 `[2500012,160]` shards，共 320001536 行 |
-| PLE convolution | 10240 通道，4 taps、dilation=3，九列历史 |
-| MTP | 一个独立 HC/QSA/MoE 层，无 PLE；共享 Main embedding，默认共享 Main head，可选独立量化 draft head |
-| Vision blocks | 27 层，hidden=1152，16 heads × 72，MLP intermediate=4304 |
-| Vision patch / merger | patch `[3,2,16,16]`；2×2 merge，4608→4608→2560 |
-| RoPE | theta=10000000；Main 与 indexer 都旋转前 64 维；interleaved MRoPE sections `[11,11,10]` |
+| Text hidden / vocabulary | 2560 / 248320; embedding and head do not tie weights |
+| Main | 48 layers; the zero-based layer index `l%4==3` is QSA, 12 layers in total, and the other 36 layers are GDN |
+| HC streams / lowrank | 4 / 320; residual width 10240 |
+| GDN heads / dimension | Q/K 16 heads, V 48 heads, dimension 128 for both; each Q/K group serves three consecutive V heads |
+| GDN QKV / Z / convolution | 10240 / 6144; 4 taps, dilation=1 |
+| QSA Q / KV | 24 / 2 heads, head dimension=256 |
+| QSA indexer | 4 query heads, 1 key head, dimension=128 |
+| QSA compression / selection | four tokens per block; at most 512 complete blocks, plus at most three visible tokens of the incomplete block |
+| Routed experts | 512 per layer, top-10, intermediate=640 |
+| Shared expert | one SwiGLU per layer, intermediate=640, independent scalar sigmoid gate |
+| PLE position | before the attention HC of zero-based layer 1; the source `ple_layer_ids=[2]` normalizes to `[1]` |
+| PLE heads / embedding | 2-gram and 3-gram, 8 heads each; 16 rows x 160 dimensions, concatenated into 2560 dimensions |
+| PLE table | 128 `[2500012,160]` shards, 320001536 rows in total |
+| PLE convolution | 10240 channels, 4 taps, dilation=3, nine columns of history |
+| MTP | one independent HC/QSA/MoE layer with no PLE; it shares the Main embedding, shares the Main head by default, and can use an independent quantized draft head |
+| Vision blocks | 27 layers, hidden=1152, 16 heads x 72, MLP intermediate=4304 |
+| Vision patch / merger | patch `[3,2,16,16]`; 2x2 merge, 4608→4608→2560 |
+| RoPE | theta=10000000; Main and indexer both rotate the first 64 dimensions; interleaved MRoPE sections `[11,11,10]` |
 | Context / norm epsilon / EOS | 262144 / `1e-6` / 248044 |
 
-Adapter 将源 `full_attention` 规范化为 `indexed_attention`，并将
-`norm_topk_prob=true` 等数学配置写入产物。字段和源参数映射由
-[adapter](../../tools/convert/qwen4_exp.py)维护，原生配置解释见
-[config](../../src/models/qwen4_exp/config.cpp)。
+The Adapter normalizes the source `full_attention` to `indexed_attention` and writes math configurations such as
+`norm_topk_prob=true` into the artifact. The field and source-parameter mapping is maintained by
+[the adapter](../../tools/convert/qwen4_exp.py), and [config](../../src/models/qwen4_exp/config.cpp) explains the native configuration.
 
-## 2. 模型计算与数值边界
+## 2. Model computation and numeric boundaries
 
-### 2.1 Main 与 HC
+### 2.1 Main and HC
 
 ```text
-token embedding，在视觉位置替换为 Vision 特征
-  → 复制为四条 HC residual streams
-  → 每层：attention HC → GDN/QSA → HC combine
-          MoE HC       → MoE     → HC combine
-          （零基第 1 层入口先加入 PLE）
-  → final HC norm/mixer → 2560 维 sample hidden → LM head
+token embedding, replaced by Vision features at the visual positions
+  → copied into four HC residual streams
+  → each layer: attention HC → GDN/QSA → HC combine
+                 MoE HC       → MoE     → HC combine
+                 (the zero-based layer 1 entry adds PLE first)
+  → final HC norm/mixer → 2560-dimension sample hidden → LM head
 ```
 
-四条 streams 是特征轴，GDN/QSA/MoE 仍消费一个 2560 维 block 输入。
-HC 对每条 stream 独立做 offset RMSNorm；低秩 down/up 产生逐特征的 sigmoid mixing，
-block injection 为四个 `2*sigmoid(logit/4)` 系数。Combine 将同一个 block 输出按
-这些系数加回各 stream，形成公开的 BF16 residual；下一次 norm 消费这些实际 BF16 words。
-Final mixer 不产生 injection，其后没有额外 final RMSNorm。
+The four streams are the feature axis, and GDN/QSA/MoE still consume one 2560-dimension block input.
+HC performs an offset RMSNorm independently on each stream. The low-rank down/up produces a per-feature sigmoid mixing, and
+the block injection uses four `2*sigmoid(logit/4)` coefficients. Combine adds the same block output back to each stream by
+these coefficients and forms the public BF16 residual. The next norm consumes these actual BF16 words.
+The final mixer produces no injection, and no additional final RMSNorm follows it.
 
-[HC 合同](../../include/ninfer/ops/gated_residual.h)维护完整公式。
-模型保留两种末端特征：final mixer 的 2560 维输出，以及其 norm/mixer 之前的
-10240 维 residual。MTP conditioning 使用后者，不能从前者反推。
+The [HC contract](../../include/ninfer/ops/gated_residual.h) maintains the complete formula.
+The model keeps two end features: the 2560-dimension output of the final mixer, and the
+10240-dimension residual before its norm/mixer. MTP conditioning uses the latter and cannot derive it back from the former.
 
-### 2.2 GDN、QSA 与 MoE
+### 2.2 GDN, QSA and MoE
 
-GDN 将 HC 输入投影为 QKVZ 和 AB。Q/K/V 经过因果卷积与 SiLU，再做 Q/K L2
-normalization 和 gated delta-rule；Z 绕过卷积。Recurrent state 为
-FP32 `S[value_dim,key_dim]`。输出使用直接 gamma 的 head-wise RMSNorm，
-乘 `sigmoid(Z)` 后投影回 2560 维。卷积 SiLU 与输出 sigmoid 是两个不同的非线性。
-计算合同见 [GDN](../../include/ninfer/ops/gated_delta_net.h)、
-[controls](../../include/ninfer/ops/gdn_control.h)及
-[gated RMSNorm](../../include/ninfer/ops/rmsnorm.h)。
+GDN projects the HC input into QKVZ and AB. Q/K/V pass through a causal convolution and SiLU, then through Q/K L2
+normalization and the gated delta-rule. Z bypasses the convolution. The recurrent state is
+FP32 `S[value_dim,key_dim]`. The output uses a head-wise RMSNorm with a direct gamma,
+multiplies by `sigmoid(Z)` and then projects back to 2560 dimensions. The convolution SiLU and the output sigmoid are two different nonlinearities.
+The computation contract appears in [GDN](../../include/ninfer/ops/gated_delta_net.h),
+[controls](../../include/ninfer/ops/gdn_control.h) and
+[gated RMSNorm](../../include/ninfer/ops/rmsnorm.h).
 
-QSA 保留完整主 K/V 历史；4:1 压缩仅作用于 index key。每个完整块先将四列 raw index-K
-平均并舍入为 BF16，再做 offset norm 和块首坐标 RoPE。四个 index heads 的非负 dot
-之和决定共享 TopK；所有 24 个 query heads 消费同一选块集合。Sparse GQA 还读取当前
-未完成块的可见 token，输出乘逐元素 sigmoid gate 后进入 O projection。
-Index score 不加入主 attention logits。完整公式与 KV codec 边界见
-[QSA 合同](../../include/ninfer/ops/qsa.h)。
+QSA keeps the complete main K/V history, and the 4:1 compression applies only to the index key. Each complete block first averages four columns of raw index-K
+and rounds them to BF16, then applies an offset norm and the block-start-coordinate RoPE. The sum of the non-negative dots of the four index heads
+decides the shared TopK. All 24 query heads consume the same selected block set. Sparse GQA also reads the visible tokens of the current
+incomplete block, and the output multiplies by an elementwise sigmoid gate before entering the O projection.
+The index score does not join the main attention logits. The complete formula and the KV codec boundary appear in
+[the QSA contract](../../include/ninfer/ops/qsa.h).
 
-MoE 使用归一化 top-k softmax 路由，shared 不参加 top-k：
+MoE uses normalized top-k softmax routing, and shared does not join top-k:
 
 ```text
 expert_e(x) = W_down_e * (SiLU(W_gate_e*x) * (W_up_e*x))
@@ -92,13 +91,13 @@ shared(x)   = sigmoid(W_shared_score*x) * shared_ffn(x)
 moe(x)      = routed(x) + shared(x)
 ```
 
-Shared FFN 同样使用 SwiGLU。MoE 输出一个 2560 维 block，由 HC 回注 residual。
-投影、非线性、route coefficient 和逐 expert 归约的私有 staging 不增加公共 BF16
-舍入边界；语义入口及 activation policy 由 [MoE 合同](../../include/ninfer/ops/moe.h)维护。
+The Shared FFN also uses SwiGLU. MoE outputs one 2560-dimension block, and HC injects it back into the residual.
+The private staging of the projections, the nonlinearities, the route coefficients and the per-expert reduction adds no public BF16
+rounding boundary. The [MoE contract](../../include/ninfer/ops/moe.h) maintains the semantic entry and the activation policy.
 
-### 2.3 MTP 与 Vision
+### 2.3 MTP and Vision
 
-MTP 的初始特征为：
+The initial features of MTP are:
 
 ```text
 e = W_fc_embedding * OffsetNorm_2560(token_embedding)
@@ -106,63 +105,63 @@ v = OffsetNorm_10240(multistream_hidden).reshape(4,2560)
 h_init[s] = W_fc_hidden * v[s] + e
 ```
 
-Hidden norm 沿完整 10240 维归约，随后同一个 fc_hidden 独立作用于四条 streams。
-第一步使用 Main conditioning，后续 draft step 使用前一步 MTP 的 pre-final-mixer
-residual。MTP 的 QSA/MoE 层及 final HC mixer 产生下一组 conditioning 和 sample。
-Draft 默认使用 Main head，也可选择第 3.3 节的独立量化 head；target 仍使用 Main head。
+The hidden norm reduces along the complete 10240 dimensions, and then the same fc_hidden acts on the four streams independently.
+The first step uses the Main conditioning, and later draft steps use the pre-final-mixer
+residual of the previous MTP step. The QSA/MoE layer and the final HC mixer of MTP produce the next set of conditioning and sample.
+Draft uses the Main head by default and can also use the independent quantized head of section 3.3. The target still uses the Main head.
 
-Vision 将 Conv3d patch 按 C/T/H/W 展平为 1536 维。Blocks 使用非因果 attention、
-LayerNorm 和 `gelu_pytorch_tanh` MLP；merger 在 2×2 合并前做 LayerNorm，
-两次 FC 之间使用 GELU。本实例没有 deepstack。编码器复用
-[公共 Qwen Vision](../../src/models/common/qwen/vision/)，Text 层只消费其 2560 维输出。
+Vision flattens the Conv3d patch into 1536 dimensions in C/T/H/W order. The blocks use non-causal attention,
+LayerNorm and a `gelu_pytorch_tanh` MLP. The merger performs a LayerNorm before the 2x2 merge and
+uses GELU between the two FCs. This instance has no deepstack. The encoder reuses
+[the common Qwen Vision](../../src/models/common/qwen/vision/), and the Text layer consumes only its 2560-dimension output.
 
-## 3. Flash Next 量化 recipe
+## 3. Flash Next quantization recipe
 
-`qwen3_8_flash_next` 使用 BF16 主 checkpoint 提供 config、资源、Main 非 routed
-权重、Vision 和 PLE；`--source nvidia=PATH` 提供完整
-`nvidia/Qwen3.8-Flash-Next-NVFP4` checkpoint，导入 Main routed experts 和 MTP 独有参数。
-来源和转换方法写入 `.conversion.json`。完整选择由
-[official recipe](../../tools/convert/official_recipes.py)维护。
+`qwen3_8_flash_next` uses the BF16 main checkpoint to provide the config, the resources, the Main non-routed
+weights, Vision and PLE. `--source nvidia=PATH` provides the complete
+`nvidia/Qwen3.8-Flash-Next-NVFP4` checkpoint and imports the Main routed experts and the MTP-only parameters.
+The source and the conversion method are written into `.conversion.json`. The complete selection is maintained by
+[the official recipe](../../tools/convert/official_recipes.py).
 
-| 部分 | 持久表示 | 计算许可或消费 |
+| Part | Persistent representation | Compute permission or consumption |
 |---|---|---|
-| Main routed gate/up/down | NVIDIA NVFP4，G16 E4M3FN scale，每 expert 矩阵一个 FP32 divisor | `AllowA4` |
-| Main GDN QKVZ/output、QSA Q/gate/output | BF16 源转 Q8 G32/FP16 scale | `A16Only` |
-| HC、QSA K/V/indexer、PLE 投影、router/shared FFN | 原 BF16 words | `A16Only` |
-| GDN AB、convolution、norm，其他 norm/bias | 原 BF16 words | 各 Op 数学 |
-| GDN A_log / dt_bias | 源 BF16 精确展开为 FP32，各 `[48]` | 保留原始含义 |
-| Token embedding / Main LM head | 两份独立 BF16 对象 | lookup / A16 head；MTP 默认共享 |
-| Optimized MTP head，可选 | BF16 Main head 源转 Q4 G64/FP16 scale，完整词表 | `A16Only` |
-| PLE table | BF16 源转 `nf4_g16_e4m3fn` | 精确解码为 BF16 lookup 输出 |
-| MTP routed experts | NVIDIA E4M3FN codes，128×128 块 BF16 multiplier | `AllowA8` |
-| MTP 其他独有参数、全部 Vision | 原 BF16 words | 投影 `A16Only` |
-| PLE hash controls | 原始 35 个 INT64 | 无损 Resource |
+| Main routed gate/up/down | NVIDIA NVFP4, G16 E4M3FN scale, one FP32 divisor per expert matrix | `AllowA4` |
+| Main GDN QKVZ/output, QSA Q/gate/output | BF16 source converted to Q8 G32/FP16 scale | `A16Only` |
+| HC, QSA K/V/indexer, PLE projections, router/shared FFN | original BF16 words | `A16Only` |
+| GDN AB, convolution, norm, other norm/bias | original BF16 words | the mathematics of each Op |
+| GDN A_log / dt_bias | the source BF16 exactly expanded to FP32, `[48]` each | keeps the original meaning |
+| Token embedding / Main LM head | two independent BF16 objects | lookup / A16 head; MTP shares by default |
+| Optimized MTP head, optional | BF16 Main head source converted to Q4 G64/FP16 scale, complete vocabulary | `A16Only` |
+| PLE table | BF16 source converted to `nf4_g16_e4m3fn` | exactly decoded into the BF16 lookup output |
+| MTP routed experts | NVIDIA E4M3FN codes, 128x128 block BF16 multiplier | `AllowA8` |
+| MTP other unique parameters, all of Vision | original BF16 words | projections `A16Only` |
+| PLE hash controls | the original 35 INT64 | lossless Resource |
 
-GPU MoE 已有 NVFP4 A4、block-FP8 A8/G128 及小批量 A16 路径；
-各语义入口的私有 shape policy 选择实际计算。CPU Main experts 使用 BF16 输入和
-FP32 中间计算，不量化激活。许可允许高精度路径，并不要求每次调用都量化为最低位宽。
+The GPU MoE already has NVFP4 A4, block-FP8 A8/G128 and small-batch A16 paths, and
+the private shape policy of each semantic entry selects the actual computation. The CPU Main experts use BF16 input and
+FP32 intermediate computation and do not quantize the activations. A permission allows a higher-precision path and does not require every call to quantize to the lowest width.
 
-Q8 使用 `grouped_absmax`，沿 K 每 32 个值分组。合并和行置换先确定最终行序，
-再进行编码。Packing、scale swizzle 和 convolution 转置在转换时完成，loader 绑定原字节。
-KV、recurrent state 和 workspace 的 dtype 独立于权重 recipe。
+Q8 uses `grouped_absmax`, grouping every 32 values along K. The merge and the row permutation determine the final row order first,
+and then the encoding happens. Packing, scale swizzle and convolution transpose happen at conversion time, and the loader binds the original bytes.
+The dtype of the KV, the recurrent state and the workspace is independent of the weight recipe.
 
-### 3.1 Norm 参数
+### 3.1 Norm parameters
 
-| 角色 | 持久参数 | 归约与 affine |
+| Role | Persistent parameter | Reduction and affine |
 |---|---|---|
-| HC、PLE grouped RMSNorm | BF16 offset `[10240]`，native `[2560,4]` | 各 stream 独立归约，gain=`1+w` |
-| Main/MTP QSA Q/K、indexer Q/K | BF16 offset `[256]` / `[128]` | 每 head 归约，同角色 heads 共享参数 |
-| MTP pre-FC embedding / hidden | BF16 offset `[2560]` / `[10240]` | 对整个对应向量归约 |
-| GDN output gated RMSNorm | BF16 gamma `[128]` | 直接 gain，所有 V heads 共享 |
-| Vision LayerNorm | BF16 weight/bias `[1152]` | 直接 affine；merger norm 位于 merge 前 |
+| HC, PLE grouped RMSNorm | BF16 offset `[10240]`, native `[2560,4]` | each stream reduces independently, gain=`1+w` |
+| Main/MTP QSA Q/K, indexer Q/K | BF16 offset `[256]` / `[128]` | per-head reduction; heads of the same role share the parameter |
+| MTP pre-FC embedding / hidden | BF16 offset `[2560]` / `[10240]` | reduces over the whole corresponding vector |
+| GDN output gated RMSNorm | BF16 gamma `[128]` | direct gain, shared by all V heads |
+| Vision LayerNorm | BF16 weight/bias `[1152]` | direct affine; the merger norm sits before the merge |
 
-Offset 保留源 words，`1+w` 不预先舍入为 BF16 gain；HC 的 `/4` 不折入权重。
-参数 dtype 与归约精度是不同的约定。
+The offset keeps the source words, and `1+w` is not pre-rounded into a BF16 gain. The HC `/4` is not folded into the weights.
+The parameter dtype and the reduction precision are different conventions.
 
-### 3.2 NVIDIA 编码导入
+### 3.2 NVIDIA encoded import
 
-Main 源的 `weight_scale_2`、`input_scale` 是正有限 FP32 multipliers。
-[ModelOpt adapter](../../tools/convert/sources/modelopt_nvfp4.py)使用：
+The `weight_scale_2` and `input_scale` of the Main source are positive finite FP32 multipliers.
+The [ModelOpt adapter](../../tools/convert/sources/modelopt_nvfp4.py) uses:
 
 ```text
 source weight = E2M1(code) * E4M3FN(scale) * weight_scale_2
@@ -171,131 +170,131 @@ d_a = RN_FP32(1 / input_scale)
 stored weight = E2M1(code) * E4M3FN(scale) / d_w
 ```
 
-Codes/scales words 保留后按目标 layout 重排；FP32 reciprocal 舍入是元数据变换，
-不承诺所有解码值与源逐位相同。Recipe 要求同 expert 的 gate/up 两个 multiplier
-words 相等，并要求一层所有 experts 的 GU 输入 multiplier 相等、down 输入 multiplier
-相等。每个 expert 仍各自持有 weight divisor。
+The codes/scales words are kept and then rearranged into the target layout. The FP32 reciprocal rounding is a metadata transformation and
+does not promise that every decoded value is bit-identical to the source. The recipe requires the two multiplier
+words of gate/up in the same expert to be equal. It also requires the GU input multiplier of all experts in one layer to be equal and the down input multiplier
+to be equal. Each expert still holds its own weight divisor.
 
-Activation divisors 存为 FP32 `[48,2]`，元素 `2*l` 与 `2*l+1` 分别供 GU/down Use
-引用；它们与 weight divisor 分开解释。A4 输入按 G16 量化，product 从 FP32 直接编码，
-不增加 BF16 中间 seam。
+The activation divisors are stored as FP32 `[48,2]`, and the elements `2*l` and `2*l+1` are referenced by the GU/down Use
+respectively. They are interpreted separately from the weight divisor. The A4 input is quantized by G16, and the product is encoded directly from FP32,
+adding no BF16 intermediate seam.
 
-MTP `fp8_e4m3fn_block128x128_bf16` 重建为 E4M3FN code × BF16 block scale。
-Gate/up 各自保留原 scale，640 行边界与 128 行块对齐。A8 按每 token 的 K128 分组
-动态量化，scale 为 FP32；每个 K128 dot 分别缩放后累加，没有静态 activation divisor。
+MTP `fp8_e4m3fn_block128x128_bf16` rebuilds as E4M3FN code x BF16 block scale.
+Gate/up each keep the original scale, and the 640-row boundary aligns with the 128-row block. A8 dynamically quantizes by K128
+groups per token, and the scale is FP32. Each K128 dot is scaled separately and then accumulated, with no static activation divisor.
 
 ### 3.3 Optimized MTP head
 
-转换时 `--proposal` 从 Main BF16 head 源生成独立 `proposal/head`，使用
-`grouped_absmax`、`q4_g64_fp16` 和 `row_split_k128_v1`。它保留全部
-`[248320,2560]` 物理行及原 vocabulary ID 顺序，不裁剪词表、不创建 `proposal/token_ids`；
-目录声明 `text.proposal.domain="full"`。`mtp/final_hidden` Use 的 policy 为 `A16Only`。
+At conversion time `--proposal` generates an independent `proposal/head` from the Main BF16 head source, using
+`grouped_absmax`, `q4_g64_fp16` and `row_split_k128_v1`. It keeps all
+`[248320,2560]` physical rows and the original vocabulary ID order. It does not trim the vocabulary and does not create `proposal/token_ids`.
+The directory declares `text.proposal.domain="full"`. The policy of the `mtp/final_hidden` Use is `A16Only`.
 
-Main BF16 head 和 `mtp/output_head` 的共享绑定保留。启动选择 optimized 时，
-MTP 改为绑定 `proposal/head`，target 验收和 ordinary decode 继续使用 Main head。
-两份 head 采用相同的词表 TP 分区：TP2 下每 rank 各持有 `[124160,2560]` 的本地部分，
-沿用全局 token ID 和候选汇合，不需要 token remap。
+The shared binding of the Main BF16 head and `mtp/output_head` stays. When startup selects optimized,
+MTP binds `proposal/head` instead, and the target acceptance and the ordinary decode continue to use the Main head.
+Both heads use the same vocabulary TP partition: under TP2 each rank holds the local `[124160,2560]` part,
+following the global token IDs and the candidate merging, with no token remap needed.
 
-这是附加的 draft 表示；关闭 optimized head 时不加载其对象。
-启动选项和执行流程见[执行与状态](qwen4_exp-execution.md#5-mtp-的生成与采用)。
+This is an additional draft representation, and disabling the optimized head does not load its objects.
+Startup options and the execution flow appear in [Execution and state](qwen4_exp-execution.md#5-mtp-generation-and-adoption).
 
-## 4. 合并矩阵与持久布局
+## 4. Merged matrices and persistent layout
 
-逻辑矩阵写作 `W[N,K]`；N 是输出行，K 是输入特征，区间均为半开区间。
-相同输入、表示和兼容元数据的投影沿 N 合并，逻辑角色仍由各自 Binding 引用。
-Native Tensor 第 0 维连续；`M=T*B`，`column=t+T*b`。
+A logical matrix is written `W[N,K]`, where N is the output row and K is the input feature, and both ranges are half-open.
+Projections with the same input, representation and compatible metadata merge along N, and each Binding still references the logical role.
+Native Tensor dimension 0 is contiguous; `M=T*B`, `column=t+T*b`.
 
-| Parent | Main / MTP 数量 | 逻辑 shape | 格式 | 输出行顺序 |
+| Parent | Main / MTP count | Logical shape | Format | Output row order |
 |---|---:|---|---|---|
-| GDN QKVZ | 36 / 0 | `[16384,2560]` | Q8 | Q 2048、K 2048、V 6144、Z 6144 |
-| GDN AB | 36 / 0 | `[96,2560]` | BF16 | a 48、b 48 |
-| GDN output | 36 / 0 | `[2560,6144]` | Q8 | 原行序 |
-| Main QSA Q/gate | 12 / 0 | `[12288,2560]` | Q8 | Q 6144、gate 6144 |
-| Main QSA KV/index | 12 / 0 | `[1664,2560]` | BF16 | K 512、V 512、index-Q 512、index-K 128 |
-| Main QSA output | 12 / 0 | `[2560,6144]` | Q8 | 原行序 |
-| MTP QSA input | 0 / 1 | `[13952,2560]` | BF16 | K 512、V 512、index-K 128、Q 6144、gate 6144、index-Q 512 |
-| MTP QSA output | 0 / 1 | `[2560,6144]` | BF16 | 原行序 |
-| Block HC down/inject | 96 / 2 | `[324,10240]` | BF16 | down 320、injection 4 |
-| Final HC down | 1 / 1 | `[320,10240]` | BF16 | 全部 down |
-| HC up | 97 / 3 | `[10240,320]` | BF16 | stream-major，`row=s*2560+d` |
-| PLE KV | 1 / 0 | `[12800,2560]` | BF16 | 四流 key 10240、共享 value 2560 |
-| MoE input | 48 / 1 | `[1793,2560]` | BF16 | router 512、shared score 1、shared gate 640、shared up 640 |
-| Shared down | 48 / 1 | `[2560,640]` | BF16 | 原行序 |
-| Routed GU bank | 48 / 1 | `[512,1280,2560]` | Main NVFP4 / MTP block-FP8 | expert-major，每 expert 内 gate 640、up 640 |
+| GDN QKVZ | 36 / 0 | `[16384,2560]` | Q8 | Q 2048, K 2048, V 6144, Z 6144 |
+| GDN AB | 36 / 0 | `[96,2560]` | BF16 | a 48, b 48 |
+| GDN output | 36 / 0 | `[2560,6144]` | Q8 | original row order |
+| Main QSA Q/gate | 12 / 0 | `[12288,2560]` | Q8 | Q 6144, gate 6144 |
+| Main QSA KV/index | 12 / 0 | `[1664,2560]` | BF16 | K 512, V 512, index-Q 512, index-K 128 |
+| Main QSA output | 12 / 0 | `[2560,6144]` | Q8 | original row order |
+| MTP QSA input | 0 / 1 | `[13952,2560]` | BF16 | K 512, V 512, index-K 128, Q 6144, gate 6144, index-Q 512 |
+| MTP QSA output | 0 / 1 | `[2560,6144]` | BF16 | original row order |
+| Block HC down/inject | 96 / 2 | `[324,10240]` | BF16 | down 320, injection 4 |
+| Final HC down | 1 / 1 | `[320,10240]` | BF16 | all down |
+| HC up | 97 / 3 | `[10240,320]` | BF16 | stream-major, `row=s*2560+d` |
+| PLE KV | 1 / 0 | `[12800,2560]` | BF16 | four-stream key 10240, shared value 2560 |
+| MoE input | 48 / 1 | `[1793,2560]` | BF16 | router 512, shared score 1, shared gate 640, shared up 640 |
+| Shared down | 48 / 1 | `[2560,640]` | BF16 | original row order |
+| Routed GU bank | 48 / 1 | `[512,1280,2560]` | Main NVFP4 / MTP block-FP8 | expert-major, gate 640 and up 640 inside each expert |
 | Routed down bank | 48 / 1 | `[512,2560,640]` | Main NVFP4 / MTP block-FP8 | expert-major |
-| MTP fc_embedding / fc_hidden | 0 / 各 1 | `[2560,2560]` | BF16 | 独立权重；分别处理 M / 4M 列 |
-| Main LM head | 一份，MTP 默认共享 | `[248320,2560]` | BF16 | vocabulary 顺序 |
-| Optimized MTP head | 0 / 可选 1 | `[248320,2560]` | Q4 | 完整 vocabulary 顺序 |
+| MTP fc_embedding / fc_hidden | 0 / 1 each | `[2560,2560]` | BF16 | independent weights; they handle M / 4M columns respectively |
+| Main LM head | one, shared by MTP by default | `[248320,2560]` | BF16 | vocabulary order |
+| Optimized MTP head | 0 / optional 1 | `[248320,2560]` | Q4 | complete vocabulary order |
 
-Main QSA 的两个 input parents 精度不同；MTP 六段投影合为一个 BF16 parent。
-MTP 的 K/V/index-K 位于前 1152 行，可直接形成 `[1152,2560]` 的连续权重 view；
-完整投影与三段投影共享同一份权重。TP2 按相同角色顺序组装本地 parent：
-K 256、V 256、index-K 128、Q 3072、gate 3072、index-Q 512，
-完整矩阵为 `[7296,2560]`，连续前缀为 `[640,2560]`。
-MoE control 为前 513 行，shared GU 为后 1280 行，可作零拷贝 views。
-持久合并不强制一次投影调用；LinearSplit 可以直接产出独立连续的激活分段。
+The two input parents of Main QSA have different precision, and the six MTP projection segments merge into one BF16 parent.
+The K/V/index-K of MTP sit in the first 1152 rows and can directly form a contiguous `[1152,2560]` weight view.
+The complete projection and the three-segment projection share the same weights. TP2 assembles the local parent in the same role order:
+K 256, V 256, index-K 128, Q 3072, gate 3072, index-Q 512.
+The complete matrix is `[7296,2560]`, and the contiguous prefix is `[640,2560]`.
+The MoE control is the first 513 rows and the shared GU is the last 1280 rows, and both work as zero-copy views.
+The persistent merge does not force a single projection call; LinearSplit can directly produce independent contiguous activation segments.
 
-### 4.1 行置换与 convolution
+### 4.1 Row permutation and convolution
 
-源 q_proj 按 head 交错 Q/gate，转换时解交错：
+The source q_proj interleaves Q/gate by head, and the conversion de-interleaves it:
 
 ```text
 Q[h*256+d,:]    = source_q_proj[h*512+d,:]
 Gate[h*256+d,:] = source_q_proj[h*512+256+d,:]
 ```
 
-GDN 与 PLE 的 convolution 都转为 channel 连续：
+The convolutions of GDN and PLE both convert to channel-contiguous:
 
 ```text
 source [C,1,4] → artifact/Binding [4,C] → native Tensor [C,4]
 stored[j*C+c] = source[c*4+j], C=10240
 ```
 
-这两类变换均保留源 BF16 words；卷积 tap 时间顺序不变。PLE 的 dilation=3 由计算解释。
-Norm、bias 与 convolution 不作为 Linear 权重重新量化。
+Both kinds of transformation keep the source BF16 words, and the convolution tap time order does not change. The computation interprets the PLE dilation=3.
+Norm, bias and convolution are not requantized as Linear weights.
 
-### 4.2 Vision 与 expert banks
+### 4.2 Vision and expert banks
 
-| Vision 参数 | 数量 | 持久 shape |
+| Vision parameter | Count | Persistent shape |
 |---|---:|---|
 | Patch projection | 1 | `[1152,1536]` |
-| QKV / bias | 27 | `[3456,1152]` / `[3456]`，Q/K/V 依次排列 |
+| QKV / bias | 27 | `[3456,1152]` / `[3456]`, Q/K/V in that order |
 | Attention output | 27 | `[1152,1152]` |
-| FC1 / FC2 | 各 27 | `[4304,1152]` / `[1152,4304]` |
-| Merger FC1 / FC2 | 各 1 | `[4608,4608]` / `[2560,4608]` |
+| FC1 / FC2 | 27 each | `[4304,1152]` / `[1152,4304]` |
+| Merger FC1 / FC2 | 1 each | `[4608,4608]` / `[2560,4608]` |
 | Position embedding | 1 | `[2304,1152]` |
 
-每层 routed experts 有 GU、down 两个物理 parent；逻辑 gate/up 各
-`[512,640,2560]`，down 为 `[512,2560,640]`。Binding 按 expert ID 引用 GU 的两半
-和 down 全矩阵。Binding range 按 C-order 逻辑元素计数，不包含 scale/divisor bytes。
+The routed experts of each layer have two physical parents, GU and down. The logical gate/up are
+`[512,640,2560]` each and down is `[512,2560,640]`. Binding references the two halves of GU
+and the whole down matrix by expert ID. The Binding range counts logical elements in C-order and does not include the scale/divisor bytes.
 
-Main 使用 `batched_block_scale_k16_m128x4_v1`，bank 内依次存所有 codes、
-swizzled scales、FP32 divisors `[512]`。GU/down payload 分别为
-943720448 / 471861248 B。Scale swizzle 使用 expert 内的局部行号。
-MTP 使用 `block_scale_m128_k128_v1`，codes 后为 BF16 scales
-`[512,10,20]` / `[512,20,5]`，payload 分别为 1677926400 / 838963200 B。
+Main uses `batched_block_scale_k16_m128x4_v1`, and the bank stores all codes,
+the swizzled scales and the FP32 divisors `[512]` in that order. The GU/down payloads are
+943720448 / 471861248 B respectively. The scale swizzle uses the local row index inside the expert.
+MTP uses `block_scale_m128_k128_v1`, with BF16 scales
+`[512,10,20]` / `[512,20,5]` after the codes, and the payloads are 1677926400 / 838963200 B respectively.
 
-Recipe 按资源/辅助值、Main 固定权重、Vision、MTP、Main experts、PLE shards 放置。
-Main experts 按 layer→GU/down，PLE 按 shard ID；普通对象对齐 256 B，PLE 对齐 4096 B。
-对象可以跨 V3 续卷，实际文件范围由目录映射，不能从文件名推导参数身份。
+The recipe places the resources/auxiliary values, the Main fixed weights, Vision, MTP, the Main experts and the PLE shards.
+The Main experts go by layer→GU/down, and PLE goes by shard ID. An ordinary object aligns to 256 B and PLE aligns to 4096 B.
+An object can continue across V3 volumes, and the directory maps the actual file range, so the parameter identity cannot be derived from the file name.
 
-## 5. PLE 表、hash 与 lookup 出口
+## 5. PLE table, hash and lookup exit
 
-PLE 的 128 个 NF4 parents 保留原 shard 边界和各自 divisor。
-`stored_scale_mse` 对每 shard 做有界两遍转换；误差计算、scale 搜索和平局规则见
-[转换数值合同](tensor-formats.md#36-stored_scale_mse-conversion-method)。
+The 128 NF4 parents of PLE keep the original shard boundaries and their own divisors.
+`stored_scale_mse` performs a bounded two-pass conversion on each shard. The error computation, the scale search and the tie rule appear in
+[the conversion numeric contract](tensor-formats.md#36-stored_scale_mse-conversion-method).
 
-`row_paged_g16_4k_v1` 每行 90 B：80 B packed codes、10 B scales。
-每个 4 KiB 数据页存 45 行，末页 37 行；每 shard payload 为 227557380 B。
-全局行 g 属于 `shard=g/2500012`、`row=g%2500012`，hash head 不对应固定 shard。
-具体 padding、divisor 地址和编码见[布局合同](storage-layouts.md#6-row_paged_g16_4k_v1)。
+`row_paged_g16_4k_v1` uses 90 B per row: 80 B of packed codes and 10 B of scales.
+Each 4 KiB data page holds 45 rows, and the last page holds 37 rows. Each shard payload is 227557380 B.
+A global row g belongs to `shard=g/2500012` and `row=g%2500012`, and a hash head does not correspond to a fixed shard.
+The exact padding, the divisor address and the encoding appear in [the layout contract](storage-layouts.md#6-row_paged_g16_4k_v1).
 
-`text.resources.ple_hash_controls` 是 280 B 的 `raw_bytes_v1` Resource，顺序为：
-三个 layer multipliers、十六个 head vocab sizes、十六个 head offsets，
-均为源 little-endian signed INT64 words。控制值无损复制，不重新生成 seed/prime。
+`text.resources.ple_hash_controls` is a 280 B `raw_bytes_v1` Resource, in this order:
+three layer multipliers, sixteen head vocab sizes and sixteen head offsets,
+all as source little-endian signed INT64 words. The control values are copied losslessly and the seed/prime is not regenerated.
 
-当前位置 raw ID 为 x0，前一、前二枚为 x1、x2；负位置补 EOS。
-若 x1=EOS，仅对本次查询令 x2=EOS；x0=EOS 仍消费此前历史：
+The current position raw ID is x0, and the previous and the second previous are x1 and x2. A negative position pads EOS.
+If x1=EOS, set x2=EOS for this query only. x0=EOS still consumes the earlier history:
 
 ```text
 u2 = word64(x0*multiplier[0]) XOR word64(x1*multiplier[1])
@@ -304,60 +303,60 @@ g[h] = positive_mod(signed64(h<8 ? u2 : u3), head_vocab_size[h])
        + head_offset[h]
 ```
 
-乘法保留 modulo-2^64 words，再解释为 signed64 做正模。输出按 2-gram 八个 heads、
-3-gram 八个 heads 拼接。分段与增量 append 使用真实 raw-ID tail；视觉特征不替换 IDs，
-EOS 规则不清空 PLE convolution history。实现见 [hash](../../src/models/qwen4_exp/ple/hash.cpp)。
+The multiplication keeps the modulo-2^64 words and then interprets them as signed64 to take the positive modulus. The output concatenates
+the eight 2-gram heads and the eight 3-gram heads. The segmentation and the incremental append use the real raw-ID tail. Vision features do not replace the IDs,
+and the EOS rule does not clear the PLE convolution history. The implementation appears in [hash](../../src/models/qwen4_exp/ple/hash.cpp).
 
-Lookup 出口严格为：
+The lookup exit is exactly:
 
 ```text
 LUT[shard,scale_word,code] =
     BF16_RNE(codebook[code] * E4M3FN(scale_word) / divisor[shard])
 ```
 
-它对精确表示值直接做 BF16 RNE，不能用未经证明的 FP32→BF16 双舍入替代。
-Scale words 的有效域为 `0x00..0x7e`；零结果保留 codebook 的符号。
-每 shard 的不可变 LUT 占 4096 B，合计 512 KiB；行解码写出 160 个 BF16 words，
-十六行按 head 顺序组成 `E[2560,T,B]`。通用实现见
-[NF4 Host 数值辅助](../../src/core/nf4.h)，异步准备和寿命见执行文档。
+It performs BF16 RNE directly on the exact represented value and cannot be replaced by an unproven FP32→BF16 double rounding.
+The valid range of the scale words is `0x00..0x7e`, and a zero result keeps the sign of the codebook.
+The immutable LUT of each shard takes 4096 B, 512 KiB in total. The row decode writes 160 BF16 words,
+and sixteen rows form `E[2560,T,B]` in head order. The generic implementation appears in
+[NF4 Host numeric helpers](../../src/core/nf4.h), and the execution document covers the asynchronous preparation and the lifetime.
 
-## 6. 权重容量与驻留
+## 6. Weight capacity and residency
 
-下面是此 recipe 的物理权重及控制值，不包含 frontend resources、对象间对齐、
-目录和文件 framing。它不是启动时的总内存占用。
+Below are the physical weights and control values of this recipe. They do not include the frontend resources, the alignment between objects,
+the directory or the file framing. They are not the total memory occupancy at startup.
 
-| 部分 | Bytes | GiB | 当前放置 |
+| Part | Bytes | GiB | Current placement |
 |---|---:|---:|---|
-| Main 非 routed-expert、非 PLE 表权重 | 7418143232 | 6.908684 | GPU |
-| Main routed experts | 67947921408 | 63.281433 | GPU resident，或 registered Host backing 加 RankProgram GPU cache |
-| PLE NF4 表 | 29127344640 | 27.126954 | V3 磁盘原位 backing |
-| Vision | 897862112 | 0.836199 | 启用时 GPU |
-| MTP experts | 2516889600 | 2.344036 | 启用时 GPU |
-| MTP 其他独有权重 | 181136896 | 0.168697 | 启用时 GPU |
-| Activation divisors 与 PLE hash controls | 664 | — | 只读控制值 |
-| 不含 optimized head 合计 | **108089298552** | **100.666004** | — |
-| Optimized MTP head，可选 | 337715200 | 0.314522 | 启用时 GPU；TP2 每 rank 一半 |
-| 含 optimized head 合计 | **108427013752** | **100.980526** | — |
+| Main non-routed-expert, non-PLE-table weights | 7418143232 | 6.908684 | GPU |
+| Main routed experts | 67947921408 | 63.281433 | GPU resident, or a registered Host backing plus the RankProgram GPU cache |
+| PLE NF4 table | 29127344640 | 27.126954 | V3 on-disk in-place backing |
+| Vision | 897862112 | 0.836199 | GPU when enabled |
+| MTP experts | 2516889600 | 2.344036 | GPU when enabled |
+| MTP other unique weights | 181136896 | 0.168697 | GPU when enabled |
+| Activation divisors and PLE hash controls | 664 | — | read-only control values |
+| Total without the optimized head | **108089298552** | **100.666004** | — |
+| Optimized MTP head, optional | 337715200 | 0.314522 | GPU when enabled; half per rank under TP2 |
+| Total with the optimized head | **108427013752** | **100.980526** | — |
 
-Text-only 权重及控制值约 97.317072 GiB。全部组件在 offload 模式的固定 GPU 权重约
-10.257616 GiB，另计 Main expert cache；resident 模式的 GPU 权重约 73.539049 GiB。
-两种模式均另计 StateImage、KV、workspace、Graph 和 staging。
-未启用的 Vision/MTP 不 materialize；共享 embedding/head 不重复计费。
-启用 optimized head 在上述 GPU 权重之外增加约 322.07 MiB；
-TP2 每 rank 增加约 161.04 MiB。
+The Text-only weights and control values are about 97.317072 GiB. In offload mode the fixed GPU weights of all components are about
+10.257616 GiB, plus the Main expert cache. In resident mode the GPU weights are about 73.539049 GiB.
+Both modes charge the StateImage, the KV, the workspace, the Graph and the staging separately.
+A disabled Vision/MTP does not materialize, and the shared embedding/head is not charged twice.
+Enabling the optimized head adds about 322.07 MiB on top of the GPU weights above, and
+about 161.04 MiB per rank under TP2.
 
-Offload 模式的 Host backing 包含已缓存到 GPU 的 experts，eviction 无需写回；resident
-模式直接绑定 GPU bank，不保留 Host expert 副本。PLE 启动只读目录、控制值和 divisors，不整体加载表。
-ModelDefinition 持有配置、表示描述与 Host 控制值；ModelShard 持有本地不可变权重与 PLE 文件 backing。
-Session 管理逻辑状态和上下文目录，RankProgram 持有可变缓存和物理执行资源。
-完整资源预算见[执行与状态](qwen4_exp-execution.md)。
+The Host backing of offload mode includes the experts already cached to the GPU, and an eviction needs no write-back. Resident
+mode binds the GPU bank directly and keeps no Host expert copy. PLE startup reads only the directory, the control values and the divisors, and does not load the whole table.
+ModelDefinition holds the configuration, the representation description and the Host control values. ModelShard holds the local immutable weights and the PLE file backing.
+Session manages the logical state and the context directory, and RankProgram holds the mutable caches and the physical execution resources.
+The complete resource budget appears in [Execution and state](qwen4_exp-execution.md).
 
-## 7. 数学来源
+## 7. Mathematical sources
 
-源结构参照固定版本的
-[Transformers 模型](https://github.com/huggingface/transformers/blob/8073e6dcaea9aa4b42acf2d92ec72148786bbaeb/src/transformers/models/qwen4_exp/modeling_qwen4_exp.py)、
-[配置](https://github.com/huggingface/transformers/blob/8073e6dcaea9aa4b42acf2d92ec72148786bbaeb/src/transformers/models/qwen4_exp/configuration_qwen4_exp.py)及
-[vLLM MTP](https://github.com/vllm-project/vllm/blob/6fddc9b21e763bfc947cc01d3ce815179aac1dc6/vllm/models/qwen4_exp/nvidia/mtp.py)。
-[NVIDIA 来源说明](https://huggingface.co/nvidia/Qwen3.8-Flash-Next-NVFP4/blob/fc694b54fb0174e0913e6adf86691ef85a4ead47/README.md)
-记录量化来源。NInfer 的正式数值边界由生产 Op 合同维护；上游 TP、私有 casts 和
-kernel packing 不自动成为本项目的数学或持久合同。
+The source structure references the pinned versions of
+[the Transformers model](https://github.com/huggingface/transformers/blob/8073e6dcaea9aa4b42acf2d92ec72148786bbaeb/src/transformers/models/qwen4_exp/modeling_qwen4_exp.py),
+[the configuration](https://github.com/huggingface/transformers/blob/8073e6dcaea9aa4b42acf2d92ec72148786bbaeb/src/transformers/models/qwen4_exp/configuration_qwen4_exp.py) and
+[vLLM MTP](https://github.com/vllm-project/vllm/blob/6fddc9b21e763bfc947cc01d3ce815179aac1dc6/vllm/models/qwen4_exp/nvidia/mtp.py).
+[The NVIDIA source note](https://huggingface.co/nvidia/Qwen3.8-Flash-Next-NVFP4/blob/fc694b54fb0174e0913e6adf86691ef85a4ead47/README.md)
+records the quantization source. The production Op contracts maintain the official numeric boundaries of NInfer. The upstream TP, the private casts and
+the kernel packing do not automatically become this project's mathematical or persistent contract.

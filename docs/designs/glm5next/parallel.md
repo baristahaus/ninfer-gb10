@@ -1,69 +1,82 @@
-# GLM5Next 双 Spark 并行与资源设计
+# GLM5Next dual-Spark parallelism and resource design
 
-性质：待落地的并行与资源设计。本文维护模块分工、权重/状态归属和部署预算；
-决策及实现状态统一见[设计索引](README.md)。[模型语义](../../maintainer/glm5next-model.md)
-与[数值政策](../../maintainer/glm5next-quantization.md)独立于本文的放置方式。
-执行所有权遵循[分布式执行设计](../../distributed-execution-design.md)和
-[Engine 架构](../../maintainer/engine-architecture.md)。
+Nature: a parallelism and resource design that still has to land. This document maintains the module
+split, the weight and state ownership and the deployment budget. The [design index](README.md) holds
+the decisions and the implementation status in one place.
+[Model semantics](../../maintainer/glm5next-model.md) and the
+[numerical policy](../../maintainer/glm5next-quantization.md) are independent of the placement
+described here. Execution ownership follows the
+[distributed execution design](../../distributed-execution-design.md) and the
+[Engine architecture](../../maintainer/engine-architecture.md).
 
-## 1. 首版并行分工
+## 1. The first parallel split
 
-同一组两个 Spark ranks 按模块选择分工：MLA/Indexer DP2、KDA TP2、dense/shared
-MLP TP2、LM head TP2、routed experts EP2，mHC 权重与四流 residual 复制。
-总 GPU 数为 2，各模块并行度不相乘。
+One group of two Spark ranks splits by module: MLA/Indexer DP2, KDA TP2, dense/shared MLP TP2, LM head
+TP2, routed experts EP2, and replicated mHC weights and four-stream residual. The total GPU count is
+2. The parallelism of the modules does not multiply.
 
-| 部分 | 固定的分工 |
+| Part | Fixed split |
 |---|---|
-| Main 11 层及 MTP 1 层 MLA | 按请求 DP2；Q_a/Q_b/KV_a/KV_b/O 的完整逻辑权重在两台复制；owner 计算该请求的完整 64 heads |
-| Main/MTP Indexer | 与对应 MLA 共用请求 owner；完整投影、32 个 query heads、pooling、评分与 selection 由 owner 计算 |
-| MLA/Indexer 历史 | 一个请求的完整 latent、pooled index cache 和未完成 pool tail 只在 owner 保存；Main 与 MTP 同 owner、不同 pool/frontier |
-| KDA | 按 heads TP2，每台 32 heads；Q/K/V/O、beta、f_b/g_b、卷积及大状态按相应 heads 切分；f_a/g_a 保持复制 |
-| Main 前三层 dense MLP | intermediate 12288 分为 6144＋6144，down 产生局部贡献 |
-| Main/MTP shared expert | intermediate 2048 分为 1024＋1024；本地 shared 与 routed 输出合并后统一归约 |
-| Main/MTP routed experts | EP2，每台 144 个完整 experts，expert 内部不再 TP；global Top8 与 route 系数保持完整语义 |
-| Router | 完整权重及控制计算复制，消费一致的 block input |
-| Main mHC | 两台复制全部权重与完整四流 residual，处理同一组物理列；完整 block 输出求和／汇集后，各自执行 post 与下一 pre |
-| Main/MTP LM head | vocabulary TP2，每台 `[77440,4096]`，Main 与 MTP 共用分片权重 |
+| Main 11 layers and MTP 1 layer MLA | DP2 by request; the complete logical weights of Q_a/Q_b/KV_a/KV_b/O are replicated on both hosts; the owner computes all 64 heads of that request |
+| Main/MTP Indexer | Shares the request owner of the matching MLA; the owner computes the complete projection, the 32 query heads, the pooling, the scoring and the selection |
+| MLA/Indexer history | The complete latent, the pooled index cache and the unfinished pool tail of one request are kept only on the owner; Main and MTP share the owner but use different pools and frontiers |
+| KDA | TP2 by heads, 32 heads per host; Q/K/V/O, beta, f_b/g_b, the convolution and the large state split by the matching heads; f_a/g_a stay replicated |
+| Main first three dense MLP layers | intermediate 12288 splits into 6144 + 6144; down produces a local contribution |
+| Main/MTP shared expert | intermediate 2048 splits into 1024 + 1024; the local shared and routed outputs merge and then reduce together |
+| Main/MTP routed experts | EP2, 144 complete experts per host, no further TP inside an expert; the global Top8 and the route coefficients keep the complete semantics |
+| Router | The complete weights and the control computation are replicated and consume the same block input |
+| Main mHC | Both hosts replicate every weight and the complete four-stream residual and process the same group of physical columns; after the complete block output is summed and gathered, each runs its own post and the next pre |
+| Main/MTP LM head | vocabulary TP2, `[77440,4096]` per host; Main and MTP share the sharded weight |
 
-DP 的分配单位是请求。普通执行保持请求的 MLA/Indexer owner 稳定，该请求的全部
-历史由此 owner 消费；不按序列位置拆开一条历史。KDA 仍由两台共同持有分片，并
-处理同一组请求。ModelSession/ContextDirectory 必须同时表达这两种 owner 集合；
-checkpoint 与恢复覆盖各自必需的分片，不能按两台都必须有 MLA cache 的规则预留。
-跨 owner 的 prefix 恢复或迁移策略在后续上下文接口设计中单独收敛。
+The allocation unit of DP is the request. Ordinary execution keeps the MLA/Indexer owner of a request
+stable, and that owner consumes all the history of the request. It does not split one history by
+sequence position. KDA is still held sharded by both hosts and processes the same group of requests.
+ModelSession/ContextDirectory must express both owner sets at the same time. The checkpoint and the
+restore cover the shards each one needs. Do not reserve by a rule that both hosts must have an MLA
+cache. The cross-owner prefix restore or migration policy converges separately in a later context
+interface design.
 
-MLA 向后续 TP/EP 计算交付完整的 4096 维 block 输出；KDA、dense/shared 和 routed
-的局部贡献在 Main mHC 或 MTP residual 消费前完成求和。Main MLA owner 的输出
-按冻结的请求/token 映射汇集为两台一致的完整 BF16 y，再进入各自 mHC post。
-mHC 不按 stream、hidden 或 owner 切分，不承担通信；其复制不增加 MLA/Indexer
-cache 副本。两台采用一致的输入 words、物理列映射和精度策略。
+MLA delivers the complete 4096-wide block output to the later TP/EP computation. The local
+contributions of KDA, dense/shared and routed finish their sum before the Main mHC or the MTP residual
+consumes them. The output of the Main MLA owner is gathered by the frozen request/token mapping into
+a complete BF16 y that agrees on both hosts, and then enters each mHC post. mHC does not split by
+stream, hidden or owner and does not carry communication. Its replication adds no MLA/Indexer cache
+copy. Both hosts use the same input words, physical column mapping and precision policy.
 
-具体 collective、pack/unpack、模型 Graph 与通算融合仍由后续执行接入设计；输入
-交换、输出归约与布局转换统一安排，避免为同一交接重复通信。mHC 接收完整 y 的
-接口与 residual 放置不再作为未定项。已有基础清单的 KDA/FFN/head 局部几何继续适用。
+The concrete collective, the pack/unpack, the model Graph and the compute-communication fusion still
+belong to a later execution integration design. Arrange the input exchange, the output reduction and
+the layout conversion together so that one handoff is not communicated twice. The interface that
+receives the complete y and the residual placement are no longer open items. The local KDA/FFN/head
+geometry of the existing base checklist still applies.
 
-本地 vLLM 的 `TP=1, DP=2, enable_expert_parallel=true` 会将 KDA、dense/shared、
-head 等非 routed-expert 权重一并复制。它的 MLA 与 KDA 使用同一个 TP group；本节
-采用的是按模块选择的混合分工，不能直接等同于该 vLLM 参数组合。
+The local vLLM setting `TP=1, DP=2, enable_expert_parallel=true` replicates the non-routed-expert
+weights as well, including KDA, dense/shared and head. Its MLA and KDA use the same TP group. This
+section adopts a mixed split chosen per module. It is not directly equivalent to that vLLM parameter
+combination.
 
-## 2. 参数合并与本地几何
+## 2. Parameter merging and local geometry
 
-纯投影及本地 FFN/MoE 的 TP2/EP2 几何、P/F/M/R/E 条目由
-[基础 Op 清单](op-checklist.md)维护。KDA Q/K/V 分别按 heads 切片后按 Q/K/V 行序
-合并；BF16 beta、f_a、g_a 不混入 Q8 parent。KDA O 按对应 heads 的 K 轴切片。
-Convolution 的 channel/tap 映射与投影一致，转换时保留源 FP32 words 和时间顺序。
+The [base Op checklist](op-checklist.md) maintains the TP2/EP2 geometry and the P/F/M/R/E entries of
+the pure projections and the local FFN/MoE. KDA Q/K/V split by heads separately and then merge in
+Q/K/V row order. BF16 beta, f_a and g_a do not enter the Q8 parent. KDA O splits along the K axis of
+the matching heads. The channel and tap mapping of the Convolution agrees with the projection. The
+conversion keeps the source FP32 words and the time order.
 
-Dense/shared 的 GU 沿 intermediate 切分，down 沿对应 K 轴切分；routed bank 每台
-持有 144 个完整 experts，expert 内部不再 TP。Global ID 到本地 bank 的映射显式提供。
-量化域和 GU 合并的数值条件见数值文档，不随这些分片变化。
+The GU of dense/shared splits along intermediate and down splits along the matching K axis. Each
+routed bank holds 144 complete experts per host, with no further TP inside an expert. The mapping
+from a global ID to the local bank is provided explicitly. The numerical conditions of the
+quantization domain and of the GU merge are in the numerical document. They do not change with these
+shards.
 
-MLA/Indexer 的 W_A/W_B 合并、U_K/U_V 因子布局与独立 O 由
-[Kpool Sparse MLA](kpool-sparse-mla.md#2-权重投影与执行链)维护；mHC 的 F 行序与
-四流布局由 [mHC 设计](mhc.md#1-权重与-tensor-布局)维护。每份物理布局只保留一个定义。
+The [Kpool Sparse MLA](kpool-sparse-mla.md#2-weights-projections-and-the-execution-chain) document
+maintains the W_A/W_B merge of MLA/Indexer, the U_K/U_V factor layout and the independent O. The
+[mHC design](mhc.md#1-weights-and-tensor-layout) maintains the F row order and the four-stream layout
+of mHC. Keep exactly one definition for each physical layout.
 
-## 3. 1M 上下文的持久状态容量
+## 3. Persistent state capacity for a 1M context
 
-令 `L=1048576`、B=1，按已定 [family layout](kpool-sparse-mla.md)计算。
-Main 有 11 层 MLA，每 token、每层保存一个 512 维 latent：
+Set `L=1048576` and B=1 and compute by the agreed [family layout](kpool-sparse-mla.md). Main has 11
+MLA layers and keeps one 512-wide latent per token per layer:
 
 ```text
 BF16 latent = layers * L * 1024 B
@@ -71,86 +84,97 @@ FP8 latent  = layers * L * (512 + 4*4) B
 Indexer    = layers * (L/4) * 128 * 2 B
 ```
 
-| 范围 | BF16 latent | FP8 codes | FP32 scales | BF16 Indexer |
+| Scope | BF16 latent | FP8 codes | FP32 scales | BF16 Indexer |
 |---|---:|---:|---:|---:|
-| Main 11 层 | 11 GiB | 5.5 GiB | 176 MiB | 704 MiB |
-| MTP 额外一层 | 1 GiB | 0.5 GiB | 16 MiB | 64 MiB |
-| Main＋MTP | 12 GiB | 6 GiB | 192 MiB | 768 MiB |
+| Main 11 layers | 11 GiB | 5.5 GiB | 176 MiB | 704 MiB |
+| MTP extra layer | 1 GiB | 0.5 GiB | 16 MiB | 64 MiB |
+| Main + MTP | 12 GiB | 6 GiB | 192 MiB | 768 MiB |
 
-这是每份完整 latent cache。第 1 节选定 MLA/Indexer 按请求 DP2，一份请求的完整
-latent 只驻留在其 owner rank；单请求的这份容量不除以二。按 heads 做 MLA TP2 的
-对照方案则会在两台各保存一份完整 512 维 latent。
+This is one complete latent cache. Section 1 chooses MLA/Indexer DP2 by request, so the complete
+latent of one request resides only on its owner rank. This capacity for a single request does not
+divide by two. A comparison scheme that shards MLA TP2 by heads would keep one complete 512-wide
+latent on each of the two hosts.
 
-Growing cache 合计如下，FP8 列已经包含全部 MLA scales；Indexer 均为 BF16：
+The growing cache totals follow. The FP8 column already contains all MLA scales. Every Indexer entry
+is BF16:
 
-| 范围 | BF16 MLA＋BF16 Indexer | FP8 MLA＋BF16 Indexer |
+| Scope | BF16 MLA + BF16 Indexer | FP8 MLA + BF16 Indexer |
 |---|---:|---:|
-| Main 11 层 | 11.6875 GiB | 6.359375 GiB |
-| MTP 额外一层 | 1.0625 GiB | 0.578125 GiB |
-| Main＋MTP | 12.75 GiB | 6.9375 GiB |
+| Main 11 layers | 11.6875 GiB | 6.359375 GiB |
+| MTP extra layer | 1.0625 GiB | 0.578125 GiB |
+| Main + MTP | 12.75 GiB | 6.9375 GiB |
 
-三列 K/gate BF16 canonical tail 每层 1536 B，Main 为 16.5 KiB、Main＋MTP 为 18 KiB。
-KDA 的完整 34 层 FP32 state 为 136 MiB，三列 BF16 convolution history 为
-4.78125 MiB；按 KDA heads TP2 后每 rank 分别为 68 MiB、2.390625 MiB。
+The three-column K/gate BF16 canonical tail is 1536 B per layer, which is 16.5 KiB for Main and
+18 KiB for Main + MTP. The complete 34-layer FP32 state of KDA is 136 MiB and the three-column BF16
+convolution history is 4.78125 MiB. After KDA TP2 by heads, each rank holds 68 MiB and 2.390625 MiB
+respectively.
 
-采用已选定的「MLA/Indexer DP2、KDA TP2」，计入一份本地 KDA state/history 与 tail：
+With the selected "MLA/Indexer DP2, KDA TP2", and counting one local KDA state/history and the tail:
 
-| 单请求在指定 rank 的占用 | Main | Main＋原生 MTP |
+| Occupancy of one request on the given rank | Main | Main + native MTP |
 |---|---:|---:|
-| Owner：FP8 MLA＋BF16 Indexer＋本地 KDA state/history＋tail | 约 6.43 GiB | 约 7.01 GiB |
-| Owner：BF16 MLA＋BF16 Indexer＋本地 KDA state/history＋tail | 约 11.76 GiB | 约 12.82 GiB |
-| 非 owner：该请求的另一份 KDA state/history 分片 | 约 0.069 GiB | 约 0.069 GiB |
+| Owner: FP8 MLA + BF16 Indexer + local KDA state/history + tail | about 6.43 GiB | about 7.01 GiB |
+| Owner: BF16 MLA + BF16 Indexer + local KDA state/history + tail | about 11.76 GiB | about 12.82 GiB |
+| Non-owner: the other KDA state/history shard of that request | about 0.069 GiB | about 0.069 GiB |
 
-表中按各层均满 1M 计费，真实 Main/MTP 各自 frontier 的有效行数按 family 合同计算。
-不计执行 records/workspace、Graph、额外 StateImage/checkpoint 副本、page tables、
-分配对齐及其他小型状态字段；MTP conditioning 等仍需单独计费。多个无共享前缀的请求
-按各自 owner 和长度累加 growing cache；两台都持有各请求的本地 KDA 分片，其容量
-按状态实例数增加，不随 L 增长。Prefix restore 除 token/latent 前沿外，还要恢复两台
-的 KDA state/convolution history，以及 owner 上的 Indexer tail 和 MTP 状态。
+The table charges every layer as full at 1M. The family contract computes the effective row count of
+the real Main/MTP frontier for each. The table excludes the execution records and workspace, the
+Graph, extra StateImage and checkpoint copies, the page tables, the allocation alignment and the other
+small state fields. MTP conditioning and similar items still need their own charge. Multiple requests
+without a shared prefix add up in the growing cache by their own owner and length. Both hosts hold
+the local KDA shard of each request, and that capacity grows with the number of state instances. It
+does not grow with L. Apart from the token/latent frontier, a prefix restore must also restore the
+KDA state and convolution history of both hosts, and the Indexer tail and the MTP state on the owner.
 
-### 3.1 Page、Indexer 与 raw records 的补充计费
+### 3.1 Additional accounting for pages, the Indexer and raw records
 
-每层每原 token 的 growing payload 为 BF16 MLA＋BF16 Indexer 的 1088 B，
-或 FP8 MLA＋BF16 Indexer 的 592 B；对应每个 64-token page 为 68 KiB 或 37 KiB。
-每层每有效 raw record column 为 `128*2*2=512 B`，跨层 frame 两个 planes 共
-`512*W*L*R` B，不含 slab 对齐。W、L、R 分别是 raw record 窗口容量、层数和行容量，
-布局按 Kpool 设计；update 出口不要求保留整段 raw records。
+The growing payload per original token per layer is 1088 B for BF16 MLA + BF16 Indexer, or 592 B for
+FP8 MLA + BF16 Indexer. That is 68 KiB or 37 KiB for each 64-token page. Each effective raw record
+column per layer is `128*2*2=512 B`. The two planes of the cross-layer frame total `512*W*L*R` B,
+without slab alignment. W, L and R are the raw record window capacity, the layer count and the row
+capacity. The layout follows the Kpool design. The update exit does not have to keep the whole raw
+record range.
 
-1M 时单层 Indexer 有 262144 个 BF16 pooled keys，共 64 MiB。MLA 选中 2048 个
-tokens 的 latent payload 为 BF16 2 MiB 或 FP8 1.03125 MiB。这是唯一数据量，
-不代表实测 HBM 流量或耗时。
+At 1M, the Indexer of one layer has 262144 BF16 pooled keys, 64 MiB in total. The latent payload of
+the 2048 tokens that MLA selects is BF16 2 MiB or FP8 1.03125 MiB. These are the only data volumes.
+They do not represent a measured HBM traffic or a measured latency.
 
-## 4. mHC 执行资源
+## 4. mHC execution resources
 
-以下为单 rank 的 payload，不含 arena 对齐、私有 workspace 或其他模型模块：
+The payload below is for one rank. It excludes arena alignment, the private workspace and the other
+model modules:
 
-| 对象 | 容量 |
+| Object | Capacity |
 |---|---:|
-| 单 site 的 BF16 F | 786432 B = 0.75 MiB |
-| 90 个 site 的 BF16 F | 67.5 MiB |
-| 90 组 BF16 base＋scale | 4860 B |
-| 90 个 branch gamma | 720 KiB |
+| BF16 F of one site | 786432 B = 0.75 MiB |
+| BF16 F of 90 sites | 67.5 MiB |
+| 90 groups of BF16 base + scale | 4860 B |
+| 90 branch gamma | 720 KiB |
 | Main final gamma | 8 KiB |
-| 每物理 token 的四流 residual | 32768 B = 32 KiB |
-| 每物理 token 的 block input 或 output | 各 8192 B = 8 KiB |
-| 每物理 token 的一组 FP32 post＋C | 80 B |
+| Four-stream residual per physical token | 32768 B = 32 KiB |
+| Block input or output per physical token | 8192 B = 8 KiB each |
+| One group of FP32 post + C per physical token | 80 B |
 
-每组 FP32 系数只有 4 个 post 与 16 个 mix，pre 不跨分支保存。融合调用的新旧
-系数不 alias，可交替使用两组共 160 B/token；独立 residual 双缓冲为 64 KiB/token，
-合法 in-place 路线可减少相应公共缓冲。实际 workspace 必须另按容量查询计费。
+Each group of FP32 coefficients has only 4 post and 16 mix. The pre is not kept across branches. The
+old and new coefficients of a fused call do not alias, so two groups alternate for a total of
+160 B/token. A separate residual double buffer is 64 KiB/token. A legal in-place route can reduce the
+matching public buffer. The actual workspace must still be charged separately by the capacity query.
 
-这些激活随当前物理窗口 `M=T*B` 增长，按执行层序复用，不按 45 层全部保留。
-例如一份 `M=4096` 的四流 residual 为 128 MiB。这里的 M 不是请求累计上下文 L，
-不能用 1M 历史长度直接为每层常驻分配 mHC 激活。
+These activations grow with the current physical window `M=T*B`. They are reused by the execution
+layer order and are not all kept for 45 layers. For example, the four-stream residual of one
+`M=4096` is 128 MiB. M here is not the accumulated request context L. Do not allocate mHC activation
+as permanently resident for every layer from a 1M history length.
 
-mHC 的非历史属性与 MTP conditioning 关系见[逻辑状态](../../maintainer/glm5next-model.md#7-逻辑状态与历史依赖)。
-这些缓冲属于 RankProgram frame，不增加 growing KV pool 或请求 StateImage 字段。
+For the relation between the non-historical property of mHC and MTP conditioning, see
+[logical state](../../maintainer/glm5next-model.md#7-logical-state-and-historical-dependencies).
+These buffers belong to the RankProgram frame. They add no growing KV pool and no request StateImage
+field.
 
-## 5. KDA records 容量与成本
+## 5. KDA records capacity and cost
 
-按 [KDA record 布局](replayssm-kda.md#3-几何行身份与-record-布局)，L 为本地层数，
-T 为窗口宽度，R 为 record 行容量，C 为 Q/K/V conv channels。以 BF16 K/V/conv、
-FP32 log_decay/beta 计算：
+By the [KDA record layout](replayssm-kda.md#3-geometry-row-identity-and-record-layout), L is the
+local layer count, T is the window width, R is the record row capacity and C is the Q/K/V conv
+channel count. Compute with BF16 K/V/conv and FP32 log_decay/beta:
 
 ```text
 StateBytes/instance = L * (4*Hv*Dv*Dk + 2*C*3)
@@ -158,57 +182,64 @@ RecordBytes/column/row = L * (2*C + 2*Hq*Dk + 2*Hv*Dv + 4*Hv*Dk + 4*Hv)
 RecordAllocationPayload = T * R * RecordBytes/column/row
 ```
 
-GLM TP2 单 rank 的载荷为：
+The payload of one GLM TP2 rank is:
 
-| 内容 | MiB |
+| Content | MiB |
 |---|---:|
-| 一份 recurrent state | 68.000000 |
-| 一份 conv history | 2.390625 |
-| 一份 recurrent＋conv | 70.390625 |
-| 每列 conv records | 0.796875 |
-| 每列 key records | 0.265625 |
-| 每列 value records | 0.265625 |
-| 每列 log_decay records | 0.531250 |
-| 每列 beta records | 0.004150 |
-| 每列每行全部 records | 1.863525 |
-| T=6、R=1 的 records | 11.181152 |
-| T=16、R=1 的 records | 29.816406 |
-| T=6、R=8 的 records | 89.449219 |
-| T=16、R=8 的 records | 238.531250 |
+| one recurrent state | 68.000000 |
+| one conv history | 2.390625 |
+| one recurrent + conv | 70.390625 |
+| conv records per column | 0.796875 |
+| key records per column | 0.265625 |
+| value records per column | 0.265625 |
+| log_decay records per column | 0.531250 |
+| beta records per column | 0.004150 |
+| all records per column per row | 1.863525 |
+| records at T=6, R=1 | 11.181152 |
+| records at T=16, R=1 | 29.816406 |
+| records at T=6, R=8 | 89.449219 |
+| records at T=16, R=8 | 238.531250 |
 
-以上不含 alignment padding、输入/输出、其他模型 records、Graph 或 source/destination
-image 的数量。每列完整 state snapshot 与 raw records 的载荷比约 37.77，不能作为
-加速比。成本变化是减少逐位置大 state 写入，增加紧凑 records 写入及接受后的一次
-recurrent fold；fold 不重跑权重投影或 readout。
+The table excludes the alignment padding, the inputs and outputs, the other model records, the Graph
+and the count of source and destination images. The payload ratio of the complete state snapshot per
+column to the raw records is about 37.77. It is not a speedup ratio. The cost change is fewer
+per-position large state writes and more compact record writes, plus one recurrent fold after
+acceptance. The fold does not rerun the weight projection or the readout.
 
-## 6. 并行方案的容量与性能判断
+## 6. Capacity and performance judgement for the parallel scheme
 
-以 MLA heads TP2、latent/Indexer 历史两台复制为对照，改为本节 DP2 会去掉一份
-重复历史，同时增加 MLA 权重复制。按已定 BF16 因子投影、不生成额外吸收矩阵计算，
-每层 Q_b/KV_b/O 合计 208 MiB，TP2 时每 rank 为 104 MiB；Main＋MTP 共增加
-1.21875 GiB/rank。若将来明确变更驻留表示，须重新计费。
+Use MLA heads TP2 with the latent/Indexer history replicated on both hosts as the control. Changing to
+the DP2 of this section removes one duplicate history and adds MLA weight replication. Compute with
+the agreed BF16 factor projection and without generating an extra absorption matrix: Q_b/KV_b/O total
+208 MiB per layer, which is 104 MiB per rank at TP2. Main + MTP adds 1.21875 GiB per rank in total.
+If the resident representation is explicitly changed later, charge it again.
 
-对于单个 1M 请求，Main＋MTP 的一份 growing cache 为 6.9375 GiB（FP8 MLA）或
-12.75 GiB（BF16 MLA），均包含固定的 BF16 Indexer，FP8 列包含全部 FP32 scales。
-去掉副本并扣除两台合计 2.4375 GiB 新增权重后，双机 payload 分别净减少
-4.5 / 10.3125 GiB。Owner 仍需
-保存完整历史，DP 不把单请求在 owner 上的 cache 减半；最终启动占用还取决于固定
-pool 预算、临时数据与通信资源。
+For a single 1M request, one growing cache of Main + MTP is 6.9375 GiB with FP8 MLA or 12.75 GiB with
+BF16 MLA. Both include the fixed BF16 Indexer, and the FP8 column includes all FP32 scales. After
+removing the copy and deducting the 2.4375 GiB of added weight across both hosts, the two-host payload
+drops by a net 4.5 / 10.3125 GiB respectively. The owner still has to keep the complete history. DP
+does not halve the cache of a single request on the owner. The final startup occupancy also depends on
+the fixed pool budget, the temporary data and the communication resources.
 
-相对非 routed-expert 全部 DP 的方案，保留 KDA/shared/head TP2 是低并发性能的
-主要预期收益来源。KDA Q/K/V/O 每层 Q8 权重为 136 MiB，TP2 后每台 68 MiB；
-4096 维 BF16 block 输出为 8 KiB/token。这个数据量关系支持小 batch 下分摊权重读取
-与计算，但实际收益取决于 kernel 效率、通信延迟和完整层序。MLA DP 的直接目标是
-减少 cache 重复，不承诺其单请求延迟优于 MLA TP2。尚无 GLM 双机端到端性能结果。
+Against a scheme that puts every non-routed-expert part on DP, keeping KDA/shared/head at TP2 is the
+main expected source of low-concurrency performance. The Q8 weight of KDA Q/K/V/O is 136 MiB per
+layer, which is 68 MiB per host at TP2. The 4096-wide BF16 block output is 8 KiB/token. This data
+volume relation supports sharing the weight read and the computation at a small batch, but the real
+gain depends on the kernel efficiency, the communication latency and the complete layer order. The
+direct goal of MLA DP is to reduce the cache duplication. It does not promise a lower single-request
+latency than MLA TP2. There is no GLM two-host end-to-end performance result yet.
 
-mHC 复制方案保持既有 TP/EP 输出交接。若把 residual 仅放在请求 owner，每个
-KDA/FFN 分支需安排输入分发和输出回收；是否有收益必须包含通信阶段共同测量。
-当前选择复制，没有实测对照证明其性能优势。
+The mHC replication scheme keeps the existing TP/EP output handoff. If the residual were placed only
+on the request owner, every KDA/FFN branch would need input distribution and output collection.
+Whether that pays must be measured together with the communication stage. The current choice is
+replication, and no measured control proves its performance advantage.
 
-## 7. 接管与退出条件
+## 7. Takeover and retirement conditions
 
-后续执行接入明确 collective、pack/unpack、Graph、前缀恢复与跨 rank 提交，并对
-完整路径验证。具体未决工作集中在设计索引，不在各模块文档维护重复任务列表。
-实现落地后，由实际 placement/binding、模型执行和测试接管；必要的当前执行说明
-归入届时建立的 `glm5next-execution.md`。预算公式随实际几何和布局维护，移入相应
-资源说明后删除本设计，不保留第二套已过期执行规格。
+The later execution integration defines the collective, the pack/unpack, the Graph, the prefix restore
+and the cross-rank submission, and verifies the complete path. The concrete open work is collected in
+the design index. Do not maintain a duplicate task list in each module document. After the
+implementation lands, the actual placement/binding, the model execution and the tests take over. The
+necessary current execution note goes into the `glm5next-execution.md` established at that time. The
+budget formulas stay maintained with the actual geometry and layout. After they move into the matching
+resource note, delete this design. Do not keep a second, expired execution specification.

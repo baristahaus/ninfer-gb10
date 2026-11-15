@@ -1,149 +1,171 @@
-# GLM5Next：Spark TP2 / EP2 基础 Op 清单
+# GLM5Next: Spark TP2 / EP2 base Op checklist
 
-性质：既有基础执行任务。P/F/M/R/E 编号、勾选状态和实施范围在整理中保持不变；
-相关设计状态与阅读入口见[设计索引](README.md)。
+Nature: an existing base execution task. The P/F/M/R/E numbers, the check state and the
+implementation scope stay unchanged during the document pass. The
+[design index](README.md) holds the related design status and the reading entry.
 
-目标：为两台 DGX Spark 上的 GLM-5.3-Flash 准备本地 GPU 算子，完成本清单已确定的
-Linear、无状态投影融合、dense/shared MLP 与 Main/MTP MoE 支持和调优。
-架构与数学见[模型语义](../../maintainer/glm5next-model.md)，量化与精度见
-[数值政策](../../maintainer/glm5next-quantization.md)，[并行设计](parallel.md)固定分工：
-同一组两个 Spark ranks 上，MLA/Indexer DP2，KDA/dense/shared/head TP2，routed experts EP2。
-本轮仅准备下列 TP2/EP2 局部几何，不增加这些算子的完整单 rank 或 RTX 5090 profile；
-MLA/Indexer 的完整 heads DP 合同见 [Kpool Sparse MLA](kpool-sparse-mla.md)，
-其 profiles 与实现另行下发，不由本清单自动追加。
+Goal: prepare local GPU operators for GLM-5.3-Flash on two DGX Spark hosts, and complete the Linear,
+stateless projection fusion, dense/shared MLP and Main/MTP MoE support and tuning that this checklist
+already fixed. [Model semantics](../../maintainer/glm5next-model.md) covers the architecture and the
+mathematics. The [numerical policy](../../maintainer/glm5next-quantization.md) covers quantization
+and precision. The [parallel design](parallel.md) fixes the split: on one group of two Spark ranks,
+MLA/Indexer DP2, KDA/dense/shared/head TP2 and routed experts EP2. This round prepares only the
+TP2/EP2 local geometry below. It adds no complete single-rank profile and no RTX 5090 profile for
+these operators. The complete-heads DP contract of MLA/Indexer is in
+[Kpool Sparse MLA](kpool-sparse-mla.md). Its profiles and implementation are issued separately and
+are not appended automatically by this checklist.
 
-本清单沿用 `.50` 的 `docs/qwen4-exp-spark-tp2-ep2-op-checklist.md` 形式。
-执行基线是 `.50` `/home/neroued/ninfer` 已完成的 Qwen TP2/EP2 本地算子成果，
-尤其复用其 indexed expert bank 和本地子集计算。未勾选表示本轮任务未完成，
-不等于现有实现不支持；已有适用实现先确认、测量，再决定是否需要改动。
+This checklist follows the form of `.50` `docs/qwen4-exp-spark-tp2-ep2-op-checklist.md`. The
+execution baseline is the Qwen TP2/EP2 local operator result that `.50` `/home/neroued/ninfer`
+already completed, in particular its indexed expert bank and its local subset computation. An
+unchecked item means this round has not finished it. It does not mean the existing implementation
+lacks support. First confirm and measure an existing suitable implementation, and then decide whether
+it needs a change.
 
-**本基础清单只准备 KDA 的纯投影和无状态 split。** [KDA ReplaySSM](replayssm-kda.md)
-已固定内部 gate、每轮 record/fold 和 accepted-prefix 状态合同，其实现另行列任务。
-[Kpool Sparse MLA](kpool-sparse-mla.md) 和 [mHC](mhc.md) 的完整
-合同也已确定，其实现均不进入本轮。mHC 权重与四流 residual 复制，先取得完整
-分支输出再更新 residual；这不改变本清单的局部几何或执行条目。
-不开展 converter、权重全量转换、模型接入、通信或引擎重构。
+**This base checklist prepares only the pure projections and the stateless split of KDA.**
+[KDA ReplaySSM](replayssm-kda.md) already fixed the internal gate, the per-round record/fold and the
+accepted-prefix state contract. Its implementation is issued as a separate task.
+[Kpool Sparse MLA](kpool-sparse-mla.md) and [mHC](mhc.md) also have fixed complete contracts, and
+neither implementation enters this round. mHC replicates the weights and the four-stream residual and
+updates the residual only after it has the complete branch output. That does not change the local
+geometry or the execution entries of this checklist. Do not start the converter, a full weight
+conversion, the model integration, communication or an engine refactor.
 
-## 1. 局部分工、合并与实施顺序
+## 1. Local split, merging and implementation order
 
-### 1.1 本轮采用的局部几何
+### 1.1 The local geometry adopted in this round
 
-| 部分 | TP2/EP2 分工 | 每 rank 计算 |
+| Part | TP2/EP2 split | Computation per rank |
 |---|---|---|
-| 本清单内 TP/EP block hidden | 复制 4096 维输入 | 同一组 tokens，T/B 不减半 |
-| KDA 投影 | 按完整 heads 切为 32＋32 | Q/K/V 各 4096 维；beta 32；f_a/g_a 各完整 128 维；f_b/g_b 各 4096 维 |
-| Main 前三层 dense MLP | intermediate 12288→6144＋6144 | 本地 clamped SwiGLU，down 输出 4096 维局部贡献 |
-| Main/MTP shared expert | intermediate 2048→1024＋1024 | 本地 clamped SwiGLU，输出直接加入本 rank 的 MoE 贡献 |
-| Main/MTP routed experts | EP2，expert 内部不做 TP | 全局 288 个 experts，每 rank 实存 144 个完整 experts，global top-8 |
-| Router | 复制 | 完整 288 维 logits、correction bias 和同一 global Top8 |
-| Main/MTP LM head | vocabulary/N 轴 TP2 | 每 rank `[77440,4096]`，Main 与 MTP 共享权重 |
+| TP/EP block hidden in this checklist | replicates the 4096-wide input | the same group of tokens, T/B not halved |
+| KDA projection | split by complete heads into 32 + 32 | Q/K/V are 4096 wide each; beta 32; f_a/g_a 128 wide each, complete; f_b/g_b 4096 wide each |
+| Main first three dense MLP layers | intermediate 12288→6144 + 6144 | local clamped SwiGLU, down outputs a 4096-wide local contribution |
+| Main/MTP shared expert | intermediate 2048→1024 + 1024 | local clamped SwiGLU, the output is added directly to this rank's MoE contribution |
+| Main/MTP routed experts | EP2, no TP inside an expert | 288 global experts, 144 complete experts actually resident per rank, global top-8 |
+| Router | replicated | the complete 288-wide logits, the correction bias and the same global Top8 |
+| Main/MTP LM head | TP2 on the vocabulary/N axis | `[77440,4096]` per rank, Main and MTP share the weight |
 
-MLA/Indexer 只计算 owner 所属请求，其输入范围不套用上表的复制约定；与本表 TP/EP
-部分的结果交接由后续模型执行设计确定。本次 DP 决策不改变 P1–P9 的局部权重形状。
+MLA/Indexer computes only the requests of its owner, and the replication convention of the table
+above does not apply to its input scope. A later model execution design decides the result handoff
+with the TP/EP part of this table. This DP decision does not change the local weight shape of P1–P9.
 
-Dense/shared 的 gate/up 分别沿 intermediate 行切片，down 沿相同 intermediate 的 K
-范围切片。它们逐通道的 clamp/SiLU/product 不跨分片，因此两个局部输出之和对应完整
-FFN。Shared 是一个 FFN 的两份 intermediate 分片，不在两侧各计算一份完整 shared。
+The gate/up of dense/shared split along the intermediate rows separately, and down splits along the K
+range of the same intermediate. Their per-channel clamp/SiLU/product does not cross a shard, so the
+sum of the two local outputs corresponds to the complete FFN. Shared is two intermediate shards of one
+FFN. Do not compute one complete shared on each side.
 
-Routed experts 的归属通过显式 global ID→本地 payload 映射给出，本地集合大小为 144。
-本地 Op 不固定连续区间、奇偶分配或负载均衡策略；这些由后续并行计划提供。
+The ownership of the routed experts is given by an explicit global ID to local payload mapping, and
+the local set size is 144. The local Op does not fix a contiguous range, an odd/even assignment or a
+load-balancing policy. A later parallel plan provides them.
 
-### 1.2 公共约定
+### 1.2 Common conventions
 
-- 权重写作 `W[N,K]`，输入 `[K,M]`，`M=T*B`、`column=t+T*b`；native Tensor 第 0
-  维连续。下面的无状态算子可按 M 展平，KDA 序列与状态语义不由 M 代替。
-- 普通 Linear、split、MLP 和本地 MoE 的公开输入/输出均为 BF16。沿 K 切片的 down/O
-  以及 EP 局部和也输出 BF16。Router 的内部 logits 与公开 coefficients 使用 FP32。
-- 本地 FFN/MoE 输出使用 Write 语义。跨 rank 求和之后才进行 Main mHC 或 MTP residual
-  消费；不在两侧各加入一份完整 residual。
-- **先完成对应 shape 的纯 `linear()`，再扩展 split、clamp/SiLU/product 及完整 FFN。**
-  每条依赖链独立推进。融合 Op 按完整数学验证，纯 Linear 的 BF16 输出不强制成为其
-  内部舍入边界，融合也不要求先调用公共 Linear 再串接后处理。
-- 新增 clamp、路由系数等语义必须在公共 profile/参数和合同中显式表达，不根据模型名
-  或 shape 偷换原算子的数学。沿用相应 family，Spark 拥有自己的分派；现有无 clamp
-  路径及其他模型已支持的行为继续成立。
-- 权重、输出与 caller-owned workspace 的 view/对齐/不重叠要求沿用所在 family；
-  容量查询覆盖完整调用与请求的 M 区间。无隐藏 device allocation、传输或 Host readback，
-  支持 CUDA Graph capture/replay。本地 Op 不接收 rank、world size 或 communicator。
+- Write the weight as `W[N,K]` and the input as `[K,M]`, with `M=T*B` and `column=t+T*b`. Native Tensor
+  dimension 0 is contiguous. The stateless operators below can flatten over M. Do not replace the KDA
+  sequence and state semantics with M.
+- The public input and output of an ordinary Linear, split, MLP and local MoE are BF16. The down/O
+  that splits along K and the EP local sum also output BF16. The internal logits and the public
+  coefficients of the Router use FP32.
+- The local FFN/MoE output uses Write semantics. The Main mHC or the MTP residual consumes it only
+  after the cross-rank sum. Do not add one complete residual on each side.
+- **Complete the pure `linear()` of the matching shape first, and then extend the split, the
+  clamp/SiLU/product and the complete FFN.** Each dependency chain advances on its own. Verify a fused
+  Op against the complete mathematics. The BF16 output of a pure Linear does not become a mandatory
+  internal rounding boundary for the fusion, and the fusion does not require calling the public
+  Linear first and then chaining the post-processing.
+- New semantics such as the clamp and the route coefficients must be expressed explicitly in the
+  public profile/parameters and in the contract. Do not swap the mathematics of the original operator
+  by a model name or a shape. Follow the matching family, and Spark has its own dispatch. The existing
+  path without a clamp and the behaviour already supported by the other models stay valid.
+- The view, alignment and non-overlap requirements of the weight, of the output and of the
+  caller-owned workspace follow the family they belong to. The capacity query covers the complete call
+  and the M range of the request. There is no hidden device allocation, no transfer and no Host
+  readback, and CUDA Graph capture and replay are supported. A local Op takes no rank, no world size
+  and no communicator.
 
-依赖关系：
+Dependencies:
 
 ```text
-P1 → F1：QKV split                    P3 → F2：beta / f_a / g_a split
-                                      └→ R1：FP32 logits / sigmoid / global Top8
-P5 → F3：NVFP4 clamped GU ┐
-P6 ─────────────────────┴→ M1：完整 dense MLP 局部贡献
-P7 → F4：BF16 clamped GU ┐
-P8 ─────────────────────┴→ M2：完整 shared MLP 局部贡献
-R1 + E1 + M2 → E3：Main 完整本地 MoE
-R1 + E2 + M2 → E4：MTP 完整本地 MoE
-P2 / P4 / P9 独立完成；E1 / E2 在 MoE family 内完成 contraction 与融合
+P1 → F1: QKV split                    P3 → F2: beta / f_a / g_a split
+                                      └→ R1: FP32 logits / sigmoid / global Top8
+P5 → F3: NVFP4 clamped GU ┐
+P6 ─────────────────────┴→ M1: complete dense MLP local contribution
+P7 → F4: BF16 clamped GU ┐
+P8 ─────────────────────┴→ M2: complete shared MLP local contribution
+R1 + E1 + M2 → E3: Main complete local MoE
+R1 + E2 + M2 → E4: MTP complete local MoE
+P2 / P4 / P9 complete independently; E1 / E2 complete the contraction and the fusion inside the MoE family
 ```
 
-## 2. 纯 Linear：九个 profile
+## 2. Pure Linear: nine profiles
 
-纯 Linear 阶段只写单个连续 BF16 输出，不包含 split、norm、卷积、clamp 或 routing。
+The pure Linear stage writes only one contiguous BF16 output. It contains no split, no norm, no
+convolution, no clamp and no routing.
 
-| 编号 | 权重表示 / permission | 本地 W[N,K] | 用途 |
+| Number | Weight representation / permission | Local W[N,K] | Use |
 |---|---|---|---|
-| P1 | Q8-G32/FP16，A16Only | `[12288,4096]` | KDA 合并 QKV：`[Q4096;K4096;V4096]` |
-| P2 | Q8-G32/FP16，A16Only | `[4096,4096]` | KDA O，沿输入 heads/K 切片的局部和 |
-| P3 | BF16，A16Only | `[288,4096]` | KDA 合并 `beta32;f_a128;g_a128` |
-| P4 | BF16，A16Only | `[4096,128]` | KDA f_b 与 g_b，两次独立投影，共用同一 profile |
-| P5 | NVIDIA NVFP4，AllowA4 | `[12288,4096]` | dense MLP 本地 GU：`[gate6144;up6144]` |
-| P6 | NVIDIA NVFP4，AllowA4 | `[4096,6144]` | dense MLP 本地 down |
-| P7 | BF16，A16Only | `[2048,4096]` | Main/MTP shared 本地 GU：`[gate1024;up1024]` |
-| P8 | BF16，A16Only | `[4096,1024]` | Main/MTP shared 本地 down |
-| P9 | BF16，A16Only | `[77440,4096]` | Main/MTP LM head 词表分片 |
+| P1 | Q8-G32/FP16, A16Only | `[12288,4096]` | KDA merged QKV: `[Q4096;K4096;V4096]` |
+| P2 | Q8-G32/FP16, A16Only | `[4096,4096]` | KDA O, the local sum split along the input heads/K |
+| P3 | BF16, A16Only | `[288,4096]` | KDA merged `beta32;f_a128;g_a128` |
+| P4 | BF16, A16Only | `[4096,128]` | KDA f_b and g_b, two independent projections sharing one profile |
+| P5 | NVIDIA NVFP4, AllowA4 | `[12288,4096]` | dense MLP local GU: `[gate6144;up6144]` |
+| P6 | NVIDIA NVFP4, AllowA4 | `[4096,6144]` | dense MLP local down |
+| P7 | BF16, A16Only | `[2048,4096]` | Main/MTP shared local GU: `[gate1024;up1024]` |
+| P8 | BF16, A16Only | `[4096,1024]` | Main/MTP shared local down |
+| P9 | BF16, A16Only | `[77440,4096]` | Main/MTP LM head vocabulary shard |
 
-- [ ] **P1**：Q8 `[12288,4096]`。
-- [ ] **P2**：Q8 `[4096,4096]`。
-- [ ] **P3**：BF16 `[288,4096]`。
-- [ ] **P4**：BF16 `[4096,128]`；用不同 f_b/g_b 权重和各自输入确认角色复用。
-- [ ] **P5**：NVFP4 `[12288,4096]`、AllowA4。
-- [ ] **P6**：NVFP4 `[4096,6144]`、AllowA4。
-- [ ] **P7**：BF16 `[2048,4096]`。
-- [ ] **P8**：BF16 `[4096,1024]`。
-- [ ] **P9**：BF16 `[77440,4096]`。
+- [ ] **P1**: Q8 `[12288,4096]`.
+- [ ] **P2**: Q8 `[4096,4096]`.
+- [ ] **P3**: BF16 `[288,4096]`.
+- [ ] **P4**: BF16 `[4096,128]`; confirm the role reuse with different f_b/g_b weights and their own inputs.
+- [ ] **P5**: NVFP4 `[12288,4096]`, AllowA4.
+- [ ] **P6**: NVFP4 `[4096,6144]`, AllowA4.
+- [ ] **P7**: BF16 `[2048,4096]`.
+- [ ] **P8**: BF16 `[4096,1024]`.
+- [ ] **P9**: BF16 `[77440,4096]`.
 
-切片与合并约定：
+Slice and merge conventions:
 
-| 对象 | 本地行/列范围 |
+| Object | Local row/column range |
 |---|---|
-| KDA heads | 两侧分别取原 heads `[0,32)`、`[32,64)`，每个 head 完整保留 128 个 channels |
-| P1 | 从源 Q、K、V 各自取对应 4096 行，再按 Q/K/V 排列；不直接平分全量 QKV parent |
-| P2 | N=4096 保留，K 取与本地 KDA output heads 相同的 4096 列 |
-| P3 | beta 取本地 32 行；f_a/g_a 各复制完整 128 行，顺序为 `[beta;f_a;g_a]` |
-| P4 | f_b/g_b 各取本地 4096 输出行，K=128 保留；f_a 与 g_a 是不同输入，不能将 f_b/g_b 当作一次同输入投影简单拼接 |
-| P5/P6 | 每侧各取 gate/up 的 6144 行，以及 down 对应的 6144 列 |
-| P7/P8 | 每侧各取 gate/up 的 1024 行，以及 down 对应的 1024 列 |
-| P9 | 两侧分别是物理词表 `[0,77440)`、`[77440,154880)`；词表有效性与 token ID 决策由后续输出层处理 |
+| KDA heads | the two sides take the original heads `[0,32)` and `[32,64)`; each head keeps all 128 channels |
+| P1 | take the matching 4096 rows of the source Q, K and V separately, then arrange them as Q/K/V; do not split the whole QKV parent evenly |
+| P2 | N=4096 is kept, and K takes the same 4096 columns as the local KDA output heads |
+| P3 | beta takes the local 32 rows; f_a/g_a each replicate the complete 128 rows, in the order `[beta;f_a;g_a]` |
+| P4 | f_b/g_b each take the local 4096 output rows and K=128 is kept; f_a and g_a are different inputs, so f_b/g_b must not be treated as one simple concatenation of a same-input projection |
+| P5/P6 | each side takes 6144 rows of gate/up and the matching 6144 columns of down |
+| P7/P8 | each side takes 1024 rows of gate/up and the matching 1024 columns of down |
+| P9 | the two sides are the physical vocabulary `[0,77440)` and `[77440,154880)`; a later output layer handles the vocabulary validity and the token ID decision |
 
-Q8 的 K 切点保持 G32 对齐，NVFP4 的 K 切点保持 G16 对齐。保留 source codes/scales
-及 weight/input divisors 的含义，按本地矩阵重排存储；不因分片重新量化或重新校准。
-P5/P6 的 GU/down 分别使用源 dense MLP 对应的 activation divisor。
+The K split point of Q8 stays G32-aligned and the K split point of NVFP4 stays G16-aligned. Keep the
+meaning of the source codes/scales and of the weight/input divisors, and rearrange the storage for the
+local matrix. Do not re-quantize or re-calibrate because of the shard. The GU/down of P5/P6 each use
+the activation divisor of the matching source dense MLP.
 
-P3 的数值几何恰好与 router 的 `[288,4096]` 相同，但其 BF16 输出不能作为 R1 的
-logits 输入。R1 要求完整 FP32 logits；可以共享 contraction 基础，不能共用错误的出口。
+The numerical geometry of P3 is exactly the same as the router's `[288,4096]`, but its BF16 output must
+not serve as the logits input of R1. R1 requires complete FP32 logits. It can share the contraction
+basis, and it must not share the wrong exit.
 
-## 3. 无状态投影融合
+## 3. Stateless projection fusion
 
 ### 3.1 LinearSplit
 
-- [ ] **F1 — KDA QKV split，依赖 P1。** Q8 `[12288,4096]`，直接写出三个独立连续
-  BF16 输出 Q/K/V，各 `[4096,M]`。这里输出的是**卷积前投影值**，不做 SiLU、
-  normalization、卷积或 history 更新。
-- [ ] **F2 — KDA control split，依赖 P3。** BF16 `[288,4096]`，直接写出
-  `beta_raw[32,M]`、`f_a[128,M]`、`g_a[128,M]`。Beta 尚未 sigmoid，f_a/g_a
-  后仍各自有第二次投影；本项不融合任何 KDA gate/recurrence 语义。
+- [ ] **F1 — KDA QKV split, depends on P1.** Q8 `[12288,4096]`, writing three independent contiguous
+  BF16 outputs Q/K/V of `[4096,M]` each. What is output here is the **pre-convolution projected value**.
+  Do not run SiLU, normalization, convolution or a history update.
+- [ ] **F2 — KDA control split, depends on P3.** BF16 `[288,4096]`, writing
+  `beta_raw[32,M]`, `f_a[128,M]` and `g_a[128,M]` directly. Beta is not yet sigmoid, and f_a/g_a each
+  still have a second projection after this. This item fuses no KDA gate or recurrence semantics.
 
-沿用 [LinearSplit](../../../include/ninfer/ops/linear_split.h) 的分段数学与完整 capacity/launch
-约定。调优目标是 contraction 直接写连续分段，最终实现不额外物化完整输出后再复制。
-无状态 split 的确定不承诺未来 KDA 状态融合必须消费这组中间 buffers。
+Follow the segmented mathematics and the complete capacity/launch contract of
+[LinearSplit](../../../include/ninfer/ops/linear_split.h). The tuning goal is for the contraction to
+write the contiguous segments directly. The final implementation must not materialize the complete
+output separately and then copy it. The stateless split decision does not promise that a future KDA
+state fusion must consume this group of intermediate buffers.
 
-### 3.2 合并 GU＋clamped SwiGLU
+### 3.2 Merged GU plus clamped SwiGLU
 
-本轮明确新增的非线性为：
+The non-linearity that this round adds explicitly is:
 
 ```text
 gate = sum_k(decode(W_gate)[i,k] * x[k,m])
@@ -152,47 +174,55 @@ product[i,m] = SiLU(min(gate, limit)) * clamp(up, -limit, limit)
 limit = 10
 ```
 
-`limit` 是显式正有限语义参数，本模型取 10；gate 只截上界，up 截上下界。
-Clamp 在 SiLU/product 之前。此参数同步进入相应 SwiGLU/MLP/MoE profile；已有无 clamp
-计算保留原义。按 family 一致的接口表达，不引入 checkpoint 专用执行入口。
+`limit` is an explicit positive finite semantic parameter, and this model takes 10. The gate clamps
+the upper bound only and up clamps both bounds. The clamp runs before the SiLU/product. This parameter
+enters the matching SwiGLU/MLP/MoE profile at the same time. An existing computation without a clamp
+keeps its original meaning. Express it through a family-consistent interface. Do not introduce a
+checkpoint-specific execution entry.
 
-- [ ] **F3 — NVFP4 GU＋clamped SwiGLU，依赖 P5。** 输入 BF16 `[4096,M]`、GU
-  NVFP4 `[12288,4096]`、AllowA4，输出连续 BF16 `[6144,M]`。使用 GU 的原
-  activation divisor；gate/up 同一个对应位置产生一个 product。
-- [ ] **F4 — BF16 GU＋clamped SwiGLU，依赖 P7。** 输入 BF16 `[4096,M]`、GU
-  BF16 `[2048,4096]`、A16Only，输出连续 BF16 `[1024,M]`。
+- [ ] **F3 — NVFP4 GU plus clamped SwiGLU, depends on P5.** Input BF16 `[4096,M]`, GU NVFP4
+  `[12288,4096]`, AllowA4, output contiguous BF16 `[6144,M]`. Use the original activation divisor of
+  the GU. One gate/up position pair produces one product.
+- [ ] **F4 — BF16 GU plus clamped SwiGLU, depends on P7.** Input BF16 `[4096,M]`, GU BF16
+  `[2048,4096]`, A16Only, output contiguous BF16 `[1024,M]`.
 
-现有 [Linear SwiGLU](../../../include/ninfer/ops/linear_swiglu.h) 只有无 clamp 公式，且其
-当前格式入口未包含 BF16，F3/F4 要同步补齐公共合同、格式支持、capacity、分派与测量。
-融合计算不要求先把 gate/up 舍入为 BF16，再执行非线性。
+The existing [Linear SwiGLU](../../../include/ninfer/ops/linear_swiglu.h) has only the formula without
+a clamp, and its current format entry does not include BF16. F3/F4 must complete the public contract,
+the format support, the capacity, the dispatch and the measurement together. The fused computation
+does not require rounding gate/up to BF16 first and then running the non-linearity.
 
-## 4. 完整 dense/shared MLP 的本地贡献
+## 4. The local contribution of the complete dense/shared MLP
 
-这里的完整 MLP 数学为 `y=W_down*product`，product 使用第 3.2 节定义。
-公开输入是 BF16 `[4096,M]`、GU/down 权重及 activation permission/metadata，
-输出是连续 BF16 `[4096,M]`，Write 语义，无 routes、gate coefficient 或 residual 输入。
+The complete MLP mathematics here is `y=W_down*product`, and product uses the definition in section
+3.2. The public input is BF16 `[4096,M]`, the GU/down weights and the activation
+permission/metadata. The output is contiguous BF16 `[4096,M]` with Write semantics and no routes, no
+gate coefficient and no residual input.
 
-- [ ] **M1 — Main dense MLP，依赖 P5/P6/F3。** 本地 I=6144，GU/down 均为 NVIDIA
-  NVFP4、AllowA4。完整调用覆盖输入量化、GU、clamp/SiLU/product、down 输入量化、
-  down 与输出写入。保留源 GU/down 各自的 activation divisor。
-- [ ] **M2 — Main/MTP shared MLP，依赖 P7/P8/F4。** 本地 I=1024，GU/down 均为
-  BF16、A16Only，输出为本地 shared contribution，系数为数学上的 1。入口直接表达
-  无缩放 shared FFN，不要求调用方伪造 router 行或全 1 coefficient tensor。
+- [ ] **M1 — Main dense MLP, depends on P5/P6/F3.** Local I=6144, GU/down both NVIDIA NVFP4,
+  AllowA4. The complete call covers the input quantization, the GU, the clamp/SiLU/product, the down
+  input quantization, down and the output write. Keep the original activation divisor of each of
+  GU/down.
+- [ ] **M2 — Main/MTP shared MLP, depends on P7/P8/F4.** Local I=1024, GU/down both BF16, A16Only.
+  The output is the local shared contribution and the coefficient is 1 in the mathematics. The entry
+  expresses an unscaled shared FFN directly. It does not require the caller to fake a router row or an
+  all-1 coefficient tensor.
 
-F3/F4 为独立 GU-product 算子，其公开输出是 BF16。M1/M2 是完整 FFN 语义，内部
-product 不增加强制 BF16 舍入边界；特别是 M1 的 A4 down 可以从内部 product 直接
-量化。独立阶段有助于实现与定位，但最终以完整 MLP 的数学与时间验收。
+F3/F4 are independent GU-product operators and their public output is BF16. M1/M2 are complete FFN
+semantics and their internal product adds no mandatory BF16 rounding boundary. In particular, the A4
+down of M1 can quantize the internal product directly. The independent stage helps implementation and
+localization, but the acceptance is against the mathematics and the timing of the complete MLP.
 
-这些计算进入现有 SwiGLU/MoE 计算基础，复用合适的 contraction。是否使用持久
-kernel、分阶段 kernels 或共享 scratch 属于实现选择，不要求一个 CUDA kernel 包办。
+These computations enter the existing SwiGLU/MoE compute basis and reuse a suitable contraction.
+Whether to use a persistent kernel, staged kernels or shared scratch is an implementation choice. Do
+not require one CUDA kernel to do all of it.
 
-## 5. GLM sigmoid＋correction-bias 路由
+## 5. GLM sigmoid plus correction-bias routing
 
-- [ ] **R1 — 完整 global Top8 路由，先完成 P3 的纯投影准备。** 每 rank 使用相同 BF16 input `[4096,M]`、
-  BF16 router weight `[288,4096]`、FP32 correction bias `[288]`，输出连续 I32 IDs
-  `[8,M]` 和 FP32 coefficients `[8,M]`。
+- [ ] **R1 — complete global Top8 routing, complete the pure projection preparation of P3 first.**
+  Every rank uses the same BF16 input `[4096,M]`, the BF16 router weight `[288,4096]` and the FP32
+  correction bias `[288]`, and outputs contiguous I32 IDs `[8,M]` and FP32 coefficients `[8,M]`.
 
-本项的完整数学固定为：
+The complete mathematics of this item is fixed as:
 
 ```text
 logit[e,m] = FP32_Dot(router_weight[e,:], x[:,m])
@@ -203,162 +233,194 @@ coefficient[j,m] = 2.5 * s[ids[j,m],m]
                    / (sum_{i=0..7}(s[ids[i,m],m]) + 1e-20)
 ```
 
-IDs 按 choice 降序，同值按较小 global expert ID 排在前。Correction bias 只用于
-选择，不进入最终系数。Top-k=8、scaling factor=2.5、normalization epsilon=1e-20
-作为语义配置明确传入/记录；本实例只有一个 expert group，本轮不扩展 grouped routing。
+The IDs are in descending choice order, and an equal value puts the smaller global expert ID first.
+The correction bias serves selection only and does not enter the final coefficients. Top-k=8, scaling
+factor=2.5 and normalization epsilon=1e-20 are passed in or recorded explicitly as semantic
+configuration. This instance has one expert group, and this round does not extend grouped routing.
 
-Router weight 保留原 BF16 words，logits 直接以 FP32 计算和消费，不经过普通 Linear
-的 BF16 输出。每 rank 复制同一 global 路由，采用相同数值路径和 tie-break；不先将
-experts 分成 144 个再各选 Top8，也不输出 shared sigmoid coefficient。
+The Router weight keeps the original BF16 words. The logits are computed and consumed directly in
+FP32 and do not pass through the BF16 output of an ordinary Linear. Every rank replicates the same
+global routing and uses the same numerical path and tie-break. Do not first split the experts into 144
+and then select a Top8 on each side, and do not output a shared sigmoid coefficient.
 
-现有 `topk_softmax_route` 的 softmax＋额外 shared logit 公式不适用。本项应提供
-明确的 sigmoid/correction 路由语义，可以复用公共 TopK 和投影基础。整个入口包含
-projection、sigmoid、TopK、系数归一化与写出，计时覆盖完整调用。
+The softmax plus extra shared logit formula of the existing `topk_softmax_route` does not apply. This
+item must provide an explicit sigmoid/correction routing semantic and can reuse the public TopK and the
+projection basis. The whole entry contains the projection, the sigmoid, the TopK, the coefficient
+normalization and the write, and the timing covers the complete call.
 
-## 6. Main/MTP EP2 与完整本地 MoE
+## 6. Main/MTP EP2 and the complete local MoE
 
-### 6.1 已知 routes 的局部 expert 贡献
+### 6.1 The local expert contribution of known routes
 
-| 对象 | 每 rank 要求 |
+| Object | Requirement per rank |
 |---|---|
-| Global E / top-k / local E | 288 / 8 / 144；每 token 本地命中数可以是 0..8 |
-| Bank | 仅有本地 144 个 experts 的 payload，保留显式 global-ID 映射与本地 subset |
-| 单 expert GU / down | `[4096,4096]` / `[4096,2048]`；GU 的 gate/up 各 2048 行 |
-| Input | 连续 BF16 `[4096,M]` |
-| Routes | Global I32 IDs `[8,M]`、FP32 coefficients `[8,M]`，直接消费、不重新归一化 |
-| Output | 连续 BF16 `[4096,M]` 本地贡献，Write；无本地命中时写零 |
-| 激活 | 第 3.2 节 clamped SwiGLU，limit=10 |
+| Global E / top-k / local E | 288 / 8 / 144; the local hit count of each token can be 0..8 |
+| Bank | only the payload of the local 144 experts, keeping the explicit global-ID mapping and the local subset |
+| Single expert GU / down | `[4096,4096]` / `[4096,2048]`; the gate/up of the GU is 2048 rows each |
+| Input | contiguous BF16 `[4096,M]` |
+| Routes | global I32 IDs `[8,M]`, FP32 coefficients `[8,M]`, consumed directly without re-normalization |
+| Output | contiguous BF16 `[4096,M]` local contribution, Write; writes zero when there is no local hit |
+| Activation | the clamped SwiGLU of section 3.2, limit=10 |
 
 ```text
 y_routed_local[:,m] = sum_{j: ids[j,m] belongs to local bank}
                        coefficient[j,m] * expert_ids[j,m](x[:,m])
 ```
 
-- [ ] **E1 — Main NVFP4 EP 贡献。** AllowA4；GU/down 的 G16 E4M3 scales、每 expert
-  weight divisors、每层 GU/down activation divisors 保持原含义。扩展本地 H=4096、
-  I=2048、global E=288、top-k=8 几何及 clamp 数学，完成小 M 与分组大 M 的调优。
-- [ ] **E2 — MTP block-FP8 EP 贡献。** AllowA8；128×128 BF16 block scales，
-  activation 按 token 的 K128 动态量化，无静态 activation divisor。其余几何、
-  local-ID 映射和 clamp 数学与 E1 相同。
+- [ ] **E1 — Main NVFP4 EP contribution.** AllowA4; the G16 E4M3 scales of GU/down, the weight
+  divisor of each expert and the activation divisor of each layer's GU/down keep their original
+  meaning. Extend the local H=4096, I=2048, global E=288, top-k=8 geometry and the clamp mathematics,
+  and complete the tuning for a small M and for a grouped large M.
+- [ ] **E2 — MTP block-FP8 EP contribution.** AllowA8; 128×128 BF16 block scales, the activation is
+  quantized dynamically in K128 groups per token, and there is no static activation divisor. The other
+  geometry, the local-ID mapping and the clamp mathematics are the same as E1.
 
-沿用 `.50` 已完成的 indexed bank、`ExpertSubset` 和本地贡献机制，不为方便测试
-分配完整 288 份 payload。不读取未归属 expert 的地址或权重，不将 top-k 改成 4。
-本地 subset 过滤不改变源系数，系数 2.5 的含义保留在 R1 的输出中。
+Reuse the indexed bank, the `ExpertSubset` and the local contribution mechanism that `.50` already
+completed. Do not allocate 288 complete payloads just to make testing easy. Do not read the address or
+the weight of an expert that is not owned, and do not change the top-k to 4. The local subset filter
+does not change the source coefficients, and the meaning of the coefficient 2.5 stays in the output of
+R1.
 
-Expert banks 不列入普通 Linear 的九个 profile。MoE family 内先落实本地矩阵
-contraction 的正确性，再加入 clamp、route weighting 与 reduction；不为专家银行
-增加一套普通 `linear()` 接口。测试可构造合法编码权重，不依赖全量 GLM 转换器。
+The expert banks are not part of the nine profiles of the ordinary Linear. Inside the MoE family,
+first complete the correctness of the local matrix contraction, and then add the clamp, the route
+weighting and the reduction. Do not add a second ordinary `linear()` interface for the expert bank. A
+test can construct a legal encoded weight and does not depend on the full GLM converter.
 
-### 6.2 Router＋EP＋shared 的完整局部融合
+### 6.2 The complete local fusion of Router plus EP plus shared
 
-完整局部 MoE 消费以下显式数据：BF16 block input、R1 router 权重和 bias、global
-路由配置、本地 routed bank/subset、TP2 shared GU/down、clamp 参数及对应的
-activation permissions/divisors。对外只写 BF16 `[4096,M]`：
+The complete local MoE consumes these explicit data: the BF16 block input, the R1 router weight and
+bias, the global routing configuration, the local routed bank/subset, the TP2 shared GU/down, the
+clamp parameter and the matching activation permissions/divisors. It writes only BF16 `[4096,M]`
+outward:
 
 ```text
 y_local = routed_contribution(R1(x), local_bank, x)
           + shared_intermediate_shard(x)
 ```
 
-- [ ] **E3 — Main 完整本地 MoE，依赖 R1/E1/M2。** NVFP4 routed＋BF16 shared，
-  global top-8，local E=144、shared I=1024，输出完整本 rank 的贡献。
-- [ ] **E4 — MTP 完整本地 MoE，依赖 R1/E2/M2。** Block-FP8 routed＋BF16 shared，
-  与 E3 共用语义入口和参数组织，格式与 permission 决定内部实现。
+- [ ] **E3 — Main complete local MoE, depends on R1/E1/M2.** NVFP4 routed plus BF16 shared, global
+  top-8, local E=144, shared I=1024, outputting the complete contribution of this rank.
+- [ ] **E4 — MTP complete local MoE, depends on R1/E2/M2.** Block-FP8 routed plus BF16 shared, sharing
+  the semantic entry and the parameter organisation with E3; the format and the permission decide the
+  internal implementation.
 
-Routes 和暂存 contribution 可以作为 caller workspace 中的私有中间量，不强制对外
-发布；融合输出按完整局部公式限定一次 BF16 出口。零 routed 命中仍计算本地 shared。
-Shared 只计一次，既不乘 routed scaling factor，也不乘额外 sigmoid。
+The routes and the staged contribution can be private intermediates in the caller workspace and are
+not forced outward. The fused output is limited to one BF16 exit by the complete local formula. A zero
+routed hit still computes the local shared. Shared counts once. It is not multiplied by the routed
+scaling factor and not by an extra sigmoid.
 
-两 rank 的 `y_local` 后续相加才是完整 MoE。Main mHC 与 MTP residual 更新均在
-这个通信边界之后，E3/E4 不承担 residual、通信或状态提交。融合目标是减少重复
-输入读取、分配与中间贡献写出，并允许 route/分组准备与 shared 计算合理组织；
-不要求强制将全流程塞进同一个 kernel。
+The two ranks' `y_local` must be added to make the complete MoE. The Main mHC and the MTP residual
+update both come after this communication boundary, and E3/E4 do not carry the residual, the
+communication or the state commit. The fusion goal is to reduce the repeated input read, the
+allocation and the intermediate contribution write, and to allow a sensible organisation of the
+route/group preparation and the shared computation. Do not force the whole flow into one kernel.
 
-## 7. 调优范围与完成方式
+## 7. Tuning scope and how it completes
 
-沿用[Op 开发规范](../../maintainer/op-development.md)、[Linear 调优方法](../../maintainer/linear-tuning.md)
-及现有 [tests](../../../tests/README.md) / [bench](../../../bench/README.md)。先检查本项的
-fixture、独立数学参考、precision policy 与流量模型，再实现和调优。验收以公共 Op
-完整调用为单位，容量查询、分派、测试和 bench 同步覆盖新增几何。
+Follow the [Op development rules](../../maintainer/op-development.md), the
+[Linear tuning method](../../maintainer/linear-tuning.md) and the existing
+[tests](../../../tests/README.md) and [bench](../../../bench/README.md). First check the fixture, the
+independent mathematical reference, the precision policy and the traffic model of the item, and then
+implement and tune. Acceptance is per complete call of the public Op, and the capacity query, the
+dispatch, the tests and the bench cover the new geometry together.
 
-### 7.1 投影与 MLP
+### 7.1 Projections and MLP
 
-| 范围 | 工作负载与目标 |
+| Scope | Workload and target |
 |---|---|
-| 小 M | 每个整数 `M=1..128`；重点 1、4、8，另保留 6；降低 M=1 延迟，随 M 增加复用权重与有效并行度 |
-| 并发/spec | 普通生成/单步 proposal 为 `M=B`；verify 的代表宽度为 `M=4B、6B、8B、16B`，B=1..8，不固定实际 draft 策略 |
-| 中间区间 | M=256 与实际 route 切换附近补点，不逐点扫描到 4096 |
-| 大 M | **512、1024、2048、4096** 均为独立锚点；报告总延迟、每列成本、带宽与实际算术吞吐参考 |
+| small M | every integer `M=1..128`; the focus is 1, 4, 8, and keep 6 as well; reduce the M=1 latency, and reuse the weight and the effective parallelism more as M grows |
+| concurrency/spec | ordinary generation and a single-step proposal are `M=B`; the representative verify widths are `M=4B, 6B, 8B, 16B` with B=1..8, and the actual draft policy is not fixed |
+| middle range | add points at M=256 and near the actual route switch; do not scan every point up to 4096 |
+| large M | **512, 1024, 2048, 4096** are all independent anchors; report the total latency, the cost per column, the bandwidth and the actual arithmetic throughput reference |
 
-P3 的窄输出与 P4 的窄 K 单独观察启动/归约成本，P9 计入完整 logits 写出。
-P1/P2 的 Q8 是 A16 权重解码路径，不能套用 INT8/NVFP4 Tensor Core 峰值。
-NVFP4 的 `AllowA4` 不等于每个 M 都采用 A4；计算参考由实际生产分派的算术决定。
+Observe the startup and reduction cost of the narrow output of P3 and of the narrow K of P4
+separately. P9 includes the complete logits write. The Q8 of P1/P2 is an A16 weight-decode path and
+must not use the INT8/NVFP4 Tensor Core peak. `AllowA4` for NVFP4 does not mean that every M uses A4.
+The actual production dispatch decides the compute reference.
 
-纯 Linear 的 useful FLOPs 为 `2*N*K*M`，weight bytes 按实际 codes/scales；
-BF16 输入/输出分别为 `2*K*M`、`2*N*M`。F1/F2 计入全部 split 输出；F3/F4
-计入 clamp/product 的完整出口；M1/M2 计入两次 contraction、必要量化与 workspace
-读写，不能用 GU 内核耗时代替完整 MLP 结果。
+The useful FLOPs of a pure Linear are `2*N*K*M`, and the weight bytes follow the actual codes/scales.
+The BF16 input and output are `2*K*M` and `2*N*M`. F1/F2 include every split output. F3/F4 include the
+complete exit of the clamp/product. M1/M2 include both contractions, the necessary quantization and
+the workspace read and write. Do not use the GU kernel time in place of the complete MLP result.
 
-### 7.2 路由与 EP/MoE
+### 7.2 Routing and EP/MoE
 
-R1 使用与投影相同的 M 区间，单独观察 FP32 logits、TopK 与 coefficients 写出。
-E1–E4 覆盖 `M=1..128` 和上述大 M 锚点，使用代表性的 0 命中、全部 8 个命中、
-两侧混合、跨 token 重复热点与较分散分布；不在每个 M 做所有分布的笛卡尔积。
+R1 uses the same M range as the projections. Observe the FP32 logits, the TopK and the coefficient
+write separately. E1–E4 cover `M=1..128` and the large-M anchors above, with a representative zero
+hit, all 8 hits, a mixed two-sided case, a repeated hot spot across tokens and a more spread
+distribution. Do not run the Cartesian product of every distribution at every M.
 
-本地实际 token-expert 数 `P=sum_m(local_hits[m])` 决定 routed 的 useful
-contraction FLOPs：`6*4096*2048*P`。按实际访问的 expert 集合计算去重权重载荷，
-同时保留 token-expert 工作量；不能用固定 global top-k/2 推定载荷。
-单 expert GU＋down 的编码载荷约为：NVFP4 **13.5 MiB**、block-FP8
-**24.00293 MiB**，另计 NVFP4 scalar metadata。E3/E4 另计完整 router 和 shared TP2
-分片，shared 不因 local routed hits=0 而消失。
+The actual local token-expert count `P=sum_m(local_hits[m])` decides the useful contraction FLOPs of
+the routed path: `6*4096*2048*P`. Compute the de-duplicated weight payload by the expert set that is
+actually accessed, and keep the token-expert work at the same time. Do not infer the payload from a
+fixed global top-k/2. The encoded payload of a single expert GU plus down is about NVFP4 **13.5 MiB**
+and block-FP8 **24.00293 MiB**, plus the NVFP4 scalar metadata. E3/E4 also count the complete router
+and the shared TP2 shard, and shared does not disappear when local routed hits=0.
 
-小 M 重点是权重读取、启动与零/少命中成本；大 M 重点是分组复用、量化准备、
-reduction 与 workspace 流量。Graph 的冷/热缓存结果分列，保留代表点 Eager 的
-提交开销；以 Spark 的带宽及实际执行精度引用 roofline。记录中位数、P95、重要切换点、
-最差变化和仍存在的限制，不将逻辑 GB/s 直接解释为 DRAM counters。
+For a small M the focus is the weight read, the startup and the cost of zero or few hits. For a large
+M the focus is the group reuse, the quantization preparation, the reduction and the workspace traffic.
+Report the cold and warm cache results of the Graph separately, and keep the submission cost of a
+representative Eager point. Reference the roofline with the Spark bandwidth and the actual execution
+precision. Record the median, P95, the important switch points, the worst change and the limits that
+remain. Do not read a logical GB/s as a DRAM counter.
 
-### 7.3 数学与回归检查
+### 7.3 Mathematical and regression checks
 
-- Pure Linear、split、GU product、完整 MLP、routes、EP contribution 和完整局部
-  MoE 分别对其独立数学参考验证。融合参考不由已舍入的阶段输出拼成。
-- Clamp 覆盖 gate 上界与 up 双边界，route 覆盖 correction bias 改变选择但不改变
-  系数来源、tie-break 和 normalization。精度标准按公共语义/permission，
-  不按内部实际走 A16/A8/A4 路径切换不同验收口径。
-- EP 覆盖非连续 global IDs、实际 144 份 bank、0/8 本地命中、共享项只加一次和
-  caller workspace 范围；两份局部数学贡献可在单机测试中组成完整参考，无需通信实现。
-- 检查被修改共享基础实际影响到的既有无 clamp/softmax profile；不扩展成与本任务
-  无关的模型回归或整机 benchmark。已有能力通过本轮检查即可保留，不要求重写。
+- Verify the pure Linear, the split, the GU product, the complete MLP, the routes, the EP contribution
+  and the complete local MoE each against its independent mathematical reference. Do not assemble the
+  fusion reference from already rounded stage outputs.
+- The clamp covers the gate upper bound and both up bounds. The route covers that the correction bias
+  changes the selection but not the coefficient source, the tie-break and the normalization. The
+  precision criterion follows the public semantics/permission. Do not switch the acceptance criterion
+  by which internal A16/A8/A4 path is actually taken.
+- EP covers non-contiguous global IDs, the actual 144-entry bank, 0/8 local hits, the shared term
+  added only once and the caller workspace range. Two local mathematical contributions can form the
+  complete reference in a single-host test without a communication implementation.
+- Check the existing profiles without a clamp or without a softmax that the modified shared basis
+  actually affects. Do not expand into a model regression or a whole-machine benchmark unrelated to
+  this task. An existing capability that passes this round's check can stay and does not need a
+  rewrite.
 
-完成一项后更新本清单并关联简短的验证/性能结果。新增 capability 与已有优化路径的
-改进分别说明；本地 Op 结果不声明为双机模型吞吐收益。
+After an item completes, update this checklist and link a short verification and performance result.
+State a new capability and an improvement to an existing optimised path separately. Do not claim a
+local Op result as a two-host model throughput gain.
 
-## 8. 本轮暂缓
+## 8. Deferred in this round
 
-以下内容不交给本轮执行 agent 实现或调优：
+The following work is not given to this round's execution agent to implement or tune:
 
-- **KDA 全部计算链与状态接口**：卷积、Q/K normalization、bounded gate、递推、
-  batch update、output gated norm，以及 projection＋conv/gate 等 KDA 融合；
-  ReplaySSM 与 accepted-prefix 状态管理按[已定设计](replayssm-kda.md)执行，
-  实现和调优另行列任务，不由本文自动扩展。实验通用入口的分派不作为生产 decode 约束。
-- **MLA 与 Indexer**：[Kpool Sparse MLA](kpool-sparse-mla.md) 已固定
-  Main/MTP 完整 heads 的接口、精度、codec/page layout、投影合并、prepare 两种出口、
-  评分/TopK、冻结 selection 与 tail 提交。Indexer 固定 BF16 cache/计算；MLA 可选
-  BF16/FP8 cache，计算保持 BF16/F32。实现和调优另行下发，不因合同确定自动扩展本轮。
-- **mHC**：[已定合同](mhc.md)覆盖完整数学、五个入口、BF16 residual
-  与 FP32 系数、collapse/norm 和相邻 post/pre 融合、末尾 mean/norm、双机复制放置。
-  实现和调优另行下发，不因接口确定而自动加入本轮。
-- **MTP stem、embedding、Vision**：本地放置和算子组合不在本轮固定，暂不增加其
-  Linear/fusion profiles。MTP MoE 与共享 LM head 的准备已包含在前文。
-- 分片 logits 的候选合并、sampling、MTP acceptance、scoring；本轮 P9 只产生本地
-  Linear logits。
-- 全量量化/converter、模型绑定与加载、通信/通算融合、Engine/Program 接入、跨 rank
-  状态与资源规划，以及完整模型性能测量。
+- **The whole KDA computation chain and the state interface**: the convolution, the Q/K normalization,
+  the bounded gate, the recurrence, the batch update, the output gated norm, and KDA fusions such as
+  projection plus conv/gate. ReplaySSM and the accepted-prefix state management follow the
+  [agreed design](replayssm-kda.md), and their implementation and tuning are issued as a separate task
+  and are not extended automatically by this document. The dispatch of the experimental general entry
+  is not a production decode constraint.
+- **MLA and the Indexer**: [Kpool Sparse MLA](kpool-sparse-mla.md) already fixed the interface, the
+  precision, the codec/page layout, the projection merge, the two prepare exits, the scoring/TopK, the
+  frozen selection and the tail commit for the complete heads of Main/MTP. The Indexer keeps a BF16
+  cache and BF16 computation. MLA can select a BF16/FP8 cache, and the computation stays BF16/F32.
+  Implementation and tuning are issued separately and are not extended into this round automatically
+  because the contract is fixed.
+- **mHC**: the [fixed contract](mhc.md) covers the complete mathematics, the five entries, the BF16
+  residual and the FP32 coefficients, the collapse/norm and the adjacent post/pre fusion, the final
+  mean/norm and the two-host replicated placement. Implementation and tuning are issued separately and
+  do not join this round automatically because the interface is fixed.
+- **MTP stem, embedding, Vision**: the local placement and the operator combination are not fixed in
+  this round, so their Linear/fusion profiles are not added yet. The preparation of the MTP MoE and of
+  the shared LM head is already in the earlier sections.
+- The candidate merge of sharded logits, the sampling, the MTP acceptance and the scoring. P9 in this
+  round produces local Linear logits only.
+- The full quantization/converter, the model binding and load, the communication/compute-communication
+  fusion, the Engine/Program integration, the cross-rank state and resource planning, and the complete
+  model performance measurement.
 
-这些部分只有在用户明确下发执行任务后才追加实施需求。执行过程中若某项依赖上述
-范围之外的工作，应停止该依赖上的扩展并反馈具体边界，继续其余独立条目。
+These parts gain an implementation requirement only after the user explicitly issues an execution
+task. If an item depends on work outside the scope above during execution, stop the extension on that
+dependency and report the concrete boundary, and continue with the other independent items.
 
-## 9. 清单完成后的去向
+## 9. Where the checklist goes after completion
 
-条目完成时保留对应实现、测试和性能证据的入口。全部条目完成且证据已归属正式
-合同／测试／benchmark 后删除本清单，历史由 Git 保存；不因某条设计确定而新增
-执行项，也不由文档整理触发远端任务下发。
+When an item completes, keep the entry to its implementation, test and performance evidence. After
+every item completes and the evidence belongs to the formal contract, the tests or the benchmark,
+delete this checklist and let Git keep the history. Do not add an execution item because a design is
+fixed, and do not let a document pass trigger a remote task issue.

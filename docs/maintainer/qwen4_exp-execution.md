@@ -1,444 +1,443 @@
-# Qwen4Exp 执行与状态
+# Qwen4Exp Execution and State
 
-本文是 Qwen3.8-Flash-Next 在 NInfer 中的执行支持入口，维护层连接、资源所有权、
-PLE 流水、MTP/Vision、CUDA Graph 和完整 continuation 的提交规则。
-模型数学、量化和持久布局见[模型与权重](qwen4_exp-model.md)。
-请求调度与发布由 [Engine 架构](engine-architecture.md)维护，通用
-[上下文缓存](resource-scheduling-and-context-cache.md)、
-[Paged KV](paged-kv-cache.md)及 [expert cache](expert-weight-cache.md)各自维护其公共合同。
+This document is the entry point for Qwen3.8-Flash-Next execution support in NInfer; it maintains the layer connections, resource ownership,
+the PLE pipeline, MTP/Vision, CUDA Graph and the commit rules of the complete continuation.
+The model mathematics, quantization and persistent layout are in [model and weights](qwen4_exp-model.md).
+Request scheduling and publication are maintained by [Engine architecture](engine-architecture.md); the common
+[context cache](resource-scheduling-and-context-cache.md),
+[Paged KV](paged-kv-cache.md) and [expert cache](expert-weight-cache.md) each maintain their own common contracts.
 
-## 1. 当前支持范围
+## 1. Current Support Scope
 
-| 能力 | 当前实现 |
+| Capability | Current implementation |
 |---|---|
-| Text | 公共 Engine 的 prefill、ordinary decode、forced control、Replay 和取消 |
-| 并发与上下文 | 启动固定 1–8 路 resident lanes；本实例最大上下文 262144，实际容量由启动预算决定 |
-| Vision | 图像、视频、多媒体消息；共享 Vision 编码器、MRoPE 和跨 Text chunk 特征交接 |
-| 原生 MTP | draft 数 1–5，支持 Text/Vision、1–8 路、采样 penalty 和约束输出 |
-| MTP head | 默认共享 Main BF16 head；可选完整词表 Q4 optimized head，支持单机及 TP2 |
-| CUDA Graph | resident Main 整图、MTP draft chain、独立采样/接受图、无 head 的单列 control 图；expert offload 保留分段交接 |
-| KV 存储 | BF16、INT8-G64、FP8-row256、NVFP4-G16、K8V4；index keys 固定 BF16 |
-| 上下文复用 | 完整 StateImage 与 Main/MTP 页组、Device 前缀命中、Snapshot/Replay；5090 还提供 Host 副本 |
-| 前端与服务 | thinking、thinking budget、tool call、GBNF/JSON/schema/choice/regex；共用 Qwen Frontend 和现有 HTTP 协议 |
-| CausalScoring | 公共 Engine 的单路 Text 评分；不启用 Vision 或 speculative backend |
-| Expert 放置 | Main 支持 GPU resident；5090 还提供 registered Host backing、GPU 缓存及整层流式执行；MTP/shared 固定 GPU |
-| PLE | V3 磁盘表、Host hash/NF4 解码、有界行缓存、增量准备和双槽 H2D |
+| Text | prefill, ordinary decode, forced control, Replay and cancellation of the public Engine |
+| Concurrency and context | a startup-fixed 1–8 resident lanes; this instance's maximum context is 262144, and the actual capacity is decided by the startup budget |
+| Vision | images, video, multimedia messages; the shared Vision encoder, MRoPE and feature handoff across Text chunks |
+| Native MTP | draft count 1–5, supports Text/Vision, 1–8 lanes, sampling penalty and constrained output |
+| MTP head | shares the Main BF16 head by default; an optional complete-vocabulary Q4 optimized head, supported on one machine and at TP2 |
+| CUDA Graph | the resident Main whole graph, the MTP draft chain, independent sampling/acceptance graphs, a single-column control graph without the head; expert offload keeps segmented handoffs |
+| KV storage | BF16, INT8-G64, FP8-row256, NVFP4-G16, K8V4; index keys are fixed at BF16 |
+| Context reuse | complete StateImage and Main/MTP page groups, Device prefix hits, Snapshot/Replay; 5090 also provides a Host replica |
+| Frontend and serving | thinking, thinking budget, tool call, GBNF/JSON/schema/choice/regex; shares the Qwen Frontend and the existing HTTP protocols |
+| CausalScoring | single-lane Text scoring of the public Engine; Vision or the speculative backend is not enabled |
+| Expert placement | Main supports GPU resident; 5090 also provides registered Host backing, GPU cache and whole-layer streaming execution; MTP/shared are fixed on the GPU |
+| PLE | V3 disk table, Host hash/NF4 decode, bounded row cache, incremental preparation and double-slot H2D |
 
-当前限制：
+Current limitations:
 
-- Speculative backend 仅支持原生 MTP；不支持 DFlash、DFlash2 或 indexed proposal head。
-- Offload 模式保留完整 Host expert 来源。GPU 缓存没有请求自适应排序或 decode 动态换入；
-  小批量缺失 expert 由 CPU 计算，没有按需换入 GPU 计算的第三条分工路径。
-- PLE 当前只有磁盘准备路径，没有整表 RAM/GPU lookup。
-- Prefill、Replay、Vision encode、MTP 历史对齐与状态采用均使用 eager。
-  Resident Main 图包含全部层和 PLE 消费；PLE Host 准备在提交图前交付输入，offload 保留 CPU expert 交接。
+- The speculative backend supports only native MTP; DFlash, DFlash2 and the indexed proposal head are not supported.
+- Offload mode keeps the complete Host expert source. The GPU cache has no request-adaptive ordering or decode dynamic swap-in;
+  small-batch missing experts are computed on the CPU, and there is no third division path of on-demand swap-in for GPU computation.
+- PLE currently has only the disk preparation path; there is no whole-table RAM/GPU lookup.
+- Prefill, Replay, Vision encode, MTP history alignment and state adoption all use eager.
+  The resident Main graph includes all layers and the PLE consumption; the PLE Host preparation delivers the input before the graph is committed, and offload keeps the CPU expert handoff.
 
-用户命令见 [CLI](../cli.md)与[Serving](../serving.md)，产物生成见
-[转换指南](../weight-conversion.md)。这些能力描述当前实现；公开的吞吐与质量结果由
-[性能文档](../performance.md)和 model cards 单独维护。
+User commands are in [CLI](../cli.md) and [Serving](../serving.md); artifact generation is in
+[the conversion guide](../weight-conversion.md). These capabilities describe the current implementation; the published throughput and quality results are maintained separately by
+[the performance documentation](../performance.md) and the model cards.
 
-## 2. 轴、前沿与所有权
+## 2. Axes, Frontiers and Ownership
 
-| 符号 | 含义 |
+| Symbol | Meaning |
 |---|---|
-| T / B | 每行物理输入列数 / 本次紧凑 batch 行数 |
-| M | `T*B`，展平列号 `t+T*b`；Linear、HC 和 MoE 使用此轴 |
-| n[b] | 本窗口有效输入前缀长度，Device `valid_columns[B]` |
-| F / F0 | 已执行输入前沿 / 候选窗口基准前沿，均按原 token 计数 |
-| a[b] | 最终采用的输入前缀长度，不等于预取、采样或候选总长度 |
-| State slot | StateImage 的物理槽；独立于 resident lane、batch row 和 KV table row |
+| T / B | number of physical input columns per row / compact batch row count of this round |
+| M | `T*B`, the flattened column number `t+T*b`; Linear, HC and MoE use this axis |
+| n[b] | effective input prefix length of this window, Device `valid_columns[B]` |
+| F / F0 | executed-input frontier / candidate-window base frontier, both counted in original tokens |
+| a[b] | input prefix length finally adopted, not equal to the prefetch, sampling or candidate total length |
+| State slot | physical slot of the StateImage; independent of the resident lane, batch row and KV table row |
 
-规范边界下 Main 前沿为 F，启用 MTP 时 Backend 前沿为 `max(F-1,0)`。
-Backend 位置 j 配对 Main conditioning j 与输入 embedding j+1，RoPE 使用位置 j 的坐标。
-Ledger 可比 Main 多一枚已经发布、尚未执行的 anchor；I/O 预取不推进任何模型前沿。
+Under the canonical boundary, the Main frontier is F, and with MTP enabled the Backend frontier is `max(F-1,0)`.
+Backend position j pairs Main conditioning j with input embedding j+1, and RoPE uses the coordinates of position j.
+The Ledger can hold one more anchor than Main that has been published but not executed; I/O prefetch advances no model frontier.
 
-HC 的四条 streams 是特征轴，GDN/QSA/MoE 的 token 数不乘四。
-只有 MTP 的共享 fc_hidden 把四条 stream 作为独立 Linear 列，使用 4M 列。
-普通 `[H,T,B]` 与 `[H,M]` 可直接改 view；parent 子范围必须保留实际 strides。
+The four streams of HC are the feature axis; the token count of GDN/QSA/MoE is not multiplied by four.
+Only MTP's shared fc_hidden treats the four streams as independent Linear columns and uses 4M columns.
+Ordinary `[H,T,B]` and `[H,M]` can be viewed directly; a parent subrange must keep the actual strides.
 
-| 所有者 | 内容 |
+| Owner | Content |
 |---|---|
-| ModelDefinition | Config、Binding/Use、表示几何、Frontend 资源和 PLE hash controls |
-| ModelShard / Parameters | 本地不可变 Host/GPU 权重、PLE 文件 backing 和实际 Op 参数视图 |
-| Session / ContextDirectory | 请求 continuation、checkpoint、Main/MTP frontiers、RoPE delta、PLE raw-ID tail、state/page/table/Host 范围分配与引用 |
-| RankProgram | StateImage 和 Main/MTP KV 的固定 backing、records、workspace、PLE 服务与上传槽、Graphs；offload 另持有 expert cache/CPU bridge |
-| Ops | 借用的输入输出和 scratch；计算或状态提取，不发布请求状态 |
-| Runtime / Frontend | 请求调度、保留策略、输出 preview/commit 和协议语义 |
+| ModelDefinition | Config, Binding/Use, representation geometry, Frontend resources and PLE hash controls |
+| ModelShard / Parameters | local immutable Host/GPU weights, PLE file backing and the actual Op parameter views |
+| Session / ContextDirectory | request continuation, checkpoint, Main/MTP frontiers, RoPE delta, PLE raw-ID tail, allocation and reference of state/page/table/Host ranges |
+| RankProgram | fixed backing of StateImage and Main/MTP KV, records, workspace, PLE service and upload slots, Graphs; offload additionally holds the expert cache/CPU bridge |
+| Ops | borrowed inputs and outputs and scratch; computation or state extraction, does not publish request state |
+| Runtime / Frontend | request scheduling, retention policy, output preview/commit and protocol semantics |
 
-HC/Linear 可计算 padding 物理列；RankProgram 提供有限安全输入。
-QSA/PLE 允许零有效列，GDN 的 active batch 不包含空行。Main 在完整 forward 前确定
-紧凑成员，保持各层、records 和 commit selectors 的行对应关系。
+HC/Linear can compute padding physical columns; RankProgram provides bounded safe input.
+QSA/PLE allow zero effective columns, and the GDN active batch does not contain empty rows. Main determines the
+compact members before the complete forward and keeps the row correspondence of the layers, records and commit selectors.
 
-## 3. Main 层调用
+## 3. Main Layer Calls
 
 ```text
-embedding + 可选视觉替换
-  → hc_expand_norm：residual、normalized
-  → attention hc_mix：block input、FP32 injection
-  → GDN 或 QSA：block output
-  → hc_combine_norm：新 residual、MoE normalized
+embedding + optional visual replacement
+  → hc_expand_norm: residual, normalized
+  → attention hc_mix: block input, FP32 injection
+  → GDN or QSA: block output
+  → hc_combine_norm: new residual, MoE normalized
   → MoE hc_mix → routed + shared MoE
-  → hc_combine_norm：新 residual、下一层 attention normalized
-    （末层改用 final norm）
+  → hc_combine_norm: new residual, next-layer attention normalized
+    (the last layer uses final norm instead)
   → final hc_mix → sample hidden → head
 ```
 
-Combine 与下一次 norm 融合，但 norm 消费实际 BF16 residual。
-进入 PLE 前先通过 `hc_combine` 物化完整 residual；PLE 输出 residual 和本层
-attention normalized 后，继续相同层流程。Main 最后一层保留的 conditioning
-是 final norm/mixer 之前的 residual；不是 normalized 或 block output。
+Combine fuses with the next norm, but the norm consumes the actual BF16 residual.
+Before entering PLE, materialize the complete residual through `hc_combine`; after PLE outputs the residual and this layer's
+attention normalized, the same layer flow continues. The conditioning kept by the last Main layer
+is the residual before the final norm/mixer; it is not normalized or block output.
 
 ### 3.1 GDN
 
-AB 投影经 `gdn_control_proj` 产生 FP32 g/beta，QKVZ 经下表的输入路径产生 Q/K/V/Z。
-Recurrence 使用 `normalize_qk=true`、`scale=1/sqrt(128)`，
-读取当前 token 更新后的 FP32 state；随后做 sigmoid-gated RMSNorm 和 output Linear。
+The AB projection goes through `gdn_control_proj` to produce FP32 g/beta, and QKVZ goes through the input path in the table below to produce Q/K/V/Z.
+Recurrence uses `normalize_qk=true`, `scale=1/sqrt(128)`,
+reads the FP32 state updated by the current token; then it does the sigmoid-gated RMSNorm and the output Linear.
 
-| 路径 | 输入组合 | 状态处理 |
+| Path | Input combination | State handling |
 |---|---|---|
-| Prefill / Replay / scoring | B=1；`linear_split → causal_conv1d_silu_split → gated_delta_net` | 保存整个窗口末端 conv/recurrent state |
-| Ordinary / 单列 control | T=1，B=1..8；`gdn_input_proj_conv_snapshot → gated_delta_net_batch_update` | 写候选 state slot |
-| MTP target verify | T=K+1；`gdn_input_proj_conv_record → gated_delta_net_replay_record` | 基准只读，保存实际 records，采用时 exact fold |
+| Prefill / Replay / scoring | B=1; `linear_split → causal_conv1d_silu_split → gated_delta_net` | saves the conv/recurrent state at the end of the whole window |
+| Ordinary / single-column control | T=1, B=1..8; `gdn_input_proj_conv_snapshot → gated_delta_net_batch_update` | writes the candidate state slot |
+| MTP target verify | T=K+1; `gdn_input_proj_conv_record → gated_delta_net_replay_record` | the base is read-only, saves the actual records, and exact fold on adoption |
 
-Z 绕过卷积，保留到输出 gate。独立 LinearSplit 的 BF16 出口是公共边界；
-融合 projection/conv 不增加私有 BF16 投影中间边界。
+Z bypasses the convolution and is kept for the output gate. The BF16 output of the independent LinearSplit is a common boundary;
+the fused projection/conv does not add a private BF16 projection intermediate boundary.
 
-Verify records 包含卷积前最新 history 列、卷积/SiLU 后且 L2 norm 前的 K/V、
-以及实际消费的 FP32 g/beta。`GdnReplayFoldPlan` 从同一次基准 state 重放接受前缀；
-结果逐 bit 对齐同一物理 record-producing block 的 snapshot。
-不得缩短 T 重新跑投影来替代 fold。原物理 B、row 身份、record 布局在采用前保持不变。
-详见 [GDN input](../../include/ninfer/ops/gdn_input_proj.h)与
-[ReplaySSM](replayssm-gdn.md)。
+Verify records contain the latest history column before the convolution, the K/V after convolution/SiLU and before the L2 norm,
+and the actually consumed FP32 g/beta. `GdnReplayFoldPlan` replays the accepted prefix from the same base state;
+the result aligns bit for bit with the snapshot of the same physical record-producing block.
+The projection must not be rerun with a shortened T instead of the fold. The original physical B, row identity and record layout stay unchanged before adoption.
+See [GDN input](../../include/ninfer/ops/gdn_input_proj.h) and
+[ReplaySSM](replayssm-gdn.md).
 
 ### 3.2 QSA
 
-Main 的 Q8 Q/gate parent 与 BF16 KV/index parent 分别调用 LinearSplit；
-MTP 使用一个 BF16 joint parent，按 K、V、index-K、Q、gate、index-Q 输出连续分段。
-权重行序与可借用的前缀 view 见[模型权重布局](qwen4_exp-model.md#4-合并矩阵与持久布局)。
-完整 QSA 投影后依次调用：
+Main's Q8 Q/gate parent and BF16 KV/index parent call LinearSplit separately;
+MTP uses one BF16 joint parent and outputs contiguous segments in the order K, V, index-K, Q, gate, index-Q.
+The weight row order and the usable prefix views are in [model weight layout](qwen4_exp-model.md#4-merged-matrices-and-persistent-layout).
+After the complete QSA projection, the calls run in order:
 
-| 阶段 | 交接 |
+| Stage | Handoff |
 |---|---|
-| `qsa_prepare` | projection、norm/RoPE、旧 raw tail → BF16 Q/index-Q、主 KV、完整块 index keys、raw-key/坐标 records |
-| `qsa_indexer` | index-Q 和 compressed cache → Device I32 block IDs `[512,T,B]`、counts `[T,B]` |
-| `qsa_sparse_gqa` | Q、原 gate logits、selection、主 KV → gated BF16 output，再交 O Linear |
+| `qsa_prepare` | projection, norm/RoPE, old raw tail → BF16 Q/index-Q, main KV, complete block index keys, raw-key/coordinate records |
+| `qsa_indexer` | index-Q and compressed cache → Device I32 block IDs `[512,T,B]`, counts `[T,B]` |
+| `qsa_sparse_gqa` | Q, original gate logits, selection, main KV → gated BF16 output, then to the O Linear |
 
-Selection 是原 token 域的四-token 逻辑块号，与物理 page ID 无关。
-Sparse GQA 直接消费前 count 个 IDs，并补上当前不完整块的可见尾部，不建立展开 token
-列表或全局 gathered KV。每 query 只读取自身因果范围，候选后缀即使已经写入也不可见。
-可见完整块数 C≤512 时，Indexer 在同一 kernel 内全选并跳过评分。
+Selection is the four-token logical block number in the original token domain and is unrelated to the physical page ID.
+Sparse GQA consumes the first count IDs directly and adds the visible tail of the current incomplete block; it does not build an expanded token
+list or a globally gathered KV. Each query reads only its own causal range; a candidate suffix is invisible even after it is written.
+When the number of visible complete blocks C≤512, the Indexer selects all of them in the same kernel and skips scoring.
 
-压缩使用 raw index-K；跨窗口先拼旧 tail，再做四列平均，保留规定的 BF16 均值舍入，
-之后 norm/RoPE。块首旋转坐标来自实际 MRoPE，不能由 token ordinal 猜测。
-主 K 的 norm/RoPE 结果直接进入存储 codec，不额外舍入为 BF16。
-Sparse GQA 保持 A16 计算，不将 Q 或 softmax probabilities 量化为低比特；
-量化 KV 在片上解码，必要的值域逆变换和完整归约后才乘 gate。
-精确公式、codec 与读写域见 [QSA](../../include/ninfer/ops/qsa.h)。
+Compression uses the raw index-K; across windows it first concatenates the old tail, then does the four-column average, keeping the specified BF16 mean rounding,
+and then norm/RoPE. The block-head rotation coordinates come from the actual MRoPE and cannot be guessed from the token ordinal.
+The main K norm/RoPE result goes directly into the storage codec without an extra BF16 rounding.
+Sparse GQA keeps A16 computation and does not quantize Q or the softmax probabilities to low bits;
+the quantized KV is decoded on chip, and the gate is applied only after the necessary value-domain inverse transform and the complete reduction.
+The exact formula, codec and read/write domains are in [QSA](../../include/ninfer/ops/qsa.h).
 
 ### 3.3 MoE
 
-MoE 消费 HC 输出的 `[2560,M]`，使用 `MoeEpilogue::Write` 产生独立 block 输出。
-Router/shared parent 的持久合并不强制一次计算；shared 始终在 GPU 上计入一次。
-GPU 的完整融合与 routed subset 入口均已实现，CPU subset 产生 FP32 contribution，
-由公共 mixed execution 汇合并最终舍入。
+MoE consumes the `[2560,M]` from HC and uses `MoeEpilogue::Write` to produce an independent block output.
+The persistent merge of the Router/shared parent does not force a single computation; shared is always counted once on the GPU.
+The complete GPU fusion and the routed subset entry are both implemented; the CPU subset produces an FP32 contribution,
+which the common mixed execution merges and rounds at the end.
 
-Resident 路径直接调用完整 GPU 融合 MoE，bank 地址由 ModelShard backing 保持稳定。
-Offload 路径由公共 `models/common/moe` 按实际 M 选择策略：
+The resident path calls the complete GPU fused MoE directly, and the bank addresses are kept stable by the ModelShard backing.
+The offload path selects a strategy by the actual M in the common `models/common/moe`:
 
-- 小 M：GPU 计算 ready experts，CPU 计算补集；稳定时不搬运权重。
-- 大 M：固定缓存与窗口中补齐的缺失集合组成完整 bank，全 GPU 计算，并预取下一层。
-- 切换：固定区地址和数量不变；窗口在大 M 流式区域与小 M 额外缓存之间重用。
-  返回小 M 时逐层恢复，尚未 ready 的部分由 CPU 计算。
+- Small M: the GPU computes the ready experts and the CPU computes the complement; weights are not moved when the state is stable.
+- Large M: the fixed cache and the missing set filled in the window form the complete bank, all computation runs on the GPU, and the next layer is prefetched.
+- Switching: the fixed region's addresses and count stay unchanged; the window is reused between the large-M streaming region and the small-M extra cache.
+  When returning to small M, restore layer by layer, and the parts not yet ready are computed by the CPU.
 
-各层额度按字节均衡分配，集合为启动优先级的前缀。Flash Next 默认使用已标定的静态
-逐层排序，`MoeOptions::expert_priority` 可覆盖；排序不影响 router 或 coefficients。
-阈值由计算策略和启动 CPU 团队规模解析，prefill/decode/verify 名称不参与分派。
-容量、上传、lease、CPU/GPU 交接和分段图的公共合同见 [Expert cache](expert-weight-cache.md)。
+The per-layer quota is allocated evenly by bytes, and the set is a prefix of the startup priority. Flash Next uses the calibrated static
+per-layer ordering by default; `MoeOptions::expert_priority` can override it; the ordering does not affect the router or the coefficients.
+The threshold is resolved from the computation strategy and the startup CPU team size; the prefill/decode/verify names do not participate in the dispatch.
+The common contract for capacity, upload, lease, CPU/GPU handoff and segmented graphs is in [Expert cache](expert-weight-cache.md).
 
-## 4. PLE 准备、传输与消费
+## 4. PLE Preparation, Transfer and Consumption
 
-### 4.1 磁盘表和读取服务
+### 4.1 Disk Table and Read Service
 
-`ple::disk::Table` 接收已绑定逻辑参数，持有长期只读文件 backing、冻结区间映射与
-每 shard 的 NF4 LUT。启动不扫描整表。行地址先映射到 V3 实际文件区间，再扩展到
-direct-I/O 对齐范围；跨续卷或非对齐边界可以产生多段读。短读只有覆盖全部必需字节
-才可接受，不能用补零替代丢失数据。
+`ple::disk::Table` receives the bound logical parameters and holds the long-lived read-only file backing, the frozen range mapping and
+the per-shard NF4 LUT. Startup does not scan the whole table. A row address is first mapped to the actual V3 file range and then expanded to
+the direct-I/O alignment range; a range that crosses a volume or an unaligned boundary can produce multiple reads. A short read is acceptable only when it covers all required bytes;
+missing data cannot be replaced with zero padding.
 
-RankProgram 的 `PrepareService` 使用一个 I/O worker，执行
-`hash → 行去重/cache → 物理读合并 → O_DIRECT/io_uring → 收集 → LUT 解码`。
-当前配置为 64 MiB 四路原始行缓存、128 个在途读、两个窗口槽。
-行缓存和在途读可跨窗口复用；必需窗口优先，预取保留必需窗口的容量。
-Worker 不调用 CUDA、不修改 ledger、frontier 或 StateImage。
+RankProgram's `PrepareService` uses one I/O worker and executes
+`hash → row deduplication/cache → physical read merge → O_DIRECT/io_uring → gather → LUT decode`.
+The current configuration is a 64 MiB four-way raw row cache, 128 in-flight reads and two window slots.
+The row cache and in-flight reads can be reused across windows; required windows come first, and prefetch keeps the capacity of the required windows.
+The worker does not call CUDA and does not modify the ledger, frontier or StateImage.
 
-输出为连续 BF16 `E[2560,T,B]`；无效尾列精确置 +0。
-Lookup 的 hash、NF4 精确舍入与布局见[模型文档](qwen4_exp-model.md#5-ple-表hash-与-lookup-出口)。
+The output is a contiguous BF16 `E[2560,T,B]`; invalid tail columns are set to exactly +0.
+The lookup hash, NF4 exact rounding and layout are in [the model document](qwen4_exp-model.md#5-ple-table-hash-and-lookup-exit).
 
-### 4.2 窗口、ticket 与上传槽
+### 4.2 Windows, Tickets and Upload Slots
 
-Ticket 由物理 slot 和 generation 构成。每行携带 sequence、epoch、起始 frontier
-和 raw-ID tail；prepare/append 返回前复制 caller IDs，后续不借用可变 caller spans。
+A ticket consists of a physical slot and a generation. Each row carries the sequence, epoch, start frontier
+and raw-ID tail; prepare/append copies the caller IDs before returning and does not borrow mutable caller spans afterwards.
 
-| 操作 | 作用 |
+| Operation | Effect |
 |---|---|
-| prepare | 固定 T/B、行身份和已知 ID 前缀；无空槽返回暂不可准备 |
-| append | 按行连续追加候选 IDs，可立即发起读取 |
-| seal | 冻结最终有效输入长度；截去尾列置零，之后不可追加 |
-| HostReady | 已 seal，全部有效 E 完成；尚不代表 Device 可消费 |
-| upload / acquire | 在独立 transfer stream 排入 H2D 和 event，再借出本代次的 Device E、ready/consumed events |
-| consumed / release | 最后 Device 消费、H2D 和 Host writers 都退役后，才重用 slot |
+| prepare | fixes T/B, row identity and the known ID prefix; returns not-preparable when no slot is free |
+| append | appends candidate IDs per row consecutively; can start a read immediately |
+| seal | freezes the final effective input length; tail columns are truncated and zeroed; no append afterwards |
+| HostReady | sealed and all effective E are complete; does not yet mean the Device can consume |
+| upload / acquire | enqueues H2D and the event on the independent transfer stream, then lends this generation's Device E, ready/consumed events |
+| consumed / release | the slot is reused only after the last Device consumption, H2D and Host writers all retire |
 
-`UploadSlots` 独立拥有 pinned/Device E；PrepareService 借用其 Host 槽。
-Consumer 在首个 E 读者前等待 ready，在最后读者后记录 consumed，再通知 owner 已提交。
-Graph 将这两个依赖捕获为 external event nodes；本代次 H2D/event 必须先于 graph replay
-排入 producer stream。尚未提交的下一代 event 不能作为本轮就绪信号。
-RankProgram 先创建上传槽，后创建准备服务；销毁时先结束 Host writers，再排空上传和消费。
-取消撤销该窗口的发布意图，仍有其他窗口使用的共享读继续完成。
-晚到完成可填充正确的不可变行缓存，但不能写入重用后的 ticket。
-读取失败通过当前 unit 的错误路径传播，不发布部分 E。
+`UploadSlots` owns the pinned/Device E independently; PrepareService borrows its Host slot.
+The consumer waits for ready before the first E reader, records consumed after the last reader, and then notifies the owner that it has committed.
+The Graph captures these two dependencies as external event nodes; this generation's H2D/event must be enqueued on the producer stream before graph replay. An uncommitted next-generation event cannot serve as this round's readiness signal.
+RankProgram creates the upload slots first and the preparation service afterwards; on destruction it finishes the Host writers first and then drains the upload and consumption.
+Cancellation revokes the publication intent of that window; shared reads still used by other windows complete.
+A late completion can fill the correct immutable row cache but cannot write into a reused ticket.
+Read failures propagate through the current unit's error path and do not publish a partial E.
 
-`PlePipeline` 组合准备、增量 ID D2H、H2D、消费和回收。
-它在等待 compute 完成时继续推进已就绪窗口的上传。
-Canonical state 和 accepted IDs 不借用将要释放的 ticket。
+`PlePipeline` combines preparation, incremental ID D2H, H2D, consumption and reclamation.
+It keeps advancing the upload of ready windows while waiting for the compute to finish.
+Canonical state and accepted IDs do not borrow tickets that are about to be released.
 
-### 4.3 与 GPU 重叠
+### 4.3 Overlap with the GPU
 
-| 场景 | 当前准备时机 |
+| Scenario | Current preparation timing |
 |---|---|
-| 首个输入窗口 | IDs 已知后提交，可与 Vision encode、embedding 和 PLE 前层重叠 |
-| Prefill / Replay | 消费当前 PLE 后准备下一个实际 Text 窗口，与后续 Main 层计算重叠 |
-| Ordinary decode | anchor 已知即准备；resident Main 提交前等待 HostReady/H2D 已排入，图内在 PLE 入口等待上传完成 |
-| MTP verify | 先准备 anchor；各步 draft ID 异步 D2H 后按顺序 append，全部有效 IDs 到齐后 seal |
-| Control / scoring | 使用同一真实输入前沿和准备流水 |
+| First input window | committed once the IDs are known; can overlap with Vision encode, embedding and the layers before PLE |
+| Prefill / Replay | prepares the next actual Text window after consuming the current PLE, overlapping with the following Main layer computation |
+| Ordinary decode | prepared once the anchor is known; the resident Main waits before commit until HostReady/H2D are enqueued, and waits inside the graph at the PLE entry for the upload to finish |
+| MTP verify | prepares the anchor first; each step's draft IDs are asynchronously D2H'd and appended in order; seal when all effective IDs are present |
+| Control / scoring | uses the same real input frontier and preparation pipeline |
 
-GPU 交接为：
+The GPU handoff is:
 
 ```text
 raw IDs + raw-ID tail → PrepareService → HostReady → H2D/event → E → KV Linear → K/V
-Main embedding / PLE 前层 → 完整 residual
-K/V + residual → ple_gate：BF16 U、BF16 N records
-residual + U + N + 旧 history → ple_conv_add_norm：BF16 residual、下一组 normalized
-  → 继续 Main 层
+Main embedding / layers before PLE → complete residual
+K/V + residual → ple_gate: BF16 U, BF16 N records
+residual + U + N + old history → ple_conv_add_norm: BF16 residual, next set of normalized
+  → continue Main layers
 ```
 
-PLE 卷积消费 norm(actual BF16 U) 的 N records，四个 tap 对应 -9、-6、-3、0。
-Conv/SiLU 与 residual/U 相加后写 BF16，再做下一组 HC norm。
-E 的最后读者是 KV Linear；RankProgram 在整个 PLE GPU 段后记录 consumed。
-Resident 图中的 external record 允许 Host 在后续层执行期间回收该槽。
-N records 和采用所需 IDs 保留到提交，不随 E 槽释放。
-GPU 数学见 [PLE 合同](../../include/ninfer/ops/ple.h)。
+The PLE convolution consumes the N records of norm(actual BF16 U), and the four taps correspond to -9, -6, -3 and 0.
+Conv/SiLU adds with the residual/U and writes BF16, then the next HC norm runs.
+The last reader of E is the KV Linear; RankProgram records consumed after the whole PLE GPU segment.
+The external record in the resident graph lets the Host reclaim that slot while the following layers execute.
+The N records and the IDs needed for adoption are kept until commit and are not released with the E slot.
+The GPU mathematics is in [PLE contract](../../include/ninfer/ops/ple.h).
 
-## 5. MTP 的生成与采用
+## 5. MTP Generation and Adoption
 
-MTP draft 数 K 在启动时固定为 1–5；物理 target 窗口 T=K+1。
-各行按剩余输出/上下文预算缩短有效长度；混合 batch 保持这一物理窗口，
-整批都无法再产生 draft 时走 ordinary。
-Draft 在完整词表上做 argmax。`--proposal-head full` 共享 Main BF16 head；
-`--proposal-head optimized` 加载并绑定产物的独立 Q4 head，以 BF16 激活执行 A16 Linear。
-每次 draft head 的列数是 B，正常 K 步 draft 调用 K 次。TP2 按词表分片计算，
-沿用设备侧全局候选选择；Eager 和 CUDA Graph 使用同一绑定。
-Workspace 规划包含所选 draft head 的实际需求，权重在启动时完成物化。
-权重布局与容量见[模型与权重](qwen4_exp-model.md#33-optimized-mtp-head)。
+The MTP draft count K is fixed at startup to 1–5; the physical target window is T=K+1.
+Each row shortens its effective length by the remaining output/context budget; a mixed batch keeps this physical window,
+and when the whole batch can no longer produce a draft, it uses ordinary.
+The draft does argmax on the complete vocabulary. `--proposal-head full` shares the Main BF16 head;
+`--proposal-head optimized` loads and binds the artifact's independent Q4 head and runs an A16 Linear with BF16 activations.
+The column count of each draft head call is B, and a normal K-step draft calls it K times. TP2 computes it by vocabulary shard and
+uses the device-side global candidate selection; Eager and CUDA Graph use the same binding.
+The workspace plan includes the actual demand of the selected draft head, and the weights are materialized at startup.
+The weight layout and capacity are in [model and weights](qwen4_exp-model.md#33-optimized-mtp-head).
 
-Target 仍使用 Main head，验收支持请求的 greedy 或 sampling 配置，
-并处理 penalty 与约束 mask。验收数学由
-[SpeculativeAccept](../../include/ninfer/ops/speculative_accept.h)维护。
+The target still uses the Main head; acceptance supports the request's greedy or sampling configuration
+and handles penalty and the constraint mask. The acceptance mathematics is maintained by
+[SpeculativeAccept](../../include/ninfer/ops/speculative_accept.h).
 
-1. **历史建立。** Prefill、Replay、control 将输入 embedding 与前一列 Main conditioning
-   配对。根部跳过第一列，连续 chunk 带上一列旧 conditioning。只执行 MTP stem、
-   attention HC、QSA projection/prepare 和 tail 提取，不执行 attention readout、MoE 或 head。
-2. **Draft。** 第一步在 Backend F-1 配对 Main conditioning 与 anchor，单独保留其
-   bridge tail；后续步骤使用前一步 MTP conditioning。工作 tail/hidden 不成为 canonical state。
-3. **Target。** Main 执行 `[anchor,drafts...]`，记录 GDN transitions、QSA raw keys/坐标、
-   PLE N，以及 sample/conditioning 窗口。所有记录保留原 T/B 和成员顺序。
-4. **采用。** 后端接受 c 个 draft，许可 c+1 个输出；Frontend 可进一步截断为 a。
-   Main 采用前 a 个输入，末端两种 hidden 同取 a-1 列。Backend 从真实 bridge tail 出发，
-   用 Main conditioning 与已接受 shifted IDs 重建其后 a-1 列历史，提交到 F+a-1。
-5. **结算。** 正式 penalty counts 只增加最终发布的 tokens；拒绝后缀不进入有效
-   State/KV coverage，余下的 correction/bonus 成为下一轮 anchor。
+1. **History setup.** Prefill, Replay and control pair the input embedding with the previous column's Main conditioning.
+   The root skips the first column, and a consecutive chunk carries the previous column's old conditioning. Only the MTP stem,
+   attention HC, QSA projection/prepare and tail extraction run; attention readout, MoE and the head do not.
+2. **Draft.** The first step pairs Main conditioning with the anchor at Backend F-1 and keeps its
+   bridge tail separately; later steps use the previous step's MTP conditioning. The working tail/hidden does not become canonical state.
+3. **Target.** Main executes `[anchor,drafts...]` and records the GDN transitions, QSA raw keys/coordinates,
+   PLE N and the sample/conditioning window. All records keep the original T/B and member order.
+4. **Adoption.** The backend accepts c drafts and permits c+1 outputs; the Frontend can further truncate to a.
+   Main adopts the first a inputs, and both end hidden take column a-1. The backend starts from the real bridge tail,
+   rebuilds its following a-1 columns of history with Main conditioning and the accepted shifted IDs, and commits to F+a-1.
+5. **Settlement.** The formal penalty counts increase only by the finally published tokens; the rejected suffix does not enter the effective
+   State/KV coverage, and the remaining correction/bonus becomes the next round's anchor.
 
-即使零 draft 被接受，正常一轮仍采用 anchor，即 a=1。零接受的取消/失败行不采用候选，
-按 Engine 终态流程释放。Checkpoint 保存 Main 末端 pair 和已提交 Backend 状态；
-恢复不依赖未决 draft 内部特征，也不重复执行 head 来重建已保存 hidden。
+Even when zero drafts are accepted, a normal round still adopts the anchor, that is a=1. Cancelled or failed rows with zero acceptance do not adopt candidates
+and are released by the Engine's final-state flow. The checkpoint saves the Main end pair and the committed Backend state;
+restore does not depend on the internal features of pending drafts and does not rerun the head to rebuild the saved hidden.
 
-## 6. Vision 与前端
+## 6. Vision and Frontend
 
-共享 Qwen Frontend 提供原 IDs、媒体 patches、视觉 spans 和三轴 MRoPE。
-RankProgram 在 embedding 后、HC 展开前替换视觉列；MTP 历史建立也使用对应视觉 embedding。
-QSA 因果顺序仍使用 token ordinal，RoPE 独立消费坐标，生成文本使用保存的 rope_delta。
+The shared Qwen Frontend provides the original IDs, media patches, vision spans and three-axis MRoPE.
+RankProgram replaces the visual columns after the embedding and before the HC expansion; MTP history setup also uses the corresponding visual embedding.
+The QSA causal order still uses the token ordinal, RoPE consumes the coordinates independently, and generated text uses the saved rope_delta.
 
-一个 Text 窗口至多消费一个视觉条目，条目可以跨多个 chunk。
-RankProgram 持有一份 workspace 和独立于通用计算区的视觉 handoff；各 residency 的视觉执行
-按 owner/generation 借用该 handoff。Session 只保留 owning Host 输入和消费计划。编码 scratch 可以复用通用区域；
-Text/decode 不覆盖有效 handoff，另一个 Vision 编码可覆盖它，后续需要时由保留 patches 重编码。
-Main 与 MTP 完成对应消费后退役条目绑定，暂停/取消也退役。
+One Text window consumes at most one visual item, and the item can span multiple chunks.
+RankProgram holds one workspace and a vision handoff independent of the general computation area; each residency's vision execution
+borrows that handoff by owner/generation. The Session keeps only the owning Host input and the consumption plan. The encoding scratch can reuse the general area;
+Text/decode does not overwrite an effective handoff, another Vision encoding can overwrite it, and the retained patches re-encode it later if needed.
+Main and MTP retire the item binding after their corresponding consumption; pause/cancel also retires it.
 
-已复用前缀覆盖的视觉条目不再编码。Checkpoint 不截断同一视觉条目的消费范围，
-条目中途暂停通过 Replay 恢复。Vision 不新增 StateImage 字段或 KV pool；
-其历史效果已经进入 Main/MTP 状态。
+Visual items already covered by a reused prefix are not encoded again. The checkpoint does not truncate the consumption range of the same visual item;
+an item paused midway is restored through Replay. Vision adds no StateImage field or KV pool;
+its historical effect has already entered the Main/MTP state.
 
-Converter 默认打包
-[Flash Next 模板](../../tools/chat_templates/qwen3_8_flash_next.jinja)，
-运行时也可用 `--chat-template` 覆盖。Thinking、reasoning effort、tool calls、结构化输出
-沿公共 Frontend 实现；模型代码不处理 HTTP 协议或执行工具。
-模板默认行为和覆盖方法见[转换指南](../weight-conversion.md)，
-输出约束见[约束解码](constrained-decoding.md)。
-采样默认值来自 artifact 的 generation_config，thinking/non-thinking 共用该组值，
-用户可显式覆盖。
+The converter packs
+[the Flash Next template](../../tools/chat_templates/qwen3_8_flash_next.jinja) by default,
+and `--chat-template` can override it at runtime. Thinking, reasoning effort, tool calls and structured output
+follow the common Frontend implementation; the model code does not handle HTTP protocols or execute tools.
+The template default behavior and the override method are in [the conversion guide](../weight-conversion.md),
+and the output constraints are in [constrained decoding](constrained-decoding.md).
+The sampling defaults come from the artifact's generation_config; thinking and non-thinking share these values,
+and the user can override them explicitly.
 
-## 7. 完整状态、checkpoint 与恢复
+## 7. Complete State, Checkpoint and Restore
 
-### 7.1 StateImage 与 metadata
+### 7.1 StateImage and Metadata
 
-一个规范 Main 前沿 F 的状态包含：
+The state of one canonical Main frontier F contains:
 
-| 数据 | 存储与含义 |
+| Data | Storage and meaning |
 |---|---|
-| GDN recurrent | 36 层 FP32 `[128,128,48]` |
-| GDN conv history | 每层 BF16 `[10240,3]`，卷积前历史 |
-| Main QSA tail | 12 层，各最多三列 raw BF16 index-K 和未完成块首三轴坐标 |
-| PLE conv history | BF16 `[10240,9]`，最近九列 N |
-| Main sample hidden | BF16 `[2560]`，来自 F-1 的 final mixer 输出 |
-| Main MTP conditioning | 启用 MTP 时 BF16 `[10240]`，来自同一 F-1 的 pre-final residual |
-| Backend QSA tail | 启用 MTP 时的一层 raw tail/坐标 |
-| Host metadata | Main/MTP frontiers、rope_delta、最近两枚已执行 raw IDs |
+| GDN recurrent | 36 layers of FP32 `[128,128,48]` |
+| GDN conv history | BF16 `[10240,3]` per layer, history before the convolution |
+| Main QSA tail | 12 layers, each at most three columns of raw BF16 index-K and the three-axis coordinates of the incomplete block head |
+| PLE conv history | BF16 `[10240,9]`, the most recent nine columns of N |
+| Main sample hidden | BF16 `[2560]`, from the final mixer output at F-1 |
+| Main MTP conditioning | BF16 `[10240]` when MTP is enabled, from the pre-final residual at the same F-1 |
+| Backend QSA tail | one layer of raw tail/coordinates when MTP is enabled |
+| Host metadata | Main/MTP frontiers, rope_delta, the two most recent executed raw IDs |
 
-模型用 `StateImageBuilder` 声明字段；Core 将每个完整 image 连续存放，Host/Device
-使用相同内部布局。Raw-ID tail 保存在 continuation metadata 中，不重复放进 Device image。
-F=0 的 Device state 清零、raw-ID tail 补 EOS，末端 hidden 尚无有效 token。
+The model declares the fields with `StateImageBuilder`; Core stores each complete image contiguously, and Host/Device
+use the same internal layout. The raw-ID tail is kept in the continuation metadata and is not put into the Device image again.
+At F=0 the Device state is zeroed, the raw-ID tail is filled with EOS, and the end hidden has no valid token yet.
 
-每个 QSA pool 的 tail 由自己的前沿 f 决定，保存 f%4 个 raw keys，其余为 +0；
-完整块边界时 tail/坐标均为零。它独立于主 KV 的压缩编码，
-不可用已 norm/RoPE 的 keys 代替。
+The tail of each QSA pool is decided by its own frontier f; it saves f%4 raw keys and sets the rest to +0;
+at a complete block boundary the tail/coordinates are all zero. It is independent of the main KV compressed encoding and
+cannot be replaced by already norm/RoPE'd keys.
 
-### 7.2 Main/MTP 共同逻辑页组
+### 7.2 Common Logical Page Group of Main/MTP
 
-每个逻辑页覆盖 64 个原 token：该 pool 所有层的主 K/V data/scale planes 各有 64 行，
-每层 BF16 index plane 有 16 行。它们共用 page ID、block table、coverage、COW 和迁移事务。
-原 token p 查 `table[p/64]`；index block g 查 `table[g/16]`。
-Main 12 层属于一个 pool，MTP 的一层属于独立 Backend pool。
+Each logical page covers 64 original tokens: the main K/V data/scale planes of all layers in that pool each have 64 rows,
+and the BF16 index plane of each layer has 16 rows. They share the page ID, block table, coverage, COW and migration transactions.
+Original token p looks up `table[p/64]`; index block g looks up `table[g/16]`.
+The 12 Main layers belong to one pool, and the one MTP layer belongs to an independent Backend pool.
 
-某页有 c 个有效原 token 时，index 只有 floor(c/4) 行有效，不能独立推进 index cursor。
-Prepare 可写候选后缀，coverage 只在采用时改变。COW 保护所有可能覆盖的 planes，
-Device/Host 迁移保留其原 words；恢复还必须具有同前沿的 StateImage 和 metadata。
-具体行密度、Host packing 和传输规则归 [Paged KV](paged-kv-cache.md)。
+When a page has c effective original tokens, the index has only floor(c/4) effective rows, and the index cursor cannot advance independently.
+Prepare can write the candidate suffix; coverage changes only on adoption. COW protects all planes that may be overwritten,
+and Device/Host migration keeps their original words; restore must also have the StateImage and metadata of the same frontier.
+The specific row density, Host packing and transfer rules belong to [Paged KV](paged-kv-cache.md).
 
-### 7.3 提交与恢复边界
+### 7.3 Commit and Restore Boundaries
 
 ```text
-Session 取得执行许可，预留 state / pages，形成 COW 与输入描述
-  → RankProgram 执行输入准备、候选 forward 和后端验收
-  → ResultReady，Frontend preview 得到接受前缀 a
-  → Session 提交 Commit，取得 CommitReceipt 后发布输出
-  → RankProgram 执行 GDN exact fold、QSA/PLE extract、hidden 选择、MTP 历史对齐
-  → DeviceRetired，Session 结算 StateImage、各 pool coverage、输入身份和资源引用
+Session obtains the execution permit, reserves state / pages, and forms the COW and input description
+  → RankProgram runs the input preparation, candidate forward and backend acceptance
+  → ResultReady; the Frontend preview obtains the accepted prefix a
+  → Session commits Commit and publishes the output after obtaining the CommitReceipt
+  → RankProgram runs the GDN exact fold, QSA/PLE extract, hidden selection and MTP history alignment
+  → DeviceRetired; Session settles the StateImage, each pool's coverage, input identity and resource references
 ```
 
-`qsa_tail_extract` 从实际 raw-key/坐标 records 取得 tail；
-`ple_state_extract` 从 N records 取得九列历史；raw-ID tail 按同一个 a 更新。
-QSA/PLE 在 a=0 时可以向独立 destination 复制旧状态；GDN fold 的 a=0 是严格 no-op。
-是否采用 destination 由 Session 的 Commit 决定，RankProgram 执行对应物理写入。
+`qsa_tail_extract` takes the tail from the actual raw-key/coordinate records;
+`ple_state_extract` takes the nine-column history from the N records; the raw-ID tail is updated by the same a.
+At a=0, QSA/PLE can copy the old state to an independent destination; GDN fold at a=0 is a strict no-op.
+Whether the destination is adopted is decided by the Session's Commit, and RankProgram performs the corresponding physical writes.
 
-Sample 和 conditioning 必须来自同一次执行的同一接受列，按原 words 复制；
-不能对更短窗口重算 final mixer。接受前沿可不对齐四-token 块或 64-token 页。
-例如 F0=6、a=1 时，新的 QSA tail 是 raw 4/5/6，候选阶段写出的块 4..7 仍不可见。
+Sample and conditioning must come from the same accepted column of the same execution and be copied by the original words;
+the final mixer cannot be recomputed for a shorter window. The accepted frontier may not align to a four-token block or a 64-token page.
+For example, when F0=6 and a=1, the new QSA tail is raw 4/5/6, and blocks 4..7 written during the candidate stage are still invisible.
 
-长窗口只产生末端 GDN recurrent state，因此完整模型 checkpoint 对齐实际执行边界。
-Session 在选定 capture 点拆分窗口；QSA/PLE 能提取中间前缀，并不单独赋予该点完整
-模型恢复能力。保存 checkpoint 保留精确 HistoryPrefix，不因非页对齐而立即复制尾页；
-真正写冲突时才执行 COW。
+A long window produces only the end GDN recurrent state, so the complete-model checkpoint aligns with the actual execution boundary.
+The Session splits the window at the selected capture point; QSA/PLE can extract an intermediate prefix but do not by themselves give that point complete
+model restore capability. Saving a checkpoint keeps the exact HistoryPrefix and does not immediately copy the tail page because of non-page alignment;
+COW runs only on a real write conflict.
 
-Snapshot 复制/恢复完整 image、各 pool 前缀和 metadata；Replay 重新执行已接受输入，
-保留原请求身份、输出 ledger 和预算，不重复发布。暂停可以释放 lane，恢复使用新的
-state slot/table row。前缀命中采用公共资源策略，不另建 QSA/PLE 专用匹配或保留算法。
-不可变 PLE row cache、expert cache、ticket、scratch 和 draft 工作特征不属于 checkpoint。
+Snapshot copies/restores the complete image, each pool's prefix and the metadata; Replay re-executes the accepted input,
+keeping the original request identity, output ledger and budget, and does not publish again. Pause can release the lane, and restore uses a new
+state slot/table row. Prefix hits use the common resource policy and do not build a QSA/PLE-specific matching or retention algorithm.
+The immutable PLE row cache, expert cache, tickets, scratch and draft working features are not part of the checkpoint.
 
-## 8. CUDA Graph 与启动资源
+## 8. CUDA Graph and Startup Resources
 
-### 8.1 图的边界
+### 8.1 Graph Boundaries
 
-`program/graphs.*` 按 exact-B 准备 ordinary、control、target verify、draft chain 和决策图。
-Resident Main 一次 replay 包含 embedding、全部层、PLE、final mixer，以及生成所需的 head。
-Control 使用无 head 的图；前缀命中后的首次采样仍可单独从保存的 hidden 投影 head。
-Eager/capture 调用同一组 GPU body，CPU experts、缓存 lease 与磁盘 I/O 在图外执行。
+`program/graphs.*` prepares the ordinary, control, target verify, draft chain and decision graphs by exact-B.
+One resident Main replay includes the embedding, all layers, PLE, final mixer and the head needed for generation.
+Control uses the head-less graph; the first sampling after a prefix hit can still project the head separately from the saved hidden.
+Eager/capture call the same set of GPU bodies; CPU experts, cache leases and disk I/O run outside the graph.
 
-`text_graph.*` 将 resident 与 expert offload 的组织分开。Resident 的 QSA mixer 以 child
-graph 持有各 context envelope；其余层计算直接捕获在外层图。PLE 消费也是 child，
-包含 ready wait、计算和 consumed record。换上传槽只更新该 child，不复制完整 Main。
-当前 Host producer 在 Main 提交前交付已排入 H2D 的 E；H2D 可以与图内前序计算重叠，
-Host 读取等待不再与 resident 前序层重叠。表驻留位置不进入 Main 的数学接口。
-Offload 仍按真实 CPU/cache 交接分段，PLE 之前的层可以在 Host 准备期间执行。
+`text_graph.*` separates the organization of resident and expert offload. The resident QSA mixer holds each context envelope as a child
+graph; the remaining layer computation is captured directly in the outer graph. PLE consumption is also a child,
+including the ready wait, the computation and the consumed record. Switching the upload slot updates only that child and does not copy the complete Main.
+The current Host producer delivers the E already enqueued for H2D before the Main commit; H2D can overlap with the preceding in-graph computation,
+and the Host read wait no longer overlaps the resident preceding layers. The table residence location does not enter Main's mathematical interface.
+Offload is still segmented by the real CPU/cache handoff, and the layers before PLE can execute during Host preparation.
 
-同一 exact-B 内，位置、valid columns、state selectors、table rows、page IDs、route/mask
-内容是 Device 输入。RankProgram 选择 context envelope 并更新本地 child；Op 保留自己的
-分派逻辑。启动时验证全部 envelope 更新和 PLE 槽切换；workspace 取允许 profile 的峰值。
+Within the same exact-B, the position, valid columns, state selectors, table rows, page IDs and route/mask
+content are Device inputs. RankProgram selects the context envelope and updates the local child; the Op keeps its own
+dispatch logic. Startup validates all envelope updates and PLE slot switches; the workspace takes the peak of the allowed profiles.
 
-MTP 按本轮实际深度 S=1..K 选择一条 draft chain，保留每行有效长度和 step-0 bridge。
-每步在 transfer 分支异步复制 ID 并记录 external event，Host 按顺序 append 到 PLE；
-链尾回接 compute stream。随后提交 Main verify（含 head），再提交消费 logits 的接受图。
-Ordinary 同样将 Main/head 与采样图分开，约束 mask 和采样配置在决策前上传。
-最终接受长度仍由 Host 事务决定，GDN fold、QSA/PLE tail 提取及 Backend 对齐在图外执行。
+MTP selects one draft chain by this round's actual depth S=1..K, keeping each row's effective length and the step-0 bridge.
+Each step asynchronously copies the ID on the transfer branch and records an external event; the Host appends it to PLE in order;
+the chain end reconnects to the compute stream. Then Main verify (including the head) is submitted, followed by the acceptance graph that consumes the logits.
+Ordinary likewise separates Main/head from the sampling graph; the constraint mask and sampling configuration are uploaded before the decision.
+The final accepted length is still decided by the Host transaction, and the GDN fold, QSA/PLE tail extraction and Backend alignment run outside the graph.
 
-### 8.2 容量规划
+### 8.2 Capacity Planning
 
-加载前从 config、Binding/Use 和各 Op 容量查询建立执行 profile。
-Startup 提供 resident 与目标可用的 offload 放置候选；Loader 按选定位置建立原编码 backing。
-权重 materialize 后，Graph probe 使用少量私有 KV 页，并保留实际 batch、draft 数、
-KV 格式、context envelope 与图共享关系。Resident 直接借用已加载 GPU banks；offload
-使用公共 MoE calibration bank。Graph 准备描述区分两种执行方式。
-销毁 probe 后按实际可用显存和 Graph 重建估计规划正式资源，遵循公共启动的 1 GiB
-headroom 与有界容量纠偏规则。Graph 先于其引用的 workspace、bridge 和 events 销毁。
+Before loading, build the execution profile from the config, Binding/Use and each Op's capacity query.
+Startup provides the resident and the target-available offload placement candidates; the Loader builds the original encoding backing at the selected location.
+After the weights are materialized, the Graph probe uses a few private KV pages and keeps the actual batch, draft count,
+KV format, context envelope and graph sharing relationships. Resident borrows the loaded GPU banks directly; offload
+uses the common MoE calibration bank. The Graph preparation description distinguishes the two execution modes.
+After destroying the probe, plan the formal resources from the actual available VRAM and the Graph rebuild estimate, following the common startup 1 GiB
+headroom and the bounded capacity correction rule. The Graph is destroyed before the workspace, bridge and events it references.
 
-Flash Next 的 prefill chunk 默认 4096，可显式指定 128 的正整数倍，
-实际窗口受剩余上下文、capture 点和媒体边界限制。没有启动自动 chunk 调优。
-Resident 的自动 KV 使用扣除必需资源后的剩余预算；offload 先保证一个完整上下文，
-剩余预算用于 expert cache。显式 KV 容量必须兑现。
-Device pool 在启动时固定，不在请求期间扩容或动态与 expert cache 交换配额。
+Flash Next's prefill chunk is 4096 by default and can be set explicitly to a positive multiple of 128;
+the actual window is limited by the remaining context, the capture point and the media boundary. There is no automatic chunk tuning at startup.
+Resident's automatic KV uses the remaining budget after the required resources are deducted; offload first guarantees one complete context and
+uses the remaining budget for the expert cache. An explicit KV capacity must be honored.
+The Device pool is fixed at startup and does not expand during requests or dynamically exchange quota with the expert cache.
 
-Workspace 对顺序互斥 scratch 取峰值，跨阶段存活的 records、conditioning 和视觉
-handoff 单独计入。PLE 容量为
-`Mmax=max(prefill_chunk,max_concurrency*(draft_tokens+1))`，
-两份 pinned E 和两份 Device E 各自共占 `2*Mmax*2560*2` B，
-另计 64 MiB row cache、I/O buffers 和有界 Host metadata。PLE 容量查询使用独立的
-TableGeometry；启动重试不借用已销毁 ModelShard 的 table。Spark 将这些 Host 分配与 GPU
-分配计入同一物理预算，Host State/KV cache 为零；Vision 的 live media 额度另在启动预算中预留。
+The workspace takes the peak of sequentially exclusive scratch; records, conditioning and the vision
+handoff that live across stages are counted separately. The PLE capacity is
+`Mmax=max(prefill_chunk,max_concurrency*(draft_tokens+1))`,
+two pinned E and two Device E each occupy `2*Mmax*2560*2` B in total,
+plus the 64 MiB row cache, I/O buffers and bounded Host metadata. The PLE capacity query uses an independent
+TableGeometry; startup retries do not borrow the table of a destroyed ModelShard. Spark counts these Host allocations and the GPU
+allocations in the same physical budget, and the Host State/KV cache is zero; the Vision live media quota is reserved separately in the startup budget.
 
-以下是本实例的逻辑 state payload，尚未计入 field/slot 对齐：
+The following is this instance's logical state payload, not yet counting field/slot alignment:
 
-| 内容 | 每个状态副本 |
+| Content | Per state copy |
 |---|---:|
 | Main GDN recurrent | 108 MiB |
 | Main GDN conv history | 2.109375 MiB |
 | PLE N history | 180 KiB |
-| QSA raw tail + 块首坐标 | 780 B/层；Main 12 层，MTP 另 1 层 |
-| Main sample / MTP conditioning | 5 KiB / 启用时另 20 KiB |
+| QSA raw tail + block-head coordinates | 780 B/layer; Main 12 layers, MTP another 1 layer |
+| Main sample / MTP conditioning | 5 KiB / another 20 KiB when enabled |
 
-每个逻辑页组包含 pool 的全部层；下面按单层列出主 KV 加 4096 B index plane：
+Each logical page group contains all layers of the pool; the table below lists the main KV plus the 4096 B index plane per single layer:
 
-| 主 KV profile | 单层 64-token payload | Main 12 层 bytes/原 token |
+| Main KV profile | Single-layer 64-token payload | Main 12 layers bytes/original token |
 |---|---:|---:|
-| BFloat16（BF16 K / FP16 V） | 135168 B | 25344 |
+| BFloat16 (BF16 K / FP16 V) | 135168 B | 25344 |
 | Int8Group64 | 71680 B | 13440 |
 | Fp8E4M3Row256 | 70144 B | 13152 |
 | Nvfp4Group16 | 40960 B | 7680 |
 | Fp8KeyNvfp4Value | 55552 B | 10416 |
 
-MTP pool 按一层另计，其容量包含 provisional lead。
-实际分配从 expanded plane schema、StateImage layout 和 workspace 查询产生，
-不以该 payload 表代替启动预算。完整 Host experts、registered 子集、pinned context、
-PLE cache 和进程内存分别计费；registered 范围不是另一份专家权重。
+The MTP pool is counted separately per layer, and its capacity includes the provisional lead.
+The actual allocation comes from the expanded plane schema, the StateImage layout and the workspace query;
+this payload table does not replace the startup budget. Complete Host experts, the registered subset, pinned context,
+the PLE cache and process memory are each accounted separately; the registered range is not another copy of the expert weights.
 
-## 9. 实现与维护入口
+## 9. Implementation and Maintenance Entry Points
 
-| 责任 | 实现 |
+| Responsibility | Implementation |
 |---|---|
-| 配置、只读定义与本地权重加载 | [config](../../src/models/qwen4_exp/config.cpp)、[definition](../../src/models/qwen4_exp/definition.cpp)、[load](../../src/models/qwen4_exp/load.cpp) |
-| 无地址 profile、Parameters 与层计算 | [execution](../../src/models/qwen4_exp/execution/) |
-| 启动预算、资源和图 | [planning](../../src/models/qwen4_exp/program/planning.cpp)、[resources](../../src/models/qwen4_exp/program/resources.cpp)、[graphs](../../src/models/qwen4_exp/program/graphs.cpp) |
-| PLE hash、读取服务和上传槽 | [ple](../../src/models/qwen4_exp/ple/)、[PlePipeline](../../src/models/qwen4_exp/program/ple_pipeline.cpp) |
-| Main/MTP 物理执行与采用 | [execution](../../src/models/qwen4_exp/program/execution.cpp)、[mtp](../../src/models/qwen4_exp/program/mtp.cpp)、[commit](../../src/models/qwen4_exp/program/commit.cpp) |
-| 请求事务、页组与 checkpoint | [session](../../src/models/qwen4_exp/session/)、[directory](../../src/models/common/context/directory.h) |
-| StateImage 与本地上下文执行 | [state](../../src/models/qwen4_exp/state/)、[context](../../src/models/qwen4_exp/program/context.cpp) |
-| 静态 expert 排序 | [expert_priority](../../src/models/qwen4_exp/parallel/expert_priority.cpp) |
+| Config, read-only definitions and local weight loading | [config](../../src/models/qwen4_exp/config.cpp), [definition](../../src/models/qwen4_exp/definition.cpp), [load](../../src/models/qwen4_exp/load.cpp) |
+| Address-free profile, Parameters and layer computation | [execution](../../src/models/qwen4_exp/execution/) |
+| Startup budget, resources and graphs | [planning](../../src/models/qwen4_exp/program/planning.cpp), [resources](../../src/models/qwen4_exp/program/resources.cpp), [graphs](../../src/models/qwen4_exp/program/graphs.cpp) |
+| PLE hash, read service and upload slots | [ple](../../src/models/qwen4_exp/ple/), [PlePipeline](../../src/models/qwen4_exp/program/ple_pipeline.cpp) |
+| Main/MTP physical execution and adoption | [execution](../../src/models/qwen4_exp/program/execution.cpp), [mtp](../../src/models/qwen4_exp/program/mtp.cpp), [commit](../../src/models/qwen4_exp/program/commit.cpp) |
+| Request transactions, page groups and checkpoint | [session](../../src/models/qwen4_exp/session/), [directory](../../src/models/common/context/directory.h) |
+| StateImage and local context execution | [state](../../src/models/qwen4_exp/state/), [context](../../src/models/qwen4_exp/program/context.cpp) |
+| Static expert ordering | [expert_priority](../../src/models/qwen4_exp/parallel/expert_priority.cpp) |
 
-[Tests](../../tests/README.md)维护 Op 数学、状态语义、PLE 和模型加载测试入口；
-[Benchmarks](../../bench/README.md)维护局部与完整 Engine 测量。
+[Tests](../../tests/README.md) maintain the entry points of the Op mathematics, state semantics, PLE and model loading tests;
+[Benchmarks](../../bench/README.md) maintain the local and complete Engine measurements.

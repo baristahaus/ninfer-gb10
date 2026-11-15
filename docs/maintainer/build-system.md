@@ -113,6 +113,14 @@ with `CMAKE_CURRENT_LIST_DIR`; `include()` does not change `CMAKE_CURRENT_SOURCE
 - Models separate loading, frontend, execution and Program source lists while retaining the
   distinct immutable-loading and mutable-runtime targets. Checkpoints/recipes do not define
   additional compile owners.
+- A model family whose body is shared by more than one compile-time variant uses include-fragments
+  rather than a copy of the body per variant. `src/models/qwen3_8_flash_next/impl/runtime/*_impl.h`
+  are those fragments: the family body, split by responsibility. A fragment carries no `#pragma
+  once` and is included exactly once, from `impl/runtime/instantiate.h`, by a translation unit that
+  first defines `NINFER_QWEN38_FLASH_NEXT_VARIANT` and `NINFER_QWEN38_FLASH_NEXT_RUNTIME_NS`. A
+  fragment is not a header: it must not be included from anywhere else, and the selected variant is
+  compile-time data rather than a runtime branch. The `instantiate.h` header states the rule at the
+  include site; this bullet states why the missing include guard is deliberate and not a defect.
 - New files require an explicit manifest edit. New families require an explicit parent include.
   There is no recursive glob, directory discovery or generated shape/dispatch registry.
 

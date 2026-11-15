@@ -1,642 +1,602 @@
-# Qwen4Exp 双 Spark 并行策略（D0）
+# Qwen4Exp Dual-Spark Parallel Strategy (D0)
 
-状态：首版 TP2/EP2 并行策略已收敛，尚未实施。本文维护首个 Qwen4Exp TP2/EP2
-模型计划的放置、计算与状态交接；单列的后续优化不属于首版实现要求。执行框架和生命周期由
-[分布式执行设计](distributed-execution-design.md)定义。
-模型数学与存储表示以[模型与权重](maintainer/qwen4_exp-model.md)、
-[执行与状态](maintainer/qwen4_exp-execution.md)及 Op 合同为准。
+Status: the first-version TP2/EP2 parallel strategy has converged; it is not implemented yet. This document maintains the placement, computation and state handoff of the first Qwen4Exp TP2/EP2 model plan; the single-column follow-up optimizations are not part of the first-version implementation requirements. The execution framework and lifecycle are defined by
+[the distributed execution design](distributed-execution-design.md).
+The model mathematics and storage representation follow [model and weights](maintainer/qwen4_exp-model.md),
+[execution and state](maintainer/qwen4_exp-execution.md) and the Op contracts.
 
-目标为两个同构 DGX Spark，每机一个 GPU rank。使用现有 Flash Next 量化产物，
-Main routed experts 为 NVFP4 / AllowA4，MTP routed experts 为 block-FP8 / AllowA8；
-其他投影保持各自 A16 合同，KV 表示独立。Spark 使用 GPU 模型计算和 Device State/KV。
+The target is two homogeneous DGX Sparks, with one GPU rank per machine. It uses the existing Flash Next quantized artifacts: Main routed experts are NVFP4 / AllowA4, and MTP routed experts are block-FP8 / AllowA8; the other projections keep their respective A16 contracts, and the KV representation is independent. Spark uses GPU model computation and Device State/KV.
 
-## 1. 确定的首版策略
+## 1. Confirmed First-Version Strategy
 
-| 部分 | 首版选择 | 实施依赖 |
+| Part | First-version choice | Implementation dependency |
 |---|---|---|
-| GDN / sparse GQA | 按 head TP2，O projection 产生局部贡献 | 合并参数切片、卷积重排、本地状态与 Op 几何 |
-| Residual / HC | 所有 M 使用复制路径 | 完整四-stream residual，block 归约后再 combine/norm |
-| Indexer | 四个 query heads、计算、cache 和 raw tail 均复制 | 共同 decision profile、完整 append 与一致 selection |
-| Router / shared | Router 复制，shared intermediate TP2 | 全局 route 与本地 bank 解耦、shared 独立几何 |
-| Routed experts | EP2，每层各 256 个完整专家，启动时确定静态映射 | Main 按已有逐层优先级交错分配；MTP 按 global ID 奇偶分配 |
-| Embedding / head | Embedding 复制，head 按词表 TP2 | 候选交换、约束、penalty、MTP 验收和 scoring |
-| PLE | 按表行分片、提前 lookup；后续投影和卷积复制 | 每机约 13.56 GiB 表，合并 lookup 输出，与 Main 前序计算重叠 |
-| MTP | QSA TP2 / experts EP2，共用分片 head；stem 两个 FC 复制 | 设备侧 draft 交接、Main verify 与 history 对齐 |
-| Vision | encoder 权重复制，独立编码单元分配给不同 rank | 编码边界、特征顺序、缓存和多媒体输入分发 |
-| 状态 | 大状态随 head 分片，小型公共字段复制 | ordinary、verify、checkpoint/restore 的共同前沿 |
+| GDN / sparse GQA | TP2 by head, the O projection produces a local contribution | Merged parameter slicing, convolution reorder, local state and Op geometry |
+| Residual / HC | All M use the replicated path | Full four-stream residual, combine/norm after block reduction |
+| Indexer | Four query heads, computation, cache and raw tail are all replicated | Shared decision profile, full append and consistent selection |
+| Router / shared | Router replicated, shared intermediate TP2 | Global route decoupled from the local bank, independent shared geometry |
+| Routed experts | EP2, 256 complete experts per layer, static mapping fixed at startup | Main interleaves by the existing per-layer priority; MTP splits by global ID parity |
+| Embedding / head | Embedding replicated, head TP2 by vocabulary | Candidate exchange, constraints, penalty, MTP acceptance and scoring |
+| PLE | Sharded by table row, lookup in advance; later projections and convolution replicated | About 13.56 GiB table per machine, merged lookup output, overlapped with the preceding Main computation |
+| MTP | QSA TP2 / experts EP2, shares the sharded head; the two stem FCs replicated | Device-side draft handoff, Main verify and history alignment |
+| Vision | Encoder weights replicated, independent encoding units assigned to different ranks | Encoding boundary, feature order, cache and multimedia input distribution |
+| State | Large state sharded with the head, small public fields replicated | Common frontier for ordinary, verify, checkpoint/restore |
 
-`T` 为每行物理输入列数，`B` 为紧凑 batch 行数，`M=T*B`。布局与执行策略消费
-实际 M、每行有效长度和上下文，不按 prefill/decode/verify 名称决定分派。
-本轮依据源码与已有单机测量审查数学、接口、加载、通信、状态和容量；双机延迟尚未测量。
-首版的 HC token/lowrank TP、Indexer query/history 分工、MTP FC TP 与单 owner MTP
-均不启用；后文的候选分析保留为后续优化依据，不阻塞当前接口和加载计划。
-PLE 表分片见第 7 节，完整计算与 Graph 组织见第 10 节。
+`T` is the number of physical input columns per row, `B` is the compact batch row count, and `M=T*B`. The layout and execution strategy consume the actual M, the per-row effective length and the context; they do not choose the dispatch by the prefill/decode/verify name.
+This round reviews the mathematics, interfaces, loading, communication, state and capacity from the source and the existing single-machine measurements; the two-machine latency has not been measured yet.
+The first version does not enable HC token/lowrank TP, Indexer query/history division, MTP FC TP or single-owner MTP; the candidate analysis in the later sections is kept as the basis for later optimization and does not block the current interfaces and loading plan.
+PLE table sharding is in section 7; the complete computation and Graph organization are in section 10.
 
-## 2. 局部几何与加载
+## 2. Local Geometry and Loading
 
-矩阵 shape 采用 `[N,K]`。下表使用完整复制 Indexer 的方案：
+Matrix shapes use `[N,K]`. The table below uses the plan with the fully replicated Indexer:
 
-| 角色 | 每 rank 的几何 |
+| Role | Geometry per rank |
 |---|---|
-| GDN heads | Q/K 各 8，V 24，dimension=128；每个 Q/K 对应三个连续 V heads |
-| GDN QKVZ | `[8192,2560]`，Q 1024、K 1024、V 3072、Z 3072 |
+| GDN heads | Q/K 8 each, V 24, dimension=128; each Q/K corresponds to three consecutive V heads |
+| GDN QKVZ | `[8192,2560]`, Q 1024, K 1024, V 3072, Z 3072 |
 | GDN AB / output | `[48,2560]` / `[2560,3072]` |
-| GDN convolution | 四个 taps，各含本地 Q/K/V 的 5120 通道 |
-| QSA heads | Q 12、KV 1，dimension=256 |
-| Main QSA Q/gate | `[6144,2560]`，Q/gate 各 3072 |
-| Main QSA KV/index | `[1152,2560]`，K/V 各 256、index-Q 512、index-K 128 |
-| Main/MTP QSA output | `[2560,3072]`，保留各自原有表示 |
-| MTP QSA joint input | `[7296,2560]`，保留完整 index-Q/index-K；按[持久布局](maintainer/qwen4_exp-model.md#4-合并矩阵与持久布局)组装，K/V/index-K 共享连续前缀 |
-| Router / shared score | `[512,2560]` / `[1,2560]`，复制 |
+| GDN convolution | four taps, each with the 5120 channels of the local Q/K/V |
+| QSA heads | Q 12, KV 1, dimension=256 |
+| Main QSA Q/gate | `[6144,2560]`, Q/gate 3072 each |
+| Main QSA KV/index | `[1152,2560]`, K/V 256 each, index-Q 512, index-K 128 |
+| Main/MTP QSA output | `[2560,3072]`, keeps its original representation |
+| MTP QSA joint input | `[7296,2560]`, keeps the full index-Q/index-K; assembled per [persistent layout](maintainer/qwen4_exp-model.md#4-merged-matrices-and-persistent-layout), K/V/index-K share a contiguous prefix |
+| Router / shared score | `[512,2560]` / `[1,2560]`, replicated |
 | Shared GU / down | `[640,2560]` / `[2560,320]` |
-| 合并 router/score/shared GU | 若保留一次投影，为 `[1153,2560]` |
-| Routed experts | 256 个完整 experts；各自 GU `[1280,2560]`、down `[2560,640]` |
-| LM head | `[124160,2560]`；global vocabulary ID 范围互不重叠 |
+| Merged router/score/shared GU | `[1153,2560]` if a single projection is kept |
+| Routed experts | 256 complete experts; each GU `[1280,2560]`, down `[2560,640]` |
+| LM head | `[124160,2560]`; the global vocabulary ID ranges do not overlap |
 
-Config 保留全局几何，ParallelPlan 产生本地参数、状态 schema 和通信描述。合并矩阵
-按逻辑角色分别切片后建立本地 parent；卷积的 tap/channel 行序随本地 Q/K/V 重建。
-Q8 output 的 K 切分保持 G32 编码分组；expert EP 保留完整 expert 的 codes/scales/divisor。
-加载直接物化本地编码与稳定视图，不先加载完整 GPU 模型再切片，不在执行期重新量化。
+Config keeps the global geometry; ParallelPlan produces the local parameters, the state schema and the communication description. Merged matrices are sliced by logical role and then a local parent is built; the convolution tap/channel row order is rebuilt with the local Q/K/V.
+The Q8 output K split keeps the G32 encoding groups; expert EP keeps the codes/scales/divisor of the complete expert.
+Loading materializes the local encodings and stable views directly; it does not load the complete GPU model first and then slice it, and it does not requantize at execution time.
 
-这部分的数学闭合性可以确定：GDN 的归一化、卷积、递推均在完整 head 内完成，
-8 个 Q/K heads 与对应 24 个 V heads 一起分配；A_log、dt_bias、AB 和 state 使用同一
-V-head 范围。QSA 的每个 KV head 原本服务 12 个 Q heads，TP2 恰好完整切开这两组。
-Head 内 RMSNorm、RoPE、KV Hadamard 与存储量化保持原 dimension，不引入归约通信。
+The mathematical closure of this part is settled: GDN normalization, convolution and recurrence all complete inside a full head, and the 8 Q/K heads are distributed together with the corresponding 24 V heads; A_log, dt_bias, AB and state use the same V-head range. Each QSA KV head originally serves 12 Q heads, and TP2 splits exactly these two groups.
+The in-head RMSNorm, RoPE, KV Hadamard and storage quantization keep the original dimension and introduce no reduction communication.
 
-需要修改的是真实的本地参数与执行几何。当前 GDN/QSA 调用使用全局 Config，QSA Op
-合同仍写明 24/2 heads；仅对权重切片不能完成接入。LocalParameters、workspace 查询、
-prepare、attention、snapshot/record/fold 及 State/KV schema 都要消费派生后的几何。
-GDN QKVZ、AB 与 QSA joint parent 不能按总 N 直接对半截取；应分别截取每个角色，
-再按原来的角色次序拼接。本轮沿用纯 Linear 几何先支持、再接 split/融合出口的工作顺序。
+What needs to change is the real local parameters and execution geometry. The current GDN/QSA calls use the global Config, and the QSA Op contract still states 24/2 heads; slicing the weights alone cannot complete the integration. LocalParameters, the workspace query, prepare, attention, snapshot/record/fold and the State/KV schema must all consume the derived geometry.
+The GDN QKVZ, AB and QSA joint parents cannot be cut in half by the total N directly; take each role separately and then concatenate them in the original role order. This round follows the work order of supporting the pure Linear geometry first and then connecting the split/fused outputs.
 
-vLLM 的 QSA 同样采用 Q/KV head TP 和 RowParallelLinear output，并在 TP 大于 KV
-heads 时复制 KV。这个做法支持本方案的 head 分工；其输入编码和私有融合不能替代
-NInfer 对 Q8 分组、BF16 出口及本地状态的处理。
+vLLM's QSA also uses Q/KV head TP and RowParallelLinear output, and it replicates KV when TP is greater than the KV head count. This practice supports the head division of this plan; its input encoding and private fusion cannot replace NInfer's handling of Q8 grouping, BF16 output and local state.
 
-## 3. Residual 与 HC
+## 3. Residual and HC
 
-首版每个 rank 持有完整 `[2560,4,M]` residual，HC norm、down/injection、up 和
-mix 重复执行。GDN/QSA 和 MoE 各产生 `[2560,M]` 局部贡献，完成归约后再 combine/norm。
-正常 Main 层对应两个主要归约边界，shared 的贡献并入 MoE 边界。
+In the first version each rank holds the complete `[2560,4,M]` residual, and HC norm, down/injection, up and mix run repeatedly. GDN/QSA and MoE each produce a `[2560,M]` local contribution, and combine/norm runs after the reduction completes. A normal Main layer corresponds to two main reduction boundaries, and the shared contribution joins the MoE boundary.
 
-vLLM 的 HC down/up/injection 也复制；其 Qwen4Exp 明确拒绝
-`use_sequence_parallel_moe`。因此大 M 的 HC token 切分需要建立完整的新执行路径，
-不能把其他模型的 sequence-parallel 开关直接套入本模型。
+vLLM's HC down/up/injection are also replicated; its Qwen4Exp explicitly rejects `use_sequence_parallel_moe`. Therefore the HC token split for large M needs a complete new execution path, and the sequence-parallel switch of other models cannot be applied to this model directly.
 
-该候选在数学上可行：block 局部贡献 → ReduceScatter token 行 → 完整单-token
-residual combine/norm/HC mix → AllGather `[2560,M]` 输入 → 下一段 TP/EP 计算。
-每个 token 的四条 streams 留在同一个 owner，residual 和 injection 在连续层间维持
-相同的 token 分区。GDN/QSA/experts 仍消费所有 tokens，本地 HC 才只处理自己的部分。
-这不把 GDN 的时间序列切开，也不改变 expert 分工。
+The candidate is mathematically feasible: block local contribution → ReduceScatter token rows → complete single-token residual combine/norm/HC mix → AllGather `[2560,M]` input → the next TP/EP computation segment.
+The four streams of each token stay in the same owner, and the residual and injection keep the same token partition across consecutive layers. GDN/QSA/experts still consume all tokens; only the local HC processes its own part.
+This does not split the GDN time sequence and does not change the expert division.
 
-TP2 下 RS/AG 的主体字节量与同尺寸 AR 相当，但调用数由一次变为两次。小 M 的 HC
-主要读完整权重，分 token 不减少每机读到的权重，收益很小；大 M 才有分摊计算的价值。
-完整 variant 还要解决三个交接：
+Under TP2 the main RS/AG byte volume is comparable to an AR of the same size, but the call count changes from one to two. The HC for small M mainly reads the full weights; splitting by token does not reduce the weights each machine reads, so the benefit is very small; only large M has the value of sharing the computation.
+The complete variant also has to solve three handoffs:
 
-- PLE 使用跨 token 的九列 history。可在 PLE 之前维持复制 residual，PLE 之后再进入
-  token 分区，避免只为这一个层增加时序 halo 或一次完整 residual 汇集。
-- Final HC 可按 token 继续计算，但 Main 的 sample/conditioning 必须按实际消费者
-  汇集。普通生成只取末列；MTP history 需要其配对的 Main conditioning 列，不能只取末列。
-- `[T,B]` 的有效列、padding、token owner 和输出行序由同一 variant 固定；不能把
-  一段扁平 token 切片重新解释为一条序列。必要的 pack/unpack 和通信缓冲计入成本。
+- PLE uses a nine-column history across tokens. It can keep the replicated residual before PLE and enter the token partition after PLE, avoiding a time halo or a full residual gather for this single layer.
+- The final HC can continue per token, but Main's sample/conditioning must gather by the actual consumer. Ordinary generation takes only the last column; MTP history needs its paired Main conditioning column and cannot take only the last column.
+- The valid columns of `[T,B]`, padding, token owner and output row order are fixed by the same variant; a flat token slice cannot be reinterpreted as a sequence. The necessary pack/unpack and communication buffers count toward the cost.
 
-另一候选是按 lowrank=320 切成 160+160：本地 down/SiLU → up 的 10240 维局部和
-→ 归约 → sigmoid/mix；四行 injection 复制。单 rank 少读约 6.25 MiB 权重，但增加
-`10240*M` 的通信与新的 HC 分段接口。此项保留为待测候选，不作为首版默认布局。
-`g` 原本是 HC 的内部量，其通信表示要满足完整 HC 数值合同，不能直接套用普通
-Linear 出口的 BF16 舍入边界。
+The other candidate splits by lowrank=320 into 160+160: local down/SiLU → up's 10240-dimension local sum → reduction → sigmoid/mix; the four-row injection is replicated. A single rank reads about 6.25 MiB less weight, but adds `10240*M` of communication and a new HC segmentation interface. This item is kept as a candidate to be tested and is not the first-version default layout.
+`g` was originally an internal quantity of HC; its communication representation must satisfy the complete HC numerical contract and cannot directly use the BF16 rounding boundary of an ordinary Linear output.
 
-低秩切分不能先在两机分别做 sigmoid 再相加。按 residual feature/stream 切分虽然也
-成立，却会在 norm、down 或最终 stream mix 之间增加归约；其完整通信链比只看某个
-Linear 的减半更重要。目前没有证据支持它优于复制路径或大 M 的 token 分区。
+The low-rank split cannot do sigmoid on the two machines separately and then add. Splitting by residual feature/stream also works, but it adds a reduction between norm, down or the final stream mix; its complete communication chain matters more than halving one Linear. There is currently no evidence that it beats the replicated path or the token partition for large M.
 
-已有迁入阶段的 Spark Graph/cold 微基准，三轮 GPU 中位数范围：HC mix 的
-M=1 约 56–58 μs，M=64 约 58–59 μs，
-M=4096 约 1.13–1.14 ms。按仓库持续读参考 257.42 GB/s，6.25 MiB 的读取量对应
-约 25 μs；这是判断分片潜力的量级，不是分布式收益测量。
+The Spark Graph/cold microbenchmarks from the existing migration stage give three-run GPU median ranges: HC mix at M=1 is about 56–58 μs, at M=64 about 58–59 μs,
+and at M=4096 about 1.13–1.14 ms. Against the repository's sustained-read reference of 257.42 GB/s, a read volume of 6.25 MiB corresponds to
+about 25 μs; this is an order-of-magnitude basis for judging the sharding potential, not a distributed benefit measurement.
 
 ## 4. QSA Indexer
 
-每个 rank 复制四个 index query heads、一个 raw index key、compressed cache 和 raw tail。
-主 attention 的 Q/K/V 按 head 切分。最大上下文下，Main 12 层 BF16 index cache
-约 192 MiB/rank/请求。
+Each rank replicates four index query heads, one raw index key, the compressed cache and the raw tail.
+The main attention Q/K/V is split by head. At the maximum context, the Main 12-layer BF16 index cache
+is about 192 MiB/rank/request.
 
-基础路径重复计算完整 Indexer，直接供本地 sparse GQA 使用。vLLM 同样复制
-index-Q/K 投影和 index cache。这里需要一致的是 selection 集合与 cache 内容：
-公共 Op 的精度容限本身并不保证两个不同实现选择相同的临界候选。
-同构双 Spark 的复制区域使用相同输入、T/B、envelope、计算路径和 global-ID
-tie-breaking；当前 score kernel 独立生成每个分数，TopK 按 score/ID 全序选择，
-不依赖浮点 atomic 累加完成顺序。其他分片 Op 仍保留自己的私有分派。
-将来采用不同设备或不同数值路径时，需改为一次生产、显式分发共同 selection。
+The base path recomputes the complete Indexer and uses it directly for the local sparse GQA. vLLM also replicates
+the index-Q/K projections and the index cache. What must be consistent here is the selection set and the cache content:
+the precision tolerance of a common Op does not by itself guarantee that two different implementations select the same critical candidates.
+The replicated region on the two homogeneous Sparks uses the same input, T/B, envelope, computation path and global-ID
+tie-breaking; the current score kernel generates each score independently, and TopK selects by the full score/ID order,
+so it does not depend on the completion order of floating-point atomic accumulation. Other sharded Ops still keep their own private dispatch.
+When different devices or different numerical paths are used in the future, the plan must change to produce the selection once and distribute the common selection explicitly.
 
-大 M 候选按 query 分工，每机仍读取完整 index cache，随后交换最终 block IDs/counts。
-每 query 最多 512 个 I32 IDs；M=4096 的完整 IDs 为 8 MiB。切换还取决于上下文长度，
-短上下文的全选路径不承担重复评分成本。
+The large-M candidate divides by query, each machine still reads the complete index cache, and then the final block IDs/counts are exchanged.
+Each query has at most 512 I32 IDs; the complete IDs at M=4096 are 8 MiB. The switch also depends on the context length;
+the full-selection path for short contexts does not bear the repeated scoring cost.
 
-现有 `qsa_prepare` 同时追加主 KV、压缩 index key、记录 raw tail，并生成全部 Q。
-它仍必须处理完整输入窗口；分 query 应发生在准备之后。当前 Indexer 要求连续
-`[128,4,T,B]` 输入及 `[512,T,B]` 输出，不能直接把跨 batch 的半个 T 视为连续 Tensor。
-需增加明确的 query 工作域/输出视图，或显式打包本地查询与 metadata；成本一并计算。
-每个 query 只有一个 selection 生产者，汇集后两边 GQA 才消费完整结果。
+The existing `qsa_prepare` appends the main KV, the compressed index key and the raw tail, and generates all Q.
+It must still process the complete input window; the query division should happen after preparation. The current Indexer requires a contiguous
+`[128,4,T,B]` input and a `[512,T,B]` output, so half a T across a batch cannot be treated as a contiguous Tensor directly.
+An explicit query work domain/output view must be added, or the local queries and metadata must be packed explicitly; the cost is counted too.
+Each query has only one selection producer, and both sides consume the complete result after the gather.
 
-Prefill 的后半段 query 可见历史更多，按 query 个数各半不保证负载均衡。分配至少要
-依据可见块数和全选区间；多请求时还需考虑各行上下文差异。是否分工应比较
-`完整 Indexer 耗时` 与 `较慢分片耗时 + 暴露的交换/布局成本`。
-减少 query 也会降低 K tile 的复用，不能默认计算量减半就会耗时减半。
+The second half of the prefill queries sees more history, so splitting by query count in half does not guarantee load balance. The assignment must at least
+consider the number of visible blocks and the full-selection interval; with multiple requests, the per-row context difference also matters. Whether to divide should compare
+`complete Indexer time` with `slower shard time + exposed exchange/layout cost`.
+Reducing queries also reduces the reuse of the K tiles, so one cannot assume that halving the computation halves the time.
 
-按 query heads 切分需要在 TopK 前合并完整 score：必须在每个 head 的 ReLU 后求和，
-不能先选各 head 的局部 TopK。该方案还不减少 key cache 扫描量。
-按历史 blocks 切分可减少扫描：各分片计算完整四-head score，交换局部 Top512 并归并；
-按相同 score/ID 顺序，局部 Top512 的并集包含全局 Top512，但须传 score 和 ID，
-而当前接口只返回 ID/count。它还需要历史分片的页表、追加与 checkpoint 设计，暂不纳入首版。
-vLLM 返回展开后的 token IDs；NInfer 继续交换压缩 block IDs，不引入这项输出膨胀。
+Splitting by query heads requires merging the complete score before TopK: sum after the ReLU of every head,
+not select each head's local TopK first. This option also does not reduce the key cache scan volume.
+Splitting by history blocks does reduce the scan: each shard computes the complete four-head score, exchanges the local Top512 and merges;
+with the same score/ID order, the union of the local Top512 contains the global Top512, but the score and ID must be transferred,
+while the current interface returns only ID/count. It also needs the page table, append and checkpoint design for the history shards, so it is not included in the first version.
+vLLM returns expanded token IDs; NInfer continues to exchange compressed block IDs and does not introduce this output expansion.
 
 ## 5. MoE
 
-两机复制 Router，产生全局 top-10 和归一化系数。本地只计算拥有的 global expert IDs，
-不按本地子集重新归一化。Shared FFN 的 intermediate 切成 320+320，独立 scalar gate
-复制，本地 shared contribution 与 routed contribution 汇合后统一归约。
+The two machines replicate the Router and produce the global top-10 and the normalized coefficients. The local computation covers only the owned global expert IDs and does not renormalize by the local subset. The shared FFN intermediate is split into 320+320, the independent scalar gate is replicated, and the local shared contribution joins the routed contribution before the unified reduction.
 
-每层本地 bank 包含 256 个完整 experts，global-ID 到 local bank 的映射独立于存储顺序。
-首版 Main 使用已有逐层优先级，排序位置 j 的专家归属 `j%2`；MTP 使用 global ID
-奇偶分配。两者均保持相同数量，加载时生成固定映射。优先级只有排序，不能替代精确频次
-或共同激活数据；优化目标是较慢 rank 的实际完成时间。小 M 看触及权重与负载偏斜，
-大 M 同时看 per-expert token 数和 grouped GEMM 效率。
+The local bank of each layer contains 256 complete experts, and the mapping from global ID to local bank is independent of the storage order.
+The first version's Main uses the existing per-layer priority, and the expert at sorted position j belongs to `j%2`; MTP uses global ID parity. Both keep the same count and generate a fixed mapping at load time. The priority is only an ordering and cannot replace exact frequency or co-activation data; the optimization target is the actual completion time of the slower rank. For small M, look at the touched weights and the load skew; for large M, also look at the per-expert token count and the grouped GEMM efficiency.
 
-首版 token 输入复制，每机计算本地 expert 子集后合并输出，不需要 token AllToAll。
-vLLM 的 `FusedMoEParallelConfig` 也区分这两件事：TP2+EP 将 routed TP 设为 1、EP 设为 2；
-DP/PCP 或 sequence-parallel tokens 才进一步触发其 AllToAll 路径。Shared MLP 的 TP
-仍独立于 routed expert 的 EP。
+The first version replicates the token input, computes the local expert subset on each machine and then merges the output; no token AllToAll is needed.
+vLLM's `FusedMoEParallelConfig` also separates these two things: TP2+EP sets routed TP to 1 and EP to 2;
+only DP/PCP or sequence-parallel tokens further trigger its AllToAll path. The shared MLP TP
+is still independent of the routed expert EP.
 
-NInfer 已有的能力与缺口如下：
+NInfer's existing capabilities and gaps are as follows:
 
-| 层级 | 已有基础 | 本次并行接入需要的工作 |
+| Layer | Existing basis | Work this parallel integration needs |
 |---|---|---|
-| Route | 全局 512、top-10、独立 FP32 coefficients | 两机复制相同 control 计算，不按本地专家重新归一化 |
-| Device bank | indexed offsets、独立 divisor、subset mask | 512 个逻辑地址映射到 256 个本地物理 slots；远端项不被读取 |
-| 本地计算 | `routed_swiglu` 支持 subset，也支持叠加 shared | 保留全局 route profile；本地 active assignments 在读权重前筛选 |
-| Shared | 公共 profile 已独立 | validation、kernel、workspace 仍固定 640，需完整支持 320 |
-| 加载 | 原产物的 affine bank 描述和整 parent 绑定 | 按专家搬运编码 planes，直接生成本地 slots 和 global-ID offsets |
-| 完整融合入口 | 假定全部 routed experts 可读 | 单机入口保留；EP 的融合路径必须显式包含 subset 与独立 shared 几何 |
+| Route | Global 512, top-10, independent FP32 coefficients | Both machines replicate the same control computation; do not renormalize by local experts |
+| Device bank | indexed offsets, independent divisor, subset mask | Map 512 logical addresses to 256 local physical slots; remote entries are not read |
+| Local computation | `routed_swiglu` supports subset and also shared accumulation | Keep the global route profile; filter local active assignments before reading weights |
+| Shared | Public profile already independent | validation, kernel, workspace still fixed at 640; need full 320 support |
+| Loading | affine bank description and whole-parent binding of the original artifact | Move encoded planes per expert and generate local slots and global-ID offsets directly |
+| Complete fused entry | Assumes all routed experts are readable | Keep the single-machine entry; the EP fused path must explicitly include the subset and the independent shared geometry |
 
-因此首版可以保留 `bank.count=512` 的逻辑域，物理容量只有 256 个专家。
-沿用现有 expert slot 的 codes/scales 组织即可让 indexed offsets 指向本地存储；
-divisor 表体积很小，可继续按 global ID 编址。任意映射不要求重写 expert GEMM，
-但不能继续通过 `bind_banks` 绑定完整 GPU parent 来实现“分片”。
+Therefore the first version can keep the logical domain `bank.count=512`, with a physical capacity of only 256 experts.
+Reusing the existing expert slot codes/scales organization lets the indexed offsets point to the local storage;
+the divisor table is very small and can continue to be addressed by global ID. An arbitrary mapping does not require rewriting the expert GEMM,
+but the complete GPU parent must no longer be bound through `bind_banks` to implement "sharding".
 
-完整融合路径中的 route/group counts 也要按本地 subset 构建。只替换 bank 指针或在
-最终输出处清零，会让中间 grouped jobs 仍访问远端权重。Shared=320 的 gate/up、down、
-activation scratch 与末端累加必须一起改，不能只放宽入口检查。
-本地 shared 与 routed 尽量在现有累加内部合并，再输出一次 BF16 局部贡献并参与 AR；
-不能先各自额外舍入为 BF16 后，把它当作已有融合语义。
+The route/group counts in the complete fused path must also be built from the local subset. Replacing only the bank pointer or zeroing at the
+final output would still let the intermediate grouped jobs access remote weights. The shared=320 gate/up, down,
+activation scratch and the final accumulation must change together; the entry check cannot simply be relaxed.
+The local shared and routed should be merged inside the existing accumulation where possible, and then a single BF16 local contribution is output and participates in the AR;
+they must not each be rounded to BF16 separately and then treated as the existing fused semantics.
 
-全局 Router 是需要一致的离散决策区域，与 Indexer 采用相同原则。合并投影若保留为
-`[1153,2560]`，两机的 router/score 段必须采用共同计算路径，shared 段才是各自的权重。
+The global Router is a discrete decision region that needs consistency, with the same principle as the Indexer. If the merged projection is kept as
+`[1153,2560]`, the router/score segment on both machines must use the same computation path, and only the shared segment is their own weight.
 
-EP 不保证每步各算五个专家。单 query 的十个 experts 可能偏向一侧；同数量、按全局
-优先级交错放置只是合理初值，不能保证每请求负载均衡。大 M 的每个 expert 仍接收
-原本路由到它的所有 tokens，所以单 expert GEMM 的 token 数不会因 EP2 自动减半。
-这有利于保留 grouped GEMM 效率，但实际加速由较忙 rank 决定。
+EP does not guarantee that each step computes five experts. The ten experts of a single query may lean to one side; the same count with interleaved
+global-priority placement is only a reasonable initial value and cannot guarantee per-request load balance. For large M, each expert still receives
+all tokens originally routed to it, so the token count of a single expert GEMM does not automatically halve with EP2.
+This helps keep the grouped GEMM efficiency, but the actual speedup is decided by the busier rank.
 
-## 6. Embedding、head 与输出决策
+## 6. Embedding, Head and Output Decision
 
-Embedding 完整复制，每机约 1.184 GiB；lookup 仅读取所需行。LM head 沿词表行切分，
-每机约 0.592 GiB，Main/MTP 继续共享同一物理 head。
+The embedding is fully replicated, about 1.184 GiB per machine; lookup reads only the needed rows. The LM head is split along the vocabulary rows,
+about 0.592 GiB per machine, and Main/MTP continue to share the same physical head.
 
-复制 embedding 的代价明确：每机比 TP2 多放约 0.592 GiB，换取逐 token lookup 不增加
-通信。vLLM 的 vocab-parallel embedding 使用零填充局部结果并归约；我们的容量条件下，
-embedding 复制仍是合理选择，head 则通过词表切分减少每步的大矩阵读取。
+The cost of replicating the embedding is clear: each machine holds about 0.592 GiB more than TP2, in exchange for per-token lookup without extra
+communication. vLLM's vocab-parallel embedding uses zero-filled local results and a reduction; under our capacity conditions,
+replicating the embedding remains the reasonable choice, and the head reduces the large matrix read per step through the vocabulary split.
 
-各 rank 先对本地 logits 应用 mask 和 penalty，再求本地 Top-K。当前采样最多保留
-全局 Top-20，按相同分数/ID 顺序，各分片的 Top-20 必然覆盖全局 Top-20。
-合并候选后才执行 min-p/top-p、归一化和 RNG。这精确保留当前采样算法；不能先在
-本地算 top-p 或 softmax 再合并。候选使用 FP32 adjusted score 和 I32 global ID，
-每 rank、每列最多 160 B。
+Each rank first applies the mask and penalty to the local logits and then computes the local Top-K. The current sampling keeps at most the
+global Top-20; with the same score/ID order, the Top-20 of each shard necessarily covers the global Top-20.
+min-p/top-p, normalization and RNG run only after the candidates are merged. This preserves the current sampling algorithm exactly; one cannot compute top-p or softmax locally first and then merge. The candidates use an FP32 adjusted score and an I32 global ID,
+at most 160 B per rank per column.
 
-Greedy 每机只需一个候选。可将 FP32 score 与逆序 global ID 编成唯一全序 U64 key，
-做一次 MAX AllReduce，使两机直接取得相同 argmax；mask 无候选使用独立的无效 key，
-signed-zero/tie 规则沿用现有 selector。这样 MTP 每步不需要 gather 后再 broadcast ID。
-Stochastic 路径汇集候选，由 output rank 在 GPU 上决策并分发小型结果。
-允许单个词表分片无合法候选，dead-end 按全局词表判定。
+Greedy needs only one candidate per machine. The FP32 score and the inverted global ID can be encoded into a unique total-order U64 key,
+and one MAX AllReduce lets both machines obtain the same argmax directly; a mask with no candidate uses an independent invalid key, and the
+signed-zero/tie rules follow the existing selector. In this way MTP does not need to gather and then broadcast the ID at each step.
+The stochastic path gathers the candidates, and the output rank decides on the GPU and distributes the small result.
+A single vocabulary shard is allowed to have no legal candidate; the dead-end is decided by the global vocabulary.
 
-当前 `sample`/acceptance 接口消费完整 logits，并含计数效果，不能在两机各调用一次
-来实现上述协议。需要拆出本地候选提取与全局决策的数学接口，保留单机融合路径；
-现有 kernel 内已有 partial TopK 与 merge，可作为计算基础。权重物理词表是 248320 行，
-实际 `token_domain` 来自模型资源，分片末尾的非公开 IDs 必须排除。
+The current `sample`/acceptance interface consumes the complete logits and includes counting effects, so it cannot be called once on each machine
+to implement the above protocol. A mathematical interface for local candidate extraction and global decision must be split out, and the single-machine fused path kept;
+the existing kernel already has partial TopK and merge, which can serve as the computation basis. The physical vocabulary of the weights is 248320 rows;
+the actual `token_domain` comes from the model resource, and the non-public IDs at the end of the shard must be excluded.
 
-MTP 验证列 j 的 penalty 叠加此前 j 个 draft IDs，因为只有接受该前缀后才消费该列。
-各列候选可并行产生，后续 acceptance 顺序执行。Global ID、tie-breaking、seed、
-逻辑位置和 SamplePurpose 保持现有语义。Canonical token counts 可随词表分片；
-候选构造只读它及 round-local overlay，最终采用命令才增加本分片命中的输出 IDs。
-许可输出与 Frontend 实际采用前缀仍分开，不能把未发布的 correction/bonus 计入持久状态。
+MTP verify column j's penalty stacks the previous j draft IDs, because that column is consumed only after that prefix is accepted.
+The candidates of each column can be produced in parallel, and the subsequent acceptance runs in order. Global ID, tie-breaking, seed,
+logical position and SamplePurpose keep the existing semantics. The canonical token counts can follow the vocabulary shards;
+candidate construction reads only them and the round-local overlay, and only the final adoption command adds the output IDs hit in this shard.
+The permitted output and the prefix actually adopted by the Frontend remain separate; unpublished correction/bonus cannot be counted into the persistent state.
 
-CausalScoring 先归约全局 max，再归约移位 exp sum，并取得 target owner 的 logit，
-得到完整词表 log-probability；不使用 Top-20 近似。它仍只需标量统计而非完整 logits。
-vLLM 已有分布式 argmax/TopK 方法，但常规 logits 路径仍可 gather 全词表，其快捷方法
-不自动提供 NInfer 的 penalty、约束和 speculative acceptance 合同。
+CausalScoring first reduces the global max, then reduces the shifted exp sum, and takes the logit of the target owner,
+to obtain the complete-vocabulary log-probability; it does not use the Top-20 approximation. It still needs only scalar statistics rather than the complete logits.
+vLLM already has distributed argmax/TopK methods, but the regular logits path can still gather the full vocabulary; its shortcut methods
+do not automatically provide NInfer's penalty, constraint and speculative acceptance contracts.
 
-已有 Spark Graph/cold 迁入测量中，完整 BF16 head 在 M=1/8 的 GPU 中位数约
-4.7–4.8 ms。词表切分缩小每机
-head 计算与读取范围；候选通信后的真实收益需要双机执行测量。
+In the existing Spark Graph/cold migration measurements, the complete BF16 head at M=1/8 has a GPU median of about
+4.7–4.8 ms. The vocabulary split shrinks the head computation and read range on each machine; the real benefit after candidate communication needs a two-machine execution measurement.
 
 ## 7. PLE
 
-确定按现有表 shard 分配所有权：两个 rank 各保存 64 个完整 NF4 shards，约
-13.56 GiB/rank；rank 0 保存 shards 0–63，rank 1 保存 64–127，每个逻辑行只有一个
-owner。原有 128 个 shard 的 metadata/哈希参数
-很小，可复制。表的存储所有权在加载期确定，本双机计划不保留完整复制表的执行 variant。
+Ownership is assigned by the existing table shard: the two ranks each hold 64 complete NF4 shards, about
+13.56 GiB/rank; rank 0 holds shards 0–63 and rank 1 holds 64–127, and each logical row has only one
+owner. The metadata/hash parameters of the original 128 shards are very small and can be replicated. The storage ownership of the table is fixed at load time, and this dual-machine plan does not keep an execution variant with the complete replicated table.
 
-vLLM 的 `Qwen4ExpPLEEmbedding` 继承 vocab-parallel embedding，通过 ETP group
-分片表行并合并 lookup 输出。NInfer 可以采用同样的放置原则，同时保留自己的 NF4
-编码、4 KiB row-page、per-shard divisor 和精确 BF16 LUT，不转换为其 BF16/FP8 表。
-完整原始 shard 的分配还避免了拆页、修改 divisor 和额外重排。
+vLLM's `Qwen4ExpPLEEmbedding` inherits the vocab-parallel embedding and shards the table rows through the ETP group
+and merges the lookup output. NInfer can adopt the same placement principle while keeping its own NF4
+encoding, 4 KiB row-page, per-shard divisor and exact BF16 LUT, without converting to its BF16/FP8 table.
+Allocating the complete original shard also avoids splitting pages, modifying the divisor and extra reordering.
 
-每轮的 GPU 流程为：
+The GPU flow of each round is:
 
 ```text
-已知 token IDs + 已执行的 raw-ID tail
-  → 按现有 INT64 wrap/XOR/有符号模语义生成 16 个全局行号
-  → 本地 owner 查询并精确解码，远端行写零
-  → 合并成完整 [2560,M] BF16 lookup
-  → 复制的 PLE projection / gate / convolution
+Known token IDs + the executed raw-ID tail
+  → generate 16 global row numbers with the existing INT64 wrap/XOR/signed modulo semantics
+  → local owner lookup and exact decode; remote rows are written as zero
+  → merge into the complete [2560,M] BF16 lookup
+  → replicated PLE projection / gate / convolution
 ```
 
-Lookup 出口应保留 BF16 words，包括 signed zero。不能用普通浮点加零来声称逐 word
-不变；每行 160 维为偶数，可以将 BF16 两两打包为 32-bit word，每个 word 仅一个
-owner 非零，用整数 SUM 合并后按 BF16 解释，或使用等价的按 owner 收集。
-该合并的逻辑语义是物化独占行，不是对多个数值贡献做近似求和。
+The lookup output should keep the BF16 words, including signed zero. Ordinary floating-point addition of zero cannot claim per-word
+invariance; each row has 160 dimensions, an even number, so BF16 can be packed pairwise into 32-bit words, each word has only one
+nonzero owner, and an integer SUM merge is interpreted as BF16, or an equivalent per-owner gather can be used.
+The logical semantics of this merge is to materialize the exclusive rows, not to approximate the sum of multiple numerical contributions.
 
-通信载荷为 `5120*M` B：M=1 为 5 KiB，M=4096 为 20 MiB，每轮 Main 只做一次。
-Lookup 不依赖 residual，可在 token IDs 确定后开始，利用 embedding 和整个第 0 层
-直到第 1 层 PLE 消费之间的时间。它可以排在同一通信序列的 layer-0 归约之前，
-与 GPU 计算重叠；若尚未完成，仍可能延迟后续归约，不能预先把通信耗时算成零。
-MTP 本体无 PLE；Main verify 的 IDs 到齐后即可启动整窗口 lookup，不再为 PLE
-把 draft IDs 搬到 Host。普通输出、约束与 Frontend 的 Host 交接仍按原有职责执行。
+The communication payload is `5120*M` B: 5 KiB at M=1 and 20 MiB at M=4096, and Main does it only once per round.
+The lookup does not depend on the residual and can start after the token IDs are determined, using the time between the embedding and the whole layer 0
+up to the PLE consumption in layer 1. It can be placed before the layer-0 reduction of the same communication sequence,
+and overlap with the GPU computation; if it is not finished, it can still delay the following reduction, so the communication time cannot be counted as zero in advance.
+The MTP body has no PLE; once the Main verify IDs are all present, the whole-window lookup can start, and the draft IDs no longer need to be moved to the Host for PLE. The ordinary output, constraints and the Frontend's Host handoff still follow their original responsibilities.
 
-GPU hash/lookup 是新增能力，现有代码只有 CPU hash、SSD 读取和 Host LUT 解码。
-现有 `make_nf4_bf16_lut` 可在加载期生成每个 shard 的小型 LUT 并上传；kernel
-消费原始 row 编码，不在启动时展开整张 BF16 表。PLE projection/gate/convolution
-与九列 history 复制，保持既有时序、归一化和 BF16 边界。
+GPU hash/lookup is a new capability; the existing code has only CPU hash, SSD reads and Host LUT decode.
+The existing `make_nf4_bf16_lut` can generate a small LUT for each shard at load time and upload it; the kernel
+consumes the original row encoding and does not expand the whole BF16 table at startup. PLE projection/gate/convolution
+and the nine-column history are replicated, keeping the existing timing, normalization and BF16 boundaries.
 
-将 Main/MTP experts 和 PLE 表分别分半，其余权重暂按复制计算，约 54.29 GiB/rank；
-其他 TP 切片还会减少容量。
-这是由现有产物各组件字节数推导的权重上界，不含 State/KV、workspace、Graph、
-staging、Frontend 与系统余量。GPU 与 CPU 分配共用机器物理内存，加载期也必须
-沿用有界 staging，不能再保留一份完整可写 Host 权重。
+Split the Main/MTP experts and the PLE table in half, and keep the other weights replicated for now, about 54.29 GiB/rank;
+other TP slices would reduce the capacity further.
+This is the weight upper bound derived from the per-component byte counts of the existing artifact, excluding State/KV, workspace, Graph,
+staging, Frontend and system headroom. GPU and CPU allocations share the machine's physical memory, and the loading stage must also
+keep bounded staging and no longer keep a complete writable Host weight copy.
 
-## 8. MTP 与 Vision
+## 8. MTP and Vision
 
-MTP 主体采用 QSA TP2 / experts EP2，Indexer 和 HC 复制，共用 Main 的分片 head。
-每步 draft 的主体有 attention 与 MoE 两个主要归约边界。单 owner 主体加分布式 head
-是对照候选，需比较节省的通信和增加的单机计算。该候选需要 owner 持有完整 MTP
-experts、完整两-head MTP KV，再向 head ranks 分发 sample hidden；不是只关闭两次 AR。
-基础路径继续与 Main 的本地 QSA/EP 接口共用。
+The MTP body uses QSA TP2 / experts EP2, with the Indexer and HC replicated, and shares Main's sharded head.
+The body of each draft step has two main reduction boundaries, attention and MoE. The single-owner body plus the distributed head is
+a control candidate and requires comparing the saved communication with the added single-machine computation. That candidate needs the owner to hold the complete MTP
+experts and the complete two-head MTP KV, and then distribute the sample hidden to the head ranks; it is not just turning off two ARs.
+The base path continues to share Main's local QSA/EP interfaces.
 
-Stem 的两个 `[2560,2560]` FC 初始复制；fc_embedding 处理 M 列，fc_hidden 处理 4M 列。
-候选切法为两者均按输出 feature 切分，本地组合 residual 后只 AllGather 一次，
-再做完整 norm/HC。它与复制路径的比较应计入原有 BF16 出口和 residual 舍入边界。
+The two `[2560,2560]` FCs of the stem are replicated initially; fc_embedding processes M columns and fc_hidden processes 4M columns.
+The candidate split divides both by output feature, combines the residual locally and then does one AllGather,
+then the complete norm/HC. Its comparison with the replicated path should count the original BF16 output and the residual rounding boundary.
 
-vLLM 两个 FC 都使用 ColumnParallelLinear 且 `gather_output=True`，各自汇集输出。
-NInfer 若切分，应让两支采用相同的输出 feature 范围，保留各自 BF16 FC 输出，
-本地 broadcast-add 并舍入成 residual 后，只汇集一次 `[2560,4,M]`，再做完整 norm。
-这需要支持局部 feature 的相加出口，不能直接把现有固定 H 的 HC norm 用于半个 H。
-两份 FC 共约 25 MiB，小 M 下权重读量减半按持续读参考带宽折算约 51 μs；这是和
-一次汇集比较的量级依据，不是实测收益或上限。实际应同时测 FC、相加、pack、通信与 norm。
+vLLM uses ColumnParallelLinear for both FCs with `gather_output=True`, and each gathers its own output.
+If NInfer splits them, both branches should use the same output feature range, keep their own BF16 FC output,
+do a local broadcast-add and round into the residual, then gather `[2560,4,M]` only once and run the complete norm.
+This requires supporting an addition output of the local features; the existing HC norm with a fixed H cannot be used directly for half of H.
+The two FCs total about 25 MiB; for small M, halving the weight read volume converts to about 51 μs against the sustained-read reference bandwidth; this is an order-of-magnitude basis for comparison with
+one gather, not a measured benefit or upper bound. In practice, measure the FC, the addition, pack, communication and norm together.
 
-Draft steps 串行依赖前一步的 ID 和 pre-final residual。全局 argmax 后在设备侧
-直接进入下一步，不增加每步的协调侧往返。vLLM 的后续 draft 可复用 step-0 Indexer
-selection 属于另一个计算选择，本方案保持逐步重新选择的现有模型语义。
-MTP history 建立只执行 stem、attention HC、QSA prepare/tail；不能误接成完整 draft forward。
+Draft steps depend serially on the previous step's ID and pre-final residual. After the global argmax, the device side
+enters the next step directly and adds no coordination-side round trip per step. vLLM's option to reuse the step-0 Indexer
+selection for later drafts is another computation choice; this plan keeps the existing model semantics of re-selecting at each step.
+MTP history setup runs only the stem, attention HC, QSA prepare/tail; it must not be misconnected as a complete draft forward.
 
-Vision 权重复制，约 0.836 GiB/rank。首版以现有 `VisionItemView/Control` 为分工单位，
-各机执行完整 encoder，最后将 merger 特征分发给 Text ranks。vLLM 的 Qwen4Exp
-也可通过 `mm_encoder_tp_mode=data` 使用数据分工的 Qwen Vision tower。
-NInfer 需要把现有逐 item 编码的调度扩展到 owner 映射，而不是修改 encoder 数学。
+The Vision weights are replicated, about 0.836 GiB/rank. The first version uses the existing `VisionItemView/Control` as the division unit,
+each machine runs the complete encoder, and finally distributes the merger features to the Text ranks. vLLM's Qwen4Exp
+can also use the data-parallel Qwen Vision tower through `mm_encoder_tp_mode=data`.
+NInfer needs to extend the existing per-item encoding scheduling to the owner mapping, not modify the encoder mathematics.
 
-输入 patches 只发送给编码 owner，最终特征保留原有 item、MRoPE 与 scatter 列映射。
-Main 和 MTP history 消费结束前保留特征引用。视频或大图不能按任意 patches 切开；
-进一步拆分需以实际 attention segment 为依据。单个不可分 item 仍只有一机编码，
-这个首版选择不会改善它的编码耗时。两机并行编码的 workspace 峰值也要单独规划。
+The input patches are sent only to the encoding owner, and the final features keep the original item, MRoPE and scatter column mapping.
+The feature references are kept until Main and MTP history finish consuming them. A video or a large image cannot be split at arbitrary patches;
+further splitting must be based on the actual attention segment. A single indivisible item is still encoded on one machine,
+and this first-version choice does not improve its encoding time. The workspace peak of the two-machine parallel encoding also needs separate planning.
 
-## 9. 状态与完整执行流程
+## 9. State and the Complete Execution Flow
 
-| 状态 | 放置 |
+| State | Placement |
 |---|---|
-| GDN recurrent / convolution | 随本地 heads 分片，recurrent 约 54 MiB/rank/Main image |
-| Main/MTP 主 KV | 每 rank 一个 KV head，共同逻辑页组 |
-| Index cache / raw tail / 块坐标 | 复制 |
-| PLE history | 复制，180 KiB/image |
-| Sample hidden / conditioning | 保存续算所需的完整行 |
-| 前沿、输入身份、接受长度 | 协调侧决定，各 rank 共同采用 |
+| GDN recurrent / convolution | Sharded with the local heads; recurrent is about 54 MiB/rank/Main image |
+| Main/MTP main KV | One KV head per rank, a common logical page group |
+| Index cache / raw tail / block coordinates | Replicated |
+| PLE history | Replicated, 180 KiB/image |
+| Sample hidden / conditioning | Keeps the complete rows needed for the continuation |
+| Frontier, input identity, accepted length | Decided on the coordination side and adopted by every rank |
 
-Head 分片只改变物理 schema，不改变 prefix 匹配算法及逻辑 token 覆盖。一个逻辑页组
-在两机分别持有主 KV head shard 和完整 index cache；相同 group ID 不要求相同地址。
-容量按各 owner 的可用资源和每组字节数共同规划，不能只用 rank 0 的页数代表全组。
+The head sharding changes only the physical schema, not the prefix matching algorithm or the logical token coverage. One logical page group
+holds the main KV head shard and the complete index cache on the two machines; the same group ID does not require the same address.
+The capacity is planned jointly from each owner's available resources and the per-group byte count; the page count of rank 0 alone cannot represent the whole group.
 
-BF16 主 KV 在 262144 context 下，Main 每 rank 约 3 GiB/请求，另加约 192 MiB index
-cache；MTP 主 KV 再加约 256 MiB 和 16 MiB index。实际容量使用所选 codec 的 schema。
-GDN 的 54 MiB 是一个 image 的本地 recurrent 字节数，source/destination、checkpoint、
-verify records 不能只计一次。Indexer tail 和 PLE history 即使复制，也要随同一
-source/destination 与接受长度一起保存、恢复和提交。
+With BF16 main KV at 262144 context, Main is about 3 GiB/request per rank, plus about 192 MiB of index
+cache; MTP main KV adds about 256 MiB and 16 MiB of index. The actual capacity uses the schema of the selected codec.
+The GDN 54 MiB is the local recurrent byte count of one image; source/destination, checkpoint and
+verify records cannot be counted only once. The Indexer tail and PLE history, even when replicated, must be saved, restored and committed together with the same
+source/destination and accepted length.
 
-三个流程需在 D0 闭合：
+The three flows must close in D0:
 
-1. Ordinary：共同 token/position → 本地 lookup/HC → TP mixer/EP MoE 与归约 →
-   分片 head/候选汇合 → 输出决定 → 按共同前沿采用本地状态。
-2. MTP：共享 conditioning → 分布式 draft steps → Main verify records → 按列候选与
-   acceptance → Frontend 采用前缀 → 本地 GDN fold、QSA/PLE tail 与 MTP 历史对齐。
-3. Restore：一次 prefix 匹配取得同一 checkpoint manifest → 各 owner 恢复自身 State/KV
-   → 必要 Replay → 续算；复制字段与分片字段必须属于同一逻辑执行状态。
+1. Ordinary: common token/position → local lookup/HC → TP mixer/EP MoE and reduction →
+   sharded head/candidate gather → output decision → adopt the local state at the common frontier.
+2. MTP: shared conditioning → distributed draft steps → Main verify records → per-column candidates and
+   acceptance → Frontend adopts the prefix → local GDN fold, QSA/PLE tail and MTP history alignment.
+3. Restore: one prefix match obtains the same checkpoint manifest → each owner restores its own State/KV
+   → necessary Replay → continuation; the replicated fields and the sharded fields must belong to the same logical execution state.
 
-Main canonical frontier 为 F，MTP 为 `max(F-1,0)`；PLE raw-ID tail 对应已执行输入，
-不是已经预测但尚未采用的输出。采用 a 个许可输出后，各 rank 的 GDN fold、QSA/PLE
-extract、sample/conditioning 选择和 MTP history 对齐共同推进这些前沿。GPU lookup
-只借用 tail 的设备输入/镜像，不能提前把整个 draft 窗口变成 canonical tail。
+The Main canonical frontier is F, and the MTP frontier is `max(F-1,0)`; the PLE raw-ID tail corresponds to the executed input,
+not to output that has been predicted but not yet adopted. After adopting a permitted outputs, each rank's GDN fold, QSA/PLE
+extract, sample/conditioning selection and MTP history alignment advance these frontiers together. The GPU lookup
+borrows only the tail's device input/mirror and cannot turn the whole draft window into the canonical tail in advance.
 
-前缀可用性由一个全局 manifest 关联全部必要 owner 的有效分片。各机不独立命中、
-独立驱逐某个仍被全局引用的 shard；恢复沿用已有引用、COW 和 Replay 语义。
-模型数学决定 schema 与前沿，ContextDirectory 管逻辑引用，RankProgram 管本地 backing。
-新分片方式需要自己的布局身份；本轮 checkpoint 在同一固定 ParallelPlan 内复用，
-不引入把已保存 state 在线转换到另一套 TP/EP 放置的能力。
+Prefix availability is tied by one global manifest to the valid shards of all necessary owners. Each machine does not hit independently or
+evict a shard that is still globally referenced independently; restore follows the existing reference, COW and Replay semantics.
+Model mathematics decides the schema and the frontier, ContextDirectory manages the logical references, and RankProgram manages the local backing.
+A new sharding scheme needs its own layout identity; this round's checkpoints are reused within the same fixed ParallelPlan and
+do not introduce the ability to convert saved state online to another TP/EP placement.
 
-四机时 QSA 的两个 KV heads 需要在对应 ranks 中复制，Q heads 可继续切成每机六个。
-ParallelPlan 显式描述这种复制，不能假定所有 State/KV 字段都按 rank 数等分。
+With four machines, the two KV heads of QSA need to be replicated in the corresponding ranks, and the Q heads can continue to be split into six per machine.
+ParallelPlan describes this replication explicitly; one cannot assume that all State/KV fields are divided equally by the rank count.
 
-## 10. 计算组织与 Graph 组装
+## 10. Computation Organization and Graph Assembly
 
-### 10.1 原生计算边界
+### 10.1 Native Computation Boundaries
 
-模型计算使用一套原生 enqueue 流程，eager 直接执行，Graph 捕获同一流程。
-基本设备段为 Main、draft chain、输出决策、状态采用；段内继续调用现有数学 Ops。
-层级组织和 Graph launch 粒度分开：模型保留清楚的 layer/Op 边界，Spark replay
-不由 Host 逐层 launch。
+Model computation uses one native enqueue flow; eager executes it directly and Graph capture uses the same flow.
+The basic device segments are Main, the draft chain, the output decision and state adoption; each segment continues to call the existing mathematical Ops.
+The layer organization and the Graph launch granularity are separate: the model keeps clear layer/Op boundaries, and Spark replay
+does not launch layer by layer from the Host.
 
-Main 统一消费准备好的 PLE lookup Tensor `E[2560,T,B]`。表驻留磁盘、Host 内存或
-Device 是 producer 的选择，不进入 Main 的数学接口，也不决定 Main 是否完整抓图。
-Producer 提供稳定 E 视图、本轮就绪依赖和消费寿命；本双机计划的 producer 是分片 GPU
-lookup/合并，可与 Main 一起捕获。现有 Host producer 也可向同一完整 Main 图供数，
-无须先实现 GPU lookup。包含 producer 的整轮组合与 Main 自身的抓图范围分别处理。
+Main consumes the prepared PLE lookup Tensor `E[2560,T,B]` uniformly. Whether the table resides on disk, in Host memory or on the
+Device is the producer's choice; it does not enter Main's mathematical interface and does not decide whether Main captures the complete graph.
+The producer provides a stable E view, this round's readiness dependency and the consumption lifetime; the producer in this dual-machine plan is the sharded GPU
+lookup/merge and can be captured together with Main. The existing Host producer can also feed the same complete Main graph,
+without implementing the GPU lookup first. The whole-round combination that includes the producer and Main's own capture scope are handled separately.
 
-vLLM 将 `CudagraphDispatcher` 的模式/shape 选择与 `CUDAGraphWrapper` 的捕获重放
-分开。这里沿用这一职责划分：Session/原生计划选择执行组合，RankProgram 绑定本地
-views 与 Graph；Op 继续负责数学与私有 shape policy，不决定模型级切图。
+vLLM separates the `CudagraphDispatcher` mode/shape selection from the `CUDAGraphWrapper` capture and replay.
+This plan follows that division: Session/the native plan selects the execution combination, RankProgram binds the local
+views and the Graph; the Op continues to own the mathematics and the private shape policy and does not decide the model-level graph split.
 
-每个 Main 层的主链为：
+The main chain of each Main layer is:
 
 ```text
-完整 residual / normalized
+Complete residual / normalized
   → HC mix
-  → 本地 GDN 或 QSA（含本地 State/KV 写入）
-  → output projection 的 BF16 局部贡献
+  → local GDN or QSA (including local State/KV writes)
+  → the BF16 local contribution of the output projection
   → AllReduce
   → HC combine / norm / mix
-  → 全局 router + 本地 routed subset + shared TP 局部贡献
+  → global router + local routed subset + shared TP local contribution
   → AllReduce
-  → HC combine / 下一入口 norm
+  → HC combine / the next entry norm
 ```
 
-第 0 层末端先物化 BF16 residual，再在第 1 层入口执行 PLE；PLE 自身产生下一组
-normalized。最后一层输出 pre-final residual 供 MTP conditioning 使用，final HC
-产生 sample hidden，随后执行本地词表 head。上述归约都位于实际数值依赖处。
+At the end of layer 0, materialize the BF16 residual first, then run PLE at the layer 1 entry; PLE itself produces the next set of
+normalized. The last layer outputs the pre-final residual for MTP conditioning, and the final HC
+produces the sample hidden, after which the local vocabulary head runs. The reductions above sit at the actual numerical dependencies.
 
-### 10.2 PLE 旁路与 stream 组织
+### 10.2 PLE Bypass and Stream Organization
 
-RankProgram 持有有序主计算流、PLE 准备流、通信流，以及输入/结果传输所需的 copy
-流。调用者传递稳定的 execution views，各 Op 不创建 stream。
-本计划的 TP、EP、PLE 和 head 通信参与者相同，可以共用一个物理 communicator；
-模型角色仍独立表达。通信流承载固定的共同顺序，不额外为 PLE 创建 communicator。
+RankProgram holds the ordered main computation stream, the PLE preparation stream, the communication stream, and the copy
+streams needed for input/result transfer. The caller passes stable execution views; each Op does not create a stream.
+In this plan the TP, EP, PLE and head communication participants are the same and can share one physical communicator;
+the model roles are still expressed independently. The communication stream carries a fixed common order and does not create an extra communicator for PLE.
 
 ```text
-                         ┌─ hash / 本地 NF4 lookup ─ PLE words 归约 ─ projection ─┐
-输入 IDs / raw-ID tail ──┤                                                       ├─ PLE gate/conv/norm
-                         └─ embedding / HC ─ 第 0 层（两次归约）─ BF16 residual ───┘
+                         ┌─ hash / local NF4 lookup ─ PLE words reduction ─ projection ─┐
+Input IDs / raw-ID tail ──┤                                                       ├─ PLE gate/conv/norm
+                         └─ embedding / HC ─ layer 0 (two reductions) ─ BF16 residual ───┘
                                                                                ↓
-                                                                       第 1 层至末层
+                                                                        layer 1 to the last layer
 ```
 
-PLE projection 只依赖 lookup 输出，也可以提前；gate 才开始依赖 Main residual。
-Storage producer 的出口仍是 E。Main 图内可以提前执行 projection，形成
-`PleProjectionView` 所需的稳定 key/value parent，到插入层再执行既有
-`ple_gate → ple_conv_add_norm` 和对应 record/state 动作；这是模型内部排程，
-不改变 E 接口或中间 BF16 边界。
+The PLE projection depends only on the lookup output and can also run early; the gate only starts depending on the Main residual.
+The storage producer's output is still E. The projection can run early inside the Main graph to form the stable key/value parent required by
+`PleProjectionView`, and at the insertion layer the existing
+`ple_gate → ple_conv_add_norm` and the corresponding record/state actions run; this is scheduling inside the model and
+does not change the E interface or the intermediate BF16 boundary.
 
-通信次序为 PLE words 归约、第 0 层 mixer 归约、第 0 层 MoE 归约、后续各层归约。
-PLE 的结果合并一结束，主链就能继续使用通信流，不等待旁路 projection。
-主链到 PLE 消费点才等待准备结果。跨流使用 event 表达数据依赖，捕获时所有旁路
-最终回接主流；这是 CUDA 支持的同图跨流捕获方式。
-见 [CUDA 跨流捕获](https://docs.nvidia.com/cuda/cuda-programming-guide/04-special-topics/cuda-graphs.html#cross-stream-dependencies-and-events)。
+The communication order is the PLE words reduction, the layer 0 mixer reduction, the layer 0 MoE reduction and the following layer reductions.
+As soon as the PLE result merge finishes, the main chain can continue to use the communication stream without waiting for the bypass projection.
+The main chain waits for the preparation result only at the PLE consumption point. Cross-stream data dependencies are expressed with events, and at capture time all bypasses
+finally reconnect to the main stream; this is the same-graph cross-stream capture method supported by CUDA.
+See [CUDA cross-stream capture](https://docs.nvidia.com/cuda/cuda-programming-guide/04-special-topics/cuda-graphs.html#cross-stream-dependencies-and-events).
 
-提前 projection 提供重叠机会，但两条计算分支共用 SM 和内存带宽。实际执行计划可以
-令 projection 并行或在 lookup 合并后等主链到达再执行，依据完整阶段耗时选择；两者
-都是图内依赖，不增加 Host 交接。PLE 合并位于第一层归约之前，未完成时仍会阻塞该
-归约，不能把旁路的全部耗时视为已隐藏。
+The early projection provides an overlap opportunity, but the two computation branches share the SM and memory bandwidth. The actual execution plan can
+run the projection in parallel or wait for the main chain to arrive after the lookup merge; choose by the complete stage time; both
+are in-graph dependencies and add no Host handoff. The PLE merge sits before the first-layer reduction and still blocks that
+reduction when unfinished, so the whole bypass time cannot be treated as hidden.
 
-旁路存储与主计算 scratch 分开规划。Lookup 为 `5120*M` B，projection 为
-`25600*M` B；M=4096 分别为 20 MiB、100 MiB，还需计入各自 scratch。
-Projection 从提前计算开始存活到 PLE 消费结束，不能沿用当前单流 MemoryArena 的
-作用域复用规则，与正在执行的第 0 层互相覆盖。其余不重叠阶段继续共享主 scratch。
+The bypass storage is planned separately from the main computation scratch. The lookup is `5120*M` B and the projection is
+`25600*M` B; at M=4096 they are 20 MiB and 100 MiB, and each scratch is counted separately.
+The projection lives from the start of the early computation to the end of the PLE consumption; it cannot use the current single-stream MemoryArena scope reuse rule
+and overwrite layer 0 while it runs. The other non-overlapping stages continue to share the main scratch.
 
-### 10.3 Graph 的外部边界
+### 10.3 External Boundaries of the Graph
 
-将设备计算、输出许可和最终采用分别组织。GPU 结果仍属于当前 frame 的候选状态，
-Frontend 确定最终输出前缀后，Session 才发出 commit/discard。
+Organize the device computation, the output permission and the final adoption separately. The GPU result is still the candidate state of the current frame;
+only after the Frontend determines the final output prefix does the Session issue commit/discard.
 
-| 路径 | 计算与决策 Graph | 后续采用 |
+| Path | Computation and decision Graph | Later adoption |
 |---|---|---|
-| Ordinary，决策输入已齐 | Main（含 PLE 旁路）+ 本地 head + 分布式决策，合为一图 | 单独的采用动作 |
-| Ordinary，mask 尚未齐 | Compute 图执行 Main + 本地 head；mask 到达后执行 Decide 图 | 单独的采用动作 |
-| MTP，无依赖 draft 的 Host 决策输入 | draft chain + Main verify + 本地 head + acceptance，合为一图 | Finish 图/设备段 |
-| MTP，约束 mask 依赖 drafts | Compute 图执行 draft chain + verify + 本地 head；Decide 图等待 mask | Finish 图/设备段 |
-| Prefill / Replay | 按实际 T 执行相同原生流程；先保持 eager，固定完整 chunk 可作为独立 capture profile | 包含所需 MTP history 建立 |
-| Vision | 每个 owner 执行完整独立 item，特征分发完成后供 Text 使用 | 特征保留到 Main/MTP 的最后消费者 |
+| Ordinary, decision inputs ready | Main (including the PLE bypass) + local head + distributed decision, as one graph | A separate adoption action |
+| Ordinary, mask not ready | The Compute graph runs Main + local head; the Decide graph runs after the mask arrives | A separate adoption action |
+| MTP, Host decision inputs without draft dependency | draft chain + Main verify + local head + acceptance, as one graph | Finish graph/device segment |
+| MTP, constrained mask depends on drafts | The Compute graph runs the draft chain + verify + local head; the Decide graph waits for the mask | Finish graph/device segment |
+| Prefill / Replay | Runs the same native flow at the actual T; keep eager first, a fixed complete chunk can be an independent capture profile | Includes the needed MTP history setup |
+| Vision | Each owner runs a complete independent item; the features are distributed and then used by Text | Features kept until Main/MTP's last consumer |
 
-决策输入已齐时不必强行沿用分段 launch。需要等待外部输入时，Compute 的结束点放在
-本地 head 之后，让大矩阵计算先完成；Decide 只消费保留的本地 logits、mask、counts
-与配置。两个组合共享原生 enqueue 函数，Graph 数量与 frame 绑定计入准备预算。
+When the decision inputs are ready, there is no need to force the segmented launch. When external input must be awaited, the Compute end point is placed after the
+local head so that the large matrix computation finishes first; Decide consumes only the retained local logits, mask, counts
+and configuration. The two combinations share the native enqueue function, and the graph count and frame binding count toward the preparation budget.
 
-Prefill 不能只为复用最大 T 图而随意补列：现有 sequence GDN 入口会推进其真实 T
-列，尾部 padding 也会影响递推状态。尾块使用实际几何的 eager 或已准备 profile。
+Prefill cannot pad columns arbitrarily just to reuse the maximum-T graph: the existing sequence GDN entry advances its real T
+columns, and the tail padding also affects the recurrent state. The tail block uses eager with the actual geometry or a prepared profile.
 
-### 10.4 MTP 整轮与约束重叠
+### 10.4 MTP Whole Round and Constraint Overlap
 
-启动固定 draft 上限 K；每轮按共同预算选择实际深度 S（1..K），使用对应的有限
-chain variant，在图内展开 S 次原生 draft step。每步包含 MTP stem、QSA TP、EP MoE、
-本地 head 与全局 argmax，下一步直接消费设备 ID 和 pre-final conditioning。
-各行有效 draft 数通过设备 extents 控制，保留第一步 bridge 的语义；没有实际工作的
-后续行不写有效状态，各 rank 履行所选 variant 的共同通信合同。Main verify 仍使用
-既定 K+1 物理列和逐行有效长度，不因某行剩余预算较小而擅自更改通信形状。
-Graph 不在每步 draft 后返回协调侧取得下一枚 ID，也不为复用最大深度图额外计算
-整批都不需要的后续 drafts。
+The draft limit K is fixed at startup; each round selects the actual depth S (1..K) by a common budget, uses the corresponding finite
+chain variant, and unrolls S native draft steps inside the graph. Each step includes the MTP stem, QSA TP, EP MoE,
+the local head and the global argmax, and the next step consumes the device ID and the pre-final conditioning directly.
+The valid draft count of each row is controlled by the device extents, keeping the semantics of the first-step bridge; later rows with no actual work
+do not write valid state, and each rank fulfills the common communication contract of the selected variant. Main verify still uses the
+fixed K+1 physical columns and the per-row effective length and does not change the communication shape because a row's remaining budget is smaller.
+The graph does not return to the coordination side after each draft step to obtain the next ID, and it does not compute the extra drafts that the whole batch does not need just to reuse the maximum-depth graph.
 
-Draft chain 完成后，一次性组装 `[anchor,drafts...]`，Main verify 的 PLE 对整窗口做
-一次 lookup 合并，不沿用单机 Host producer 的增量 D2H/准备流程。
+After the draft chain completes, assemble `[anchor,drafts...]` once; Main verify's PLE does one lookup merge over the whole window
+and does not follow the single-machine Host producer's incremental D2H/preparation flow.
 
-约束路径可以在一个 Compute 图内保留以下分叉：
+The constrained path can keep the following fork inside one Compute graph:
 
 ```text
-draft chain ─┬─ prepare verify IDs ─ Main verify + local head ─ 保留 local logits
-             └─ output rank 将 drafts 异步 D2H ─ DraftsReady
+draft chain ─┬─ prepare verify IDs ─ Main verify + local head ─ keep local logits
+             └─ output rank copies the drafts asynchronously D2H ─ DraftsReady
                                                    ↓
-                                      协调侧 matcher 生成分片 masks
+                                      coordination-side matcher builds sharded masks
                                                    ↓
-                              Compute 结果依赖 + masks 已就绪 → Decide 图
+                              Compute result dependency + masks ready → Decide graph
 ```
 
-Output rank 的 copy 分支使用 frame 自有 pinned staging 和可供 Host 观察的 external
-event；执行线程观察本轮事件后发布 `DecisionInputNeeded`，target 计算继续。
-外部 event 保留到其 Graph 和传输消费者结束，capture 期间不查询事件。
-该机制可用 [CUDA external event nodes](https://docs.nvidia.com/dl-cuda-graph/cuda-graph-basics/constraints.html#external-events-and-streams)
-实现，不需要在图中调用 Host matcher 或等待控制消息的 callback。
-Mask 输入和共同命令顺序确定后即可入队 Decide，GPU 用 stream/event 继承 Compute
-完成依赖；Host 不必先等待整个 Compute 完成。
+The copy branch of the output rank uses the frame's own pinned staging and an external event observable by the Host;
+after the execution thread observes this round's event, it publishes `DecisionInputNeeded` and the target computation continues.
+The external event is kept until its Graph and transfer consumers finish, and events are not queried during capture.
+This mechanism can be implemented with [CUDA external event nodes](https://docs.nvidia.com/dl-cuda-graph/cuda-graph-basics/constraints.html#external-events-and-streams)
+and does not need to call the Host matcher in the graph or wait for a callback of control messages.
+Once the mask input and the common command order are fixed, Decide can be enqueued, and the GPU inherits the Compute
+completion dependency through stream/event; the Host does not need to wait for the whole Compute to finish first.
 
-Mask 在各词表 shard 上应用。普通 sampling 使用候选汇集、output rank 决策和结果
-分发；greedy 的全局 argmax 已在所有 ranks 可见，整数前缀比较可在各机得到相同
-acceptance，由 output rank 对外发布。RNG 和公开输出决策的所有权保持不变。
+The mask is applied on each vocabulary shard. Ordinary sampling uses candidate gather, output rank decision and result
+distribution; greedy's global argmax is already visible on all ranks, and the integer prefix comparison can yield the same
+acceptance on every machine, published by the output rank. RNG and the ownership of the public output decision stay unchanged.
 
-Finish 消费 Frontend 最终接受的 a，执行本地 GDN fold、QSA/PLE extract、末端 hidden
-选择、token counts 采用及 MTP history 对齐。其物理窗口固定，a 是设备输入。
-该阶段需要将当前 Host 循环中的逐行复制/metadata 准备转为可捕获的设备准备动作；
-MTP history 继续只执行 stem、attention HC、QSA prepare/tail，不追加一次完整 draft。
-Canonical state 的逻辑采用由 Session 管理，Finish 的设备完成依赖交给下一轮。
+Finish consumes the a that the Frontend finally accepts, and runs the local GDN fold, QSA/PLE extract, the final hidden
+selection, the token counts adoption and the MTP history alignment. Its physical window is fixed, and a is a device input.
+This stage needs to convert the per-row copy/metadata preparation in the current Host loop into capturable device preparation actions;
+MTP history continues to run only the stem, attention HC, QSA prepare/tail and does not append a complete draft.
+The logical adoption of the canonical state is managed by the Session, and Finish hands its device completion dependency to the next round.
 
-### 10.5 完整 replay 与局部 Graph 更新
+### 10.5 Complete Replay and Local Graph Updates
 
-单机 `TextGraph` 的 resident Main 已使用完整外层 replay，QSA envelope 与 PLE 上传槽
-通过 child 更新。分布式实现沿用该组装方式，使上表每个设备段只有一次外层 replay，
-capture 直接包含计算和 NCCL。
-PLE 的模型计算位于 Main 图内部；上游准备位置不是逐层切图的理由。两个 E 槽的地址
-切换通过输入绑定或局部 consumer 更新处理，不为每个槽复制完整模型 executable。
+The resident Main of the single-machine `TextGraph` already uses complete outer replay, and the QSA envelope and the PLE upload slot
+are updated through children. The distributed implementation follows this assembly so that each device segment in the table above has only one outer replay, and the
+capture includes the computation and NCCL directly.
+PLE's model computation lives inside the Main graph; the upstream preparation position is not a reason to split the graph layer by layer. The address switch of the two E slots
+is handled through input binding or local consumer updates, and the complete model executable is not copied for each slot.
 
-保留现有 QSA 随上下文更新 launch 的能力，采用“完整外层图 + 可更新的本地计算
-子图”：
+Keep the existing ability to update the QSA launch with the context, using "complete outer graph + updatable local computation
+subgraph":
 
-1. 启动时按实际绑定的 frame 地址，捕获 QSA 本地计算区域的各 envelope definitions。
-   基础复制 Indexer 的路径中，该区域没有通信。
-2. 捕获外层原生设备段时，将相应 definition 插入为 child graph，保留节点句柄；
-   NCCL 在外层流程中按共同顺序直接捕获。
-3. 跨上下文档位时，只更新这些 child 的参数/计算 definition，保留通信节点和 backing。
-   不按内核名称查找节点，也不把完整层和通信重新捕获一次。
-4. Child 的拓扑、节点加入顺序和可更新参数满足 CUDA 更新要求；若计算/通信拓扑
-   改变，使用另一条已准备的共同 variant。大 M 的 query 分工会把本地计算区域放在
-   selection 通信两侧，不能把通信藏进可任意替换的 child。
+1. At startup, capture the envelope definitions of the QSA local computation region by the actual bound frame address.
+   In the base path with the replicated Indexer, this region has no communication.
+2. When capturing the outer native device segment, insert the corresponding definition as a child graph and keep the node handle;
+   NCCL is captured directly in the outer flow in the common order.
+3. When switching context slots, update only the parameters/computation definitions of these children and keep the communication nodes and the backing.
+   Do not look up nodes by kernel name, and do not capture the complete layers and communication again.
+4. The child's topology, node insertion order and updatable parameters must satisfy the CUDA update requirements; if the computation/communication topology
+   changes, use another prepared common variant. The large-M query division places the local computation region on both sides of the
+   selection communication, and the communication cannot be hidden inside a child that can be replaced arbitrarily.
 
-Core 的 Graph 封装已提供捕获中插入 child、保留绑定句柄和更新 child 的能力。
-实现结合 `cudaStreamGetCaptureInfo` / `cudaStreamUpdateCaptureDependencies` 与显式
-Graph API 组装，使用 `cudaGraphExecChildGraphNodeSetParams` 更新。
-相关能力及限制见 [CUDA 捕获与显式节点组合](https://developer.nvidia.com/blog/constructing-cuda-graphs-with-dynamic-parameters/)
-和 [CUDA child graph 更新](https://docs.nvidia.com/cuda/cuda-runtime-api/cuda_runtime_api/group__CUDART__GRAPH.html)。
-这是对现有 Graph 基础的扩展，不要求 Op 暴露 kernel 参数，也不建立通用模型 DAG。
+The Core Graph wrapper already provides the ability to insert children during capture, keep bound handles and update children.
+The implementation combines `cudaStreamGetCaptureInfo` / `cudaStreamUpdateCaptureDependencies` with the explicit
+Graph API and updates with `cudaGraphExecChildGraphNodeSetParams`.
+See [CUDA capture and explicit node composition](https://developer.nvidia.com/blog/constructing-cuda-graphs-with-dynamic-parameters/)
+and [CUDA child graph updates](https://docs.nvidia.com/cuda/cuda-runtime-api/cuda_runtime_api/group__CUDART__GRAPH.html).
+This is an extension of the existing Graph basis and does not require Ops to expose kernel parameters or build a generic model DAG.
 
-外层 executable 按 ParallelPlan、设备段/通信协议、T/B、状态更新模式和 frame 绑定
-建立。上下文档位是已安装的本地计算 profile，不把整套 Main 图按所有档位复制。
-Workspace 按所有允许 profile 的峰值预留；child definitions、外层 executable、NCCL
-保留量均计入实际 Graph 准备开销。多 frame 不自动共享可写 logits/records；有序计算
-可以共享 scratch，跨阶段等待的结果保留到实际消费者结束。
-Frame 视图与并行 scratch 分区先于 capture 确定；普通 enqueue 与 child 插入消费
-同一份绑定和容量，不能因为插入 child 跳过了 Host 计算调用，就漏掉其存储预留。
+The outer executable is built from the ParallelPlan, the device segment/communication protocol, T/B, the state update mode and the frame binding.
+The context slots are installed local computation profiles, and the whole Main graph is not copied for every slot.
+The workspace is reserved for the peak of all allowed profiles; the child definitions, the outer executable and the NCCL
+retention are all counted in the actual Graph preparation cost. Multiple frames do not automatically share writable logits/records; ordered computation
+can share scratch, and results awaited across stages are kept until the actual consumer finishes.
+The frame views and the parallel scratch partition are fixed before capture; the ordinary enqueue and the child insertion consume
+the same bindings and capacities, and the storage reservation must not be missed because inserting a child skipped a Host computation call.
 
-各 rank 的本地 kernel、地址和输出侧 copy 分支可以不同，通信协议必须共同选择。
-NCCL 要求 capture/replay 的参与者一致，各 rank 使用对应共同 capture 所派生的图；
-它的 group 调用若混合多个 stream，会增加这些 stream 的依赖，因此此处通信保持在
-同一有序流中。见 [NCCL Graph 合同](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/usage/cudagraph.html)
-及 [NCCL stream 语义](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/usage/streams.html)。
+The local kernels, addresses and output-side copy branches of each rank may differ, but the communication protocol must be chosen in common.
+NCCL requires the capture/replay participants to be consistent, and each rank uses the graph derived from the corresponding common capture;
+if its group call mixes multiple streams, it adds dependencies on those streams, so the communication here stays in
+the same ordered stream. See [NCCL Graph contract](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/usage/cudagraph.html)
+and [NCCL stream semantics](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/usage/streams.html).
 
-### 10.6 成本与可扩展边界
+### 10.6 Cost and Scalable Boundaries
 
-基础 Main 的 48 层各有 mixer output 和 MoE output 两个归约边界，共 96 次。
-PLE 表分片另有一次合并；每个 draft step 有两次 block 归约和一次全局 argmax。
-按本文基础布局，greedy ordinary 的设备通信为 98 次，K-step greedy MTP 为
-`98+3K` 次；一般采样的候选汇集和结果分发比 greedy 输出多一次。这里不含 Host
-控制传输、Vision 特征分发或后续新增的布局优化。完整图减少 Host launch 和交接，
-这些数学依赖中的通信仍然存在。
-这 96 次 block 归约各自的 BF16 逻辑 payload 为 `2*2560*M` B：
+The 48 layers of the base Main each have a mixer output and a MoE output reduction boundary, 96 in total.
+The PLE table sharding adds one merge; each draft step has two block reductions and one global argmax.
+Under the base layout of this document, the device communication of greedy ordinary is 98 calls, and that of K-step greedy MTP is
+`98+3K`; the candidate gather and result distribution of general sampling add one more than the greedy output. This does not include Host
+control transfer, Vision feature distribution or later layout optimizations. The complete graph reduces Host launches and handoffs;
+the communication in these mathematical dependencies still exists.
+The BF16 logical payload of each of the 96 block reductions is `2*2560*M` B:
 
-| M | 单次 H 归约 payload | 96 次合计 |
+| M | Single H reduction payload | 96 total |
 |---:|---:|---:|
 | 1 | 5 KiB | 480 KiB |
 | 8 | 40 KiB | 3.75 MiB |
 | 48 | 240 KiB | 22.5 MiB |
 | 4096 | 20 MiB | 1.875 GiB |
 
-以上不含 PLE、head、MTP，也不是链路实际 wire bytes。各次归约之间存在 HC、gate、
-norm 等非线性依赖，不能把这 96 次按总字节量合成一次传输。小 M 需控制逐次启动和
-同步成本；大 M 要同时看有效链路带宽、计算重叠及较慢 rank 的完成时间。
-BF16 局部贡献和通信是既定合同，不为并行额外强制 FP32；新的分片组合仍需按其
-数学与数值合同检查，不要求和单卡另一种归约顺序逐位一致。
+The above excludes PLE, head and MTP and is not the actual wire bytes of the link. The reductions have nonlinear dependencies such as HC, gate and
+norm between them, so the 96 calls cannot be combined into one transfer by total bytes. Small M needs control of the per-call launch and
+synchronization cost; large M must consider the effective link bandwidth, the computation overlap and the completion time of the slower rank.
+The BF16 local contribution and communication are fixed contracts and do not force FP32 for parallelism; a new sharding combination still needs to be checked against its
+mathematical and numerical contract and is not required to match another single-card reduction order bit for bit.
 
-层间耗时的判断单位是：本地前置计算 → 较慢 rank 的局部结果 → 暴露的通信 →
-后续 HC/投影，而非把每个 Linear 的读量减半后直接相加。共享 Router/Indexer/HC
-仍占时间，EP 的每步负载可能不均，head 的减半也只是其中一项。
+The unit for judging the inter-layer time is: local pre-computation → the local result of the slower rank → the exposed communication →
+the following HC/projection, rather than halving each Linear's read volume and adding them directly. The shared Router/Indexer/HC
+still take time, the EP per-step load may be uneven, and the head halving is only one item.
 
-没有本地 active expert 的 rank 仍输出正确的零/共享贡献并参与约定通信。Indexer
-全选与混合上下文继续在 kernel 内处理。可选择不同的已准备 variant，但不能在某一
-rank 依据本地观察单独增减 collective 或改变消息尺寸。图的分派和更新不引入逐层
-控制消息或每轮全组 Host barrier。
+A rank with no local active expert still outputs the correct zero/shared contribution and participates in the agreed communication. Indexer
+full selection and mixed contexts continue to be handled inside the kernel. Different prepared variants can be selected, but a rank cannot
+add or remove collectives or change the message size on its own based on local observation. The graph dispatch and update do not introduce per-layer
+control messages or a per-round whole-group Host barrier.
 
-Eager 与 Graph 共用这些边界。真正通算融合前，先保留清晰的本地 Op 输出和 collective
-合同；之后可以将归约与 HC combine/norm 接在一起，仍保留 BF16 residual 的原数值顺序。
-执行框架无需知道这些 Op 的私有 tile、调优表或专家 GEMM 算法。
+Eager and Graph share these boundaries. Before the real compute-communication fusion, keep the clear local Op outputs and the collective
+contracts; afterwards the reduction can be connected with the HC combine/norm while keeping the original numerical order of the BF16 residual.
+The execution framework does not need to know these Ops' private tiles, tuning tables or expert GEMM algorithms.
 
-权重放置与执行时分工还需要分开。Experts/PLE 所有权、head 范围、MTP 单 owner 或
-TP/EP 主体在启动时选定；HC token 分区与 Indexer query 分工可以复用相同权重和
-canonical state，只改变 frame 的临时布局。若同时保留 HC lowrank TP、MTP FC 的
-复制/TP 两条路径，需要在加载期明确准备各自可消费的矩阵视图/编码并计入容量，
-不能把切换 variant 变成执行期搬运、重排权重。
+Weight placement and execution-time division also need to be separated. Experts/PLE ownership, the head range, MTP single-owner or
+the TP/EP body are chosen at startup; the HC token partition and the Indexer query division can reuse the same weights and
+canonical state and change only the frame's temporary layout. If both the HC lowrank TP and the MTP FC replicated/TP paths are kept, the matrix views/encodings each can consume must be prepared explicitly at load time and counted in the capacity;
+switching variants must not become execution-time weight movement or reordering.
 
-## 11. 实施依赖与后续优化
+## 11. Implementation Dependencies and Later Optimization
 
-| 项目 | 可行性结论 | 下一步依赖 |
+| Item | Feasibility conclusion | Next dependency |
 |---|---|---|
-| GDN/QSA head TP、expert EP、vocab head TP | 数学和主要分片方式确定 | 本地 Op shape、分片加载和完整 state schema |
-| EP 复制输入、统一结果归约 | 现有 subset/indexed bank 可承接，不需要先引入 AllToAll | 直接加载本地 slots，完成 shared=320 与融合筛选 |
-| Embedding、HC、Indexer 基础复制 | 可形成完整基础路径；复制的离散决策有共同执行要求 | 绑定共同 decision profile 和本地 cache |
-| PLE 表行分片、计算复制 | 已确定；编码保持，lookup 合并提前 | GPU hash/NF4 lookup、精确 word 交接和旁路存储 |
-| 词表候选与采样 | 当前 Top-20 合同下可精确分布式执行 | 候选/决策接口、mask/count 分片及采用协议 |
-| MTP / Vision | 主体与独立 item 分工可行，history 与 Frontend 语义保留 | 分片 head 的设备决策、history 路径、特征分发 |
-| 大 M HC token 分区 | 后续优化，首版关闭 | PLE 前后布局、末端特征、RS/AG 的完整耗时 |
-| 大 M Indexer query 分工 | 后续优化，首版关闭 | query 工作域、负载分配、selection 交换耗时 |
-| HC lowrank TP、MTP FC TP、单 owner MTP | 后续优化，首版关闭 | 完整候选路径对照，而非只测局部 GEMM |
-| 完整设备段 Graph、本地计算 child 更新 | 单机 resident Main、draft chain 和 Core child 更新已实现；分布式尚未实现 | 共同 capture、通信旁路容量与设备 Finish |
+| GDN/QSA head TP, expert EP, vocab head TP | Mathematics and main sharding method settled | Local Op shapes, sharded loading and the complete state schema |
+| EP replicated input, unified result reduction | The existing subset/indexed bank can carry it; no AllToAll is needed first | Load the local slots directly and complete shared=320 and the fused filtering |
+| Embedding, HC, Indexer base replication | Can form the complete base path; the replicated discrete decisions have common execution requirements | Bind the common decision profile and the local cache |
+| PLE table row sharding, computation replication | Settled; encoding kept, lookup merge moved earlier | GPU hash/NF4 lookup, exact word handoff and bypass storage |
+| Vocabulary candidates and sampling | Can be executed exactly in a distributed way under the current Top-20 contract | Candidate/decision interfaces, mask/count sharding and the adoption protocol |
+| MTP / Vision | The body and the independent item division are feasible; history and Frontend semantics kept | Device decision of the sharded head, history path, feature distribution |
+| Large-M HC token partition | Later optimization, disabled in the first version | PLE front/back layout, final features, complete RS/AG time |
+| Large-M Indexer query division | Later optimization, disabled in the first version | query work domain, load assignment, selection exchange time |
+| HC lowrank TP, MTP FC TP, single-owner MTP | Later optimization, disabled in the first version | Complete candidate path comparison, not only local GEMM measurements |
+| Complete device-segment Graph, local computation child updates | Single-machine resident Main, draft chain and Core child updates implemented; distributed not yet implemented | Common capture, communication bypass capacity and device Finish |
 
-D0 的基础角色所有权、编码切片、本地几何、状态和输出决策方式按本文首版路径执行。
-后续候选不进入首版分派，也不预设未经测量的 M 阈值。Shared=320、分片采样、GPU
-lookup 与 Graph 组合基础是明确的新增能力；它们不能靠现有 TP shape 清单自动补齐。
-单机 resident Main 已直接复用现有 PLE producer 完整抓图，与双机实现解耦。
+D0's basic role ownership, encoding slices, local geometry, state and output decision method follow the first-version path in this document.
+The later candidates do not enter the first-version dispatch, and no unmeasured M threshold is preset. Shared=320, sharded sampling, GPU
+lookup and the Graph combination basis are explicit new capabilities; they cannot be filled in automatically from the existing TP shape list.
+The single-machine resident Main already reuses the existing PLE producer for the complete capture and is decoupled from the dual-machine implementation.
 
-## 12. 源码依据
+## 12. Source Basis
 
-本轮对照本地 vLLM 工作副本的具体实现，而非将其全部默认策略视为 NInfer 的选择：
+This round compares the specific implementation of the local vLLM working copy rather than treating all its default policies as NInfer's choices:
 
-单机耗时复用 `.agent-tmp/spark-op-migration/units/` 下 `hc-mix` 和
-`bf16-n248320-k2560` 的既有迁入记录；读带宽参考来自
-[roofline](../bench/common/roofline.h)。这些历史数据仅用于判断候选成本量级。
+The single-machine timings reuse the existing migration records of `hc-mix` and
+`bf16-n248320-k2560` under `.agent-tmp/spark-op-migration/units/`; the read bandwidth reference comes from
+[roofline](../bench/common/roofline.h). These historical data are used only to judge the order of magnitude of the candidate cost.
 
-| vLLM 路径，相对 `~/vllm/vllm/` | 对应事实 |
+| vLLM path, relative to `~/vllm/vllm/` | Corresponding fact |
 |---|---|
-| `models/qwen4_exp/nvidia/model.py`、`hyperconnection.py` | HC 复制、sequence-parallel MoE 限制、PLE 位置与 Vision 模式 |
-| `models/qwen4_exp/nvidia/qsa.py`、`indexer_qsa.py` | 主 heads TP、Indexer 复制、展开 token selection 与 MTP 复用选项 |
-| `model_executor/models/qwen3_next.py`、`model_executor/layers/fused_moe/config.py` | Routed EP、shared TP 与 AllToAll 的适用条件 |
-| `models/qwen4_exp/nvidia/ngram_embedding.py`、`models/qwen4_exp/common/ple.py` | ETP 表行分片与 checkpoint 行区间 |
-| `models/qwen4_exp/nvidia/mtp.py` | 双 FC 的 column TP/gather、conditioning 和 draft 层 |
-| `model_executor/layers/logits_processor.py`、`model_executor/layers/vocab_parallel_embedding.py` | 分布式 argmax/TopK、普通 logits gather、词表 embedding |
-| `v1/cudagraph_dispatcher.py`、`compilation/cuda_graph.py` | 执行模式/profile 分派与捕获重放的职责划分 |
+| `models/qwen4_exp/nvidia/model.py`, `hyperconnection.py` | HC replication, sequence-parallel MoE restriction, PLE position and Vision mode |
+| `models/qwen4_exp/nvidia/qsa.py`, `indexer_qsa.py` | Main heads TP, Indexer replication, expanded token selection and MTP reuse option |
+| `model_executor/models/qwen3_next.py`, `model_executor/layers/fused_moe/config.py` | Applicability conditions of routed EP, shared TP and AllToAll |
+| `models/qwen4_exp/nvidia/ngram_embedding.py`, `models/qwen4_exp/common/ple.py` | ETP table row sharding and checkpoint row ranges |
+| `models/qwen4_exp/nvidia/mtp.py` | Column TP/gather of the two FCs, conditioning and the draft layer |
+| `model_executor/layers/logits_processor.py`, `model_executor/layers/vocab_parallel_embedding.py` | Distributed argmax/TopK, regular logits gather, vocabulary embedding |
+| `v1/cudagraph_dispatcher.py`, `compilation/cuda_graph.py` | Division of responsibility between execution mode/profile dispatch and capture replay |
 
-NInfer 的落点包括：
+NInfer's landing points include:
 
-- [GDN/QSA/MTP 执行](../src/models/qwen4_exp/execution/)、
-  [StateImage](../src/models/qwen4_exp/state/state_image.cpp)、
-  [状态采用](../src/models/qwen4_exp/program/commit.cpp)。
-- [MoE 公共合同](../include/ninfer/ops/moe.h)、
-  [bank 视图](../src/core/weight_bank.h)、[bank 加载](../src/models/common/moe/weights.cpp)、
-  [MoE 参数支持](../src/ops/moe/operands.cpp)、
-  [block-scaled shared 计算](../src/ops/moe/kernels/cuda/block_scaled/shared.cu)。
-- [HC 合同](../include/ninfer/ops/gated_residual.h)、[QSA 合同](../include/ninfer/ops/qsa.h)、
-  [Indexer](../src/ops/softmax_attention/qsa/indexer/)。
-- [Sampling](../include/ninfer/ops/sampling.h)、
-  [Speculative acceptance](../include/ninfer/ops/speculative_accept.h)、
-  [现有候选/归并实现](../src/ops/sampling/kernels/distribution.cuh)。
-- [PLE 参数](../src/models/qwen4_exp/ple/parameters.cpp)、
-  [哈希](../src/models/qwen4_exp/ple/hash.cpp)、[精确 NF4 LUT](../src/core/nf4.h)、
-  [权重物化](../src/artifact/materializer.cpp)、
-  [Vision item](../src/models/common/qwen/vision/control.h)。
+- [GDN/QSA/MTP execution](../src/models/qwen4_exp/execution/),
+  [StateImage](../src/models/qwen4_exp/state/state_image.cpp),
+  [state adoption](../src/models/qwen4_exp/program/commit.cpp).
+- [MoE common contract](../include/ninfer/ops/moe.h),
+  [bank view](../src/core/weight_bank.h), [bank loading](../src/models/common/moe/weights.cpp),
+  [MoE parameter support](../src/ops/moe/operands.cpp),
+  [block-scaled shared computation](../src/ops/moe/kernels/cuda/block_scaled/shared.cu).
+- [HC contract](../include/ninfer/ops/gated_residual.h), [QSA contract](../include/ninfer/ops/qsa.h),
+  [Indexer](../src/ops/softmax_attention/qsa/indexer/).
+- [Sampling](../include/ninfer/ops/sampling.h),
+  [Speculative acceptance](../include/ninfer/ops/speculative_accept.h),
+  [existing candidate/merge implementation](../src/ops/sampling/kernels/distribution.cuh).
+- [PLE parameters](../src/models/qwen4_exp/ple/parameters.cpp),
+  [hashing](../src/models/qwen4_exp/ple/hash.cpp), [exact NF4 LUT](../src/core/nf4.h),
+  [weight materialization](../src/artifact/materializer.cpp),
+  [Vision item](../src/models/common/qwen/vision/control.h).

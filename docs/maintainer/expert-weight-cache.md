@@ -1,94 +1,94 @@
-# Expert 权重来源与 GPU 副本缓存
+# Expert weight sources and the GPU replica cache
 
-本文约定已实现的 bank 视图、放置加载、GPU 副本容器与 MoE 计算交接。
-数学与量化布局由 [artifact 格式](artifact-container.md)和各 Op 合同拥有；
-执行与生命周期由 [Engine 架构](engine-architecture.md)拥有。
+This document specifies the implemented bank views, placement loading, GPU replica container and MoE compute handoff.
+The [artifact format](artifact-container.md) and the Op contracts own the mathematics and the quantization layouts;
+the [Engine architecture](engine-architecture.md) owns execution and lifetime.
 
-Engine 支持常驻 GPU，以及受显存预算约束的 MoE 混合执行。CPU `routed_swiglu` Op
-支持 Q4 GU + Q5/Q6 down 及 NVFP4 GU/down，直接消费 Host bank 并产生 FP32 分项。
-GPU 使用同一组 logical expert ID，既可以计算固定子集，也可以消费补齐后的整层 bank。
-Qwen3.5 MoE 与 Qwen4Exp Main 均使用这套公共调度，支持 eager 和分段 CUDA Graph。
+The Engine supports a resident GPU and MoE mixed execution bounded by the device memory budget. The CPU `routed_swiglu` Op
+supports Q4 GU + Q5/Q6 down and NVFP4 GU/down. It consumes the Host bank directly and produces FP32 contributions.
+The GPU uses the same set of logical expert IDs. It can compute a fixed subset, or it can consume the completed whole-layer bank.
+Qwen3.5 MoE and Qwen4Exp Main both use this common schedule, with eager and segmented CUDA Graph support.
 
-## 来源与身份
+## Source and identity
 
-`core/weight_bank.h` 的 `WeightBankLayout` 描述一个 affine 矩阵集合，包含本地 N/K、
-矩阵数量，以及 codes/high/scales 各 plane 的 parent 偏移、单矩阵字节数和矩阵步长。
-`WeightBankRegion` 显式指定展平 parent 上的起始行、矩阵行数、数量和行步长。
-几何来自 `WeightGeometry`；bank 不另行定义 codec。
+In `core/weight_bank.h`, `WeightBankLayout` describes one affine matrix set: the local N/K,
+the matrix count, and for each codes/high/scales plane the parent offset, the single-matrix byte count and the matrix stride.
+`WeightBankRegion` explicitly specifies the start row on the flattened parent, the matrix row count, the count and the row stride.
+The geometry comes from `WeightGeometry`; the bank defines no codec of its own.
 
-`WeightBankView` 借用 ModelShard 的不可变 `WeightParent`。`matrix_weight` 可以取得一个
-原生矩阵视图，包括每次 Use 独立传入的 activation divisor。矩阵字节数与步长允许不同：
-例如 GU bank 中所有 gate 构成的视图，矩阵行数是 I、步长是 2I。
+`WeightBankView` borrows the ModelShard's immutable `WeightParent`. `matrix_weight` returns one
+native matrix view, including the activation divisor passed separately per Use. The matrix byte count and the stride may differ:
+for example, the view of all gates in a GU bank has matrix row count I and stride 2I.
 
-- Groupwise INT 使用已有 rank-2 parent `[E*N,K]`，E/N 由模型 Binding 明确给出。
-- NVFP4 使用 rank-3 `[E,N,K]`，codes、swizzled G16 scales、FP32 divisors 分别成 plane。
-  切片保持 128 行边界，每个本地矩阵位于同一 divisor 域。
-- Block-FP8 使用 rank-2/3 codes 和 BF16 `[E,N/128,K/128]` scales；不含 matrix divisor。
-- Paged NF4 由其按行读取合同管理，不表示成 affine expert bank。
+- Groupwise INT uses the existing rank-2 parent `[E*N,K]`; the model Binding states E/N explicitly.
+- NVFP4 uses rank-3 `[E,N,K]`, with codes, swizzled G16 scales and FP32 divisors in separate planes.
+  Slices keep the 128-row boundary, and each local matrix sits in the same divisor domain.
+- Block-FP8 uses rank-2/3 codes and BF16 `[E,N/128,K/128]` scales; it has no matrix divisor.
+- Paged NF4 is governed by its row-read contract and is not represented as an affine expert bank.
 
-`ExpertBankSource` 将同一 logical expert 的 GU/down 两个 bank 组合，并为 Host 来源提供
-对应 parent 的 `CudaHostView`。CPU 使用数学视图的 Host 地址，上传使用注册后的传输视图。
-`ExpertKey={ExpertBankId,logical_expert}` 不随缓存分配变化。
-Qwen3.5 的 bank ID 按 Main 层顺序建立，选中的 MTP bank 追加在末尾。
-模型 loader 逐个核对 gate/up/down Binding 的 parent、起点和形状，再建立 bank；
-不从物理对象 ID 或参数名称猜测编码。
+`ExpertBankSource` combines the GU and down banks of the same logical expert, and for a Host source it provides
+the `CudaHostView` of the corresponding parent. The CPU uses the Host address of the mathematical view; upload uses the registered transfer view.
+`ExpertKey={ExpertBankId,logical_expert}` does not change with cache allocation.
+Qwen3.5 builds bank IDs in Main layer order and appends the selected MTP bank at the end.
+The model loader checks the parent, start and shape of each gate/up/down Binding before it builds the bank;
+it does not guess the encoding from physical object IDs or parameter names.
 
-## 逻辑加载与放置
+## Logical loading and placement
 
-加载顺序是 `read_definition → resolve_load → materialize_model`：
+The load order is `read_definition → resolve_load → materialize_model`:
 
-1. `Binder` 检查逻辑引用、Use 和所选资源；辅助值按对应元素区间取得 owning Host 值。
-   `ModelDefinition` 持有这些已读 Host 资源及其 `PreparedResources`，Frontend 借用其稳定地址。
-2. `ModelDefinition` 保留配置、逻辑引用、Use 和 expert source 描述，提供无 backing 的权重几何。
-   Engine 显式建立不可变 `ModelProfile`，在读取大权重前查询
-   实际 Op 的 workspace 并联合解析容量。纯逻辑 binder 不承担执行布局约束。
-   `resolve_load` 产生一次本地 materialization 的 `ResolvedLoadPlan`，指定目标 GPU，
-   以及 Main experts 使用 GPU 或 CPU 来源。
-   MTP、router、shared expert 和其余固定权重仍在 GPU；放置沿显式 WeightId 展开。
-3. `plan_materialization` 按 `(physical object, Device)` 去重，并用 `LayoutBuilder`
-   分别规划 Host/Device backing。Host 的 `CpuOnly` 与 `CudaTransfer` 需求合并为一份来源；
-   注册对象集中在 Host backing 的对齐前缀，普通 CPU 对象使用其后的独立区域。
-   同一 parent 同时需要 CPU/GPU 两份 backing 时，两份容量均计入。
-4. Materializer 为 CPU tensor 分配可缓存的 `HostBuffer`，为 GPU tensor 分配
-   `DeviceBuffer`。仅供 CPU 的对齐 payload 由 direct I/O 直接写入最终 Host backing；
-   边界页和 CPU/GPU 双端需求使用有界 staging，一次读取后分发。
-   Host 放置保留文件的页内偏移；大块 Host backing 在读取前并行触页，`CudaTransfer`
-   区域随后由 `CudaHostRegistration` 长期注册，仍是可缓存的 CPU 内存。
-   ModelShard 持有 allocation 与 registration；RankProgram 结束使用后，先注销，再释放 Host backing。
-   仅有 `CpuOnly` 需求的加载不创建 CUDA stream、event 或 pinned buffer。
-5. `bind_view(reference, backing, device)` 明确选择实际位置。
-   ModelShard 持有最终 backing，所有原生权重与 bank 视图借用它，不依赖 Reader 生命周期。
+1. `Binder` checks the logical references, the Uses and the selected resources; an auxiliary value takes the owning Host value of the corresponding element range.
+   `ModelDefinition` holds these read Host resources and their `PreparedResources`, and the Frontend borrows their stable addresses.
+2. `ModelDefinition` keeps the configuration, the logical references, the Uses and the expert source descriptions, and provides the weight geometry without backing.
+   The Engine explicitly builds the immutable `ModelProfile`, queries the
+   actual Op workspace before it reads large weights, and resolves the capacity jointly. A purely logical binder carries no execution layout constraint.
+   `resolve_load` produces the `ResolvedLoadPlan` of one local materialization, which names the target GPU
+   and whether Main experts use a GPU or a CPU source.
+   MTP, router, shared expert and the remaining fixed weights stay on the GPU; the placement unfolds along explicit WeightIds.
+3. `plan_materialization` deduplicates by `(physical object, Device)` and uses `LayoutBuilder`
+   to plan the Host and Device backing separately. The Host `CpuOnly` and `CudaTransfer` needs merge into one source;
+   registered objects occupy the aligned prefix of the Host backing, and ordinary CPU objects use the separate region after it.
+   When the same parent needs both CPU and GPU backing, both capacities count.
+4. The materializer allocates a cacheable `HostBuffer` for a CPU tensor and a
+   `DeviceBuffer` for a GPU tensor. Direct I/O writes a CPU-only aligned payload straight into the final Host backing;
+   boundary pages and dual CPU/GPU needs use bounded staging, read once and then dispatched.
+   Host placement keeps the in-page offset of the file; large Host backing regions are touched in parallel before the read, and the `CudaTransfer`
+   region is then registered for its lifetime by `CudaHostRegistration`, still as cacheable CPU memory.
+   ModelShard holds the allocation and the registration; after the RankProgram finishes using them, it deregisters first and then releases the Host backing.
+   A load with `CpuOnly` needs alone creates no CUDA stream, event or pinned buffer.
+5. `bind_view(reference, backing, device)` selects the actual location explicitly.
+   ModelShard holds the final backing; all native weight and bank views borrow it and do not depend on the Reader lifetime.
 
-这里保留完整 parent 原编码，不运行期 repack，也不把 Host 来源保存成大量单 expert 对象。
-`Parameters` 保存 bank 身份、矩阵 profile 与 Use 元数据，可以描述 CPU 来源。
-workspace 查询消费数学 profile；完整 GPU FFN 显式接受 resident/cached CUDA bank，
-混合单层执行另外借用原生 Host bank 和交接资源。
-Qwen3.5 MoE 与 Qwen4Exp 均支持完整 GPU 放置；5090 预算不足时可选择 Host Main experts
-和 RankProgram GPU cache。Spark 使用完整 GPU 放置。Qwen4Exp 的 block-FP8 MTP experts 常驻 GPU，
-模型编排见 [Qwen4Exp 执行](qwen4_exp-execution.md)。
+This path keeps the complete parent in its original encoding: it does no runtime repack, and it does not store a Host source as many single-expert objects.
+`Parameters` holds the bank identity, the matrix profile and the Use metadata, and it can describe a CPU source.
+The workspace query consumes the mathematical profile; a full GPU FFN explicitly accepts a resident or cached CUDA bank,
+and mixed single-layer execution additionally borrows the native Host bank and the handoff resources.
+Qwen3.5 MoE and Qwen4Exp both support full GPU placement; when the 5090 budget is short, Host Main experts
+and the RankProgram GPU cache are available. Spark uses full GPU placement. The Qwen4Exp block-FP8 MTP experts are resident on the GPU;
+see [Qwen4Exp execution](qwen4_exp-execution.md) for the model orchestration.
 
-## 副本容量与 GPU 寻址
+## Replica capacity and GPU addressing
 
-`describe_expert_cache` 先返回无指针的布局及容量：数据池 C、各 bank entry 布局、
-Host 目录条目数、GPU offset/divisor 表和 pinned 索引快照容量。
-`ExpertCache` 随 RankProgram 建立；调用者显式提供 upload execution view，并在 acquire/release
-提供 consumer execution view。ModelShard 来源、DeviceContext 和被借用的 streams 必须比缓存活得更久。
-全 resident 来源要求 C=0，不创建动态 offset/divisor/上传槽存储。
-注册来源的 Host 容量由 ModelShard 计费；注册字节数是其中的子集，不再加一份权重容量。
+`describe_expert_cache` first returns the layout and the capacities without pointers: the data pool C, each bank entry layout,
+the Host directory entry count, the GPU offset/divisor tables and the pinned index snapshot capacity.
+`ExpertCache` is built with the RankProgram; the caller supplies the upload execution view explicitly and the consumer execution view at acquire/release.
+The ModelShard source, the DeviceContext and the borrowed streams must outlive the cache.
+A fully resident source requires C=0 and creates no dynamic offset/divisor/upload-slot storage.
+ModelShard charges the Host capacity of a registered source; the registered byte count is a subset of it, so no second weight capacity is added.
 
-CPU 来源的每个 entry 是完整 expert 的 GU/down 数据块，只包含 codes/high/scales。
-各 plane 至少 16-byte 对齐，entry 按 256-byte 对齐；不同 bank 使用自己的 entry 大小。
-所有 bank 共用一个 byte pool；RankProgram 显式规划固定区和可复用区域，不把小 expert 填充成最大 expert。
-entry 不是序列化 parent，不追加虚假的 divisor trailer。
+Each entry of a CPU source is the GU/down data block of a complete expert and holds only codes/high/scales.
+Each plane is aligned to at least 16 bytes and each entry to 256 bytes; different banks use their own entry size.
+All banks share one byte pool; the RankProgram explicitly plans the fixed region and the reusable region, and it does not pad a small expert up to the largest expert.
+An entry is not a serialized parent, and it carries no artificial divisor trailer.
 
-NVFP4 的 matrix divisor 是静态元数据：CPU 来源在启动时镜像到 GPU，常驻 GPU 来源
-直接引用原 divisor plane。Host 元数据与 payload 的 divisor 必须表示同一组值，
-由来源建立者保证；artifact materializer 从原 payload 提取并验证。
-运行期上传只搬 codes/high/scales，divisor 始终按 logical expert ID 寻址。
+The NVFP4 matrix divisor is static metadata: a CPU source mirrors it to the GPU at startup, and a resident GPU source
+references the original divisor plane directly. The divisor in the Host metadata and in the payload must represent the same set of values;
+the source builder guarantees that, and the artifact materializer extracts it from the original payload and verifies it.
+Runtime upload moves only codes/high/scales, and the divisor is always addressed by logical expert ID.
 
-`device_weight_bank` / `device_expert_bank` 从原生 CUDA bank 建立借用视图，不分配或重排权重。
-`ExpertBankDeviceView` 同时记录逻辑 expert 数和 CUDA device。
-`ExpertMatrixDeviceView` 的寻址合同：
+`device_weight_bank` / `device_expert_bank` build borrowing views from the native CUDA bank; they allocate no weights and reorder none.
+`ExpertBankDeviceView` records both the logical expert count and the CUDA device.
+The addressing contract of `ExpertMatrixDeviceView`:
 
 ```text
 resident: offsets == nullptr; plane_address = plane_base + expert * plane_stride
@@ -96,49 +96,49 @@ cached:   offsets != nullptr; plane_address = plane_base + offsets[expert]
 divisor_address = divisor_base + expert * divisor_stride
 ```
 
-缓存的 plane_base 是 pool_base 加该 bank 的 plane 偏移；`indexed_storage` 描述整个被借用的
-pool 范围，用于检查输出和 scratch 不与权重重叠。offset table、pool 和 divisor
-分配地址终身稳定，可供 Graph 捕获。`UINT64_MAX` 是未发布哨兵；消费者只可读取
-acquire 成功所保护的 keys，不能把表里其他条目的内容当作可用性保证。
+For the cached form, plane_base is pool_base plus the bank's plane offset; `indexed_storage` describes the whole borrowed
+pool range, and it is used to check that outputs and scratch do not overlap the weights. The allocation addresses of the offset table, the pool and the divisor
+are stable for their lifetime, so Graph capture can use them. `UINT64_MAX` is the unpublished sentinel; a consumer may read only
+the keys protected by a successful acquire, and it must not treat the contents of other table entries as a guarantee of availability.
 
-当前真实权重的编码数据量如下，均不包含分配器及执行 workspace：
+The encoded data sizes of the current real weights are below; none includes the allocator or the execution workspace:
 
-| 来源 | 单 expert 动态数据 | 完整 bank 动态数据 |
+| Source | Single-expert dynamic data | Whole-bank dynamic data |
 |---|---:|---:|
-| 35B Q4 GU + Q5 down，256 experts | 1,802,240 B | 461,373,440 B |
-| 35B Q4 GU + Q6 down，256 experts | 1,933,312 B | 494,927,872 B |
-| Flash Next NVFP4 GU + down，512 experts | 2,764,800 B | 1,415,577,600 B |
+| 35B Q4 GU + Q5 down, 256 experts | 1,802,240 B | 461,373,440 B |
+| 35B Q4 GU + Q6 down, 256 experts | 1,933,312 B | 494,927,872 B |
+| Flash Next NVFP4 GU + down, 512 experts | 2,764,800 B | 1,415,577,600 B |
 
-Flash Next Main 48 个 bank 的两组 divisor 共 196,608 B；offset 表同为 196,608 B。
-其 MTP 原始 block-FP8 expert payload 为 2,516,889,600 B，按固定 GPU 来源计入容量。
+The two divisor sets of the Flash Next Main 48 banks total 196,608 B; the offset table is also 196,608 B.
+Its original MTP block-FP8 expert payload is 2,516,889,600 B and counts toward capacity as a fixed GPU source.
 
-## 准备、发布和消费
+## Preparation, publication and consumption
 
-`ExpertPlacement` 指定 logical key 及其在区域内的 256-byte 对齐偏移。构造时安装
-`[0,fixed_bytes)` 的固定布局；固定条目在缓存生命周期内不能替换。`replace(region,entries)`
-完整重建一个可复用区域：新布局不能重叠、切断已有 entry 或借用区域外的同一 key。
-调用者先 release 旧消费者；上传流等待其完成事件后覆盖 payload 与索引。未提交的旧上传被取消，
-已提交上传通过同一条流排序。替换不搬移区域外副本，也不执行权重 D2D。
-替换的 reader wait 当即排入上传流。RankProgram 必须先提交当前层的完整上传及发布事件，
-再替换后续预取窗口，避免后续窗口的等待挡住尚未提交的当前层数据。
+`ExpertPlacement` names the logical key and its 256-byte aligned offset inside the region. Construction installs
+the fixed layout `[0,fixed_bytes)`; a fixed entry cannot be replaced during the cache lifetime. `replace(region,entries)`
+rebuilds one reusable region completely: the new layout must not overlap, cut an existing entry, or borrow the same key outside the region.
+The caller releases the old consumers first; the upload stream waits for their completion events and then overwrites the payload and the index. Uncommitted old uploads are cancelled,
+and committed uploads are ordered through the same stream. Replacement moves no replica outside the region and performs no weight D2D.
+The reader wait of a replacement enters the upload stream immediately. The RankProgram must first commit the complete upload and publication event of the current layer,
+and only then replace the later prefetch windows, so a later window's wait does not block current-layer data that is not yet committed.
 
-`prepare(ExpertCacheRequest)` 选择已有安置的 required 和 prefetch，重复 key 只计一次。
-它只改变上传需求，保留所选条目的地址与跨批进度。布局、窗口轮转和保留集合由 RankProgram 决定。
+`prepare(ExpertCacheRequest)` selects the required and prefetch keys of existing placements; a repeated key counts once.
+It changes only the upload demand and keeps the addresses and the cross-batch progress of the selected entries. The RankProgram decides the layout, the window rotation and the retention set.
 
-`progress(ExpertUploadBudget)` 按本次 payload 字节数与批次数预算提交工作，不显式等待 GPU。
-启动配置同时限制单批 payload、复制描述符数和在途批次数；零预算只检查完成状态。
-返回值包含 required 是否已发布、prefetch 是否已经就绪、是否等待上传槽，以及本次提交的批数和字节数。
+`progress(ExpertUploadBudget)` submits work within this call's payload-byte and batch-count budget and does not wait on the GPU explicitly.
+The startup configuration also bounds the single-batch payload, the copy descriptor count and the in-flight batch count; a zero budget only checks completion state.
+The return value says whether required is published, whether prefetch is ready, whether an upload slot is awaited, and the batch count and byte count submitted by this call.
 
-权重直接从注册来源复制，不经过 CPU packing。较大的连续 bank 区间使用 pitched H2D，
-小集合与离散区间使用批量 H2D；选择仅依赖实际地址和规模。传输描述符预分配并复用。
-普通 Host 地址与 CUDA 映射地址分别保存，批量复制消费后者，CPU 数学继续消费前者。
-一个 expert 可以跨批次；完整 payload 提交后才发布它的 offset。编码内 padding 保留原字节，
-entry 对齐空隙不计入传输 payload。
+Weights copy directly from the registered source with no CPU packing. A larger contiguous bank range uses pitched H2D,
+and a small set or a scattered range uses batched H2D; the choice depends only on the actual addresses and sizes. Transfer descriptors are preallocated and reused.
+The plain Host address and the CUDA mapped address are stored separately; batched copies consume the latter, and CPU mathematics keeps consuming the former.
+One expert may span batches; its offset is published only after the complete payload is committed. Padding inside the encoding keeps its original bytes,
+and entry alignment gaps do not count toward the transfer payload.
 
-上传槽仅持有描述符、dirty index 快照与完成事件。数据批次之后提交索引批次；
-完成前不重写该槽的快照和描述符。Host 来源没有有效注册视图时，在建立缓存前拒绝。
+An upload slot holds only descriptors, a dirty-index snapshot and a completion event. The index batch is submitted after the data batches;
+the slot's snapshot and descriptors are not rewritten before completion. A Host source with no valid registered view is refused before the cache is built.
 
-发布顺序：
+Publication order:
 
 ```text
 encoded data DMA → changed offset entries DMA → slot completion event
@@ -146,149 +146,149 @@ encoded data DMA → changed offset entries DMA → slot completion event
     → release: consumer completion event → region replacement
 ```
 
-索引只更新已可安全修改的条目，可合并相邻 dirty 条目，不覆盖正在被其他 use 读取的表项。
-每个已发布 entry 记录上传槽及发布代次；acquire 只等待所需代次，已回收的旧槽代次意味着
-该次上传已完成。后续无关预取不会成为旧数据消费者的新依赖。
+The index updates only entries that are already safe to modify, may merge adjacent dirty entries, and never overwrites a table entry that another use is reading.
+Each published entry records its upload slot and publication generation; acquire waits only for the generations it needs, and a reclaimed old slot generation means
+that upload has completed. A later unrelated prefetch does not become a new dependency of an old data consumer.
 
-`acquire(keys,execution)` 在发布已经排入流后即可成功，不要求 Host 已观察到 DMA 完成。
-未发布时返回空；已 release 的 use 占满有界环时返回空，由调用方等待回收；全部槽仍有未 release 的 use 属于调用错误。
-成功取得的每个 use 都须在同一 consumer stream 调用一次 `release`，包括 resident bank。
-release 必须位于最后一次真实 kernel/Graph replay 之后；这两个交接操作在 capture 外执行。
-区域替换在上传流等待已 release 的 consumer event，再更新 payload 和 offset；
-尚未 release 的 use 阻止替换。use 记录副本代次，旧 use 完成不会减少新副本的 pin。
-Host 的 release 不代表 GPU 已完成读取。CUDA 提交失败后停止接受工作，销毁前排空
-已提交传输和消费者。
+`acquire(keys,execution)` succeeds as soon as the publication is enqueued on the stream; it does not require the Host to have observed DMA completion.
+It returns empty when the key is unpublished. It returns empty when released uses fill the bounded ring, and the caller then waits for reclamation. All slots still holding an unreleased use is a caller error.
+Every successfully acquired use must call `release` once on the same consumer stream, including for a resident bank.
+release must follow the last real kernel or Graph replay; both handoff operations execute outside capture.
+A region replacement waits on the upload stream for the consumer events of released uses, then updates the payload and the offsets;
+an unreleased use blocks the replacement. A use records the replica generation, and an old use completing does not reduce the pin of a new replica.
+A Host release does not mean the GPU has finished reading. After a CUDA submission failure the cache stops accepting work and drains
+committed transfers and consumers before destruction.
 
-缓存不包含 CPU 线程池、不执行 MoE 数学，也不拥有模型执行策略。
-上层通过 required/prefetch 和 progress 预算表达实际需求；已经提交的复制不能撤回。
-注册及首次上传的准备成本在启动阶段处理。CPU 计算与 DMA 可以同时读取不可变来源，
-但共享系统内存带宽；RankProgram 为权重上传和小 bridge 分配独立 streams。
+The cache holds no CPU thread pool, performs no MoE mathematics and owns no model execution policy.
+The layer above expresses actual demand through required/prefetch and the progress budget; a committed copy cannot be withdrawn.
+The preparation cost of registration and the first upload is handled at startup. CPU computation and DMA can read the immutable source at the same time,
+but they share system memory bandwidth; the RankProgram allocates separate streams for weight upload and the small bridge.
 
-## MoE 计算交接
+## MoE compute handoff
 
-数学、输入输出与 alias 合同由 [MoE Op](../../include/ninfer/ops/moe.h) 和
-[SumContributions](../../include/ninfer/ops/sum_contributions.h) 拥有。
+The mathematics, the inputs/outputs and the alias contract belong to the [MoE Op](../../include/ninfer/ops/moe.h) and
+[SumContributions](../../include/ninfer/ops/sum_contributions.h).
 
-- `topk_softmax_route` 写出 logical expert IDs、原始 top-k softmax 系数和独立 shared sigmoid
-  系数。路由张量为 I32/FP32 `[K,T]`，shared 系数为 FP32 `[T]`。
-- `routed_swiglu` 消费同一次路由，可以计算 All、None、mask 的 1 侧或 0 侧；不重新归一化。
-  mask 表示计算分工，GPU offset table 表示物理位置。两者独立，未选 expert 的偏移和权重不被读取。
-  可选 shared term 在 GPU 上计算一次，也适用于 None。
-- CPU 分支写 FP32 `[H,T]`；GPU 分项可写 FP32，最终计算可写 BF16，或在一次最终舍入前加上原 BF16 residual。
-  `sum_contributions` 接受一到两份 FP32 分项与可选 BF16 residual，产生 BF16 输出。
-- `topk_softmax_swiglu_moe` 定义完整 router、routed/shared SwiGLU 与可选 residual 的融合计算。
-  它与独立 Op 共用 kernel 机制，保有自己的格式/shape 分派和调优策略；全 GPU Main/MTP
-  通过这一入口执行。
+- `topk_softmax_route` writes the logical expert IDs, the raw top-k softmax coefficients and the separate shared sigmoid
+  coefficients. The routing tensors are I32/FP32 `[K,T]`, and the shared coefficients are FP32 `[T]`.
+- `routed_swiglu` consumes the same routing and can compute All, None, or the 1 side or the 0 side of a mask; it does not renormalize.
+  The mask expresses the compute split and the GPU offset table expresses the physical location. The two are independent, and the offsets and weights of an unselected expert are not read.
+  The optional shared term is computed once on the GPU and also applies to None.
+- The CPU branch writes FP32 `[H,T]`; a GPU contribution can write FP32, and the final computation can write BF16 or add the original BF16 residual before a single final rounding.
+  `sum_contributions` accepts one or two FP32 contributions and an optional BF16 residual, and produces a BF16 output.
+- `topk_softmax_swiglu_moe` defines the fused computation of the complete router, routed/shared SwiGLU and the optional residual.
+  It shares the kernel mechanism with the separate Ops and keeps its own format/shape dispatch and tuning policy; the fully GPU Main/MTP
+  executes through this entry point.
 
-CUDA 数学支持 35B 的整数 expert profiles，以及 Flash Next 的 NVFP4、block-FP8 profiles，
-通过同一组 [MoE 语义入口](../../include/ninfer/ops/moe.h)消费实际表示与 activation Use。
-CPU 支持 Q4+Q5、Q4+Q6 和 Main NVFP4，输入为 BF16，
-SiLU 与 down 输入保持 FP32，不量化激活；CPU block-FP8 尚未实现。
-`CudaSwiGLUExperts` 借用 affine 或 indexed GPU bank；`CpuSwiGLUExperts` 借用完整原生 Host bank，
-直接按各 plane 的偏移和步长消费，NVFP4 使用每个 expert 自己的 matrix divisor。
-CPU 权重接口不携带 activation divisor。GPU activation divisor 属于 Use，matrix divisor 属于权重表示，二者不互相替代。
-融合 GU/down 分别取相关 Use 的 activation policy 交集；NVFP4 A4 需要共同的正值 activation divisor。
+CUDA mathematics supports the 35B integer expert profiles and the Flash Next NVFP4 and block-FP8 profiles,
+and consumes the actual representation and the activation Use through the same set of [MoE semantic entry points](../../include/ninfer/ops/moe.h).
+The CPU supports Q4+Q5, Q4+Q6 and Main NVFP4 with BF16 input;
+the SiLU and down inputs stay FP32 and the activation is not quantized. CPU block-FP8 is not implemented yet.
+`CudaSwiGLUExperts` borrows an affine or indexed GPU bank; `CpuSwiGLUExperts` borrows the complete native Host bank
+and consumes it directly through each plane's offset and stride, with NVFP4 using each expert's own matrix divisor.
+The CPU weight interface carries no activation divisor. The GPU activation divisor belongs to the Use and the matrix divisor belongs to the weight representation; neither replaces the other.
+A fused GU/down takes the intersection of the activation policies of the relevant Uses; NVFP4 A4 needs a common positive activation divisor.
 
-Op 不分配长期资源或上传权重；CUDA 分支消费 Device 路由，CPU 分支同步消费 Host 路由。
-RankProgram 提供 scratch 和执行 view，负责发布、acquire/release 及 bridge 完成依赖。
-固定 profile 的 CUDA Graph 可以重放新的路由、mask 和
-索引内容；更新必须发生在旧消费者结束之后。shared 始终驻留 GPU，不进入动态 expert 集合。
+The Op allocates no long-lived resources and uploads no weights; the CUDA branch consumes Device routing, and the CPU branch consumes Host routing synchronously.
+The RankProgram provides scratch and the execution view, and owns publication, acquire/release and the bridge completion dependency.
+A CUDA Graph with a fixed profile can replay new routing, mask and
+index contents; the update must happen after the old consumers finish. shared always stays resident on the GPU and never enters the dynamic expert set.
 
-`models/common/moe` 的单层执行借用 `moe::ExecutionView`。`moe::Partition` 从本层已就绪 GPU ID
-快照建立互补 mask 与 cache keys，CPU/GPU 在本次调用消费同一快照。mask 在计算流更新，
-pinned staging 在 DMA 完成前不复用。`moe::Bridge` 持有 CPU team、普通 Host scratch、
-pinned/Device frame，以及独立的 bridge stream/events。资源查询分别返回两端 frame 和
-scratch 上界，可对多个 profile 取最大值；GPU scratch 由调用者提供，route/routed 顺序复用。
-纯 GPU 分工不建立 CPU team 或 bridge，完整融合调用显式接受 resident/indexed bank。
-公共执行支持 `Write` 和 `AddResidual`；前者不读取旧输出，后者在最终舍入前加入已有
-BF16 输出。Qwen3.5 使用后者，HC 架构可消费前者的独立 block 输出。
+The single-layer execution in `models/common/moe` borrows `moe::ExecutionView`. `moe::Partition` builds the complementary mask and the cache keys from the
+ready GPU ID snapshot of this layer, and the CPU and the GPU consume the same snapshot in this call. The mask is updated on the compute stream,
+and pinned staging is not reused before DMA completes. `moe::Bridge` holds the CPU team, the plain Host scratch,
+the pinned/Device frame, and the separate bridge stream and events. A resource query returns the frame and
+scratch upper bounds for each side, and it can take the maximum over several profiles; the GPU scratch is supplied by the caller and is reused in route/routed order.
+A pure GPU split builds no CPU team and no bridge, and a full fused call explicitly accepts a resident or indexed bank.
+The common execution supports `Write` and `AddResidual`; the first does not read the old output, and the second adds the existing
+BF16 output before the final rounding. Qwen3.5 uses the second, and the HC architecture can consume the independent block output of the first.
 
-调用方先用 cache `prepare/progress` 发布 required。混合调用先在计算流提交 route，
-回传 hidden 和连续的 IDs/coefficients，再提交 GPU routed/shared。小 T 的复制直接按计算流
-排序，较大 T 使用独立 bridge 流及事件，使传输与 GPU 计算重叠。调用方持有 GPU 分工的 lease；
-RankWorker 等输入就绪后运行同步 CPU collective，与 GPU 分支重叠。
-CPU FP32 分项通过同一传输流上传，计算流按依赖合并两份分项与 residual。正常路径只等待 CPU 输入，
-最终输出按计算流排序。一份 frame 由同一 RankWorker 在固定 streams 上连续复用；下一次
-route/D2H 经过上一层 combine，因而不会覆盖仍在上传的 Host 分项。资源销毁排空两条流。
-若本次路由没有 CPU assignment，跳过 CPU collective 和分项回传。单层 cache 交接在 capture 外执行。
+The caller first publishes required through cache `prepare/progress`. A mixed call submits the route on the compute stream first,
+returns hidden and the contiguous IDs/coefficients, and then submits the GPU routed/shared work. A small T copy is ordered directly on the compute stream,
+and a larger T uses a separate bridge stream and events so the transfer overlaps the GPU computation. The caller holds the lease of the GPU split;
+the RankWorker runs the synchronous CPU collective once the input is ready, overlapping the GPU branch.
+The CPU FP32 contributions upload through the same transfer stream, and the compute stream merges the two contributions and the residual by dependency. The normal path waits only for the CPU input,
+and the final output is ordered on the compute stream. One frame is reused continuously by the same RankWorker on fixed streams; the next
+route/D2H passes the previous layer's combine, so it does not overwrite a Host contribution that is still uploading. Resource destruction drains both streams.
+If this routing has no CPU assignment, the CPU collective and the contribution return are skipped. The single-layer cache handoff executes outside capture.
 
-RankProgram 记录每次完整 traversal 中实际参与计算的 CPU 层数；连续相同 T 下，CPU 频繁参与时
-在层间保持团队轮询，稀疏参与时允许休眠。启停使用不同阈值，T 改变或 traversal 未完成时
-重新观察。该策略不依赖 expert 的具体 ID、GPU 命中率假设或请求阶段，作用域在 traversal
-结束时释放；完整 GPU 流式计算不保持 CPU 团队活跃。
+The RankProgram records the number of CPU layers that actually take part in each complete traversal; under a repeated identical T, it keeps the team polling between layers
+when the CPU participates often, and it lets the team sleep when participation is sparse. Start and stop use different thresholds, and the observation restarts
+when T changes or the traversal is incomplete. The policy depends on no specific expert ID, no GPU hit-rate assumption and no request phase; its scope is released
+when the traversal ends, and a fully GPU streaming computation keeps no CPU team active.
 
-## Engine 预算与逐层执行
+## Engine budget and layer-by-layer execution
 
-`NINFER_VRAM_BUDGET_MIB` 是引擎可使用的 Device 容量上限，另受启动时实际空闲显存限制。
-预算包含固定权重、RankProgram State/KV、workspace、cache、offset/divisor 表、bridge/masks
-及运行时余量。自动 KV 先保证一个完整上下文；Host 模式把其余容量优先用于 expert。
-显式 KV 配置仍完整兑现。Host 来源、注册范围和 pinned frame 单独报告，注册范围是
-Host backing 的子集。MTP、router、shared、Vision 和 draft 始终留在 GPU。
+`NINFER_VRAM_BUDGET_MIB` is the upper bound on the Device capacity the engine may use, and the free device memory at startup bounds it further.
+The budget covers the fixed weights, the RankProgram State/KV, the workspace, the cache, the offset/divisor tables, the bridge/masks
+and the runtime margin. Automatic KV first guarantees one complete context; Host mode spends the remaining capacity on experts first.
+An explicit KV configuration is still delivered in full. The Host source, the registration range and the pinned frame are reported separately, and the registration range is
+a subset of the Host backing. MTP, router, shared, Vision and draft always stay on the GPU.
 
-两种架构的完整 GPU 放置可行时使用融合路径，不创建 Host expert 副本；Host 路径保留完整
-原编码来源。
-`EngineOptions::moe.expert_priority` 可指定每个 Main 层全部 logical ID 的优先级排列。
-35B-A3B 和 Flash Next 配置默认使用模型私有的静态标定排序，其他配置使用 ID 顺序；
-显式排列覆盖默认值。排序只决定缓存放置，不改变 router、coefficients 或 expert 数学，
-也不在请求期间更新。标定来源说明与数组分别保存在各模型的 `moe_priority.cpp` 和
-`expert_priority.cpp`；同配置的其他训练权重可提供自己的排序。
-各层按字节均衡分配额度，以完整 expert 为单位选取优先级前缀；排列本身
-不强制启用 offload。优先级影响目标集合，实际 GPU 分工由已就绪副本决定。
-`moe.cpu_workers=0` 自动选择物理核并为执行调用线程留核；非零指定团队规模。
+When full GPU placement is feasible for both architectures, the fused path is used and no Host expert replica is created; the Host path keeps the complete
+original encoding source.
+`EngineOptions::moe.expert_priority` can specify a priority order over all logical IDs of each Main layer.
+The 35B-A3B and Flash Next configurations default to the model-private static calibration order, and other configurations use ID order;
+an explicit order overrides the default. The order decides only the cache placement: it changes no router, no coefficients and no expert mathematics,
+and it is not updated during a request. The calibration source description and the arrays live in each model's `moe_priority.cpp` and
+`expert_priority.cpp`; other training weights with the same configuration can provide their own order.
+Each layer gets a byte-balanced allowance and selects the priority prefix in whole experts; the order itself
+does not force offload. The priority shapes the target set, and the ready replicas decide the actual GPU split.
+`moe.cpu_workers=0` selects the physical cores automatically and leaves cores for the executing caller thread; a nonzero value sets the team size.
 
-`moe::Schedule` 由 RankProgram 持有，封装 offload traversal、CPU 活动和图交接；其具体
-`offload::Resources`、CPU/team 计划与分段图只在提供 offload 的目标编译。
-Resident 调用直接消费 ModelShard bank，复用完整 GPU 融合 Op。公共 plan 按实际 MoE 调用顺序组织，
-bank ID 与模型层号独立。模型提供 Main/MTP 的 bank 放置与优先级；混合计算阈值及参考 CPU 团队规模作为
-计算 profile 的策略输入，缓存规划不固定任何模型几何。扣除固定资源、KV、workspace、bridge/masks 和索引后，
-剩余容量 C 分成固定区 R 和流式窗口。启动时联合求解均衡的固定额度及窗口容量：每层完整
-bank 为 W_l，固定 expert 为 R_l，每个窗口必须容纳 `max_l(W_l-R_l)`。不先扣除两个完整 bank。
-规划枚举完整 expert 的额度边界，并利用取整余量；固定集合取各层优先级前缀，数量和地址终身稳定。
-默认使用两个窗口；预算不足双窗口时使用单窗口，连单窗口也不可行时拒绝该容量计划。
+The RankProgram holds `moe::Schedule`, which wraps the offload traversal, the CPU activity and the graph handoff; its concrete
+`offload::Resources`, the CPU/team plan and the segmented graph compile only for a target that provides offload.
+A resident call consumes the ModelShard bank directly and reuses the full GPU fused Op. The common plan follows the actual MoE call order,
+and bank IDs are independent of model layer numbers. The model provides the bank placement and the priority of Main/MTP; the mixed-compute threshold and the reference CPU team size are
+policy inputs of the compute profile, and the cache plan fixes no model geometry. After the fixed resources, KV, workspace, bridge/masks and indexes are subtracted,
+the remaining capacity C splits into the fixed region R and the streaming windows. Startup solves jointly for the balanced fixed allowance and the window capacity: each layer's complete
+bank is W_l and its fixed experts are R_l, and every window must hold `max_l(W_l-R_l)`. It does not subtract two complete banks first.
+The plan enumerates the allowance boundaries in whole experts and uses the rounding remainder; the fixed set takes each layer's priority prefix, and its count and addresses are stable for their lifetime.
+Two windows are the default; when the budget cannot hold two windows it uses one, and when even one window is infeasible it refuses that capacity plan.
 
-小 T 把全部窗口空间合并为一段连续额外缓存，继续按均衡字节额度扩展每层的优先级前缀。
-固定布局、额外布局及各层缺失集合都在启动时确定；初始固定与额外上传完成后才进入执行。
-每次 Main traversal 只依据实际 T 形成需求：
+For a small T, all window space merges into one contiguous extra cache, which keeps extending each layer's priority prefix by the balanced byte allowance.
+The fixed layout, the extra layout and each layer's missing set are all determined at startup; execution starts only after the initial fixed and extra uploads complete.
+Each Main traversal forms its demand from the actual T alone:
 
-- 小 T：GPU/CPU 消费同一 ready 集合及其补集。稳定时复用快照和 lease，无权重上传。
-  从大 T 返回时，在层间按层序分批恢复额外布局；无需等待全部恢复，未 ready 的 expert 由 CPU
-  计算。每个完整 expert 上传完成后才进入快照，恢复完成后重新稳定。
-- 大 T：窗口紧凑装载当前层的缺失集合，与固定副本合成完整 indexed bank；另一窗口预取下一层。
-  当前数据先单独发布完成事件，再推进下一层上传。窗口最后读取之后可排入下一次覆盖，
-  单窗口模式按相同依赖顺序加载。不同层缺失字节数导致的窗口尾部余量暂不使用。
+- Small T: the GPU and the CPU consume the same ready set and its complement. When stable, the snapshot and the lease are reused and no weight uploads occur.
+  When returning from a large T, the extra layout is restored between layers in layer order and in batches; there is no need to wait for the whole restore, and an expert that is not ready is
+  computed by the CPU. Each complete expert enters the snapshot only after its upload completes, and the state becomes stable again after the restore finishes.
+- Large T: the window packs the current layer's missing set and combines it with the fixed replicas into the complete indexed bank; the other window prefetches the next layer.
+  The current data publishes its own completion event first, and then the next layer's upload advances. After the window's last read, the next overwrite can be enqueued,
+  and single-window mode loads in the same dependency order. The tail remainder of a window caused by different layers' missing byte counts is not used yet.
 
-prefill、Replay、ordinary/control 和 speculative verification 共用该入口，不依据请求阶段
-改变 MoE 策略。权重上传与当前层计算及下一层 mixer 重叠；连续大 T 不在 chunk 边界恢复
-小 T 布局。大小 T 切换只重建窗口，不改变固定区；一次完整额外缓存恢复的 H2D 不超过窗口总容量。
-恢复途中再次进入大 T 时，取消未提交恢复，并在已有上传之后重建流式布局。
-cache 不进入 StateImage、checkpoint 或 speculative 回滚。
+prefill, Replay, ordinary/control and speculative verification share this entry point, and the MoE policy does not change with the request phase.
+Weight upload overlaps the current layer's computation and the next layer's mixer; a run of large T does not restore the small-T layout at a chunk boundary.
+Switching between small and large T rebuilds only the windows and leaves the fixed region unchanged; the H2D of one complete extra-cache restore does not exceed the total window capacity.
+When a large T starts again during a restore, the uncommitted restore is cancelled and the streaming layout is rebuilt after the uploads already made.
+The cache never enters a StateImage, a checkpoint or a speculative rollback.
 
-MemorySummary 报告池容量、固定区、窗口总容量与数量、实际占用、完整小 T 目标和实际 ready
-字节及逐层数量。固定区加窗口等于 cache_bytes；ready 与 target 是其中的状态或目标，不能重复相加。
-另报告 H2D 总量及其中的预取字节，不再提供碎片整理计数。
+MemorySummary reports the pool capacity, the fixed region, the total window capacity and the window count, the actual occupancy, the complete small-T target and the actual ready
+bytes and per-layer counts. The fixed region plus the windows equal cache_bytes; ready and target are a state or a target within it, so they cannot be added twice.
+It also reports the total H2D bytes and the prefetch bytes inside them, and it no longer provides a defragmentation count.
 
-`prefill_chunk=0` 表示未指定：常驻模型默认 1024，CPU expert offload 默认 4096。
-`--prefill-chunk N` 接受 128 的正整数倍，启动时按指定值或固定默认值规划容量，实际调用
-受 context 剩余长度限制。测量签名包含优先级、各层缓存额度、团队、池容量和 chunk，
-不把常驻模型的重算成本标定直接套给 offload。
+`prefill_chunk=0` means unspecified: the resident model defaults to 1024 and CPU expert offload to 4096.
+`--prefill-chunk N` accepts a positive multiple of 128, and startup plans the capacity from the given value or the fixed default; the actual call
+is bounded by the remaining context length. The measurement signature includes the priority, each layer's cache allowance, the team, the pool capacity and the chunk,
+and it does not apply the resident model's recompute-cost calibration to offload.
 
-Qwen3.5 常驻执行使用整段 CUDA Graph；Main offload 使用分段 Graph，也保留 eager 提交。
-稳定小 T 将 mixer 与 MoE GPU 前段合并；窗口流式加载或额外缓存恢复期间分开提交，
-在 mixer 之后取得快照和加入权重就绪依赖。CPU 等待图中的输入就绪 external event，
-与 GPU routed/shared 并行计算；本轮没有 CPU contribution 时跳过 collective 和回传。
-捕获路径把输入 D2H 排在 GPU experts 前，避免独立拷贝分支被延后；较大 T 的结果 H2D
-仍使用 bridge stream。Eager 保留较大 T 的输入拷贝分支。
-缓存交接和预取留在图外，lease 释放排在最后一个 GPU 权重消费者之后。
+Qwen3.5 resident execution uses one whole CUDA Graph; Main offload uses a segmented Graph and also keeps eager submission.
+A stable small T fuses the mixer with the leading MoE GPU segment; during window streaming or extra-cache restore the two are submitted separately,
+and the snapshot and the weight-ready dependency are taken after the mixer. The CPU waits on the input-ready external event of the graph
+and computes in parallel with the GPU routed/shared work; when this round has no CPU contribution, the collective and the return are skipped.
+The capture path places the input D2H before the GPU experts so the separate copy branch is not delayed; the result H2D of a larger T
+still uses the bridge stream. Eager keeps the input copy branch of a larger T.
+The cache handoff and the prefetch stay outside the graph, and the lease release is ordered after the last GPU weight consumer.
 
-MTP 的 Main verification 和 DFlash 的 target 使用同一分段调度；MTP 自身及 draft
-延续常驻 Graph。相同 exact-B 的 target executable 在 draft 的不同拓扑间共享，
-每次选择 profile 同时安装对应 target envelope；MoE 段不随 context 档位复制。
-约束 mask 在首个 target GPU 段提交后准备。Graph 实例与 bridge/masks
-均由 RankProgram 持有。启动校准借用已加载的 Host bank，以单层窗口承载权重，但按候选正式计划
-捕获 All/None/MaskOnes 和 steady 段；CPU/GPU 计算仍使用同一组执行原语。
-expert ID 与 offset 改变不要求重新校准，计算变体集合改变时校准对应集合。
-销毁临时资源后扣除重建估计，再确定 expert cache 额度；销毁时先结束设备
-工作并释放 Graph，再释放其引用的事件和存储。Prefill、Replay 延续 eager 提交，MoE
-计算策略仍只依据实际 T。
+MTP's Main verification and DFlash's target use the same segmented schedule; MTP itself and draft
+continue the resident Graph. A target executable with the same exact-B is shared across the draft's different topologies,
+and selecting a profile installs the matching target envelope at the same time; the MoE segment is not replicated with the context tier.
+The constraint mask is prepared after the first target GPU segment is submitted. The Graph instance and the bridge/masks
+are both held by the RankProgram. Startup calibration borrows the loaded Host bank and carries the weights in a single-layer window, but captures All/None/MaskOnes and the steady segments
+according to the candidate's formal plan; the CPU and the GPU still use the same set of execution primitives.
+A change of expert ID or offset does not require recalibration; when the set of compute variants changes, the corresponding set is calibrated.
+After the temporary resources are destroyed, the rebuild estimate is subtracted and the expert cache allowance is then fixed; destruction ends the device
+work and releases the Graphs first, and then releases the events and storage they reference. Prefill and Replay continue eager submission, and the MoE
+compute policy still depends only on the actual T.
 
-测试与实测入口分别见 [Tests](../../tests/README.md) 和 [Benchmarks](../../bench/README.md)。
+The test and measurement entry points are in [Tests](../../tests/README.md) and [Benchmarks](../../bench/README.md).

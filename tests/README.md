@@ -36,7 +36,7 @@ executables and CTest working directories under `<build-dir>/tests/`.
 Tests link the same Core, Ops and CPU shared libraries as products and benchmarks, stored in
 `<build-dir>/lib/`; relative RPATH supplies their build-tree lookup. Test support and restricted
 CPU ISA qualification libraries remain private static targets. See
-[Build system](../docs/maintainer/build-system.md#shared-library-boundary) for linkage ownership.
+[Build system](../docs/maintainer/build-system.md#targets-and-dependencies) for linkage ownership.
 
 CUDA and I/O failure cases interpose selected symbols only in their owning test executables.
 `ninfer_test_interpose()` exports the replacements; `symbol_interpose.h` resolves the real shared

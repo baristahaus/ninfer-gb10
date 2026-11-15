@@ -243,12 +243,14 @@ The product is deliberately small:
 
 ## Documentation
 
+- [Contributing](CONTRIBUTING.md): how to report a bug, propose a change, and submit a pull request
 - [Documentation index](docs/README.md)
 - [CLI](docs/cli.md)
 - [HTTP serving](docs/serving.md)
 - [Performance index](docs/performance.md)
 - [GB10 performance record](docs/performance/qwen3.8-flash-next-125b-a6b.md#gb10-sm_121a)
 - [Flash-Next model reference](docs/maintainer/qwen3.8-flash-next-125b-a6b-model.md)
+- [Two-GPU lane](docs/lane.md)
 - [Fork strategy](docs/maintainer/2026-10-12-fork-strategy.md)
 - [Provenance](PROVENANCE.md)
 - [History](HISTORY.md)
